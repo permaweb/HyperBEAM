@@ -16,25 +16,25 @@
 %%% Lua environment, except for the `install/3' function, which is used to
 %%% install the library in the first place.
 -export([get/3, resolve/3, set/3, event/3, install/3]).
+-export([make_table_meta/2]).
 -include("include/hb.hrl").
 
 %%% The set of devices that must be included in the device sandbox for an
 %%% execution that is able to perform AO-Core resolutions. Without the following
 %%% devices, all resolutions will fail.
 -define(MINIMAL_AO_CORE_DEVICES, [<<"structured@1.0">>]).
--define(LIBRARY_FUNCTIONS, [
-    {get, fun get/3},
-    {resolve, fun resolve/3},
-    {set, fun set/3},
-    {event, fun event/3}
-]).
+
+normalize_preloaded_devices(PreloadedDevices) when is_list(PreloadedDevices) ->
+    PreloadedDevices;
+normalize_preloaded_devices(PreloadedDevices) when is_map(PreloadedDevices) ->
+    maps:values(PreloadedDevices);
+normalize_preloaded_devices(_PreloadedDevices) ->
+    [].
 
 %% @doc Install the library into the given Lua environment.
 install(Base, State, Opts) ->
-    % Compute the device-name allowlist for the Lua sandbox. When the
-    % caller provides a `device-sandbox' field, only those names plus
-    % the minimal-AO-Core set are admissible; otherwise we leave the
-    % allowlist undefined (no restriction).
+    % Calculate and set the new `preloaded_devices' option.
+    AllDevs = normalize_preloaded_devices(hb_opts:get(preloaded_devices, [], Opts)),
     DevSandboxDef =
         hb_ao:get(
             <<"device-sandbox">>,
@@ -42,19 +42,34 @@ install(Base, State, Opts) ->
             false,
             Opts
         ),
-    AdmissibleNames =
+    AdmissibleDevs =
         case DevSandboxDef of
-            false -> all;
+            false -> AllDevs;
             DevNames ->
-                hb_util:message_to_ordered_list(
-                    hb_util:unique(DevNames ++ ?MINIMAL_AO_CORE_DEVICES)
+                lists:flatmap(
+                    fun(Name) ->
+                        case
+                            lists:filter(
+                                fun(X) ->
+                                    hb_ao:get(<<"name">>, X, Opts) == Name
+                                end,
+                                AllDevs
+                            )
+                        of
+                            [Dev] -> [Dev];
+                            _ -> []
+                        end
+                    end,
+                    hb_util:message_to_ordered_list(
+                        hb_util:unique(DevNames ++ ?MINIMAL_AO_CORE_DEVICES)
+                    )
                 )
         end,
-    ?event({adding_ao_core_resolver, {device_sandbox, AdmissibleNames}}),
+    ?event({adding_ao_core_resolver, {device_sandbox, AdmissibleDevs}}),
     ExecOpts =
         Opts#{
-            <<"admissible-devices">> => AdmissibleNames,
-            <<"hashpath">> => ignore
+            preloaded_devices => AdmissibleDevs,
+            hashpath => ignore
         },
     % Initialize the AO-Core resolver.
     BaseAOTable =
@@ -73,10 +88,9 @@ install(Base, State, Opts) ->
             dev_lua:encode(BaseAOTable, Opts),
             State
         ),
-    {
-        ok,
+    State3 = 
         lists:foldl(
-            fun({FuncName, Func}, StateIn) ->
+            fun(FuncName, StateIn) ->
                 {ok, StateOut} =
                     luerl:set_table_keys_dec(
                         [ao, FuncName],
@@ -95,7 +109,7 @@ install(Base, State, Opts) ->
                                 ),
                             % Call the function with the decoded arguments.
                             {Res, ResState} =
-                                Func(Args, ImportState, ExecOpts),
+                                ?MODULE:FuncName(Args, ImportState, ExecOpts),
                             % Encode the response for return to Lua
                             return(Res, ResState, Opts)
                         end,
@@ -104,9 +118,179 @@ install(Base, State, Opts) ->
                 StateOut
             end,
             State2,
-            ?LIBRARY_FUNCTIONS
-        )
-    }.
+            [
+                FuncName
+            ||
+                {FuncName, _} <- dev_lua_lib:module_info(exports),
+                FuncName /= module_info,
+                FuncName /= ?FUNCTION_NAME,
+                FuncName /= make_table_meta
+            ]
+        ),
+    % Build table index/set handlers for AO metatables. Encoded AO messages
+    % receive these through per-table metatables in encode_table.
+    GetFun =
+        fun([RawTable, Key], S) ->
+            table_index(RawTable, Key, S, Opts)
+        end,
+    SetFun =
+        fun([RawTable, Key, Value], S) ->
+            Table = dev_lua:decode(luerl:decode(RawTable, S), Opts),
+            DecodedValue = dev_lua:decode(luerl:decode(Value, S), Opts),
+            ?event(
+                debug_lua_setindex,
+                {global_set,{table, Table}, {key, Key}, {value, DecodedValue}}
+            ),
+            SetResult =
+                hb_cache:ensure_all_loaded(
+                    hb_ao:set(Table, #{ Key => DecodedValue }, Opts),
+                    Opts
+                ),
+            ?event(debug_lua_setindex, {set_result, {set_result, SetResult}}),
+            %% Clear all data keys from the table (preserving the metatable ref)
+            %% then write SetResult entries using raw writes
+            S1 =
+                luerl_heap:upd_table(
+                    RawTable,
+                    fun({table, _A, _D, Meta}) ->
+                        {table, array:new([{default, nil}]), ttdict:new(), Meta}
+                    end,
+                    S
+                ),
+            ?event(debug_lua_setindex, {updated_table, {updated_table, S1}}),
+            S2 = 
+                maps:fold(
+                    fun(K, V, SAcc) ->
+                        {EncodedV, SAcc2} = dev_lua:encode_value(V, SAcc, Opts),
+                        luerl_heap:raw_set_table_key(RawTable, K, EncodedV, SAcc2)
+                    end,
+                    S1,
+                    SetResult
+                ),
+            ?event(debug_lua_setindex, {done_set_result_encoded}),
+            {[], S2}
+        end,
+    {GetRef, State4} = luerl:encode(GetFun, State3),
+    {SetRef, State5} = luerl:encode(SetFun, State4),
+    {_, State6} =
+        luerl_heap:alloc_table(
+            [{<<"__index">>, GetRef}, {<<"__newindex">>, SetRef}],
+            State5
+        ),
+    %% We want to remove the custom metatable from lua-reserved util tables.
+    {EmptyMeta, State7} = luerl_heap:alloc_table([], State6),
+    {ok, GRef, State8} = luerl:get_table_keys([<<"_G">>], State7),
+    State9 = luerl_heap:set_metatable(GRef, EmptyMeta, State8),
+    StdTables = 
+        [
+            <<"ao">>, <<"string">>, <<"table">>, <<"math">>, <<"os">>,
+            <<"io">>, <<"package">>, <<"coroutine">>, <<"state">>
+        ],
+    State10 = 
+        lists:foldl(
+            fun(Name, SAcc) ->
+                case luerl_heap:raw_get_table_key(GRef, Name, SAcc) of
+                    nil -> SAcc;
+                    Tref when is_tuple(Tref), element(1, Tref) =:= tref ->
+                        luerl_heap:set_metatable(Tref, EmptyMeta, SAcc);
+                    _ -> SAcc
+                end
+            end,
+            State9,
+            StdTables
+        ),
+    {ok, State10}.
+
+%% @doc Build the __index/__newindex metatable for a luerl state without
+%% allocating or populating the table itself. Used to inject hb_ao:get and
+%% hb_ao:set into the Lua environment, for all gets and sets using the 
+%% lua metatable (__index/__newindex).
+make_table_meta(St0, Opts) ->
+    GetFun =
+        fun([RawTable, Key], S) ->
+            table_index(RawTable, Key, S, Opts)
+        end,
+    SetFun =
+        fun([RawTable, Key, RawValue], S) ->
+            Table = dev_lua:decode(luerl:decode(RawTable, S), Opts),
+            Value = dev_lua:decode(luerl:decode(RawValue, S), Opts),
+            SetResult =
+                hb_cache:ensure_all_loaded(
+                    hb_ao:set(Table, #{ Key => Value }, Opts),
+                    Opts
+                ),
+            %% Clear all data keys from the table (preserving the metatable ref)
+            %% then write SetResult entries using raw writes to bypass __newindex.
+            S1 =
+                luerl_heap:upd_table(
+                    RawTable,
+                    fun({table, _A, _D, Meta}) ->
+                        {table, array:new([{default, nil}]), ttdict:new(), Meta}
+                    end,
+                    S
+                ),
+            S2 =
+                maps:fold(
+                    fun(K, V, SAcc) ->
+                        {EncodedV, SAcc2} = dev_lua:encode_value(V, SAcc, Opts),
+                        luerl_heap:raw_set_table_key(RawTable, K, EncodedV, SAcc2)
+                    end,
+                    S1,
+                    SetResult
+                ),
+            ?event(debug_lua, {set_result_encoded}),
+            {[], S2}
+        end,
+    {GetFunRef, St1} = luerl:encode(GetFun, St0),
+    {SetFunRef, St2} = luerl:encode(SetFun, St1),
+    luerl_heap:alloc_table(
+        [{<<"__index">>, GetFunRef}, {<<"__newindex">>, SetFunRef}],
+        St2
+    ).
+
+table_index(RawTable, RawKey, State, Opts) ->
+    Table = dev_lua:decode(luerl:decode(RawTable, State), Opts),
+    Key = dev_lua:decode(luerl:decode(RawKey, State), Opts),
+    ?event(debug_lua_getindex, {global_get, {table, Table}, {key, Key}}),
+    Action = table_key_action(Key, Opts),
+    Result =
+        case Action of
+            {get, Path} ->
+                value_result(hb_ao:get(Path, Table, Opts));
+            {resolve, Req} ->
+                hb_ao:resolve(Table, Req, Opts);
+            false ->
+                value_result(hb_ao:get(Key, Table, Opts))
+        end,
+    encode_index_result(Result, State, Opts).
+
+table_key_action([Path], _Opts) ->
+    {get, Path};
+table_key_action([Path, Req], Opts) when is_map(Req) ->
+    {resolve, (hb_ao:normalize_keys(Req, Opts))#{ <<"path">> => hb_path:to_binary(Path) }};
+table_key_action(Req, Opts) when is_map(Req) ->
+    {resolve, hb_ao:normalize_keys(Req, Opts)};
+table_key_action(_Key, _Opts) ->
+    false.
+
+value_result(not_found) ->
+    not_found;
+value_result(Value) ->
+    {ok, Value}.
+
+encode_index_result(not_found, State, _Opts) ->
+    {[nil], State};
+encode_index_result({error, _Reason}, State, _Opts) ->
+    {[nil], State};
+encode_index_result({ok, Result}, State, Opts) ->
+    ?event(debug_lua_getindex, {global_get_found, {result, Result}}),
+    Encodable =
+        case is_map(Result) of
+            true -> hb_private:reset(Result);
+            false -> Result
+        end,
+    {Encoded, State2} = dev_lua:encode_value(Encodable, State, Opts),
+    {[Encoded], State2}.
 
 %% @doc Helper function for returning a result from a Lua function.
 return(Result, ExecState, Opts) ->
@@ -181,7 +365,7 @@ event([Event], ExecState, Opts) ->
     event([global, Event], ExecState, Opts);
 event([Group, Event], State, Opts) when is_list(Event) ->
     event([Group, list_to_tuple(Event)], State, Opts);
-event([Group, Event], ExecState, _Opts) ->
+event([Group, Event], ExecState, Opts) ->
     ?event(
         lua_event,
         {event,
