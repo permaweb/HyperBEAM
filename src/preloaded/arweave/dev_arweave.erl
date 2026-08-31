@@ -885,31 +885,7 @@ request(Method, Path, Extra, LogExtra, Opts) ->
                 <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
             }
         ),
-    to_message(Path, Method, best_response(Res), LogExtra, Opts).
-
-%% @doc Select the best response from a list of responses by sorting them
-%% ascending by HTTP status code. Returns the first (best) response tuple.
-best_response({error, {no_viable_responses, Responses}}) ->
-    best_response(Responses);
-best_response([]) ->
-    {error, no_viable_responses};
-best_response(Responses) when is_list(Responses) ->
-    Sorted = lists:sort(
-        fun({_, ResponseA}, {_, ResponseB}) ->
-            StatusA = response_status(ResponseA),
-            StatusB = response_status(ResponseB),
-            StatusA =< StatusB
-        end,
-        Responses
-    ),
-    hd(Sorted);
-best_response(Response) ->
-    Response.
-
-response_status(Response) when is_map(Response) ->
-    maps:get(<<"status">>, Response, 999);
-response_status(_Response) ->
-    999.
+    to_message(Path, Method, lib_arweave_common:best_response(Res), LogExtra, Opts).
 
 %% @doc Transform a response from the Arweave node into an AO-Core message.
 to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Opts) ->
@@ -1206,7 +1182,7 @@ best_response_handles_failed_connect_entries_test_parallel() ->
     ],
     ?assertEqual(
         {ok, #{ <<"status">> => 200, <<"body">> => <<"OK-2">> }},
-        best_response(Responses)
+        lib_arweave_common:best_response(Responses)
     ).
 
 best_response_non_map_error_round_trips_test_parallel() ->

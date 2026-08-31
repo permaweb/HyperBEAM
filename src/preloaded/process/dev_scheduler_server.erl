@@ -212,27 +212,23 @@ do_assign(State, Message, ReplyPID) ->
     BaseStateHashpath = base_state(State),
     NextSlot = maps:get(current, State) + 1,
     {Timestamp, Height, Hash} = ar_timestamp:get(),
+    BaseAssignment =
+        lib_scheduler:base_assignment(
+            hb_util:id(maps:get(id, State)),
+            NextSlot,
+            Message,
+            Opts
+        ),
     Assignment =
         commit_assignment(
-            #{
-                <<"path">> =>
-                    case hb_path:from_message(request, Message, Opts) of
-                        undefined -> <<"compute">>;
-                        Path -> hb_path:to_binary(Path)
-                    end,
-                <<"data-protocol">> => <<"ao">>,
-                <<"variant">> => <<"ao.N.1">>,
-                <<"process">> => hb_util:id(maps:get(id, State)),
-                <<"epoch">> => <<"0">>,
-                <<"slot">> => NextSlot,
+            BaseAssignment#{
                 <<"block-height">> => Height,
                 <<"block-hash">> => hb_util:human_id(Hash),
                 <<"block-timestamp">> => Timestamp,
                 % Note: Local time on the SU, not Arweave
                 <<"timestamp">> => scheduler_time(),
                 <<"base-hashpath">> => BaseStateHashpath,
-                <<"body">> => OnlyAttested,
-                <<"type">> => <<"Assignment">>
+                <<"body">> => OnlyAttested
             },
             State
         ),

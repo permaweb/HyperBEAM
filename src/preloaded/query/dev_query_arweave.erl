@@ -87,6 +87,13 @@ query(Obj, <<"transactions">>, Args, Opts) ->
             ),
             {ok, connection([], Args, Opts)}
     end;
+query(#{ <<"offset">> := Offset }, <<"block">>, _Args, Opts)
+        when is_integer(Offset) ->
+    % Resolve the `block' field of a transaction node: a cached transaction
+    % holds no block metadata of its own, so the block is found by the weave
+    % offset carried on the node (see `node_with_offset/3'), which also
+    % distinguishes this from the top-level `block(id/height)' query.
+    block_at_offset(Offset, Opts);
 query(Obj, <<"block">>, Args, Opts) ->
     case query(Obj, <<"blocks">>, Args, Opts) of
         {ok, []} -> {ok, null};
@@ -264,10 +271,20 @@ read_ids(_, 0, _Opts) -> [];
 read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Msg} ->
-            [AnnotatedID#{ <<"node">> => Msg } | read_ids(Rest, Count - 1, Opts)];
+            [
+                AnnotatedID#{ <<"node">> => node_with_offset(Msg, AnnotatedID, Opts) }
+                | read_ids(Rest, Count - 1, Opts)
+            ];
         _ ->
             read_ids(Rest, Count, Opts)
     end.
+
+%% @doc Carry the transaction's weave offset onto its node, so that the `block'
+%% field resolver can locate the block that includes it (see `query/4').
+node_with_offset(Msg, #{ <<"offset">> := Offset }, _Opts)
+        when is_map(Msg), is_integer(Offset) ->
+    Msg#{ <<"offset">> => Offset };
+node_with_offset(Msg, _Annotated, _Opts) -> Msg.
 
 %% @doc Drop to the cursor position, returning the list of items after the cursor.
 drop_to_cursor(Args, Ordered, Opts) ->
@@ -380,14 +397,8 @@ block_range_to_offset_range(Heights, Opts) ->
             RawMin ->
                 case read_block(hb_util:int(RawMin), Opts) of
                     {ok, MinBlock} ->
-                        % The `weave_size` is the size at the _end_ of the block,
-                        % so we must subtract the start from it to find the 
-                        % starting byte of the block.
-                        WeaveSize = hb_util:int(
-                            hb_maps:get(<<"weave_size">>, MinBlock, 0, Opts)),
-                        BlockSize = hb_util:int(
-                            hb_maps:get(<<"block_size">>, MinBlock, 0, Opts)),
-                        WeaveSize - BlockSize;
+                        {BlockStart, _} = block_bounds(MinBlock, Opts),
+                        BlockStart;
                     {error, not_found} -> 0
                 end
         end,
@@ -456,18 +467,47 @@ read_cached_block(Height, Opts) ->
 
 %% @doc Return the latest block height indexed in the Arweave pseudo-path cache.
 latest_cached_block(Opts) ->
-    Blocks =
-        hb_cache:list_numbered(
-            hb_path:to_binary([
-                <<"~arweave@2.9">>,
-                <<"block">>,
-                <<"height">>
-            ]),
-            Opts
-        ),
-    case Blocks of
+    case cached_heights(Opts) of
         [] -> not_found;
-        _ -> {ok, lists:max(Blocks)}
+        Blocks -> {ok, lists:max(Blocks)}
+    end.
+
+%% @doc List the block heights present in the Arweave pseudo-path cache.
+cached_heights(Opts) ->
+    hb_cache:list_numbered(
+        hb_path:to_binary([
+            <<"~arweave@2.9">>,
+            <<"block">>,
+            <<"height">>
+        ]),
+        Opts
+    ).
+
+%% @doc The weave byte range `{StartOffset, EndOffset}' that a block covers.
+%% The block's `weave_size' is the size of the weave at the block's _end_, so
+%% its starting byte is that size less the block's own size.
+block_bounds(Block, Opts) ->
+    WeaveSize = hb_util:int(hb_maps:get(<<"weave_size">>, Block, 0, Opts)),
+    BlockSize = hb_util:int(hb_maps:get(<<"block_size">>, Block, 0, Opts)),
+    {WeaveSize - BlockSize, WeaveSize}.
+
+%% @doc Find the cached block that includes the given weave offset -- the block
+%% whose byte range `[weave_size - block_size, weave_size)' contains it. Scans
+%% the locally cached blocks, so it is only reached when the `block' field is
+%% explicitly selected on a transaction. Returns `{ok, null}' when no cached
+%% block covers the offset.
+block_at_offset(Offset, Opts) ->
+    block_covering(Offset, lists:sort(cached_heights(Opts)), Opts).
+
+block_covering(_Offset, [], _Opts) -> {ok, null};
+block_covering(Offset, [Height | Rest], Opts) ->
+    case read_cached_block(Height, Opts) of
+        {ok, Block} ->
+            case block_bounds(Block, Opts) of
+                {Start, End} when Start =< Offset, Offset < End -> {ok, Block};
+                _ -> block_covering(Offset, Rest, Opts)
+            end;
+        _ -> block_covering(Offset, Rest, Opts)
     end.
 
 %%% Match argument processing
