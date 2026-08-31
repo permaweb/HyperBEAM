@@ -4,7 +4,9 @@
 -module(hb_device).
 -export([truncate_args/2, message_to_fun/3, message_to_device/2]).
 -export([is_direct_key_access/3, is_direct_key_access/4]).
+-export([is_reserved/3, is_reserved/4]).
 -export([find_exported_function/5, is_exported/4, info/2, info/3]).
+-include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 -define(DEFAULT_DEVICE, <<"message@1.0">>).
@@ -226,6 +228,32 @@ is_exported(#{ exports := Exports }, Key, _Opts) ->
     );
 is_exported(_Info, _Key, _Opts) -> true.
 
+%% @doc Determine if a key is reserved by a device.
+%% A key is reserved if it is declared in the device's `info().reserved' list,
+%% or if it resolves to a direct device function. Keys handled by a device's
+%% default handler are not reserved.
+is_reserved(Base, Key, Opts) ->
+    is_reserved(message_to_device(Base, Opts), Base, Key, Opts).
+is_reserved(Dev, Base, Key, Opts) when is_binary(Dev) ->
+    DevMod = message_to_device(#{ <<"device">> => Dev }, Opts),
+    is_reserved(DevMod, Base, Key, Opts);
+is_reserved(Dev, Base, Key, Opts) ->
+    Info = info(Dev, Base, Opts),
+    is_reserved_key(Info, Key, Opts) orelse is_device_key(Dev, Base, Key, Opts).
+
+%% @doc Check if a key appears in a device's `reserved' info list.
+is_reserved_key(Info, Key, Opts) ->
+    Reserved = hb_maps:get(reserved, Info, [], Opts),
+    NormReserved = lists:map(fun maybe_normalize_device_key/1, Reserved),
+    lists:member(maybe_normalize_device_key(Key, existing), NormReserved).
+
+%% @doc Check if a key is claimed by the device's direct function dispatch.
+is_device_key(Dev, Base, Key, Opts) ->
+    case message_to_fun(Dev, Base, Key, Opts) of
+        {ok, _, _} -> true;
+        {add_key, _, _} -> false
+    end.
+
 %% @doc Normalize an exported key to its canonical atomized form. By default
 %% new atoms are created if necessary. In practice this is used for keys that
 %% orinate from a device's `info' response, but _not_ for keys that could be
@@ -301,3 +329,34 @@ do_is_direct_key_access(Dev, NormKey, Opts) ->
             not lists:member(NormKey, Exports ++ ?MESSAGE_KEYS);
         _ -> false
     end.
+
+explicit_reserved_key_test() ->
+    Trie = #{ <<"device">> => <<"trie@1.0">> },
+    ?assert(is_reserved(Trie, <<"node-value">>, #{})),
+    ?assert(is_reserved(<<"trie@1.0">>, Trie, <<"node-value">>, #{})),
+    ?assert(is_reserved(Trie, <<"Node-Value">>, #{})),
+    ?assertNot(is_reserved(Trie, <<"alice">>, #{})).
+
+message_reserved_key_test() ->
+    Msg = #{ <<"device">> => <<"message@1.0">> },
+    Trie = #{ <<"device">> => <<"trie@1.0">> },
+    ?assert(is_reserved(Msg, <<"path">>, #{})),
+    ?assert(is_reserved(Msg, <<"set">>, #{})),
+    ?assert(is_reserved(Msg, <<"get">>, #{})),
+    ?assert(is_reserved(Trie, <<"get">>, #{})),
+    ?assert(is_reserved(Trie, <<"set">>, #{})),
+    ?assert(is_reserved(Trie, <<"keys">>, #{})),
+    ?assertNot(is_reserved(Trie, <<"commit">>, #{})),
+    ?assertNot(is_reserved(Msg, <<"alice">>, #{})).
+
+trie_keys_skip_reserved_keys_test() ->
+    Trie =
+        #{
+            <<"device">> => <<"trie@1.0">>,
+            <<"node-value">> => ignored,
+            <<"get">> => ignored,
+            <<"set">> => ignored,
+            <<"keys">> => ignored,
+            <<"alice">> => 1
+        },
+    ?assertEqual([<<>>, <<"alice">>], lists:sort(hb_ao:keys(Trie, #{}))).
