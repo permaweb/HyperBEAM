@@ -19,6 +19,10 @@
 scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_StoreOpts) ->
     remote.
+
+%% @doc Start local store
+start(#{<<"local-store">> := LocalStore}) ->
+    hb_store:start(LocalStore);
 start(_StoreOpts) ->
     ok.
 
@@ -62,29 +66,22 @@ type(StoreOpts, #{ <<"type">> := Key }, NodeOpts) ->
 %% @returns `{ok, Msg}' on success or `{error, not_found}' if the key is missing.
 read_request(#{ <<"only-ids">> := true }, Key, _NodeOpts) when not ?IS_ID(Key) ->
     {error, not_found};
-read_request(StoreOpts, Key, Opts) ->
+read_request(#{<<"node">> := Node} = StoreOpts, Key, Opts) ->
+    ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
+    %% admissible is only executed in hb_http_multi
+    StoreOpts2 = (maps:without([<<"node">>], StoreOpts))#{<<"nodes">> => [Node]},
+    read_request(StoreOpts2, Key, Opts);
+read_request(#{ <<"nodes">> := Nodes } = StoreOpts, Key, Opts) when is_list(Nodes) ->
+    ?event(store_remote_node, {executing_read, {nodes, length(Nodes)}, {key, Key}}),
+    Config = request_config(Nodes, Key, StoreOpts),
     HTTPRes =
-        case StoreOpts of
-            #{ <<"node">> := Node } ->
-                ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
-                hb_http:get(
-                    Node,
-                    #{ <<"path">> => <<"/~cache@1.0/read">>, <<"read">> => Key },
-                    Opts
-                );
-            #{ <<"nodes">> := Nodes } when is_list(Nodes) ->
-                ?event(store_remote_node, {executing_read, {nodes, length(Nodes)}, {key, Key}}),
-                Config = multi_request_config(Nodes, Key, StoreOpts, Opts),
-                hb_http:request(
-                    <<"GET">>,
-                    Config,
-                    <<"/~cache@1.0/read">>,
-                    #{ <<"read">> => Key },
-                    Opts
-                );
-            _ ->
-                {error, not_found}
-        end,
+        hb_http:request(
+            <<"GET">>,
+            Config,
+            <<"/~cache@1.0/read">>,
+            #{ <<"read">> => Key },
+            Opts
+        ),
     case HTTPRes of
         {ok, Res} ->
             % returning the whole response to get the test-key
@@ -99,25 +96,25 @@ read_request(StoreOpts, Key, Opts) ->
         {error, _Err} ->
             ?event(store_remote_node, {read_not_found, {key, Key}}),
             {error, not_found}
-    end.
+    end;
+read_request(StoreOpts, _, _) ->
+    ?event(error, 
+        {missing_node_config, 
+            {name, maps:get(<<"name">>, StoreOpts, no_name_store)}}),
+    {error, not_found}.
 
-multi_request_config(Nodes, Key,  StoreOpts, Opts) ->
+%% @doc Override nodes and admissible configuration for custom behaviour.
+request_config(Nodes, Key, StoreOpts) ->
+    Admissible2 =
+        case maps:get(<<"admissible">>, StoreOpts, undefined) of
+            #{} = Admissible ->
+                Admissible#{<<"requested-key">> => Key};
+            Admissible ->
+                Admissible
+        end,
     #{
         <<"nodes">> => [ node_request(N) || N <- Nodes ],
-        <<"parallel">> => hb_maps:get(parallel, StoreOpts, true, Opts),
-        <<"responses">> => hb_maps:get(responses, StoreOpts, 1, Opts),
-        <<"stop-after">> => hb_maps:get(stop_after, StoreOpts, true, Opts),
-        <<"admissible">> =>
-            #{
-                <<"device">> => <<"cache@1.0">>,
-                <<"path">> => <<"expected-response">>,
-                <<"expected">> => Key,
-                %% Hook config rides the admissibility spec (the `Base' that
-                %% reaches `expected_response'), never `NodeOpts', no collision.
-                <<"on">> => hb_maps:get(<<"on">>, StoreOpts, #{}, Opts),
-                <<"commit-hook-response">> =>
-                    hb_opts:get(commit_hook_response, false, Opts)
-            }
+        <<"admissible">> => Admissible2
     }.
 
 read(StoreOpts, #{ <<"read">> := Key }, NodeOpts) ->
@@ -134,12 +131,6 @@ without_transport_commitment(Msg, Opts) when is_map(Msg) ->
     hb_message:without_unless_signed([<<"hashpath">>], WithoutCommitment, Opts);
 without_transport_commitment(Res, _Opts) ->
     Res.
-
-%% @doc Fan out a read across every configured node in parallel, taking the
-%% first response that the `~cache@1.0/expected-response' admissibility check
-%% proves to be the requested, cryptographically-valid message. Uses `NodeOpts'
-%% (the runtime node options) so the admissibility resolution can dispatch the
-%% `cache@1.0' device; `StoreOpts' carries the store-level `nodes'/`local-store'.
 
 %% @doc Extract the base URL of a configured remote node. Accepts a bare URL
 %% binary, or a node map carrying a `prefix' or `uri' key.
@@ -386,6 +377,13 @@ read_only_ids_test() ->
 	],
     ?assertEqual({error, not_found}, hb_cache:read(ID, #{ <<"store">> => RemoteStore })).
 
+%% @doc Return the admissibility predicate used by remote cache tests.
+cache_admissibility() ->
+    #{
+        <<"device">> => <<"cache-admissibility@1.0">>,
+        <<"path">> => <<"expected-response">>
+    }.
+
 %% @doc Read a committed message back through a multi-node remote store and
 %% confirm the admissibility check passes and returns the verified message.
 multiread_admissible_test() ->
@@ -401,7 +399,8 @@ multiread_admissible_test() ->
     Node2 = hb_http_server:start_node(#{ <<"store">> => LocalStore }),
     RemoteStore =
         [ #{ <<"store-module">> => hb_store_remote_node,
-             <<"nodes">> => [Node1, Node2] } ],
+             <<"nodes">> => [Node1, Node2],
+             <<"admissible">> => cache_admissibility() } ],
     {ok, Got} = hb_cache:read(SignedID, #{ <<"store">> => RemoteStore }),
     ?assertMatch(
         #{ <<"test-key">> := <<"router-v1">> },
@@ -432,7 +431,9 @@ multiread_rejects_wrong_content_test() ->
     ?assertMatch(#{ <<"k">> := <<"B">> }, hb_cache:ensure_all_loaded(Wrong)),
     %% With the gate (multi-node) the wrong message is rejected.
     MultiStore =
-        [ #{ <<"store-module">> => hb_store_remote_node, <<"nodes">> => [Node] } ],
+        [ #{ <<"store-module">> => hb_store_remote_node,
+             <<"nodes">> => [Node],
+             <<"admissible">> => cache_admissibility() } ],
     ?assertEqual(
         {error, not_found},
         hb_cache:read(IDA, #{ <<"store">> => MultiStore })

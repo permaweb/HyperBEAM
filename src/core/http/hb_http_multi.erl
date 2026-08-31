@@ -140,8 +140,7 @@ is_admissible(ok, Res, Admissible, Statuses, Node, Opts) ->
     ),
     AdmissibleStatus = admissible_status(Res, Statuses),
     ?event(debug_multi, {admissible_status, {result, AdmissibleStatus}}),
-    NodeOpts = hb_maps:get(<<"opts">>, Node, #{}, Opts),
-    AdmissibleResponse = admissible_response(Res, Admissible, NodeOpts, Opts),
+    AdmissibleResponse = admissible_response(Res, Admissible, Node, Opts),
     ?event(debug_multi, {admissible_response, {result, AdmissibleResponse}}),
     AdmissibleStatus andalso AdmissibleResponse;
 is_admissible(_, _, _, _, _, _) -> false.
@@ -238,20 +237,36 @@ admissible_status(Status, Statuses) when is_list(Statuses) ->
 
 %% @doc If an `admissable` message is set for the request, check if the response
 %% adheres to it. Else, return `true'.
-admissible_response(_Response, undefined, _NodeOpts, _Opts) -> true;
-admissible_response(Response, Msg, NodeOpts, Opts) ->
+admissible_response(_Response, undefined, _Node, _Opts) -> true;
+admissible_response(Response, Msg, Node, Opts) ->
     Path = hb_maps:get(<<"path">>, Msg, <<"is-admissible">>, Opts),
-    Req = Response#{ <<"path">> => Path },
-    %% Stamp the serving node's `http-reference' (from its per-node `opts') onto
-    %% the admissibility base so the hook can report which node was validated.
-    Base =
-        (hb_message:without_unless_signed([<<"path">>], Msg, Opts))#{
-            <<"http-reference">> => hb_maps:get(<<"http-reference">>, NodeOpts, <<>>, Opts)
-        },
-    ?event(debug_multi,
-        {executing_admissible_message, {message, Base}, {req, Req}}
-    ),
-    try hb_ao:resolve(Base, Req, Opts) of
+    Decorator = hb_maps:get(<<"decorator">>, Msg, undefined, Opts),
+    Req =
+        hb_private:set(
+            Response#{ <<"path">> => Path },
+            <<"admissibility/node">>,
+            Node,
+            Opts
+        ),
+    AdmissibleOpts =
+        Opts#{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
+    try
+        Base =
+            apply_decorator(
+                hb_message:without_unless_signed(
+                    [<<"path">>, <<"decorator">>],
+                    Msg,
+                    Opts
+                ),
+                Req,
+                Decorator,
+                AdmissibleOpts
+            ),
+        ?event(debug_multi,
+            {executing_admissible_message, {message, Base}, {req, Req}}
+        ),
+        hb_ao:resolve(Base, Req, AdmissibleOpts)
+    of
         {ok, Res} when is_atom(Res) or is_binary(Res) ->
             ?event(debug_multi, {admissible_result, {result, Res}}),
             hb_util:atom(Res) == true;
@@ -272,6 +287,20 @@ admissible_response(Response, Msg, NodeOpts, Opts) ->
             ),
             false
     end.
+
+%% @doc Apply the optional decorator before resolving the admissibility
+%% predicate.
+apply_decorator(Base, _Req, undefined, _Opts) -> Base;
+apply_decorator(Base, Req, Decorator, Opts) ->
+    DecoratorBase =
+        hb_message:without_unless_signed([<<"path">>], Decorator, Opts),
+    {ok, Decorated} =
+        hb_ao:resolve(
+            DecoratorBase,
+            Req#{ <<"path">> => <<"decorator">>, <<"body">> => Base },
+            Opts
+        ),
+    Decorated.
 
 %% @doc Collect the necessary number of responses, and stop workers if
 %% configured to do so.
@@ -359,6 +388,22 @@ ao_node(URL) ->
     #{<<"uri">> => <<URL/binary, "~meta@1.0/info">>,
       <<"opts">> => #{ <<"http-client">> => httpc }}.
 
+with_http_reference(Node, Ref) ->
+    Node#{
+        <<"opts">> =>
+            (maps:get(<<"opts">>, Node))#{ <<"http-reference">> => Ref }
+    }.
+
+http_reference_predicate() ->
+    #{
+        <<"device">> => <<"message@1.0">>,
+        <<"path">> => <<"http-reference">>,
+        <<"decorator">> =>
+            #{
+                <<"device">> => <<"stamp-decorator@1.0">>
+            }
+    }.
+
 dead_node() ->
     {ok, S} = gen_tcp:listen(0, []),
     {ok, Port} = inet:port(S),
@@ -405,6 +450,18 @@ multirequest_test_() ->
                 ?assertMatch({error, {no_viable_responses, _}},
                     multi([crash(), crash()],
                         #{<<"parallel">> => true, <<"stop-after">> => true}))
+            end},
+            {"http-reference predicate", fun() ->
+                Node = maps:get(fast, N),
+                Extra = #{ <<"admissible">> => http_reference_predicate() },
+                ?assertMatch(
+                    {ok, _},
+                    multi([with_http_reference(Node, <<"true">>)], Extra)
+                ),
+                ?assertMatch(
+                    {error, {no_viable_responses, _}},
+                    multi([with_http_reference(Node, <<"false">>)], Extra)
+                )
             end}
         ]} end}.
 
