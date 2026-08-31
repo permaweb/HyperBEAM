@@ -42,10 +42,17 @@
 -include("include/hb.hrl").
 
 %% @doc Initialize the device.
+-spec init(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ function := binary(), _ => _ }}.
 init(M1, _M2, Opts) ->
     {ok, hb_ao:set(M1, #{<<"function">> => <<"handle">>}, Opts)}.
 
 %% @doc On first pass prepare the call, on second pass get the results.
+-spec compute(
+    #{ pass => integer(), process => #{ _ => _ }, _ => _ },
+    #{ body => #{ _ => _ }, 'block-height' => integer(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }}.
 compute(M1, M2, Opts) ->
     case hb_ao:get(<<"pass">>, M1, Opts) of
         1 -> prep_call(M1, M2, Opts);
@@ -512,6 +519,8 @@ generate_stack(File) ->
     generate_stack(File, <<"WASM">>).
 generate_stack(File, Mode) ->
     generate_stack(File, Mode, #{}).
+-spec generate_stack(binary() | list(), binary(), #{ _ => _ }) ->
+    #{ _ => _ }.
 generate_stack(File, _Mode, RawOpts) ->
     Opts = normalize_test_opts(RawOpts),
     test_init(),

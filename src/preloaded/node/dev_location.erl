@@ -33,6 +33,8 @@ info() ->
 
 %% @doc Route either `POST' or `GET' requests to the correct handler for known
 %% location records.
+-spec known(#{ _ => _ }, #{ method => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _}.
 known(Base, Req, Opts) ->
     case hb_ao:get(<<"method">>, Req, <<"GET">>, Opts) of
         <<"POST">> -> write_foreign(Base, Req, Opts);
@@ -40,6 +42,7 @@ known(Base, Req, Opts) ->
     end.
 
 %% @doc List all known location records.
+-spec all(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, [_]} | {error, _}.
 all(_Base, _Req, Opts) ->
     dev_location_cache:list(Opts).
 
@@ -47,6 +50,8 @@ all(_Base, _Req, Opts) ->
 %% cache. If an address is provided, we search for the location of that
 %% specific scheduler. Otherwise, we return the location record for the current
 %% node's scheduler, if it has been established.
+-spec read(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, #{ status := integer(), body := binary(), _ => _ }}.
 read(Address, _Base, _Req, Opts) ->
     read(Address, Opts).
 read(Address, Opts) ->
@@ -100,6 +105,7 @@ find_target(Base, RawReq, Opts) ->
 
 %% @doc Generate a new scheduler location record and register it. We both send 
 %% the new scheduler-location to the given registry, and return it to the caller.
+-spec node(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _}.
 node(Base, RawReq, RawOpts) ->
     Opts =
         case hb_ao:resolve(
