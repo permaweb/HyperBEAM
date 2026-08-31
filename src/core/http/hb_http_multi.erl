@@ -292,12 +292,14 @@ admissible_response(Response, Msg, Node, Opts) ->
 %% predicate.
 apply_decorator(Base, _Req, undefined, _Opts) -> Base;
 apply_decorator(Base, Req, Decorator, Opts) ->
+    DecoratorPath =
+        hb_maps:get(<<"path">>, Decorator, <<"decorator">>, Opts),
     DecoratorBase =
-        hb_message:without_unless_signed([<<"path">>], Decorator, Opts),
+        hb_maps:without([<<"path">>], Decorator, Opts),
     {ok, Decorated} =
         hb_ao:resolve(
             DecoratorBase,
-            Req#{ <<"path">> => <<"decorator">>, <<"body">> => Base },
+            Req#{ <<"path">> => DecoratorPath, <<"body">> => Base },
             Opts
         ),
     Decorated.
