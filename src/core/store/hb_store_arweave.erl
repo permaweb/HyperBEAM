@@ -520,6 +520,25 @@ stale_ans104_offset_returns_error_test() ->
     Result = read(Opts, #{ <<"read">> => FakeID }, Opts),
     ?assertMatch({error, {id_mismatch, _, _}}, Result).
 
+%% @doc A TX with missing chunks returns after the first unavailable chunk.
+missing_chunk_tx_returns_not_found_test_() ->
+    {timeout, 0.2, fun() ->
+        IndexStore = [hb_test_utils:test_store(hb_store_volatile)],
+        Opts = #{ <<"index-store">> => IndexStore },
+        ID = <<"5sMXXxyVQvrEGaFDxO8jnaYBBcT2vlNt1NHFatzjVes">>,
+        ok = write_offset(
+            Opts,
+            ID,
+            <<"tx@1.0">>,
+            33391392104694,
+            47304018
+        ),
+        ?assertEqual(
+            {error, not_found},
+            read(Opts, #{ <<"read">> => ID }, Opts)
+        )
+    end}.
+
 %% @doc The L1 TX has bundle tags, but data is not a valid bundle.
 write_read_fake_bundle_tx_test() ->
     Store = [hb_test_utils:test_store()],
