@@ -6,6 +6,8 @@
 
 %% @doc Output the dot representation of the cache, or a specific path within
 %% the cache set by the `target' key in the request.
+-spec dot(#{ _ => _ }, #{ target => binary(), 'render-data' => boolean(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ 'content-type' := binary(), body := binary() }}.
 dot(_, Req, Opts) ->
     Target = hb_ao:get(<<"target">>, Req, all, Opts),
     Dot =
@@ -23,6 +25,8 @@ dot(_, Req, Opts) ->
 
 %% @doc Output the SVG representation of the cache, or a specific path within
 %% the cache set by the `target' key in the request.
+-spec svg(#{ _ => _ }, #{ target => binary(), 'render-data' => boolean(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ 'content-type' := binary(), body := binary() }}.
 svg(Base, Req, Opts) ->
     {ok, #{ <<"body">> := Dot }} = dot(Base, Req, Opts),
     ?event(cacheviz, {dot, Dot}),
@@ -33,6 +37,8 @@ svg(Base, Req, Opts) ->
 %% the `graph.js' library. If the request specifies a `target' key, we use that
 %% target. Otherwise, we generate a new target by writing the message to the
 %% cache and using the ID of the written message.
+-spec json(#{ _ => _ }, #{ target => binary(), 'max-size' => integer(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | #{ _ => _ }.
 json(Base, Req, Opts) ->
     ?event({json, {base, Base}, {req, Req}}),
     Target =
@@ -60,10 +66,12 @@ json(Base, Req, Opts) ->
     Res.
 
 %% @doc Return a renderer in HTML form for the JSON format.
+-spec index(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 index(Base, _, Opts) ->
     ?event({cacheviz_index, {base, Base}}),
     hb_http_server:static(<<"cacheviz@1.0">>, <<"graph.html">>, Opts).
 
 %% @doc Return a JS library that can be used to render the JSON format.
+-spec js(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 js(_, _, Opts) ->
     hb_http_server:static(<<"cacheviz@1.0">>, <<"graph.js">>, Opts).

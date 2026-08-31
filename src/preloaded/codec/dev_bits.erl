@@ -48,6 +48,11 @@
 %% @doc Decode the base message's body into a message of the fields named by
 %% the format given as the key's argument, or into a list of such messages
 %% for a `repeat(...)' format.
+-spec from(
+    #{ body => bitstring() },
+    #{ from => binary() },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ } | [#{ _ => _ }]} | {error, _}.
 from(Base, Req, Opts) ->
     maybe
         {ok, Body} ?= find_body(Base, Opts),
@@ -90,6 +95,8 @@ decode_records(Fields, Record, Body, Records) ->
     end.
 
 %% @doc Return the leading N bits of the base message's body.
+-spec take(#{ body => bitstring() }, #{ take => pos_integer() }, #{ _ => _ }) ->
+    {ok, bitstring()} | {error, _}.
 take(Base, Req, Opts) ->
     maybe
         {ok, Body} ?= find_body(Base, Opts),

@@ -46,6 +46,7 @@ info(_) ->
     }.
 
 %% @doc HTTP info response providing information about this device
+-spec info(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
 info(_Base, _Req, _Opts) ->
     InfoBody = #{
         <<"description">> => <<"Router device for handling outbound message routing">>,
@@ -91,6 +92,7 @@ info(_Base, _Req, _Opts) ->
 %% @doc Register function that allows telling the current node to register
 %% a new route with a remote router node. This function should also be idempotent.
 %% so that it can be called only once.
+-spec register(#{ _ => _ }, #{ as => binary(), _ => _ }, #{ _ => _ }) -> {ok, binary()}.
 register(_M1, M2, Opts) ->
     %% Extract all required parameters from options
     %% These values will be used to construct the registration message
@@ -138,6 +140,8 @@ register(_M1, M2, Opts) ->
     {ok, <<"Routes registered.">>}.
 
 %% @doc Device function that returns all known routes.
+-spec routes(#{ _ => _ }, #{ method => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, binary() | [_] | #{ _ => _ }} | {error, _}.
 routes(M1, M2, Opts) ->
     ?event({routes_msg, M1, M2}),
     Routes = load_routes(Opts),
@@ -236,6 +240,8 @@ routes(M1, M2, Opts) ->
 %% routing based on the Opts and request message provided, or as a standalone
 %% function, taking only the request message and the `Opts' map.
 route(Msg, Opts) -> route(undefined, Msg, Opts).
+-spec route(#{ _ => _ }, #{ path => binary(), 'route-path' => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, binary() | #{ _ => _ }} | {error, no_matches}.
 route(_, Msg, Opts) ->
     Routes = load_routes(Opts),
     MatchedRoute = match_routes(Msg, Routes, Opts),
@@ -405,6 +411,11 @@ do_apply_route(
 %% @doc Find the first matching template in a list of known routes. Allows the
 %% path to be specified by either the explicit `path' (for internal use by this
 %% module), or `route-path' for use by external devices and users.
+-spec match(#{ routes => [_] | #{ _ => _ }, _ => _ },
+    #{ path => binary(), 'route-path' => binary(), _ => _ },
+    #{ _ => _ }
+) ->
+    {ok, #{ _ => _ }} | {error, no_matching_route}.
 match(Base, Req, Opts) ->
     ?event(debug_preprocess,
         {matching_routes,
@@ -724,6 +735,11 @@ binary_to_bignum(Bin) when ?IS_ID(Bin) ->
     Num.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
+-spec preprocess(
+    #{ 'commit-request' => boolean(), _ => _ },
+    #{ request := #{ path := binary(), _ => _ }, body := _, _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ body := [_], _ => _ }}.
 preprocess(Base, RawReq, Opts) ->
     Req = hb_ao:get(<<"request">>, RawReq, Opts#{ <<"hashpath">> => ignore }),
     ?event(debug_preprocess, {called_preprocess,Req}),

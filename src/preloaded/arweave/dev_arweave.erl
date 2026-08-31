@@ -26,12 +26,15 @@ info() ->
     }.
 
 %% @doc Proxy the `/info' endpoint from the Arweave node.
+-spec status(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _}.
 status(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/info">>, Opts).
 
 %% @doc Returns the given transaction as an AO-Core message. By default, this
 %% embeds the `/raw` payload. Set `exclude-data` to true to return just the
 %% header.
+-spec tx(#{ _ => _ }, #{ method => binary(), tx => binary(), target => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _}.
 tx(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"POST">> -> post_tx(Base, Request, Opts);
@@ -45,6 +48,8 @@ tx(Base, Request, Opts) ->
 %% Note: When uploading ans104 transactions, this function will use the
 %% node's default bundler. If instead you want to use this node as a bundler
 %% you should use the ~bundler@1.0 device.
+-spec post_tx(#{ _ => _ }, #{ target => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _}.
 post_tx(Base, RawRequest, Opts) ->
     {ok, Request} = extract_target(Base, RawRequest, Opts),
     case hb_maps:find(<<"commitment-device">>, Request, Opts) of
@@ -157,6 +162,8 @@ get_tx(Base, Request, Opts) ->
 
 %% @doc A router for range requests by method. Both `HEAD` and `GET` requests
 %% are supported.
+-spec raw(#{ raw => binary(), _ => _ }, #{ method => binary(), raw => binary(), range => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, binary() | #{ _ => _ }} | {error, _}.
 raw(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"HEAD">> -> head_raw(Base, Request, Opts);
@@ -403,6 +410,17 @@ list_find(Key, [{XKey, Value} | Rest], Default) ->
 %%   offset and length.
 %% - `GET` with `txid`: `GET`s a chunk or range of bytes from the given offset,
 %%   relative to the given transaction's data root.
+-spec chunk(
+    #{ _ => _ },
+    #{
+        method => binary(),
+        offset => binary() | integer(),
+        length => binary() | integer(),
+        pending => binary(),
+        _ => _
+    },
+    #{ _ => _ }
+) -> {ok, binary() | #{ _ => _ }} | {error, _}.
 chunk(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"POST">> -> post_chunk(Base, Request, Opts);
@@ -719,6 +737,7 @@ get_chunk(Offset, Opts) ->
 %% block hash length (43 characters), it is used as an ID. If it is parsable as
 %% an integer, it is used as a block height. If it is not present, the current
 %% block is used.
+-spec block(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 block(Base, Request, Opts) when is_map(Base) ->
     Block =
         hb_ao:get_first(
@@ -796,9 +815,12 @@ only_if_cached(Req, Opts) ->
     ).
 
 %% @doc Retrieve the current block information from Arweave.
+-spec current(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _}.
 current(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/block/current">>, Opts).
 
+-spec price(#{ size => integer(), _ => _ }, #{ size => integer(), _ => _ }, #{ _ => _ }) ->
+    {ok, binary() | #{ _ => _ }} | {error, _}.
 price(Base, Request, Opts) ->
     Size =
         hb_ao:get_first(
@@ -816,11 +838,14 @@ price(Base, Request, Opts) ->
             request(<<"GET">>, <<"/price/", (hb_util:bin(Size))/binary>>, Opts)
     end.
 
+-spec tx_anchor(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, binary() | #{ _ => _ }} | {error, _}.
 tx_anchor(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/tx_anchor">>, Opts).
 
 %% @doc Retrieve either a list of the pending TXIDs on the configured Arweave
 %% nodes, or a specific unconfirmed transaction header by its TXID.
+-spec pending(#{ pending => binary(), _ => _ }, #{ pending => binary(), offset => integer(), _ => _ }, #{ _ => _ }) ->
+    {ok, binary() | [binary()] | #{ _ => _ }} | {error, _}.
 pending(Base, Request, Opts) ->
     case find_key(<<"pending">>, Base, Request, Opts) of
         not_found -> request(<<"GET">>, <<"/tx/pending">>, Opts);

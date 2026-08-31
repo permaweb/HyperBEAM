@@ -80,6 +80,8 @@ value_path(Other, Opts) ->
 
 %% @doc Match a single key-value pair in the index, returning all message IDs that
 %% contain the key-value pair.
+-spec match(binary() | atom(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, [binary()]} | {error, not_found}.
 match(Key, Base, _Req, Opts) -> match(Key, Base, Opts).
 match(Key, Base, Opts) ->
     Store = store(Opts),
@@ -98,6 +100,8 @@ match(Key, Base, Opts) ->
 
 %% @doc Match the full base message against the index, returning the intersection
 %% of all matches for each key.
+-spec all(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, [binary()]} | {error, not_found}.
 all(Base, _Req, Opts) ->
     IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
     Keys =

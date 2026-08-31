@@ -31,11 +31,15 @@
 %%% Public interface.
 
 %% @doc An alias for `item/3'.
+-spec tx(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ id := binary(), timestamp := integer(), _ => _ }} | {error, #{ _ => _ }}.
 tx(Base, Req, Opts) ->
     item(Base, Req, Opts).
 
 %% @doc Implements an `up.arweave.net'-compatible endpoint for
 %% bundling messages.
+-spec item(#{ _ => _ }, #{ 'bundler-subject' => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ id := binary(), timestamp := integer(), _ => _ }} | {error, #{ _ => _ }}.
 item(_Base, Req, Opts) ->
     ServerPID = ensure_server(Opts),
     ItemToProcess =

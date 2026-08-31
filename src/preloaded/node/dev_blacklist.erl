@@ -44,6 +44,8 @@
      <<"/~hyperbuddy@1.0/bundle.js">>]).
 
 %% @doc Hook handler: block requests that involve blacklisted IDs.
+-spec request(#{ _ => _ }, #{ request := #{ path => binary(), _ => _ }, _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, #{ _ => _ }} | {blocked_txid, binary()}.
 request(_Base, HookReq, Opts) ->
     ?event({hook_req, HookReq}),
     case hb_opts:get(blacklist_providers, false, Opts) of
