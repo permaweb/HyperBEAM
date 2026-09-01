@@ -1,9 +1,9 @@
 %%% @doc A lightweight in-memory HyperBEAM store backed by a single ETS
 %%% `ordered_set`. The store is volatile: it does not persist data to disk
-%%% ever, and -- critically -- can be configured to expire all data
-%%% periodically. This is useful for testing and as a short-term in-memory
-%%% cache, not for instances where an `ok` from the `write` function should
-%%% imply data persistence.
+%%% ever, and -- critically -- can be configured to reset all data
+%%% periodically or when the table exceeds a maximum number of entries. This
+%%% is useful for testing and as a short-term in-memory cache, not for instances
+%%% where an `ok` from the `write` function should imply data persistence.
 %%%
 %%% Each entry is stored as `{Path, {raw, Bin} | {link, Target} | group}`.
 %%% Group membership is discovered by a lexicographic range scan over the
@@ -239,7 +239,20 @@ put_entry(Opts, RawKey, Entry) ->
     ensure_parent_groups(Table, Key),
     ?event(store_volatile, {put, {key, Key}}),
     ets:insert(Table, {Key, Entry}),
+    maybe_reset_by_size(Opts, Table),
     ok.
+
+%% @doc Reset the store when its ETS entry count exceeds `max-size`.
+maybe_reset_by_size(Opts, Table) ->
+    case maps:get(<<"max-size">>, Opts, infinity) of
+        infinity ->
+            ok;
+        RawMaxSize ->
+            case ets:info(Table, size) > hb_util:int(RawMaxSize) of
+                true -> reset_store(Opts);
+                false -> ok
+            end
+    end.
 
 table(Opts) ->
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
@@ -397,6 +410,21 @@ max_ttl_test() ->
     ?assertEqual({ok, <<"c">>}, hb_store:read(StoreOpts, <<"a">>, #{})),
     timer:sleep(200),
     ?assertEqual({error, not_found}, hb_store:read(StoreOpts, <<"a">>, #{})),
+    ok = hb_store:stop(StoreOpts).
+
+max_size_test() ->
+    StoreOpts =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-max-size-test">>,
+            <<"max-size">> => 2
+        },
+    ok = hb_store:start(StoreOpts),
+    ok = hb_store:write(StoreOpts, #{ <<"a">> => <<"b">> }, #{}),
+    ?assertEqual({ok, <<"b">>}, hb_store:read(StoreOpts, <<"a">>, #{})),
+    ok = hb_store:write(StoreOpts, #{ <<"c">> => <<"d">> }, #{}),
+    ?assertEqual({error, not_found}, hb_store:read(StoreOpts, <<"a">>, #{})),
+    ?assertEqual({error, not_found}, hb_store:read(StoreOpts, <<"c">>, #{})),
     ok = hb_store:stop(StoreOpts).
 
 empty_root_reports_not_found_test() ->
