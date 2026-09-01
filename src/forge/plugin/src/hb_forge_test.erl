@@ -890,7 +890,7 @@ restore_test_print_env(Old) ->
 
 %% @doc Clear hb_opts' cached view of `HB_PRINT'.
 erase_print_env_cache() ->
-    erase(default_message_with_env).
+    persistent_term:erase(default_message_with_env).
 
 %% @doc Build runtime opts pointing at the freshly-built preloaded
 %% store; its devices resolve through the high-trust preloaded path.
