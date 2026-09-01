@@ -471,6 +471,10 @@ do_encode(List, Opts) when is_list(List) ->
     );
 do_encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
     hb_util:bin(Atom);
+do_encode({as, undefined, Msg}, Opts) when is_map(Msg) ->
+    do_encode(Msg, Opts);
+do_encode({as, DevID, Msg}, Opts) when is_map(Msg) ->
+    do_encode(hb_ao:set(Msg, <<"device">>, DevID, Opts), Opts);
 do_encode(Other, _Opts) ->
     Other.
 
@@ -907,6 +911,34 @@ lua_http_hook_test() ->
         }),
     {ok, Res} = hb_http:get(Node, <<"/hello?hello=world">>, #{}),
     ?assertMatch(#{ <<"body">> := <<"i like turtles">> }, Res).
+
+%% @doc Use a Lua module as a hook on a request whose path names a device,
+%% putting an `{as, Device, Msg}' subresolve directive in the parsed sequence.
+lua_http_hook_subresolve_test() ->
+    Module =
+        <<
+            """
+            function request(base, req, opts)
+                return "ok", { body = { { body = req.body[1].device } } }
+            end
+            """
+        >>,
+    Node = hb_http_server:start_node(
+        #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"on">> => #{
+                <<"request">> =>
+                    #{
+                        <<"device">> => <<"lua@5.3a">>,
+                        <<"module">> => #{
+                            <<"content-type">> => <<"application/lua">>,
+                            <<"body">> => Module
+                        }
+                    }
+            }
+        }),
+    {ok, Res} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
+    ?assertMatch(#{ <<"body">> := <<"meta@1.0">> }, Res).
 
 %% @doc Call a process whose `execution-device' is set to `lua@5.3a'.
 pure_lua_process_test() ->
