@@ -48,81 +48,13 @@ assignments_to_bundle(ProcID, Assignments, More, TimeInfo, RawOpts) ->
             )
     }}.
 
-%%% Return legacy net-SU compatible results.
-assignments_to_aos2(ProcID, Assignments, More, RawOpts) when is_map(Assignments) ->
-    assignments_to_aos2(
-        ProcID,
-        hb_util:message_to_ordered_list(Assignments),
-        More,
-        format_opts(RawOpts)
-    );
+%%% Return legacy net-SU compatible results. The implementation lives in
+%%% `lib_process' as the single canonical copy (declared via `-device_libraries'
+%%% by both the process and vm packages so it resolves from either); this is a
+%%% thin delegation to keep one copy.
 assignments_to_aos2(ProcID, Assignments, More, RawOpts) ->
-    Opts = format_opts(RawOpts),
-    {Timestamp, Height, Hash} = ar_timestamp:get(),
-    BodyStruct = 
-        #{
-            <<"page_info">> =>
-                #{
-                    <<"process">> => hb_util:human_id(ProcID),
-                    <<"has_next_page">> => More,
-                    <<"timestamp">> => list_to_binary(integer_to_list(Timestamp)),
-                    <<"block-height">> => list_to_binary(integer_to_list(Height)),
-                    <<"block-hash">> => hb_util:human_id(Hash)
-                },
-            <<"edges">> =>
-                lists:map(
-                    fun(Assignment) ->
-                        #{
-                            <<"cursor">> => cursor(Assignment, Opts),
-                            <<"node">> => assignment_to_aos2(Assignment, Opts)
-                        }
-                    end,
-                    Assignments
-                )
-        },
-    Encoded = hb_json:encode(BodyStruct),
-    ?event({body_struct, BodyStruct}),
-    ?event({encoded, {explicit, Encoded}}),
-    {ok, 
-        #{
-            <<"content-type">> => <<"application/json">>,
-            <<"body">> => Encoded
-        }
-    }.
+    lib_process:assignments_to_aos2(ProcID, Assignments, More, RawOpts).
 
-%% @doc Generate a cursor for an assignment. This should be the slot number, at
-%% least in the case of mainnet `ao.N.1' assignments. In the case of legacynet
-%% (`ao.TN.1') assignments, we may want to use the assignment ID.
-cursor(Assignment, RawOpts) ->
-    Opts = format_opts(RawOpts),
-    hb_ao:get(<<"slot">>, Assignment, Opts).
-%% @doc Convert an assignment to an AOS2-compatible JSON structure.
-assignment_to_aos2(Assignment, RawOpts) ->
-    Opts = format_opts(RawOpts),
-    Message = hb_ao:get(<<"body">>, Assignment, Opts),
-    AssignmentWithoutBody = hb_maps:without([<<"body">>], Assignment, Opts),
-    {ok, MessageStruct} =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"json-iface@1.0">> },
-            #{
-                <<"path">> => <<"to">>,
-                <<"message">> => Message
-            },
-            Opts
-        ),
-    {ok, AssignmentStruct} =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"json-iface@1.0">> },
-            #{
-                <<"path">> => <<"to">>,
-                <<"message">> => AssignmentWithoutBody
-            },
-            Opts
-        ),
-    #{
-        <<"message">> => MessageStruct,
-        <<"assignment">> => AssignmentStruct
-    }.
 
 %% @doc Convert an AOS2-style JSON structure to a normalized HyperBEAM
 %% assignments response.
