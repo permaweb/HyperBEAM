@@ -400,18 +400,60 @@ start_http2(ServerID, ProtoOpts, NodeMsg) ->
 init(Req, ServerID) ->
     case cowboy_req:method(Req) of
         <<"OPTIONS">> -> cors_reply(Req, ServerID);
+        <<"POST">> ->
+            NodeMsg = get_opts(#{ <<"http-server">> => ServerID }),
+            Limit = hb_opts:get(http_post_size_limit, infinity, NodeMsg),
+            case read_body(Req, Limit) of
+                {ok, Body} -> handle_request(Req, Body, ServerID);
+                {error, payload_too_large, Req2} ->
+                    payload_too_large_reply(Req2)
+            end;
         _ ->
             {ok, Body} = read_body(Req),
             handle_request(Req, Body, ServerID)
     end.
 
 %% @doc Helper to grab the full body of a HTTP request, even if it's chunked.
-read_body(Req) -> read_body(Req, <<>>).
-read_body(Req0, Acc) ->
+read_body(Req) -> read_body_unlimited(Req, <<>>).
+read_body(Req, infinity) -> read_body(Req);
+read_body(Req, RawLimit) ->
+    Limit = hb_util:int(RawLimit),
+    case cowboy_req:body_length(Req) of
+        Length when is_integer(Length), Length > Limit ->
+            {error, payload_too_large, Req};
+        _ ->
+            read_body(Req, <<>>, 0, Limit)
+    end.
+read_body_unlimited(Req0, Acc) ->
     case cowboy_req:read_body(Req0) of
         {ok, Data, _Req} -> {ok, << Acc/binary, Data/binary >>};
-        {more, Data, Req} -> read_body(Req, << Acc/binary, Data/binary >>)
+        {more, Data, Req} ->
+            read_body_unlimited(Req, << Acc/binary, Data/binary >>)
     end.
+
+%% @doc Read a request body without accumulating more than `Limit' bytes.
+read_body(Req0, Acc, Size, Limit) ->
+    ReadSize = min(8000000, Limit - Size + 1),
+    case cowboy_req:read_body(Req0, #{ length => ReadSize }) of
+        {ok, Data, _Req} when Size + byte_size(Data) =< Limit ->
+            {ok, << Acc/binary, Data/binary >>};
+        {ok, _Data, Req} ->
+            {error, payload_too_large, Req};
+        {more, Data, Req} when Size + byte_size(Data) =< Limit ->
+            read_body(
+                Req,
+                << Acc/binary, Data/binary >>,
+                Size + byte_size(Data),
+                Limit
+            );
+        {more, _Data, Req} ->
+            {error, payload_too_large, Req}
+    end.
+
+%% @doc Return HTTP 413 when a POST body exceeds the configured limit.
+payload_too_large_reply(Req) ->
+    Req2 = cowboy_req:reply(413, #{}, Req),
+    {ok, Req2, no_state}.
 
 %% @doc Reply to CORS preflight requests.
 cors_reply(Req, _ServerID) ->
@@ -720,3 +762,46 @@ restart_server_test() ->
         {ok, <<"server-2">>},
         hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{ <<"protocol">> => http2 })
     ).
+
+%% @doc Ensure that POST bodies over the configured limit return HTTP 413.
+post_size_limit_test() ->
+    Node = start_node(#{ <<"http-post-size-limit">> => 3 }),
+    {ok, {{_Version1, AllowedStatus, _Reason1}, _Headers1, _Body1}} =
+        httpc:request(
+            post,
+            {binary_to_list(Node), [], "application/octet-stream", <<"123">>},
+            [],
+            []
+        ),
+    {ok, {{_Version, Status, _Reason}, _Headers, _Body}} =
+        httpc:request(
+            post,
+            {binary_to_list(Node), [], "application/octet-stream", <<"1234">>},
+            [],
+            []
+        ),
+    ?assertNotEqual(413, AllowedStatus),
+    ?assertEqual(413, Status).
+
+%% @doc Ensure that the POST limit also applies without a content-length header.
+chunked_post_size_limit_test() ->
+    Node = start_node(#{
+        <<"http-post-size-limit">> => 3,
+        <<"protocol">> => http1
+    }),
+    #{ port := Port } = uri_string:parse(Node),
+    {ok, Socket} =
+        gen_tcp:connect("localhost", Port, [binary, {active, false}], 5000),
+    ok = gen_tcp:send(
+        Socket,
+        <<
+            "POST / HTTP/1.1\r\n",
+            "host: localhost\r\n",
+            "transfer-encoding: chunked\r\n",
+            "connection: close\r\n\r\n",
+            "4\r\n1234\r\n0\r\n\r\n"
+        >>
+    ),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
+    ok = gen_tcp:close(Socket),
+    ?assertMatch({_, _}, binary:match(Response, <<" 413 ">>)).
