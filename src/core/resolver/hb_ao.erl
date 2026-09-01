@@ -113,7 +113,8 @@
         <<"cache-control">>,
         <<"spawn-worker">>,
         <<"only">>,
-        <<"prefer">>
+        <<"prefer">>,
+        <<"vary-func">>
     ]
 ).
 
@@ -433,9 +434,13 @@ resolve_stage(2, Base, Req, Opts) ->
     case maybe_vary(Base, Req, Opts) of
         no_spec ->
             cache_lookup(Base, Req, Opts);
-        {ok, VariedBase, VariedReq, Overlay} ->
+        {ok, VariedBase, VariedReq, Overlay, VaryFunc} ->
             apply_vary_overlay(
-                cache_lookup(VariedBase, VariedReq, Opts),
+                cache_lookup(
+                    VariedBase,
+                    VariedReq,
+                    Opts#{ <<"vary-func">> => VaryFunc }
+                ),
                 Overlay,
                 Base,
                 Req,
@@ -524,6 +529,30 @@ resolve_stage(4, Base, Req, Opts) ->
                     error_infinite(Base, Req, Opts)
             end
     end.
+resolve_stage(
+    5,
+    Base,
+    Req,
+    ExecName,
+    Opts = #{ <<"vary-func">> := {Status, Func} }
+) ->
+    ?event_debug(debug_ao_core, {stage, 5, device_lookup}, Opts),
+    UserOpts = hb_maps:without(?TEMP_OPTS, Opts, Opts),
+    Key = hb_path:hd(Req, UserOpts),
+    resolve_stage(
+        6,
+        Func,
+        Base,
+        Req,
+        ExecName,
+        Opts#{
+            <<"add-key">> =>
+                case Status of
+                    add_key -> Key;
+                    _ -> false
+                end
+        }
+    );
 resolve_stage(5, Base, Req, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 5, device_lookup}, Opts),
     % Device lookup: Find the Erlang function that should be utilized to 
@@ -970,7 +999,7 @@ maybe_vary_loaded(Base, Req, Opts) when is_map(Base), is_map(Req) ->
                     add_key -> Key;
                     _ -> false
                 end,
-            hb_types:vary(
+            case hb_types:vary(
                 Device,
                 Key,
                 Func,
@@ -978,7 +1007,12 @@ maybe_vary_loaded(Base, Req, Opts) when is_map(Base), is_map(Req) ->
                 Base,
                 Req,
                 UserOpts
-            )
+            ) of
+                {ok, VariedBase, VariedReq, Overlay} ->
+                    {ok, VariedBase, VariedReq, Overlay, {Status, Func}};
+                no_spec ->
+                    no_spec
+            end
     end;
 maybe_vary_loaded(_Base, _Req, _Opts) ->
     no_spec.

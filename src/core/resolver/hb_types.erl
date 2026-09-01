@@ -550,7 +550,14 @@ apply_union([], _Value, _Opts) ->
     error;
 apply_union(Members, Value, Opts) ->
     case matching_union_member(Members, Value) of
-        {ok, Member} -> {ok, apply_schema(Member, Value, Opts)};
+        {ok, Member} ->
+            try {ok, apply_schema(Member, Value, Opts)}
+            catch
+                throw:{invalid_type, _, _} ->
+                    apply_coerced_union(Members, Value, Opts);
+                throw:{required_key_missing, _} ->
+                    apply_coerced_union(Members, Value, Opts)
+            end;
         error -> apply_coerced_union(Members, Value, Opts)
     end.
 
@@ -574,13 +581,31 @@ matching_union_member([Member | Rest], Value) ->
 
 apply_coerced_union([], _Value, _Opts) ->
     error;
-apply_coerced_union([Member | Rest], Value, Opts) ->
+apply_coerced_union(Members, Value, Opts) ->
+    {PassThrough, Constrained} =
+        lists:partition(fun is_passthrough_schema/1, Members),
+    apply_coerced_union_ordered(Constrained ++ PassThrough, Value, Opts).
+
+apply_coerced_union_ordered([], _Value, _Opts) ->
+    error;
+apply_coerced_union_ordered([Member | Rest], Value, Opts) ->
     try apply_schema(Member, Value, Opts) of
         Varied -> {ok, Varied}
     catch
-        throw:{invalid_type, _, _} -> apply_coerced_union(Rest, Value, Opts);
-        throw:{required_key_missing, _} -> apply_coerced_union(Rest, Value, Opts)
+        throw:{invalid_type, _, _} ->
+            apply_coerced_union_ordered(Rest, Value, Opts);
+        throw:{required_key_missing, _} ->
+            apply_coerced_union_ordered(Rest, Value, Opts)
     end.
+
+is_passthrough_schema(#{ <<"kind">> := Kind }) ->
+    lists:member(
+        Kind,
+        [<<"any">>, <<"wildcard">>, <<"remote">>, <<"alias">>,
+            <<"variable">>, <<"unknown">>]
+    );
+is_passthrough_schema(_) ->
+    false.
 
 coerce_type(_, undefined, _Opts) -> error;
 coerce_type(#{ <<"kind">> := <<"integer">> }, Value, _Opts) ->
@@ -716,6 +741,16 @@ check_type(#{ <<"kind">> := <<"bitstring">> }, Value) -> is_bitstring(Value);
 check_type(#{ <<"kind">> := <<"boolean">> }, Value) -> is_boolean(Value);
 check_type(#{ <<"kind">> := <<"atom">> }, Value) -> is_atom(Value);
 check_type(#{ <<"kind">> := <<"pid">> }, Value) -> is_pid(Value);
+check_type(#{ <<"kind">> := <<"message">>, <<"keys">> := Keys }, Value)
+        when is_map(Value) ->
+    maps:fold(
+        fun
+            (Key, #{ <<"presence">> := required }, true) -> maps:is_key(Key, Value);
+            (_, _, Acc) -> Acc
+        end,
+        true,
+        Keys
+    );
 check_type(#{ <<"kind">> := <<"message">> }, Value) -> is_map(Value);
 check_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }, Value) ->
     is_tuple(Value)
@@ -940,6 +975,60 @@ union_passthrough_members_do_not_swallow_constrained_members_test() ->
                 <<"members">> => [any_type(), wildcard_type(), Binary]
             },
             <<"value">>,
+            #{}
+        )
+    ),
+    FirstMessage =
+        message_type(
+            #{
+                <<"first">> =>
+                    #{ <<"presence">> => required, <<"type">> => Integer }
+            },
+            none
+        ),
+    SecondMessage =
+        message_type(
+            #{
+                <<"second">> =>
+                    #{ <<"presence">> => required, <<"type">> => Integer }
+            },
+            none
+        ),
+    ?assertEqual(
+        #{ <<"second">> => 2 },
+        apply_schema(
+            #{
+                <<"kind">> => <<"union">>,
+                <<"members">> => [FirstMessage, SecondMessage]
+            },
+            #{ <<"second">> => 2 },
+            #{}
+        )
+    ),
+    IntMessage =
+        message_type(
+            #{
+                <<"value">> =>
+                    #{ <<"presence">> => required, <<"type">> => Integer }
+            },
+            none
+        ),
+    BinaryMessage =
+        message_type(
+            #{
+                <<"value">> =>
+                    #{ <<"presence">> => required, <<"type">> => Binary }
+            },
+            none
+        ),
+    ?assertEqual(
+        #{ <<"value">> => <<"text">> },
+        apply_schema(
+            #{
+                <<"kind">> => <<"union">>,
+                <<"members">> => [IntMessage, BinaryMessage]
+            },
+            #{ <<"value">> => <<"text">> },
             #{}
         )
     ).
