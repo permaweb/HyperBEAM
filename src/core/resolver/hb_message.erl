@@ -62,6 +62,7 @@
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
 -export([verify/1, verify/2, verify/3, paranoid_verify/2, paranoid_verify/3]).
 -export([commit/2, commit/3, signers/2, type/1, minimize/1]).
+-export([verified_committers/2, verified_committers/3]).
 -export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
 -export([commitment/2, commitment/3, commitments/3]).
 -export([with_only_committed/2, without_unless_signed/3]).
@@ -672,6 +673,107 @@ signers(Msg, Opts) ->
     hb_util:ok(
         hb_ao:raw(<<"message@1.0">>, <<"committers">>, Msg, #{}, Opts)
     ).
+
+%% @doc Return committers whose commitments verify and cover the required keys.
+verified_committers(Request, Opts) ->
+    verified_committers(Request, [], Opts).
+
+verified_committers(Request, RequiredKeys, Opts) ->
+    Commitments = hb_maps:get(<<"commitments">>, Request, #{}, Opts),
+    lists:filtermap(
+        fun({CommitmentID, Commitment}) ->
+            LoadedCommitment = hb_cache:ensure_all_loaded(Commitment, Opts),
+            case valid_commitment(
+                Request,
+                CommitmentID,
+                LoadedCommitment,
+                RequiredKeys,
+                Opts
+            ) of
+                {true, Committer} -> {true, Committer};
+                false -> false
+            end
+        end,
+        hb_maps:to_list(Commitments, Opts)
+    ).
+
+valid_commitment(
+        Request,
+        CommitmentID,
+        Commitment =
+            #{
+                <<"commitment-device">> := _CommitmentDevice
+            },
+        RequiredKeys,
+        Opts) ->
+    Committed = commitment_keys(Commitment, Opts),
+    Present = committed_keys_present(Committed, RequiredKeys),
+    case Present andalso verify_commitment(Request, CommitmentID, Opts) of
+        true ->
+            case verified_committer(Commitment, Opts) of
+                undefined -> false;
+                Committer -> {true, Committer}
+            end;
+        false -> false
+    end;
+valid_commitment(_Request, _CommitmentID, _Commitment, _RequiredKeys, _Opts) ->
+    false.
+
+%% @doc Return the verified committer identity implied by a commitment.
+verified_committer(Commitment, Opts) ->
+    case hb_maps:get(<<"keyid">>, Commitment, undefined, Opts) of
+        undefined ->
+            hb_maps:get(<<"committer">>, Commitment, undefined, Opts);
+        KeyID ->
+            case {
+                hb_maps:get(<<"commitment-device">>, Commitment, undefined, Opts),
+                hb_maps:get(<<"type">>, Commitment, undefined, Opts)
+            } of
+                {<<"ans104@1.0">>, Type} when Type =/= undefined ->
+                    ans104_keyid_to_committer(KeyID, Type);
+                _ ->
+                    lib_httpsig_keyid:keyid_to_committer(KeyID)
+            end
+    end.
+
+%% @doc Return the committer implied by an ANS-104 keyid and signature type.
+ans104_keyid_to_committer(<<"publickey:", _/binary>> = KeyID, Type) ->
+    try
+        hb_util:human_id(
+            ar_wallet:to_address(
+                hb_util:decode(hb_util:remove_scheme_prefix(KeyID)),
+                ar_tx:deserialize_sig_type(Type)
+            )
+        )
+    catch _:_ ->
+        undefined
+    end;
+ans104_keyid_to_committer(KeyID, _Type) ->
+    lib_httpsig_keyid:keyid_to_committer(KeyID).
+
+committed_keys_present(Committed, RequiredKeys) ->
+    lists:all(
+        fun(Key) -> lists:member(Key, Committed) end,
+        RequiredKeys
+    ).
+
+verify_commitment(Request, CommitmentID, Opts) ->
+    try
+        {ok, VerificationBase} = hb_message:with_only_committed(Request, Opts),
+        hb_message:verify(
+            VerificationBase,
+            #{ <<"commitment-ids">> => [CommitmentID] },
+            Opts
+        )
+    catch
+        _:_ -> false
+    end.
+
+commitment_keys(Commitment, Opts) ->
+    RawCommitted = maps:get(<<"committed">>, Commitment, []),
+    try hb_util:message_to_ordered_list(RawCommitted, Opts)
+    catch _:_ -> RawCommitted
+    end.
 
 %% @doc Pretty-print a message.
 print(Msg) -> print(Msg, 0).
