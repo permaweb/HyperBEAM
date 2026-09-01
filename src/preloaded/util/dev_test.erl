@@ -4,6 +4,7 @@
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
 -export([index/3, postprocess/3, load/3]).
+-export([vary_projection/3, vary_wildcard/3, vary_unspecified/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -243,6 +244,28 @@ mangle(Base, _Req, Opts) ->
             end
     end.
 
+%% @doc Return the inputs selected by the function's schema.
+-spec vary_projection(
+    #{ required := integer(), optional => binary(), deep := #{ slot := integer() } },
+    #{ path := binary(), deep_request := #{ slot := integer() } },
+    #{ _ => _ }
+) -> {ok, #{ base := #{ _ => _ }, request := #{ _ => _ } }}.
+vary_projection(Base, Req, _Opts) ->
+    {ok, #{ <<"base">> => Base, <<"request">> => Req }}.
+
+%% @doc Return schema-selected inputs while retaining wildcard keys.
+-spec vary_wildcard(
+    #{ required := integer(), _ => _ },
+    #{ path := binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ base := #{ _ => _ }, request := #{ _ => _ } }}.
+vary_wildcard(Base, Req, _Opts) ->
+    {ok, #{ <<"base">> => Base, <<"request">> => Req }}.
+
+%% @doc Return an input without declaring a Vary schema.
+vary_unspecified(Base, _Req, _Opts) ->
+    {ok, maps:get(<<"noise">>, Base)}.
+
 %%% Tests
 
 %% @doc Tests the resolution of a default function.
@@ -287,3 +310,137 @@ restore_test() ->
     Base = #{ <<"device">> => <<"test-device@1.0">>, <<"already-seen">> => [1] },
     {ok, Res} = hb_ao:resolve(Base, <<"restore">>, #{}),
     ?assertEqual([1], hb_private:get(<<"test-key/started-state">>, Res, #{})).
+
+vary_projection_and_coercion_test() ->
+    Opts = vary_opts(),
+    {ok, RequiredPath} = hb_cache:write(<<"7">>, Opts),
+    {ok, DeepPath} =
+        hb_cache:write(
+            #{ <<"slot">> => <<"8">>, <<"noise">> => <<"drop">> },
+            Opts
+        ),
+    {ok, DeepRequestPath} =
+        hb_cache:write(#{ <<"slot">> => <<"9">> }, Opts),
+    {ok, Res} =
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"required">> => {link, RequiredPath, #{}},
+                <<"deep">> => {link, DeepPath, #{}},
+                <<"noise">> => <<"drop">>
+            },
+            #{
+                <<"path">> => <<"vary-projection">>,
+                <<"deep-request">> => {link, DeepRequestPath, #{}},
+                <<"noise">> => <<"drop">>
+            },
+            Opts
+        ),
+    VariedBase = maps:get(<<"base">>, Res),
+    VariedReq = maps:get(<<"request">>, Res),
+    ?assertEqual(7, maps:get(<<"required">>, VariedBase)),
+    ?assertEqual(#{ <<"slot">> => 8 }, maps:get(<<"deep">>, VariedBase)),
+    ?assertNot(maps:is_key(<<"optional">>, VariedBase)),
+    ?assertNot(maps:is_key(<<"noise">>, VariedBase)),
+    ?assertEqual(
+        #{ <<"slot">> => 9 },
+        maps:get(<<"deep-request">>, VariedReq)
+    ),
+    ?assertNot(maps:is_key(<<"noise">>, VariedReq)).
+
+vary_required_key_missing_test() ->
+    Opts = vary_opts(),
+    ?assertThrow(
+        {required_key_missing, <<"required">>},
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"deep">> => #{ <<"slot">> => 1 }
+            },
+            #{
+                <<"path">> => <<"vary-projection">>,
+                <<"deep-request">> => #{ <<"slot">> => 1 }
+            },
+            Opts
+        )
+    ).
+
+vary_wildcard_preserves_other_keys_test() ->
+    Opts = vary_opts(),
+    {ok, BaseExtraPath} = hb_cache:write(<<"base">>, Opts),
+    {ok, RequestExtraPath} = hb_cache:write(<<"request">>, Opts),
+    BaseExtra = {link, BaseExtraPath, #{}},
+    RequestExtra = {link, RequestExtraPath, #{}},
+    {ok, Res} =
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"required">> => <<"1">>,
+                <<"extra">> => BaseExtra
+            },
+            #{
+                <<"path">> => <<"vary-wildcard">>,
+                <<"extra">> => RequestExtra
+            },
+            Opts
+        ),
+    ?assertEqual(1, maps:get(<<"required">>, maps:get(<<"base">>, Res))),
+    ?assertEqual(BaseExtra, maps:get(<<"extra">>, maps:get(<<"base">>, Res))),
+    ?assertEqual(
+        RequestExtra,
+        maps:get(<<"extra">>, maps:get(<<"request">>, Res))
+    ).
+
+vary_unspecified_function_is_identity_test() ->
+    Opts = vary_opts(),
+    ?assertEqual(
+        {ok, <<"kept">>},
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"noise">> => <<"kept">>
+            },
+            <<"vary-unspecified">>,
+            Opts
+        )
+    ).
+
+vary_projection_uses_projected_cache_key_test() ->
+    Store = hb_test_utils:test_store(),
+    Opts =
+        #{
+            <<"store">> => Store,
+            <<"cache-control">> => [<<"always">>],
+            <<"spawn-worker">> => false
+        },
+    Base =
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"required">> => <<"7">>,
+            <<"deep">> => #{ <<"slot">> => <<"8">> },
+            <<"noise">> => <<"first">>
+        },
+    Req =
+        #{
+            <<"path">> => <<"vary-projection">>,
+            <<"deep-request">> => #{ <<"slot">> => <<"9">> }
+        },
+    {ok, First} = hb_ao:resolve(Base, Req, Opts),
+    {ok, Second} =
+        hb_ao:resolve(
+            Base#{ <<"noise">> => <<"second">> },
+            Req,
+            Opts#{ <<"cache-control">> => [<<"only-if-cached">>] }
+        ),
+    ?assertEqual(7, hb_ao:get(<<"base/required">>, Second, Opts)),
+    ?assertEqual(8, hb_ao:get(<<"base/deep/slot">>, Second, Opts)),
+    ?assertEqual(9, hb_ao:get(<<"request/deep-request/slot">>, Second, Opts)).
+
+vary_opts() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:reset(Store),
+    #{
+        <<"store">> => Store,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"spawn-worker">> => false
+    }.
