@@ -1561,7 +1561,7 @@ head_raw_ans104_test_parallel() ->
 head_raw_ans104_invalid_tags_test() ->
     Tags = [{<<"Content-Type">>, <<"application/json">>}],
     EncodedTags = ar_bundles:encode_tags(Tags),
-    TagsWithoutTerminator = binary:part(EncodedTags, 0, byte_size(EncodedTags) - 1),
+    CorruptedTags = <<EncodedTags/binary, 0>>,
     Body = <<"{\"$schema\":\"https://example.invalid/schema\"}">>,
     DataItem =
         <<
@@ -1571,8 +1571,8 @@ head_raw_ans104_invalid_tags_test() ->
             0,
             0,
             (length(Tags)):64/little,
-            (byte_size(TagsWithoutTerminator)):64/little,
-            TagsWithoutTerminator/binary,
+            (byte_size(CorruptedTags)):64/little,
+            CorruptedTags/binary,
             Body/binary
         >>,
     ?assertMatch(
