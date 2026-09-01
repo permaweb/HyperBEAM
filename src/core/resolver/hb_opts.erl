@@ -15,6 +15,7 @@
 -module(hb_opts).
 -export([get/1, get/2, get/3, as/2, identities/1, load/1, load/2, load_bin/2]).
 -export([default_message/0, default_message_with_env/0, mimic_default_types/3]).
+-export([merge_config/2]).
 -export([ensure_node_history/2]).
 -export([check_required_opts/2]).
 -include("include/hb.hrl").
@@ -702,6 +703,40 @@ load_paths([P | Rest], Opts, Acc) ->
         {error, _} = Err -> Err
     end.
 
+%% @doc Merge a loaded configuration into the default node message. Root keys
+%% prefixed with `+' append to the default value, while suffixed keys prepend.
+merge_config(Default, Loaded) ->
+    maps:fold(
+        fun(Key, Value, Acc) ->
+            case config_extension(Key) of
+                {append, BaseKey} ->
+                    Acc#{ BaseKey => config_list(maps:get(BaseKey, Default, []))
+                        ++ config_list(Value) };
+                {prepend, BaseKey} ->
+                    Acc#{ BaseKey => config_list(Value)
+                        ++ config_list(maps:get(BaseKey, Default, [])) };
+                false -> Acc#{ Key => Value }
+            end
+        end,
+        Default,
+        Loaded
+    ).
+
+config_extension(<<"+", Rest/binary>>) when Rest =/= <<>> ->
+    case binary:last(Rest) of
+        $+ -> false;
+        _ -> {append, Rest}
+    end;
+config_extension(Key) when is_binary(Key), byte_size(Key) > 1 ->
+    case binary:last(Key) of
+        $+ -> {prepend, binary:part(Key, 0, byte_size(Key) - 1)};
+        _ -> false
+    end;
+config_extension(_) -> false.
+
+config_list(Value) when is_list(Value) -> Value;
+config_list(Value) when is_binary(Value); is_atom(Value); is_map(Value) -> [Value].
+
 %% @doc Convert a path to a device from its file extension. If no extension is
 %% provided, we default to `flat@1.0'.
 path_to_device(Path) ->
@@ -1082,6 +1117,71 @@ load_multi_mixed_extensions_test() ->
     ?assertMatch(
         [#{ <<"store-module">> := hb_store_fs }|_],
         hb_maps:get(<<"store">>, Conf)
+    ).
+
+merge_config_extensions_test() ->
+    Default = #{
+        <<"store">> => [#{ a => b }],
+        <<"atom">> => default,
+        <<"binary">> => <<"default">>,
+        <<"map">> => #{ default => true },
+        <<"nested">> => #{ <<"+store">> => [nested] }
+    },
+    ?assertEqual(
+        [#{ a => b }, #{ b => c }],
+        maps:get(
+            <<"store">>,
+            merge_config(Default, #{ <<"+store">> => [#{ b => c }] })
+        )
+    ),
+    ?assertEqual(
+        [#{ b => c }, #{ a => b }],
+        maps:get(
+            <<"store">>,
+            merge_config(Default, #{ <<"store+">> => #{ b => c } })
+        )
+    ),
+    ?assertEqual(
+        [default, loaded],
+        maps:get(
+            <<"atom">>,
+            merge_config(Default, #{ <<"+atom">> => loaded })
+        )
+    ),
+    ?assertEqual(
+        [<<"default">>, <<"loaded">>],
+        maps:get(
+            <<"binary">>,
+            merge_config(Default, #{ <<"+binary">> => <<"loaded">> })
+        )
+    ),
+    ?assertEqual(
+        [#{ loaded => true }, #{ default => true }],
+        maps:get(
+            <<"map">>,
+            merge_config(Default, #{ <<"map+">> => #{ loaded => true } })
+        )
+    ),
+    ?assertEqual(
+        #{ <<"+store">> => [loaded_nested] },
+        maps:get(
+            <<"nested">>,
+            merge_config(
+                Default,
+                #{ <<"nested">> => #{ <<"+store">> => [loaded_nested] } }
+            )
+        )
+    ),
+    ?assertNot(maps:is_key(
+        <<"+store">>,
+        merge_config(Default, #{ <<"+store">> => [] })
+    )),
+    ?assertEqual(
+        untouched,
+        maps:get(
+            <<"+store+">>,
+            merge_config(Default, #{ <<"+store+">> => untouched })
+        )
     ).
 
 preloaded_env_override_test() ->
