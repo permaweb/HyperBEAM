@@ -504,7 +504,7 @@ raw_default_message() ->
                     <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
                 }
             ],
-        <<"match-index">> => [?DEFAULT_PRIMARY_STORE],
+        <<"match-index">> => false,
         <<"priv-store">> =>
             [
                 #{
