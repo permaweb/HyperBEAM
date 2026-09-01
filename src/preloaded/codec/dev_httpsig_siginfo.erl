@@ -569,6 +569,10 @@ escaped_value_test() ->
             <<"2">> => #{
                 <<"name">> => <<"Quotes">>,
                 <<"value">> => <<"{\"function\":\"mint\"}">>
+            },
+            <<"3">> => #{
+                <<"name">> => <<"Data:Protocol">>,
+                <<"value">> => <<"ao">>
             }
         },
         <<"signature">> => hb_util:encode(Signature),

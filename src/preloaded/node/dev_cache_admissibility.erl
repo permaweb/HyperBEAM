@@ -27,7 +27,7 @@ expected_response(Base, Req, Opts) ->
 
 %% @doc Fire the `admissible-response' hook when a peer read is admitted. Spawns
 %% by default so the read returns without waiting for the downstream handler;
-%% set `admissible_response_hook_async => false' to run it synchronously.
+%% set `<<"admissible-response-hook-async">>=> false' to run it synchronously.
 fire_admissible_response_hook(Base, Opts) ->
     % Relay + handler-device loading resolve against the node default store (local
     % cache + gateway). Drop the request's remote-node store, or those reads
@@ -38,8 +38,8 @@ fire_admissible_response_hook(Base, Opts) ->
         Local#{
             <<"on">> => hb_maps:get(<<"on">>, Base, #{}, Opts),
             <<"commit-hook-response">> =>
-                hb_opts:get(commit_hook_response, false, Base),
-            cache_control => [<<"no-cache">>, <<"no-store">>]
+                hb_opts:get(<<"commit-hook-response">>, false, Base),
+            <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
         },
     Run =
         fun() ->
@@ -49,7 +49,7 @@ fire_admissible_response_hook(Base, Opts) ->
                 HookOpts
             )
         end,
-    case hb_opts:get(admissible_response_hook_async, true, Opts) of
+    case hb_opts:get(<<"admissible-response-hook-async">>, true, Opts) of
         false -> Run();
         _ ->
             spawn(
@@ -71,7 +71,7 @@ admissible_response_body(Base, Opts) ->
         #{
             <<"reference">> => Ref,
             <<"status-class">> => <<"success">>,
-            <<"event">> => <<"is_admissible">>
+            <<"event">> => <<"is-admissible">>
         },
     case hb_opts:get(commit_hook_response, false, Opts) of
         true ->
@@ -122,5 +122,112 @@ missing_expected_test() ->
             #{}
         )
     ).
+
+%% @doc A response with the expected commitment id but modified committed data
+%% is rejected.
+tampered_response_test() ->
+    SignOpts = #{ <<"priv-wallet">> => ar_wallet:new() },
+    Response = hb_message:commit(#{ <<"test">> => <<"value">> }, SignOpts),
+    Expected = hb_message:id(Response, signed, SignOpts),
+    Base =
+        #{
+            <<"device">> => <<"cache-admissibility@1.0">>,
+            <<"requested-key">> => Expected
+        },
+    Tampered =
+        Response#{
+            <<"test">> => <<"tampered">>,
+            <<"path">> => <<"expected-response">>
+        },
+    ?assertEqual({ok, false}, hb_ao:resolve(Base, Tampered, #{})).
+
+%% @doc Build an admitted response and a hook that reports its invocation to
+%% the calling test process.
+hook_test_messages(Ref) ->
+    Parent = self(),
+    SignOpts = #{ <<"priv-wallet">> => ar_wallet:new() },
+    Response = hb_message:commit(#{ <<"test">> => <<"value">> }, SignOpts),
+    Expected = hb_message:id(Response, signed, SignOpts),
+    Handler =
+        #{
+            <<"device">> =>
+                #{
+                    notify =>
+                        fun(_Base, Req, _Opts) ->
+                            Parent ! {Ref, Req},
+                            {ok, Req}
+                        end
+                },
+            <<"path">> => <<"notify">>
+        },
+    Base =
+        #{
+            <<"device">> => <<"cache-admissibility@1.0">>,
+            <<"requested-key">> => Expected,
+            <<"on">> => #{ <<"admissible-response">> => Handler }
+        },
+    {Base, Response#{ <<"path">> => <<"expected-response">> }}.
+
+%% @doc The synchronous option runs the admitted-response hook before the
+%% predicate resolution returns.
+synchronous_hook_test() ->
+    Ref = make_ref(),
+    {Base, Req} = hook_test_messages(Ref),
+    ?assertEqual(
+        {ok, true},
+        hb_ao:resolve(
+            Base,
+            Req,
+            #{ <<"admissible-response-hook-async">> => false }
+        )
+    ),
+    receive
+        {Ref, HookReq} ->
+            Body = hb_maps:get(<<"body">>, HookReq, #{}),
+            ?assertEqual(
+                <<"is-admissible">>,
+                hb_maps:get(<<"event">>, Body, undefined)
+            )
+    after 0 ->
+        ?assert(false)
+    end.
+
+%% @doc The configured hook response is signed and verifies before delivery.
+signed_hook_response_test() ->
+    Ref = make_ref(),
+    {Base, Req} = hook_test_messages(Ref),
+    SignedBase = Base#{ <<"commit-hook-response">> => true },
+    ?assertEqual(
+        {ok, true},
+        hb_ao:resolve(
+            SignedBase,
+            Req,
+            #{ <<"admissible-response-hook-async">> => false }
+        )
+    ),
+    receive
+        {Ref, HookReq} ->
+            Body = hb_maps:get(<<"body">>, HookReq, #{}),
+            ?assert(hb_message:verify(Body, all, #{}))
+    after 0 ->
+        ?assert(false)
+    end.
+
+%% @doc The default asynchronous mode eventually invokes the admitted-response
+%% hook without changing the predicate result.
+asynchronous_hook_test() ->
+    Ref = make_ref(),
+    {Base, Req} = hook_test_messages(Ref),
+    ?assertEqual({ok, true}, hb_ao:resolve(Base, Req, #{})),
+    receive
+        {Ref, HookReq} ->
+            Body = hb_maps:get(<<"body">>, HookReq, #{}),
+            ?assertEqual(
+                <<"is-admissible">>,
+                hb_maps:get(<<"event">>, Body, undefined)
+            )
+    after 1000 ->
+        ?assert(false)
+    end.
 
 -endif.

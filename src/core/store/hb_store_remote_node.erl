@@ -16,11 +16,13 @@
 %%
 %% @param StoreOpts A message with the store options (ignored).
 %% @returns remote.
-scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_StoreOpts) ->
     remote.
 
 %% @doc Start local store
+%%
+%% @param StoreOpts A message with the store options.
+%% @returns `ok` or `{failure, _}`.
 start(#{<<"local-store">> := LocalStore}) ->
     hb_store:start(LocalStore);
 start(_StoreOpts) ->
@@ -43,7 +45,7 @@ resolve(#{ <<"node">> := Node }, #{ <<"resolve">> := Key }, _NodeOpts) ->
 
 %% @doc Determine the type of value at a given key.
 %%
-%% Remote nodes support `simple', `composite', or `{error, not_found}'.
+%% Remote nodes support `simple', or `{error, not_found}'.
 %%
 %% @param Opts A map of options (including node configuration).
 %% @param Key The key whose value type is determined.
@@ -69,11 +71,11 @@ read_request(#{ <<"only-ids">> := true }, Key, _NodeOpts) when not ?IS_ID(Key) -
 read_request(#{<<"node">> := Node} = StoreOpts, Key, Opts) ->
     ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
     %% admissible is only executed in hb_http_multi
-    StoreOpts2 = (maps:without([<<"node">>], StoreOpts))#{<<"nodes">> => [Node]},
+    StoreOpts2 = (hb_maps:without([<<"node">>], StoreOpts, Opts))#{<<"nodes">> => [Node]},
     read_request(StoreOpts2, Key, Opts);
 read_request(#{ <<"nodes">> := Nodes } = StoreOpts, Key, Opts) when is_list(Nodes) ->
     ?event(store_remote_node, {executing_read, {nodes, length(Nodes)}, {key, Key}}),
-    Config = request_config(Nodes, Key, StoreOpts),
+    Config = request_config(Nodes, Key, StoreOpts, Opts),
     HTTPRes =
         hb_http:request(
             <<"GET">>,
@@ -97,22 +99,22 @@ read_request(#{ <<"nodes">> := Nodes } = StoreOpts, Key, Opts) when is_list(Node
             ?event(store_remote_node, {read_not_found, {key, Key}}),
             {error, not_found}
     end;
-read_request(StoreOpts, _, _) ->
-    ?event(error, 
-        {missing_node_config, 
-            {name, maps:get(<<"name">>, StoreOpts, no_name_store)}}),
+read_request(StoreOpts, _, Opts) ->
+    ?event(error,
+        {missing_node_config,
+            {name, hb_maps:get(<<"name">>, StoreOpts, no_name_store, Opts)}}),
     {error, not_found}.
 
 %% @doc Override nodes and admissible configuration for custom behaviour.
-request_config(Nodes, Key, StoreOpts) ->
+request_config(Nodes, Key, StoreOpts, Opts) ->
     Admissible2 =
-        case maps:get(<<"admissible">>, StoreOpts, undefined) of
+        case hb_maps:get(<<"admissible">>, StoreOpts, undefined, Opts) of
             #{} = Admissible ->
                 Admissible#{<<"requested-key">> => Key};
             Admissible ->
                 Admissible
         end,
-    #{
+    StoreOpts#{
         <<"nodes">> => [ node_request(N) || N <- Nodes ],
         <<"admissible">> => Admissible2
     }.
