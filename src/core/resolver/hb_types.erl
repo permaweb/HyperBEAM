@@ -453,7 +453,7 @@ apply_schema(
     Explicit =
         maps:fold(
             fun(Key, #{ <<"presence">> := Presence, <<"type">> := Type }, Acc) ->
-                case hb_maps:find(Key, Message, Opts) of
+                case maps:find(Key, Message) of
                     {ok, Value} ->
                         Acc#{ Key => apply_schema(Type, Value, Opts) };
                     error when Presence =:= required ->
@@ -897,6 +897,24 @@ selected_links_are_materialized_without_loading_omitted_keys_test() ->
             },
             Opts
         )
+    ).
+
+explicit_wildcard_preserves_lazy_links_test() ->
+    Missing = {link, <<"data/not-present">>, #{}},
+    Schema =
+        message_type(
+            #{
+                <<"scheduler">> =>
+                    #{
+                        <<"presence">> => optional,
+                        <<"type">> => wildcard_type()
+                    }
+            },
+            none
+        ),
+    ?assertEqual(
+        #{ <<"scheduler">> => Missing },
+        apply_schema(Schema, #{ <<"scheduler">> => Missing }, #{})
     ).
 
 optional_wildcard_preserves_links_and_sequences_materialize_test() ->

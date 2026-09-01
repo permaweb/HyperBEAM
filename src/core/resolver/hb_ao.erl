@@ -1008,6 +1008,8 @@ maybe_vary_loaded(Base, Req, Opts) when is_map(Base), is_map(Req) ->
                 Req,
                 UserOpts
             ) of
+                {ok, Base, Req, none} ->
+                    no_spec;
                 {ok, VariedBase, VariedReq, Overlay} ->
                     {ok, VariedBase, VariedReq, Overlay, {Status, Func}};
                 no_spec ->
