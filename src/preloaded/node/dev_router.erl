@@ -1596,6 +1596,25 @@ range_limited_route_filtering_test_parallel() ->
             choose(2, <<"Range">>, #{ <<"route-by">> => 9001 }, Nodes, Opts)
         )
     ),
+    TipNodes =
+        [
+            #{
+                <<"id">> => <<"bounded">>,
+                <<"min">> => 172_800_000_000_000,
+                <<"max">> => 388_800_000_000_000
+            },
+            #{ <<"id">> => <<"tip">>, <<"min">> => 172_800_000_000_000 }
+        ],
+    ?assertMatch(
+        [#{ <<"id">> := <<"tip">> }],
+        choose(
+            2,
+            <<"Range">>,
+            #{ <<"route-by">> => 388_800_618_995_959 },
+            TipNodes,
+            Opts
+        )
+    ),
     lists:foreach(
         fun(_) ->
             ?assert(
