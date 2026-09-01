@@ -137,6 +137,12 @@ execute_handler(
         Opts#{ <<"on">> => maps:remove(<<"step">>, On) }
     );
 execute_handler(HookName, Handler, Req, Opts) ->
+    case hook_matches(Handler, Req, Opts) of
+        false -> {ok, Req};
+        true -> run_handler(HookName, Handler, Req, Opts)
+    end.
+
+run_handler(HookName, Handler, Req, Opts) ->
     try
         % Resolve the handler message, setting the path to the handler name if
         % it is not already set. We ensure to ignore the hashpath such that the
@@ -201,6 +207,24 @@ execute_handler(HookName, Handler, Req, Opts) ->
                 "` raised an exception: ",
                 (iolist_to_binary(io_lib:format("~p:~p", [Error, Reason])))/binary
             >>}
+    end.
+
+%% @doc A hook runs unconditionally unless it carries a `templates' list, in
+%% which case it runs only when the request's path/method matches one of them.
+hook_matches(Handler, Req, Opts) ->
+    case hb_maps:get(<<"templates">>, Handler, no_templates, Opts) of
+        no_templates -> true;
+        Templates ->
+            Inner = hb_maps:get(<<"request">>, Req, #{}, Opts),
+            ToMatch =
+                #{
+                    <<"path">> => hb_maps:get(<<"path">>, Inner, <<>>, Opts),
+                    <<"method">> => hb_maps:get(<<"method">>, Inner, <<"GET">>, Opts)
+                },
+            lists:any(
+                fun(T) -> hb_util:template_matches(ToMatch, T, Opts) =:= true end,
+                hb_util:message_to_ordered_list(Templates, Opts)
+            )
     end.
 
 %%% Tests
