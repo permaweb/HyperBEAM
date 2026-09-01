@@ -79,6 +79,13 @@
     DEFAULT_HTTP_OPTS,
     #{ <<"http-client">> => ?DEFAULT_HTTP_CLIENT, <<"protocol">> => http2 }
 ).
+%% Arweave nodes are reached over plain HTTP, where `http2' means h2c
+%% prior-knowledge. The nodes accept h2c but emit uppercase header names,
+%% which gun rejects (RFC7540 8.1.2), so we pin them to HTTP/1.1.
+-define(
+    ARWEAVE_NODE_HTTP_OPTS,
+    #{ <<"http-client">> => ?DEFAULT_HTTP_CLIENT, <<"protocol">> => http1 }
+).
 -define(ENV_KEYS,
     #{
         <<"priv-key-location">> => {"HB_KEY", "hyperbeam-key.json"},
@@ -229,6 +236,28 @@ raw_default_message() ->
         % What HTTP client should the node use?
         % Options: gun, httpc, hackney
         <<"http-client">> => ?DEFAULT_HTTP_CLIENT,
+        %% Maximum gun connections per authority for h1. h1 is one stream per
+        %% connection, so this is the concurrency cap for h1 peers. Set close
+        %% to the prior unpooled-gun concurrency floor so external-network
+        %% test suites don't cascade-fail when one peer stream is reset.
+        <<"http-client-gun-max-sockets-h1">> => 64,
+        %% Maximum gun connections per authority for h2. h2 multiplexes up to
+        %% ~100 streams per connection, so a small cap is sufficient in
+        %% steady state — but under concurrent cancel/peer-reset churn a
+        %% single connection GOAWAY cascades to every stream sharing it, so
+        %% we keep the cap high enough that blast radius stays bounded on
+        %% high-parallelism test suites.
+        <<"http-client-gun-max-sockets-h2">> => 16,
+        %% Maximum queued requests per caller before backpressure kicks in.
+        <<"http-client-gun-max-queued-per-caller">> => 8,
+        %% Ceiling on gen_server:call to a pool manager. Bounds how long a
+        %% request blocks while queued behind a pending conn or full pool.
+        <<"http-client-gun-call-timeout">> => 10_000,
+        %% If the pool supervisor is not running (no hb_sup), whether to fall
+        %% back to an unpooled gun:open per request. Default is false: opening
+        %% connections outside the pool defeats the cap, so the fallback is
+        %% opt-in for standalone tools/tests that cannot start hb_sup.
+        <<"http-client-gun-allow-unpooled-fallback">> => false,
         % Scheduling mode: Determines when the SU should inform the recipient
         % that an assignment has been scheduled for a message.
         % Options: aggressive(!), local_confirmation, remote_confirmation,
@@ -978,7 +1007,7 @@ ensure_node_history(Opts, RequiredOpts) ->
 
 %% @doc Util to add opts to nodes.
 add_opts(Items) ->
-    add_opts(Items, ?DEFAULT_HTTP_OPTS).
+    add_opts(Items, ?ARWEAVE_NODE_HTTP_OPTS).
 add_opts(Items, Opts) ->
     lists:map(
         fun (Item) when is_map(Item) -> 
