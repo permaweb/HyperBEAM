@@ -23,7 +23,7 @@
 %%%       signature.</li>
 %%% </ol>
 -module(hb_device_load).
--export([reference/2]).
+-export([reference/2, schema/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -297,12 +297,62 @@ load_archive(ID, Opts) ->
     end.
 
 load_archive_message(Msg, Opts) ->
-    hb_device_archive:load(
-        hb_maps:get(<<"module-name">>, Msg, undefined, Opts),
-        hb_maps:get(<<"body">>, Msg, undefined, Opts),
-        Msg,
-        Opts
-    ).
+    Archive = hb_maps:get(<<"body">>, Msg, undefined, Opts),
+    maybe
+        {ok, Module} ?=
+            hb_device_archive:load(
+                hb_maps:get(<<"module-name">>, Msg, undefined, Opts),
+                Archive,
+                Msg,
+                Opts
+            ),
+        cache_schema(Module, Archive, Opts),
+        {ok, Module}
+    end.
+
+%% @doc Cache the schemas for every module in a packaged device archive.
+cache_schema(_Module, Archive, Opts) ->
+    case hb_device_archive:contents(Archive) of
+        {ok, Modules, _Resources} ->
+            lists:foreach(
+                fun
+                    ({Module, _Path, Beam}) ->
+                        cache_schema_module(Module, Beam, Opts);
+                    (_) -> ok
+                end,
+                Modules
+            );
+        _ ->
+            ok
+    end.
+
+%% @doc Extract and store one packaged module's function schemas.
+cache_schema_module(Module, Beam, Opts) ->
+    case hb_types:beam_to_schema(Module, Beam) of
+        {ok, Schema} ->
+            hb_store:write(
+                loaded_device_store(Opts),
+                #{ schema_key(Module) =>
+                    term_to_binary(Schema, [compressed]) },
+                Opts
+            );
+        _ ->
+            ok
+    end.
+
+%% @doc Read the cached schema for a packaged device module.
+schema(Module, Opts) ->
+    case hb_store:read(loaded_device_store(Opts), schema_key(Module), Opts) of
+        {ok, Encoded} ->
+            try {ok, binary_to_term(Encoded, [safe])}
+            catch _:_ -> {error, invalid_cached_schema}
+            end;
+        Other ->
+            Other
+    end.
+
+schema_key(Module) ->
+    <<"~meta@1.0/devices/schemas/", (atom_to_binary(Module, utf8))/binary>>.
 
 implementation_query(SpecID) ->
     #{

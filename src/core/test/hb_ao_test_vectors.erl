@@ -372,6 +372,21 @@ singleton_id_base_test() ->
         hb_ao:resolve(<<"/", MissingID/binary, "/keys">>, Opts)
     ).
 
+direct_id_key_resolution_test() ->
+    Store = hb_test_utils:test_store(),
+    Opts =
+        #{
+            <<"store">> => Store,
+            <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+            <<"spawn-worker">> => false
+        },
+    hb_store:reset(Store),
+    {ok, ID} = hb_cache:write(#{ <<"value">> => <<"kept">> }, Opts),
+    ?assertEqual(
+        {ok, <<"kept">>},
+        hb_ao:resolve(ID, <<"value">>, Opts)
+    ).
+
 resolve_id_test(Opts) ->
     ?assertMatch(
         ID when byte_size(ID) == 43,
