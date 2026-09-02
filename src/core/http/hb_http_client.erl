@@ -5,6 +5,9 @@
 -include("include/hb.hrl").
 -include("include/hb_opts.hrl").
 -include("include/hb_http_client.hrl").
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
 %% Public API
 -export([request/2, response_status_to_atom/1, setup_conn/1]).
 %% GenServer
@@ -790,6 +793,12 @@ get_status_class({error, {down, noproc}}) ->
     <<"noproc">>;
 get_status_class({error, {stream_error, {closed, normal}}}) ->
     <<"stream-closed">>;
+get_status_class({error, {tls_alert, {internal_error, _}}}) ->
+    <<"tls-alert-internal-error">>;
+get_status_class({error, {tls_alert, {handshake_failure, _}}}) ->
+    <<"tls-alert-handshake-failure">>;
+get_status_class({error, {tls_alert, {certificate_expired, _}}}) ->
+    <<"tls-alert-certificate-expired">>;
 get_status_class({error, Error}) when is_atom(Error) ->
     hb_util:atom_to_dashed_binary(Error);
 get_status_class(208) ->
@@ -829,3 +838,21 @@ path_to_category(Path) ->
         undefined -> <<"unknown">>;
         _ -> <<"unknown">>
     end.
+
+-ifdef(TEST).
+
+tls_alert_status_class_test() ->
+    ?assertEqual(
+        <<"tls-alert-internal-error">>,
+        get_status_class({error, {tls_alert, {internal_error, test}}})
+    ),
+    ?assertEqual(
+        <<"tls-alert-handshake-failure">>,
+        get_status_class({error, {tls_alert, {handshake_failure, test}}})
+    ),
+    ?assertEqual(
+        <<"tls-alert-certificate-expired">>,
+        get_status_class({error, {tls_alert, {certificate_expired, test}}})
+    ).
+
+-endif.
