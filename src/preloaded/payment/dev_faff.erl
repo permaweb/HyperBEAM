@@ -21,6 +21,8 @@
 -include("include/hb.hrl").
 
 %% @doc Decide whether or not to service a request from a given address.
+-spec estimate(#{ _ => _ }, #{ request := #{ _ => _ }, _ => _ }, #{ _ => _ }) ->
+    {ok, integer() | binary()}.
 estimate(_, Msg, NodeMsg) ->
     ?event(payment, {estimate, {msg, Msg}}),
     % Check if the address is in the allow-list.
@@ -41,6 +43,7 @@ is_admissible(Msg, NodeMsg) ->
     ).
 
 %% @doc Charge the user's account if the request is allowed.
+-spec charge(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, boolean()}.
 charge(_, Req, _NodeMsg) ->
     ?event(payment, {charge, Req}),
     {ok, true}.

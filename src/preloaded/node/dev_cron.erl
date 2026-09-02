@@ -9,6 +9,8 @@
 info(_) -> 
 	#{ default => fun handler/4 }.
 
+-spec info(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ status := integer(), body := #{ _ => _ }, _ => _ }}.
 info(_Base, _Req, _Opts) ->
 	InfoBody = #{
 		<<"description">> => <<"Cron device for scheduling messages">>,
@@ -24,6 +26,7 @@ info(_Base, _Req, _Opts) ->
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Default handler: Assume that the key is an interval descriptor.
+-spec handler(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
 handler(<<"set">>, Base, Req, Opts) ->
     hb_ao:raw(<<"message@1.0">>, <<"set">>, Base, Req, Opts);
 handler(<<"keys">>, Base, _Req, _Opts) ->
@@ -32,6 +35,8 @@ handler(Interval, Base, Req, Opts) ->
     every(Base, Req#{ <<"interval">> => Interval }, Opts).
 
 %% @doc Exported function for scheduling a one-time message.
+-spec once(#{ _ => _ }, #{ 'cron-path' => binary(), once => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ status := integer(), body := binary(), _ => _ }} | {error, _}.
 once(_Base, Req, Opts) ->
 	case extract_path(<<"once">>, Req, Opts) of
 		not_found ->
@@ -77,6 +82,8 @@ once_worker(Path, Req, Opts) ->
 
 
 %% @doc Exported function for scheduling a recurring message.
+-spec every(#{ _ => _ }, #{ interval := binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ status := integer(), body := binary(), _ => _ }} | {error, _}.
 every(_Base, Req, Opts) ->
 	case {
 		extract_path(Req, Opts),
@@ -137,6 +144,8 @@ every(_Base, Req, Opts) ->
 	end.
 
 %% @doc Exported function for stopping a scheduled task.
+-spec stop(#{ _ => _ }, #{ stop := binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ status := integer(), body := _, _ => _ }} | {error, _}.
 stop(_Base, Req, Opts) ->
 	case hb_maps:get(<<"stop">>, Req, not_found, Opts) of
 		not_found ->
@@ -165,6 +174,8 @@ stop(_Base, Req, Opts) ->
 	end.
 
 %% @doc Exported function for getting a scheduled task status report.
+-spec report(#{ _ => _ }, #{ report := binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ 'task-id' := binary(), active := boolean(), _ => _ }} | {error, _}.
 report(_Base, Req, Opts) ->
 	case hb_maps:get(<<"report">>, Req, not_found, Opts) of
 		not_found ->

@@ -7,10 +7,14 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Replace the base message's base64url `body' with its decoded bytes.
+-spec decode(#{ body => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body := binary(), _ => _ }} | {error, _}.
 decode(Base, _Req, Opts) ->
     with_body(Base, Opts, fun hb_util:decode/1).
 
 %% @doc Replace the base message's binary `body' with its base64url encoding.
+-spec encode(#{ body => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body := binary(), _ => _ }} | {error, _}.
 encode(Base, _Req, Opts) ->
     with_body(Base, Opts, fun hb_util:encode/1).
 

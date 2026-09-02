@@ -113,7 +113,8 @@
         <<"cache-control">>,
         <<"spawn-worker">>,
         <<"only">>,
-        <<"prefer">>
+        <<"prefer">>,
+        <<"vary-func">>
     ]
 ).
 
@@ -429,18 +430,22 @@ resolve_stage(2, Base, Req, Opts = #{ <<"resolve-mode">> := raw }) ->
     % validation, persistence, linking, and worker stages.
     raw(Base, Req, Opts);
 resolve_stage(2, Base, Req, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 2, cache_lookup}, Opts),
-    % Lookup request in the cache. If we find a result, return it.
-    % If we do not find a result, we continue to the next stage,
-    % unless the cache lookup returns `halt' (the user has requested that we 
-    % only return a result if it is already in the cache).
-    case hb_cache_control:maybe_lookup(Base, Req, Opts) of
-        {ok, Res} ->
-            ?event_debug(debug_ao_core, {stage, 2, cache_hit, {res, Res}, {opts, Opts}}, Opts),
-            {ok, Res};
-        {continue, NewBase, NewReq} ->
-            resolve_stage(3, NewBase, NewReq, Opts);
-        {error, CacheResp} -> {error, CacheResp}
+    ?event_debug(debug_ao_core, {stage, 2, vary_and_cache_lookup}, Opts),
+    case maybe_vary(Base, Req, Opts) of
+        no_spec ->
+            cache_lookup(Base, Req, Opts);
+        {ok, VariedBase, VariedReq, Overlay, VaryFunc} ->
+            apply_vary_overlay(
+                cache_lookup(
+                    VariedBase,
+                    VariedReq,
+                    Opts#{ <<"vary-func">> => VaryFunc }
+                ),
+                Overlay,
+                Base,
+                Req,
+                Opts
+            )
     end;
 resolve_stage(3, Base, Req, _Opts) when not is_map(Base) or not is_map(Req) ->
     % Validation check: If the messages are not maps, we cannot find a key
@@ -524,6 +529,30 @@ resolve_stage(4, Base, Req, Opts) ->
                     error_infinite(Base, Req, Opts)
             end
     end.
+resolve_stage(
+    5,
+    Base,
+    Req,
+    ExecName,
+    Opts = #{ <<"vary-func">> := {Status, Func} }
+) ->
+    ?event_debug(debug_ao_core, {stage, 5, device_lookup}, Opts),
+    UserOpts = hb_maps:without(?TEMP_OPTS, Opts, Opts),
+    Key = hb_path:hd(Req, UserOpts),
+    resolve_stage(
+        6,
+        Func,
+        Base,
+        Req,
+        ExecName,
+        Opts#{
+            <<"add-key">> =>
+                case Status of
+                    add_key -> Key;
+                    _ -> false
+                end
+        }
+    );
 resolve_stage(5, Base, Req, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 5, device_lookup}, Opts),
     % Device lookup: Find the Erlang function that should be utilized to 
@@ -921,6 +950,8 @@ ensure_message_loaded(MsgID, Opts) when ?IS_ID(MsgID) ->
             LoadedMsg;
         failure ->
             failure;
+        {error, not_found} ->
+            throw({necessary_message_not_found, <<"/">>, MsgID});
         not_found ->
             throw({necessary_message_not_found, <<"/">>, MsgID})
     end;
@@ -928,6 +959,89 @@ ensure_message_loaded(MsgLink, Opts) when ?IS_LINK(MsgLink) ->
     hb_cache:ensure_loaded(MsgLink, Opts);
 ensure_message_loaded(Msg, _Opts) ->
     Msg.
+
+%% @doc Vary device inputs when their function declares a schema.
+maybe_vary(Base, Req, Opts) ->
+    case direct_key_access(Base, Req, Opts) of
+        true ->
+            no_spec;
+        _ ->
+            try
+                maybe_vary_loaded(
+                    ensure_message_loaded(Base, Opts),
+                    ensure_message_loaded(Req, Opts),
+                    Opts
+                )
+            catch
+                throw:{necessary_message_not_found, _, _} -> no_spec
+            end
+    end.
+
+%% @doc Check direct access before loading an ID-backed base message.
+direct_key_access(Base, Req, Opts) when is_map(Req) ->
+    try hb_device:is_direct_key_access(Base, Req, Opts)
+    catch _:_ -> unknown
+    end;
+direct_key_access(_Base, _Req, _Opts) ->
+    unknown.
+
+maybe_vary_loaded(Base, Req, Opts) when is_map(Base), is_map(Req) ->
+    case hb_device:is_direct_key_access(Base, Req, Opts) of
+        true ->
+            no_spec;
+        _ ->
+            UserOpts = hb_maps:without(?TEMP_OPTS, Opts, Opts),
+            Key = hb_path:hd(Req, UserOpts),
+            {Status, Device, Func} =
+                hb_device:message_to_fun(Base, Key, UserOpts),
+            AddKey =
+                case Status of
+                    add_key -> Key;
+                    _ -> false
+                end,
+            case hb_types:vary(
+                Device,
+                Key,
+                Func,
+                AddKey,
+                Base,
+                Req,
+                UserOpts
+            ) of
+                {ok, Base, Req, none} ->
+                    no_spec;
+                {ok, VariedBase, VariedReq, Overlay} ->
+                    {ok, VariedBase, VariedReq, Overlay, {Status, Func}};
+                no_spec ->
+                    no_spec
+            end
+    end;
+maybe_vary_loaded(_Base, _Req, _Opts) ->
+    no_spec.
+
+%% @doc Lookup a computation result or continue its resolution.
+cache_lookup(Base, Req, Opts) ->
+    case hb_cache_control:maybe_lookup(Base, Req, Opts) of
+        {ok, Res} ->
+            ?event_debug(
+                debug_ao_core,
+                {stage, 2, cache_hit, {res, Res}, {opts, Opts}},
+                Opts
+            ),
+            {ok, Res};
+        {continue, NewBase, NewReq} ->
+            resolve_stage(3, NewBase, NewReq, Opts);
+        {error, CacheResp} ->
+            {error, CacheResp}
+    end.
+
+%% @doc Apply a varied result patch to its original input message.
+apply_vary_overlay({ok, Res}, base, Base, _Req, Opts) when is_map(Res) ->
+    {ok, set(Base, Res, internal_opts(Opts))};
+apply_vary_overlay({ok, Res}, request, _Base, Req, Opts) when is_map(Res) ->
+    {ok, set(Req, Res, internal_opts(Opts))};
+apply_vary_overlay(Res, _Overlay, _Base, _Req, _Opts) ->
+    Res.
 
 %% @doc Catch all return if we are in an infinite loop.
 error_infinite(Base, Req, Opts) ->

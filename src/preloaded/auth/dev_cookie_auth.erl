@@ -11,6 +11,7 @@
 %% key for the `httpsig@1.0' commitment. If a `committer' is given, we search 
 %% for it in the cookie message instead of generating a new secret. See the
 %% module documentation of `dev_cookie' for more details on its scheme.
+-spec generate(#{ _ => _ }, #{ committer => binary(), generator => _, _ => _ }, map()) -> term().
 generate(Base, Request, Opts) ->
     {WithCookie, Secrets} =
         case find_secrets(Request, Opts) of
@@ -33,6 +34,7 @@ generate(Base, Request, Opts) ->
 %% messages. The inbound request has the same structure as a normal request
 %% hook: The message sequence is the body of the request, and the request is
 %% the request message.
+-spec finalize(#{ _ => _ }, #{ request := #{ _ => _ }, body := list(), _ => _ }, map()) -> term().
 finalize(Base, Request, Opts) ->
     ?event(debug_auth, {finalize, {base, Base}, {request, Request}}),
     maybe
@@ -58,6 +60,7 @@ finalize(Base, Request, Opts) ->
 %% key for the `httpsig@1.0' commitment. If a `committer' is given, we search 
 %% for it in the cookie message instead of generating a new secret. See the
 %% module documentation of `dev_cookie' for more details on its scheme.
+-spec commit(#{ _ => _ }, #{ secret => binary(), committer => binary(), generator => _, _ => _ }, map()) -> term().
 commit(Base, Request, RawOpts) when ?IS_LINK(Request) ->
     Opts = dev_cookie:opts(RawOpts),
     commit(Base, hb_cache:ensure_loaded(Request, Opts), Opts);
@@ -111,6 +114,7 @@ store_secret(Secret, Msg, Opts) ->
 %% @doc Verify the HMAC commitment with the key being the secret from the 
 %% request cookies. We find the appropriate cookie from the cookie message by
 %% the committer ID given in the request message.
+-spec verify(#{ _ => _ }, #{ secret => binary(), committer => binary(), _ => _ }, map()) -> term().
 verify(Base, ReqLink, RawOpts) when ?IS_LINK(ReqLink) ->
     Opts = dev_cookie:opts(RawOpts),
     verify(Base, hb_cache:ensure_loaded(ReqLink, Opts), Opts);

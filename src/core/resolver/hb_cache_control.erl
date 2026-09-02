@@ -140,7 +140,10 @@ perform_cache_write(Base, Req, Res, Opts) ->
                 Opts
             );
         Map when is_map(Map) ->
-            hb_cache:write(Res, Opts);
+            case maps:is_key(<<"vary-func">>, Opts) of
+                true -> hb_cache:write_hashpath(Res, Opts);
+                false -> hb_cache:write(Res, Opts)
+            end;
         _ ->
             ?event({cannot_write_result, Res}),
             skip_caching

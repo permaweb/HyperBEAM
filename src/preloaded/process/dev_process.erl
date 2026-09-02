@@ -79,6 +79,9 @@ info(_Base) ->
 
 %% @doc Return the process state with the device swapped out for the device
 %% of the given key.
+-spec as(#{ 'input-prefix' => binary(), _ => _ },
+    #{ as => binary(), 'as-device' => binary(), _ => _ },
+    #{ _ => _ }) -> {ok, #{ device := binary(), _ => _ }}.
 as(RawBase, Req, Opts) ->
     {ok, Base} = ensure_loaded(RawBase, Req, Opts),
     Key = 
@@ -126,13 +129,19 @@ as(RawBase, Req, Opts) ->
 %% _must_ be set in all processes aside those marked with `ao.TN.1' variant.
 %% This is in order to ensure that post-mainnet processes do not default to
 %% using infrastructure that should not be present on nodes in the future.
+-spec default_device(#{ 'process/variant' => binary(), _ => _ }, binary(), #{ _ => _ }) ->
+    binary().
 default_device(Base, Key, Opts) ->
     lib_process:default_device(Base, Key, Opts).
 
 %% @doc Wraps functions in the Scheduler device.
+-spec schedule(#{ scheduler => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 schedule(Base, Req, Opts) ->
     lib_process:run_as(<<"scheduler">>, Base, Req, Opts).
 
+-spec slot(#{ scheduler => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 slot(Base, Req, Opts) ->
     ?event({slot_called, {base, Base}, {req, Req}}),
     lib_process:run_as(<<"scheduler">>, Base, Req, Opts).
@@ -140,6 +149,8 @@ slot(Base, Req, Opts) ->
 next(Base, _Req, Opts) ->
     lib_process:run_as(<<"scheduler">>, Base, next, Opts).
 
+-spec snapshot(#{ execution => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }}.
 snapshot(RawBase, _Req, Opts) ->
     Base = lib_process:ensure_process_key(RawBase, Opts),
     {ok, SnapshotMsg} =
@@ -190,6 +201,19 @@ init(Base, Req, Opts) ->
 %%   handlers and previewing results. The POST method is the key entry point
 %%   for the dryrun functionality that allows external clients to test
 %%   message processing without side effects.
+-spec compute(
+    #{ initialized => binary(), 'at-slot' => integer(), _ => _ },
+    #{
+        compute => integer(),
+        slot => integer(),
+        init => binary(),
+        push => _,
+        'result-depth' => _,
+        async => _,
+        'max-depth' => _
+    },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _} | {failure, _}.
 compute(Base, Req, Opts) ->
     ProcBase = lib_process:ensure_process_key(Base, Opts),
     ProcID = lib_process:process_id(ProcBase, #{}, Opts),
@@ -623,6 +647,8 @@ should_snapshot_time(Res, Opts) ->
 
 %% @doc Returns the known state of the process at either the current slot, or
 %% the latest slot in the cache depending on the `process-now-from-cache' option.
+-spec now(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {failure, _} | {error, _}.
 now(RawBase, Req, Opts) ->
     Base = lib_process:ensure_process_key(RawBase, Opts),
     ProcessID = lib_process:process_id(Base, #{}, Opts),
@@ -680,6 +706,8 @@ now(RawBase, Req, Opts) ->
 
 %% @doc Recursively push messages to the scheduler until we find a message
 %% that does not lead to any further messages being scheduled.
+-spec push(#{ push => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 push(Base, Req, Opts) ->
     lib_process:run_as(
         <<"push">>,
