@@ -408,7 +408,7 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
                 )
         end,
     % The keys to be used in encodings of the message:
-    KeysForEncoding =
+    UnorderedKeysForEncoding =
         hb_util:list_replace(
             EncodedKeysWithBodyKey,
             <<"body">>,
@@ -422,6 +422,13 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
         lists:filter(
             fun(Key) -> not key_present(Key, Encoded) end,
             RawInputs
+        ),
+    KeysForEncoding =
+        order_siginfo_keys(
+            UnorderedKeysForEncoding,
+            RawInputs,
+            EncodedWithSigInfo,
+            BodyKeys
         ),
     KeysForCommitment =
         dev_httpsig_siginfo:from_siginfo_keys(
@@ -443,6 +450,76 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
         Commitment#{ <<"committed">> => KeysForEncoding },
         KeysForCommitment
     }.
+
+%% @doc Order encoded signature components by their original committed keys.
+order_siginfo_keys(Keys, Inputs, HTTPEncMsg, BodyKeys) ->
+    Positions =
+        maps:from_list(
+            lists:zip(
+                lists:map(fun normalized_base_key/1, Inputs),
+                lists:seq(1, length(Inputs))
+            )
+        ),
+    DefaultPosition = length(Inputs) + 1,
+    BodyPosition =
+        lists:foldl(
+            fun(Key, Position) ->
+                min(
+                    maps:get(
+                        normalized_base_key(Key),
+                        Positions,
+                        DefaultPosition
+                    ),
+                    Position
+                )
+            end,
+            DefaultPosition,
+            BodyKeys
+        ),
+    Ranked =
+        lists:map(
+            fun(Key) ->
+                DecodedKeys =
+                    dev_httpsig_siginfo:from_siginfo_keys(
+                        HTTPEncMsg,
+                        BodyKeys,
+                        [Key]
+                    ),
+                Position =
+                    siginfo_key_position(
+                        DecodedKeys,
+                        Positions,
+                        BodyPosition,
+                        DefaultPosition
+                    ),
+                {Position, Key}
+            end,
+            Keys
+        ),
+    [Key || {_Position, Key} <- lists:keysort(1, Ranked)].
+
+%% @doc Find where an encoded component belongs in the committed key order.
+siginfo_key_position([], _Positions, BodyPosition, _DefaultPosition) ->
+    BodyPosition;
+siginfo_key_position(Keys, Positions, _BodyPosition, DefaultPosition) ->
+    lists:foldl(
+        fun(Key, Position) ->
+            min(
+                maps:get(
+                    normalized_base_key(Key),
+                    Positions,
+                    DefaultPosition
+                ),
+                Position
+            )
+        end,
+        DefaultPosition,
+        Keys
+    ).
+
+%% @doc Normalize a committed key without changing its list position.
+normalized_base_key(Key) ->
+    hb_link:remove_link_specifier(hb_ao:normalize_key(Key)).
 
 %% @doc Calculate if a key or its `+link' TABM variant is present in a message.
 key_present(Key, Keys) -> key_present(true, Key, Keys).
@@ -643,6 +720,64 @@ commit_secret_key_test() ->
             CommittedMsg,
             #{ <<"committers">> => Committers, <<"secret">> => <<"bad-secret">> },
             #{}
+        )
+    ).
+
+%% @doc Ensure that HTTPSig preserves the committed order of an L1 transaction.
+tx_commitment_order_roundtrip_test() ->
+    Data = <<"test-data">>,
+    TX =
+        ar_tx:sign(
+            ar_tx:normalize(
+                #tx{
+                    format = 2,
+                    tags = [
+                        {<<"device">>, <<"manifest@1.0">>},
+                        {<<"content-type">>, <<"application/json">>},
+                        {<<"status">>, <<"200">>}
+                    ],
+                    data = Data
+                }
+            ),
+            ar_wallet:new()
+        ),
+    ?assert(ar_tx:verify(TX)),
+    Opts = hb_opts:default_message(),
+    TXID = hb_util:human_id(TX#tx.id),
+    Structured =
+        hb_message:convert(
+            TX,
+            <<"structured@1.0">>,
+            <<"tx@1.0">>,
+            Opts
+        ),
+    Encoded =
+        hb_message:convert(
+            Structured,
+            <<"httpsig@1.0">>,
+            <<"structured@1.0">>,
+            Opts
+        ),
+    RoundTripped =
+        hb_message:convert(
+            Encoded,
+            <<"structured@1.0">>,
+            <<"httpsig@1.0">>,
+            Opts
+        ),
+    OriginalCommitment =
+        maps:get(TXID, maps:get(<<"commitments">>, Structured)),
+    RoundTrippedCommitment =
+        maps:get(TXID, maps:get(<<"commitments">>, RoundTripped)),
+    ?assertEqual(
+        maps:get(<<"committed">>, OriginalCommitment),
+        maps:get(<<"committed">>, RoundTrippedCommitment)
+    ),
+    ?assert(
+        hb_message:verify(
+            RoundTripped,
+            #{ <<"commitment-ids">> => [TXID] },
+            Opts
         )
     ).
 
