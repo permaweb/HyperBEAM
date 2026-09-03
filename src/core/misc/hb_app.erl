@@ -13,10 +13,11 @@
 
 start(_StartType, _StartArgs) ->
     hb:init(),
-    hb_sup:start_link(),
+    {ok, Supervisor} = hb_sup:start_link(),
     ok = hb_name:start(),
     _TimestampServer = ar_timestamp:start(),
-    {ok, _} = hb_http_server:start().
+    {ok, _Listener, ServerID} = hb_http_server:start_application(),
+    {ok, Supervisor, ServerID}.
 
-stop(_State) ->
-    ok.
+stop(ServerID) ->
+    cowboy:stop_listener(ServerID).

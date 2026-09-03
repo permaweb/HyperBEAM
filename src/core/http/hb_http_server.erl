@@ -10,7 +10,7 @@
 %%% such that changing it on start of the router server allows for
 %%% the execution parameters of all downstream requests to be controlled.
 -module(hb_http_server).
--export([start/0, start/1, allowed_methods/2, init/2]).
+-export([start/0, start/1, start_application/0, allowed_methods/2, init/2]).
 -export([set_opts/1, set_opts/2, get_opts/0, get_opts/1]).
 -export([set_default_opts/1, set_proc_server_id/1]).
 -export([static/3, static/4]).
@@ -24,6 +24,11 @@
 %% is used as the source for server configuration settings, as well as the
 %% `Opts' argument to use for all AO-Core resolution requests downstream.
 start() ->
+    {ok, Listener, _ServerID} = start_application(),
+    {ok, Listener}.
+
+%% @doc Start the application HTTP server and return its listener ID.
+start_application() ->
     ?event(http, {start_store, <<"cache-mainnet">>}),
     EnvConfig = hb_opts:default_message_with_env(),
     Loc = hb_opts:get(hb_config_location, <<"config.flat">>, EnvConfig),
@@ -58,7 +63,7 @@ start() ->
             )
         ),
     maybe_greeter(Loaded, PrivWallet),
-    start(
+    {ok, Listener} = start(
         Loaded#{
             <<"priv-wallet">> => PrivWallet,
             <<"store">> => UpdatedStoreOpts,
@@ -66,7 +71,9 @@ start() ->
             <<"cache-writers">> =>
                 [hb_util:human_id(ar_wallet:to_address(PrivWallet))]
         }
-    ).
+    ),
+    ServerID = hb_util:human_id(ar_wallet:to_address(PrivWallet)),
+    {ok, Listener, ServerID}.
 start(Opts) ->
     application:ensure_all_started([
         kernel,
