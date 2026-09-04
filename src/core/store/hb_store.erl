@@ -635,12 +635,18 @@ normalize_each(Path, [Key | Keys], Opts) ->
 %% among them -- can never recurse into another normalization.
 normalize(Path, Body, Opts) ->
     Stores = hb_opts:get(store, [], Opts),
+    StoreList =
+        case Stores of
+            List when is_list(List) -> List;
+            Store when is_map(Store) -> [Store];
+            _ -> []
+        end,
     Direct =
         lists:filter(
             fun(S) ->
                 not (?REQUIRES_PREPROCESS(S) orelse ?REQUIRES_POSTPROCESS(S))
             end,
-            Stores
+            StoreList
         ),
     hb_ao:raw(
         #{ <<"path">> => Path, <<"0.body">> => Body },
@@ -1401,6 +1407,17 @@ normalize_pipeline_test() ->
     ?assertEqual(
         {ok, hb_util:encode(<<"val">>)},
         read([Store], <<"b64/", EncodedKey/binary>>, #{})
+    ),
+    % A single store message is also a valid `store' option.
+    SingleKey = hb_util:encode(<<"single">>),
+    SingleOpts = #{ <<"store">> => Store },
+    ?assertEqual(
+        ok,
+        write(write_req(<<"b64/", SingleKey/binary>>, <<"one">>), SingleOpts)
+    ),
+    ?assertEqual(
+        {ok, hb_util:encode(<<"one">>)},
+        read(<<"b64/", SingleKey/binary>>, SingleOpts)
     ),
     ?event(testing, {normalized_write_and_read_passed}),
     % Each list item is normalized through the same explicit path.
