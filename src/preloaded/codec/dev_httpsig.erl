@@ -461,21 +461,7 @@ order_siginfo_keys(Keys, Inputs, HTTPEncMsg, BodyKeys) ->
             )
         ),
     DefaultPosition = length(Inputs) + 1,
-    BodyPosition =
-        lists:foldl(
-            fun(Key, Position) ->
-                min(
-                    maps:get(
-                        normalized_base_key(Key),
-                        Positions,
-                        DefaultPosition
-                    ),
-                    Position
-                )
-            end,
-            DefaultPosition,
-            BodyKeys
-        ),
+    BodyPosition = earliest_key_position(BodyKeys, Positions, DefaultPosition),
     Ranked =
         lists:map(
             fun(Key) ->
@@ -502,6 +488,10 @@ order_siginfo_keys(Keys, Inputs, HTTPEncMsg, BodyKeys) ->
 siginfo_key_position([], _Positions, BodyPosition, _DefaultPosition) ->
     BodyPosition;
 siginfo_key_position(Keys, Positions, _BodyPosition, DefaultPosition) ->
+    earliest_key_position(Keys, Positions, DefaultPosition).
+
+%% @doc Find the earliest original position of a list of committed keys.
+earliest_key_position(Keys, Positions, DefaultPosition) ->
     lists:foldl(
         fun(Key, Position) ->
             min(
