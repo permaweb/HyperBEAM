@@ -66,10 +66,12 @@
 %%%                        falling through to the next.
 %%% '''
 %%% Every path position of a request is processed through this pipeline: the
-%%% op-named key of `read', `list', `type' and `group' requests, every key of a
-%%% `write', and both sides of a `link'. `resolve' and `match' requests pass to
-%%% the store untouched: resolutions are reused as store paths, and matches
-%%% carry no path at all.
+%%% op-named key of `read', `list', `type', `group' and `resolve' requests,
+%%% every key of a `write', and both sides of a `link'. For stores without key
+%%% normalization, `resolve' applies only prefix handling and restores a
+%%% stripped prefix on return. Key-normalizing stores cannot map resolved paths
+%%% back into the caller's namespace, so their `resolve' requests pass through
+%%% untouched, as do `match' requests, which carry no path.
 
 -module(hb_store).
 -export([behavior_info/1]).
@@ -509,16 +511,19 @@ invoke(Mod, Store, Function, Args) ->
     end.
 
 %% @doc Preprocess a request ahead of the store: the op-named key of `read',
-%% `list', `type' and `group' requests, every key of a `write' request, and
-%% both sides of a `link' request each pass through the pipeline. Stores
-%% without pipeline keys, and `resolve' and `match' requests, pass through
-%% untouched.
+%% `list', `type', `group' and `resolve' requests, every key of a `write'
+%% request, and both sides of a `link' request each pass through the pipeline.
+%% For stores without key normalization, `resolve' applies only prefix handling
+%% because its results are reused as store paths. Key-normalizing stores cannot
+%% map resolved paths back into the caller's namespace, so their `resolve'
+%% requests pass through untouched, as do `match' and operations with no path.
 preprocess(Store, _Function, Args) when not ?REQUIRES_PREPROCESS(Store) ->
     {ok, Args};
-preprocess(_Store, Function, Args)
-        when Function =:= resolve orelse Function =:= match ->
-    % Resolutions are reused as store paths, which the pipeline cannot map
-    % back to the caller's namespace; matches carry no path at all.
+preprocess(Store, resolve, Args)
+        when is_map_key(<<"normalize-key">>, Store) ->
+    {ok, Args};
+preprocess(_Store, match, Args) ->
+    % Matches carry no path to preprocess.
     {ok, Args};
 preprocess(Store, Function, [Req, Opts])
         when Function =:= write orelse Function =:= link ->
@@ -528,13 +533,15 @@ preprocess(Store, Function, [Req, Opts])
     end;
 preprocess(Store, Function, [Req, Opts])
         when Function =:= read orelse Function =:= list orelse
-            Function =:= type orelse Function =:= group ->
+            Function =:= type orelse Function =:= group orelse
+            Function =:= resolve ->
     % Process operations where the key to act upon is the 'named' element of
     % the request: `read=KEY`, etc.
     maybe
         {ok, Key} ?=
             preprocess_key(
                 Store,
+                Function,
                 maps:get(OpKey = hb_util:bin(Function), Req, <<>>),
                 Opts
             ),
@@ -545,9 +552,10 @@ preprocess(_Store, _Function, Args) ->
 
 %% @doc Preprocess a single key: admit it against the `prefix' (stripping
 %% the prefix forward unless `prefix-strip' is disabled), then normalize it
-%% through the `normalize-key' path. A key without the prefix is `not_found'
-%% for this store.
-preprocess_key(Store, Key, Opts) ->
+%% through the `normalize-key' path. A `resolve' that reaches this function
+%% stops after prefix handling so its result remains a reusable store path.
+%% A key without the prefix is `not_found' for this store.
+preprocess_key(Store, Function, Key, Opts) ->
     Prefix = maps:get(<<"prefix">>, Store, <<>>),
     Size = byte_size(Prefix),
     case Key of
@@ -557,9 +565,10 @@ preprocess_key(Store, Key, Opts) ->
                     true -> Rest;
                     false -> Key
                 end,
-            case maps:get(<<"normalize-key">>, Store, []) of
-                [] -> {ok, Stripped};
-                NormPath -> normalize(NormPath, Stripped, Opts)
+            case {Function, maps:get(<<"normalize-key">>, Store, [])} of
+                {resolve, _} -> {ok, Stripped};
+                {_, []} -> {ok, Stripped};
+                {_, NormPath} -> normalize(NormPath, Stripped, Opts)
             end;
         _ ->
             {error, not_found}
@@ -574,10 +583,10 @@ preprocess_all(_Store, _Function, [], _Opts) ->
     {ok, #{}};
 preprocess_all(Store, Function, [{Path, Value} | Pairs], Opts) ->
     maybe
-        {ok, NormPath} ?= preprocess_key(Store, Path, Opts),
+        {ok, NormPath} ?= preprocess_key(Store, Function, Path, Opts),
         {ok, NormValue} ?=
             case Function of
-                link -> preprocess_key(Store, Value, Opts);
+                link -> preprocess_key(Store, Function, Value, Opts);
                 _ -> {ok, Value}
             end,
         {ok, NormPairs} ?= preprocess_all(Store, Function, Pairs, Opts),
@@ -592,8 +601,18 @@ strips(Store, _Opts) ->
 %% @doc Normalize a successful store result on its way back to the caller.
 %% A `read' result is replaced by exactly what its `normalize-result'
 %% resolution returns; enumerations -- `list' results and `composite' read
-%% children -- normalize each key independently. All other results pass
-%% through untouched.
+%% children -- normalize each key independently. A `resolve' result regains
+%% any prefix stripped before store invocation. All other results pass through
+%% untouched.
+postprocess(Store, resolve, Result, _)
+        when is_map_key(<<"normalize-key">>, Store) ->
+    Result;
+postprocess(Store = #{ <<"prefix">> := Prefix }, resolve, {ok, Res}, [_, Opts])
+        when is_binary(Res) ->
+    case strips(Store, Opts) of
+        true -> {ok, <<Prefix/binary, Res/binary>>};
+        false -> {ok, Res}
+    end;
 postprocess(Store, _, Result, _) when not ?REQUIRES_POSTPROCESS(Store) ->
     Result;
 postprocess(#{ <<"normalize-result">> := Path }, read, {ok, Value}, [_, Opts]) ->
@@ -1357,6 +1376,30 @@ prefix_pipeline_test() ->
     ?assertEqual({error, not_found}, read([Ungated], <<"inner">>, #{})),
     ?assertEqual({ok, <<"2">>}, read([Plain], <<"outer">>, #{})),
     ?event(testing, {unprefixed_skip_and_strip_off_passed}).
+
+%% @doc Demonstrate that cache reads of mounted paths require `resolve' to
+%% cross the external-to-native prefix boundary and restore the external path.
+prefix_pipeline_resolve_test() ->
+    Mounted =
+        (hb_test_utils:test_store(hb_store_fs, <<"pipeline-resolve">>))#{
+            <<"prefix">> => <<"mnt/">>
+        },
+    Native = maps:remove(<<"prefix">>, Mounted),
+    start(Mounted),
+    ?assertEqual(ok, write([Mounted], write_req(<<"mnt/inner">>, <<"1">>), #{})),
+    % The store receives and persists the native path after prefix stripping.
+    ?assertEqual({ok, <<"1">>}, read([Native], <<"inner">>, #{})),
+    ?assertEqual({error, not_found}, resolve([Native], <<"mnt/inner">>, #{})),
+    % `resolve' must translate into the native namespace, then restore the
+    % mounted path because `hb_cache' reuses it for the subsequent read.
+    ?assertEqual({ok, <<"mnt/inner">>}, resolve([Mounted], <<"mnt/inner">>, #{})),
+    ?assertEqual(
+        {ok, <<"1">>},
+        hb_cache:read(
+            <<"mnt/inner">>,
+            #{ <<"store">> => Mounted, <<"cache-read-mode">> => raw }
+        )
+    ).
 
 %% @doc Test that lifecycle operations bypass path preprocessing for a store
 %% carrying a prefix.
