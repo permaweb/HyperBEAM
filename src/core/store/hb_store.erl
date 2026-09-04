@@ -526,7 +526,9 @@ preprocess(Store, Function, [Req, Opts])
         {ok, NormReq} ?= preprocess_all(Store, Function, Req, Opts),
         {ok, [NormReq, Opts]}
     end;
-preprocess(Store, Function, [Req, Opts]) ->
+preprocess(Store, Function, [Req, Opts])
+        when Function =:= read orelse Function =:= list orelse
+            Function =:= type orelse Function =:= group ->
     % Process operations where the key to act upon is the 'named' element of
     % the request: `read=KEY`, etc.
     maybe
@@ -537,7 +539,9 @@ preprocess(Store, Function, [Req, Opts]) ->
                 Opts
             ),
         {ok, [Req#{ OpKey => Key }, Opts]}
-    end.
+    end;
+preprocess(_Store, _Function, Args) ->
+    {ok, Args}.
 
 %% @doc Preprocess a single key: admit it against the `prefix' (stripping
 %% the prefix forward unless `prefix-strip' is disabled), then normalize it
@@ -1343,7 +1347,27 @@ prefix_pipeline_test() ->
     ?assertEqual(ok, write([StripOff], write_req(<<"mnt/keep">>, <<"3">>), #{})),
     ?assertEqual({ok, <<"3">>}, read([StripOff], <<"mnt/keep">>, #{})),
     ?assertEqual({ok, <<"3">>}, read([Ungated], <<"mnt/keep">>, #{})),
+    ?assertEqual(ok, reset([Mounted])),
+    ?assertEqual({error, not_found}, read([Ungated], <<"inner">>, #{})),
+    ?assertEqual({ok, <<"2">>}, read([Plain], <<"outer">>, #{})),
     ?event(testing, {unprefixed_skip_and_strip_off_passed}).
+
+%% @doc Test that lifecycle operations bypass path preprocessing for a store
+%% carrying a prefix.
+prefix_pipeline_stop_test() ->
+    Store =
+        (hb_test_utils:test_store(hb_store_volatile, <<"pipeline-stop">>))#{
+            <<"prefix">> => <<"mnt/">>
+        },
+    start(Store),
+    #{ <<"pid">> := Pid } = find(Store),
+    Monitor = erlang:monitor(process, Pid),
+    ?assertEqual(ok, stop(Store)),
+    receive
+        {'DOWN', Monitor, process, Pid, normal} -> ok
+    after 1000 ->
+        ?assert(false)
+    end.
 
 %% @doc Test that `normalize-key' rewrites admitted keys through its path
 %% ahead of the store -- for writes and reads alike -- and that
