@@ -374,9 +374,12 @@ write_key_ops(Base, <<"commitments">>, _HPAlg, RawCommitments, Opts, Acc) ->
             fun(BaseCommID, Commitment, InnerAcc) ->
                 ?event_debug(debug_cache, {writing_commitment, {commitment, Commitment}}),
                 {ok, CommMsgID, CommOps} = write_message_ops(Commitment, Opts),
+                % A commitment is not indexed: the message it commits is
+                % indexed under its committer and target.
+                MsgOps = [ Op || Op <- CommOps, element(1, Op) =/= index_hook ],
                 [
                     {link, <<CommitmentsBase/binary, "/", BaseCommID/binary>>, CommMsgID}
-                    | prepend_reversed(CommOps, InnerAcc)
+                    | prepend_reversed(MsgOps, InnerAcc)
                 ]
             end,
             Acc1,

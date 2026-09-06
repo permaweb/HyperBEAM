@@ -7,6 +7,22 @@
 %%% `transactions' query selects the order (`HEIGHT_DESC' by default,
 %%% `HEIGHT_ASC' for ascending).  A `block' range filter narrows results to
 %%% transactions whose offsets fall within the requested block heights.
+%%%
+%%% A node with stores of the `~match@1.0' index -- its own, a published
+%%% index's, its mempool's, or all of them as one -- answers the
+%%% `transactions' query from them whenever the query's filters are the
+%%% index's pairs: single-valued `tags', one owner, one recipient, and no
+%%% explicit IDs. The page is then read from the index in weave order between
+%%% bounds, the mempool leading it descending and ending it ascending, and
+%%% each cursor names its match's key in the index, so paging is stateless.
+%%% A match the node's stores hold is read through `hb_cache'; one only a
+%%% published index knows is read from the weave by one read of the item's
+%%% header, carrying the header's fields alone. An item the weave holds at
+%%% two offsets is two matches, and so two edges with one ID. The page's
+%%% `count' is read on demand, up to `query_arweave_max_index_count'
+%%% matches. Every other query, and every node without the index, is
+%%% answered through `hb_cache' -- where several values for one tag are
+%%% refused, as they are here.
 -module(dev_query_arweave).
 %%% AO-Core API:
 -export([query/4]).
@@ -16,6 +32,14 @@
 %%% Default returned page size and maximum allowed page size.
 -define(DEFAULT_PAGE_SIZE, 10).
 -define(DEFAULT_MAX_PAGE_SIZE, 100).
+%% The cursor of an index-served edge: its match's key in the index.
+-define(MEMBER_CURSOR, "member=").
+%% The most matches a page's `count' reads by default.
+-define(DEFAULT_MAX_INDEX_COUNT, 1000).
+%% The bytes read past an offset when the item's header runs beyond its
+%% chunk: signature, owner, target, anchor and tags, which ANS-104 caps at
+%% 4 KiB.
+-define(ITEM_PROBE_LENGTH, 8192).
 %% @doc The arguments that are supported by the Arweave GraphQL API.
 -define(SUPPORTED_QUERY_ARGS,
     [
@@ -43,6 +67,31 @@ query(#{ <<"hasNextPage">> := HasNextPage }, <<"hasNextPage">>, _Args, _Opts) ->
     {ok, HasNextPage};
 query(#{ <<"count">> := Count }, <<"count">>, _Args, _Opts) ->
     {ok, Count};
+query(#{ <<"matches">> := Matches, <<"terminal">> := Terminal },
+        <<"edges">>, _Args, Opts) ->
+    % The edges of an index-served page, read only when asked for. The
+    % terminal page of a forced-next-page read marks its last cursor.
+    Edges = match_edges(Matches, Opts),
+    Marked =
+        case Terminal of
+            true -> force_terminal_cursor(Edges);
+            false -> Edges
+        end,
+    {ok, [{ok, Edge} || Edge <- Marked]};
+query(#{ <<"template">> := Template, <<"ranges">> := Ranges },
+        <<"count">>, _Args, Opts) ->
+    % The count of an index-served page, read over its ranges on demand,
+    % up to the node's maximum.
+    Cap =
+        hb_opts:get(
+            query_arweave_max_index_count,
+            ?DEFAULT_MAX_INDEX_COUNT,
+            Opts
+        ),
+    case index_matches(Template, Ranges, none, Cap, Opts) of
+        {ok, Matches} -> {ok, hb_util:bin(length(Matches))};
+        Error -> Error
+    end;
 query(Obj, <<"transaction">>, Args, Opts) ->
     case query(Obj, <<"transactions">>, Args, Opts) of
         {ok, #{ <<"edges">> := [] }} -> {ok, null};
@@ -54,38 +103,9 @@ query(Obj, <<"transactions">>, Args, Opts) ->
         {field, <<"transactions">>},
         {args, Args}
     }),
-    case valid_after_cursor(Args, Opts) of
-        true ->
-            Matches = match_args(Args, Opts),
-            WithExplicit =
-                case explicit_ids(Args, Opts) of
-                    [] -> Matches;
-                    ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
-                end,
-            Ordered =
-                case annotate_ids(WithExplicit, Opts) of
-                    unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
-                    Annotated ->
-                        Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
-                        sort_offset_annotated(
-                            filter_offset_annotated(
-                                Annotated,
-                                maps:get(<<"block">>, Args, undefined),
-                                Opts
-                            ),
-                            Order,
-                            Opts
-                        )
-                end,
-            ?event({transactions_matches, Matches}),
-            {ok, connection(Ordered, Args, Opts)};
-        false ->
-            ?event(
-                {invalid_after_cursor,
-                    hb_maps:get(<<"after">>, Args, not_found, Opts)
-                }
-            ),
-            {ok, connection([], Args, Opts)}
+    case index_connection(Args, Opts) of
+        unservable -> cached_transactions(Args, Opts);
+        Result -> Result
     end;
 query(Obj, <<"block">>, Args, Opts) ->
     case query(Obj, <<"blocks">>, Args, Opts) of
@@ -193,6 +213,44 @@ query(Obj, Field, Args, _Opts) ->
         {args, Args}
     }),
     {ok, <<"Not implemented.">>}.
+
+%% @doc Serve a transactions page through `hb_cache': the IDs the query's
+%% arguments match, annotated with their offsets, filtered to the block
+%% range and sorted.
+cached_transactions(Args, Opts) ->
+    case valid_after_cursor(Args, Opts) of
+        true ->
+            Matches = match_args(Args, Opts),
+            WithExplicit =
+                case explicit_ids(Args, Opts) of
+                    [] -> Matches;
+                    ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
+                end,
+            Ordered =
+                case annotate_ids(WithExplicit, Opts) of
+                    unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
+                    Annotated ->
+                        Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
+                        sort_offset_annotated(
+                            filter_offset_annotated(
+                                Annotated,
+                                maps:get(<<"block">>, Args, undefined),
+                                Opts
+                            ),
+                            Order,
+                            Opts
+                        )
+                end,
+            ?event({transactions_matches, Matches}),
+            {ok, connection(Ordered, Args, Opts)};
+        false ->
+            ?event(
+                {invalid_after_cursor,
+                    hb_maps:get(<<"after">>, Args, not_found, Opts)
+                }
+            ),
+            {ok, connection([], Args, Opts)}
+    end.
 
 %% @doc Encode a transaction anchor (`last_tx`) for the GraphQL response.
 %% Per the Arweave spec, an anchor is one of:
@@ -470,6 +528,241 @@ latest_cached_block(Opts) ->
         _ -> {ok, lists:max(Blocks)}
     end.
 
+%%% Index-served pages
+
+%% @doc Serve a transactions page from the `~match@1.0' index: the matches
+%% of the query's pairs over its block range from its cursor, in the sort's
+%% direction. Every query the index cannot serve is `unservable':
+%% `cached_transactions' answers it.
+index_connection(Args, Opts) ->
+    maybe
+        {ok, Template} ?= index_template(Args, Opts),
+        {ok, After} ?= index_cursor(Args, Opts),
+        Direction =
+            case hb_maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>, Opts) of
+                <<"HEIGHT_ASC">> -> asc;
+                _ -> desc
+            end,
+        Ranges = index_ranges(Direction, Args, Opts),
+        PageSize = page_size(Args, Opts),
+        {ok, Matches} ?=
+            index_matches(Template, Ranges, After, PageSize + 1, Opts),
+        More = length(Matches) > PageSize,
+        ForceNextPage = force_next_page(Args, Opts),
+        {ok,
+            #{
+                <<"matches">> => lists:sublist(Matches, PageSize),
+                <<"terminal">> => ForceNextPage andalso not More,
+                <<"template">> => Template,
+                <<"ranges">> => Ranges,
+                <<"pageInfo">> =>
+                    #{ <<"hasNextPage">> => More orelse ForceNextPage }
+            }}
+    end.
+
+%% @doc The query's filters as the index's pairs: each tag's one value, and
+%% the `committer' and `field-target' one owner and one recipient are
+%% indexed under. Explicit IDs, a height or bundle filter, a filter given
+%% several values, and a query naming no pair are `unservable'.
+index_template(Args, Opts) ->
+    Get = fun(Filter) -> hb_maps:get(Filter, Args, null, Opts) end,
+    Fields =
+        [
+            {Pair, Get(Filter)}
+        ||
+            {Pair, Filter} <-
+                [
+                    {<<"committer">>, <<"owners">>},
+                    {<<"field-target">>, <<"recipients">>}
+                ]
+        ],
+    maybe
+        true ?= explicit_ids(Args, Opts) =:= [] orelse unservable,
+        true ?=
+            Get(<<"height">>) =:= null andalso Get(<<"bundledIn">>) =:= null
+                orelse unservable,
+        true ?=
+            lists:all(
+                fun({_Pair, Values}) ->
+                    Values =:= null orelse length(Values) =< 1
+                end,
+                Fields
+            ) orelse unservable,
+        Tags =
+            case Get(<<"tags">>) of
+                null -> #{};
+                Filters -> dev_query_graphql:keys_to_template(Filters)
+            end,
+        Template =
+            maps:merge(
+                Tags,
+                maps:from_list([ {Pair, Value} || {Pair, [Value]} <- Fields ])
+            ),
+        true ?= map_size(Template) > 0 orelse unservable,
+        {ok, Template}
+    end.
+
+%% @doc The match the page resumes after, from the cursor of an
+%% index-served edge with its terminal marker dropped; a cursor of another
+%% form names a cached item, from which only `cached_transactions' resumes.
+index_cursor(Args, Opts) ->
+    case hb_maps:get(<<"after">>, Args, null, Opts) of
+        Unset when Unset =:= null; Unset =:= undefined; Unset =:= <<>> ->
+            {ok, none};
+        <<?MEMBER_CURSOR, Cursor/binary>> ->
+            {ok, hd(binary:split(Cursor, <<"&">>))};
+        _ ->
+            unservable
+    end.
+
+%% @doc The ranges a page reads in order, as `~match@1.0' bounds: the
+%% offsets of the query's block range, from its near end in the page's
+%% direction to its far end; or, with no range, the whole weave -- the
+%% mempool leading it descending and ending it ascending -- followed by the
+%% messages the weave never held, last in either order, as
+%% `cached_transactions' orders them.
+index_ranges(Direction, Args, Opts) ->
+    Heights = hb_maps:get(<<"block">>, Args, null, Opts),
+    Ignored = hb_opts:get(query_arweave_ignore_block_ranges, false, Opts),
+    Window =
+        case Heights =:= null orelse Ignored of
+            true -> open;
+            false -> block_range_to_offset_range(Heights, Opts)
+        end,
+    Bounds =
+        case {Direction, Window} of
+            {asc, open} ->
+                [#{ <<"from">> => 0 }, #{ <<"from">> => -1, <<"to">> => 0 }];
+            {asc, {Start, infinity}} ->
+                [#{ <<"from">> => Start }];
+            {asc, {Start, End}} ->
+                [#{ <<"from">> => Start, <<"to">> => End }];
+            {desc, open} ->
+                [#{ <<"from">> => infinity }];
+            {desc, {Start, infinity}} ->
+                [#{ <<"from">> => infinity, <<"to">> => Start - 1 }];
+            {desc, {Start, End}} ->
+                [#{ <<"from">> => End - 1, <<"to">> => Start - 1 }]
+        end,
+    [ Range#{ <<"direction">> => Direction } || Range <- Bounds ].
+
+%% @doc The matches of a page: the ranges read in order from the cursor,
+%% which lies in the range holding its key.
+index_matches(Template, Ranges, After, Limit, Opts) ->
+    % A cursor among the messages the weave never held resumes their range
+    % alone: the second of the two an open ascending page reads.
+    Ahead =
+        case {After, Ranges} of
+            {<<"-1", _/binary>>, [_Weave, Unmined]} -> [Unmined];
+            _ -> Ranges
+        end,
+    locate_ranges(Template, Ahead, After, Limit, Opts).
+
+%% @doc The matches of the ranges in order from the cursor, as far as the
+%% page has room.
+locate_ranges(_Template, Ranges, _After, Limit, _Opts)
+        when Ranges =:= []; Limit =:= 0 ->
+    {ok, []};
+locate_ranges(Template, [Range | Rest], After, Limit, Opts) ->
+    Bounds =
+        case After of
+            none -> Range;
+            _ -> (maps:remove(<<"from">>, Range))#{ <<"after">> => After }
+        end,
+    maybe
+        {ok, Matches} ?=
+            locate(Template, Bounds#{ <<"limit">> => Limit }, Opts),
+        {ok, More} ?=
+            locate_ranges(Template, Rest, none, Limit - length(Matches), Opts),
+        {ok, Matches ++ More}
+    end.
+
+%% @doc The matches of a template through `~match@1.0'. A node without
+%% stores of the index is `unservable'; a failing store is an error, as
+%% `cached_transactions' answers from different data.
+locate(Template, Req, Opts) ->
+    case hb_ao:raw(
+            <<"match@1.0">>,
+            Template,
+            Req#{ <<"path">> => <<"locate">> },
+            Opts
+        ) of
+        {error, not_found} -> unservable;
+        Result -> Result
+    end.
+
+%% @doc The edges of the page's matches in its order, under cursors naming
+%% their keys, read together. A match carrying an ID reads its cached
+%% message; one without reads the item at its offset from the weave. A
+%% match neither can read is dropped and reported.
+match_edges(Matches, Opts) ->
+    Read =
+        hb_pmap:parallel_map(
+            Matches,
+            fun(Match) -> {Match, match_message(Match, Opts)} end,
+            hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts)
+        ),
+    lists:filtermap(
+        fun({#{ <<"member">> := Member }, {ok, Node}}) ->
+                {true,
+                    #{
+                        <<"cursor">> => <<?MEMBER_CURSOR, Member/binary>>,
+                        <<"node">> => Node
+                    }};
+            ({Match, Error}) ->
+                ?event(warning,
+                    {match_unreadable, {match, Match}, {error, Error}}
+                ),
+                false
+        end,
+        Read
+    ).
+
+%% @doc A match's message: through `hb_cache' by its ID, or from the weave
+%% by its offset.
+match_message(#{ <<"id">> := ID }, Opts) -> hb_cache:read(ID, Opts);
+match_message(#{ <<"offset">> := Offset }, Opts) -> header(Offset, Opts).
+
+%% @doc The message of the item at a weave offset, from its header alone:
+%% parsed from the bytes between the offset and the end of its chunk -- one
+%% fetch, and every byte a gateway serves when the chunk closes the bundle,
+%% as the weave's padding follows it -- or from a longer read when the
+%% header runs into the next chunk. The data is left out: neither the index
+%% nor the header holds its length.
+header(Offset, Opts) ->
+    Tail =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{ <<"path">> => <<"chunk">>, <<"offset">> => Offset + 1 },
+            Opts
+        ),
+    case header_message(Tail, Opts) of
+        {ok, Node} ->
+            {ok, Node};
+        {error, _} ->
+            header_message(
+                hb_store_arweave:read_chunks(Offset, ?ITEM_PROBE_LENGTH, Opts),
+                Opts
+            )
+    end.
+
+%% @doc The message of the item whose header opens the read bytes.
+header_message({ok, Bytes}, Opts) ->
+    try
+        {ok, _HeaderSize, TX} = ar_bundles:deserialize_header(Bytes),
+        {ok,
+            hb_message:convert(
+                TX#tx{ data = <<>>, data_size = 0 },
+                <<"structured@1.0">>,
+                <<"ans104@1.0">>,
+                Opts
+            )}
+    catch _:Reason ->
+        {error, {'invalid-item', Reason}}
+    end;
+header_message(Error, _Opts) ->
+    Error.
+
 %%% Match argument processing
 
 %% @doc Progressively generate matches from each argument for a transaction
@@ -625,7 +918,8 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
     ?event({filtered_out_of_range, length(AnnotatedIDs) - length(Filtered)}),
     Filtered.
 
-%% @doc Return the base IDs for messages that have a matching commitment.
+%% @doc Return the IDs of the messages whose commitments carry a field:
+%% their committer, or their target.
 matching_commitments(Field, Values, Opts) when is_list(Values) ->
     hb_util:unique(lists:flatten(
         lists:filtermap(
@@ -648,19 +942,7 @@ matching_commitments(Field, Value, Opts) when is_binary(Value) ->
                     {ids, IDs}
                 }
             ),
-            lists:map(fun(ID) -> commitment_id_to_base_id(ID, Opts) end, IDs);
-        _ -> not_found
-    end.
-
-%% @doc Convert a commitment message's ID to a base ID.
-commitment_id_to_base_id(ID, Opts) ->
-    Store = hb_opts:get(store, no_store, Opts),
-    ?event({commitment_id_to_base_id, ID}),
-    case hb_store:read(Store, << ID/binary, "/signature">>, Opts) of
-        {ok, EncSig} ->
-            Sig = hb_util:decode(EncSig),
-            ?event({commitment_id_to_base_id_sig, Sig}),
-            hb_util:encode(hb_crypto:sha256(Sig));
+            IDs;
         _ -> not_found
     end.
 
@@ -717,3 +999,156 @@ pending_offsets_page_by_cursor_test() ->
     #{ <<"id">> := PendingA, <<"cursor">> := FirstCursor } = Page(BaseArgs),
     #{ <<"id">> := NumericID } = Page(BaseArgs#{ <<"after">> => FirstCursor }),
     ok.
+
+%% @doc The messages the weave never held page out last in either order,
+%% by cursor, from a node's own stores.
+unmined_pages_test() ->
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()] },
+    Node = hb_http_server:start_node(Opts),
+    lists:foreach(
+        fun(N) ->
+            {ok, _} =
+                hb_cache:write(
+                    #{ <<"type">> => <<"Unmined">>, <<"n">> => hb_util:bin(N) },
+                    Opts
+                )
+        end,
+        lists:seq(1, 3)
+    ),
+    Query =
+        <<"""
+            query($after: String, $sort: SortOrder) {
+                transactions(
+                    tags: [{ name: "type", values: ["Unmined"] }],
+                    first: 1,
+                    after: $after,
+                    sort: $sort
+                ) {
+                    pageInfo { hasNextPage }
+                    edges { cursor node { id } }
+                }
+            }
+        """>>,
+    Pages =
+        fun Pages(Sort, After, Acc) ->
+            #{
+                <<"edges">> := [Edge = #{ <<"cursor">> := Cursor }],
+                <<"pageInfo">> := #{ <<"hasNextPage">> := More }
+            } =
+                hb_util:deep_get(
+                    <<"data/transactions">>,
+                    dev_query_graphql:test_query(
+                        Node,
+                        Query,
+                        #{ <<"after">> => After, <<"sort">> => Sort },
+                        Opts
+                    ),
+                    #{},
+                    Opts
+                ),
+            Item = maps:get(<<"node">>, Edge),
+            case More of
+                true -> Pages(Sort, Cursor, [Item | Acc]);
+                false -> lists:reverse([Item | Acc])
+            end
+        end,
+    Descending = Pages(<<"HEIGHT_DESC">>, null, []),
+    ?assertEqual(3, length(lists:usort(Descending))),
+    ?assertEqual(lists:reverse(Descending), Pages(<<"HEIGHT_ASC">>, null, [])).
+
+%% @doc A page served from the published index on Arweave, its items
+%% read from the weave: the twenty-four items of `action=Battle.Begin'
+%% page out in each order under cursors naming their keys, every item
+%% carrying the tag it was found by, the count is the whole set's, and the
+%% last page closes.
+published_pages_test_() ->
+    {timeout, 300, fun published_pages/0}.
+published_pages() ->
+    Sizes = <<"&key-hash-size=39&value-hash-size=40&offset-size=49">>,
+    Opts =
+        #{
+            <<"store">> =>
+                [
+                    (hb_test_utils:test_store(hb_store_lmdb))#{
+                        <<"capacity">> => 1024 * 1024 * 1024
+                    }
+                ],
+            <<"match-index">> =>
+                [
+                    #{
+                        <<"store-module">> => hb_store_arlmdb,
+                        <<"name">> => <<"query-published-index">>,
+                        <<"root">> =>
+                            <<"oWRzBr3KHhULAL-s5ULeXac1mb_WQOX5uFBRea16iRI">>,
+                        <<"return-row">> => true,
+                        <<"prefix">> => <<"~match@1.0/">>,
+                        <<"to-key">> => <<"~match@1.0/row", Sizes/binary>>,
+                        <<"from-key">> => <<"~match@1.0/member", Sizes/binary>>
+                    }
+                ]
+        },
+    Node = hb_http_server:start_node(Opts),
+    Query =
+        <<"""
+            query($after: String, $sort: SortOrder) {
+                transactions(
+                    tags: [{ name: "action", values: ["Battle.Begin"] }],
+                    first: 10,
+                    after: $after,
+                    sort: $sort
+                ) {
+                    count
+                    pageInfo { hasNextPage }
+                    edges { cursor node { id tags { name value } } }
+                }
+            }
+        """>>,
+    Page =
+        fun(Sort, After) ->
+            hb_util:deep_get(
+                <<"data/transactions">>,
+                dev_query_graphql:test_query(
+                    Node,
+                    Query,
+                    #{ <<"after">> => After, <<"sort">> => Sort },
+                    Opts
+                ),
+                #{},
+                Opts
+            )
+        end,
+    Pages =
+        fun Pages(Sort, After, Acc) ->
+            #{
+                <<"edges">> := Edges,
+                <<"pageInfo">> := #{ <<"hasNextPage">> := More }
+            } = Page(Sort, After),
+            Last = maps:get(<<"cursor">>, lists:last(Edges)),
+            case More of
+                true -> Pages(Sort, Last, Acc ++ Edges);
+                false -> Acc ++ Edges
+            end
+        end,
+    Descending = Pages(<<"HEIGHT_DESC">>, null, []),
+    ?assertEqual(24, length(Descending)),
+    ?assertEqual(
+        lists:reverse(Descending),
+        Pages(<<"HEIGHT_ASC">>, null, [])
+    ),
+    IDs = [ ID || #{ <<"node">> := #{ <<"id">> := ID } } <- Descending ],
+    ?assertEqual(24, length(lists:usort(IDs))),
+    ?assert(
+        lists:all(
+            fun(#{ <<"node">> := #{ <<"tags">> := Tags } }) ->
+                lists:member(
+                    #{
+                        <<"name">> => <<"action">>,
+                        <<"value">> => <<"Battle.Begin">>
+                    },
+                    Tags
+                )
+            end,
+            Descending
+        )
+    ),
+    ?assertMatch(#{ <<"count">> := <<"24">> }, Page(<<"HEIGHT_DESC">>, null)).
