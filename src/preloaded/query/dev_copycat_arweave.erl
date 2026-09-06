@@ -1697,13 +1697,14 @@ pending_range_indexes_bundle_children_test() ->
             hb_cache:read(ChildID, hb_store:scope(Opts, local))
         ),
         ?assertEqual(ChildID, hb_message:id(ChildMsg, signed, Opts)),
-        % The mempool's items are indexed in the node's pending index alone.
+        % The mempool's items are located from the node's pending index
+        % alone, at `infinity'.
         ?assertMatch(
-            {ok, [ChildID]},
+            {ok, [#{ <<"offset">> := infinity, <<"id">> := ChildID }]},
             hb_ao:raw(
                 <<"match@1.0">>,
                 #{ <<"content-type">> => <<"text/plain">> },
-                #{ <<"path">> => <<"content-type">> },
+                #{ <<"path">> => <<"locate">> },
                 (hb_store:scope(Opts, local))#{ <<"match-index">> => [Pending] }
             )
         )
