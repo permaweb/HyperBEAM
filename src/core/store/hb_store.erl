@@ -19,18 +19,18 @@
 %%%                   `local', `remote', `arweave', etc. Used in order to allow
 %%%                   node operators to prioritize their stores for search.
 %%%     group/3:      Create a new group of keys in the store using a request
-%%%                   map of the form `#{<<"group">> => Path}`.
+%%%                   map of the form `#{ <<"group">> => Path }`.
 %%%     link/3:       Create links using a request map of the form
-%%%                   `#{NewPath => ExistingPath}`.
+%%%                   `#{ NewPath => ExistingPath }`.
 %%%     type/3:       Return whether the value found at the given key is a
 %%%                   `composite' (group) type, or a `simple' direct binary,
-%%%                   using a request map of the form `#{<<"type">> => Path}`.
+%%%                   using a request map of the form `#{ <<"type">> => Path }`.
 %%%     read/3:       Read the data at the given location, returning a binary
 %%%                   if it is a `simple' value, or a message if it is a complex
-%%%                   term, using a request map of the form `#{<<"read">> => Path}`.
-%%%     write/3:      Write a request map of the form `#{Path => Value}`.
+%%%                   term, using a request map of the form `#{ <<"read">> => Path }`.
+%%%     write/3:      Write a request map of the form `#{ Path => Value }`.
 %%%     list/3:       For `composite' type keys, return child keys using a
-%%%                   request map of the form `#{<<"list">> => Path}`.
+%%%                   request map of the form `#{ <<"list">> => Path }`.
 %%%                   Composite read results may also return children as
 %%%                   `{Key, Value}' pairs when the store can provide a child
 %%%                   value without an additional read.
@@ -81,11 +81,6 @@
 %%%     `[to|from]-value`:  An AO-Core path, resolved in `raw' mode with a
 %%%                         successful result as the `Base/body`.
 %%% '''
-%%% Every path position of a request is processed through this pipeline. Every
-%%% `Key` -- whether seen as an input (e.g. to `read`) or an output (as in
-%%% `list`) use the `[to|from]-key` flow, and similarly `[to|from]-value` is
-%%% used upon every value relatively as input or response. A `match` request
-%%% carries no key or value and passes through untouched.
 -module(hb_store).
 -export([behavior_info/1]).
 -export([
@@ -513,7 +508,7 @@ do_call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args, 
 %% `not_found' for that store alone, and an answer that fails its
 %% normalization is an error: both move the manager on to the next store.
 invoke(Mod, Store, Function, Args = [Req, Opts]) ->
-    case pipelined(Store) of
+    case has_processing_pipeline(Store) of
         false ->
             apply_store_function(Mod, Store, Function, Args);
         true ->
@@ -529,14 +524,15 @@ invoke(Mod, Store, Function, Args = [Req, Opts]) ->
     end.
 
 %% @doc Whether a store message describes a normalization pipeline.
-pipelined(Store) ->
+has_processing_pipeline(Store) ->
     lists:any(fun(Key) -> is_map_key(Key, Store) end, ?PIPELINE_KEYS).
 
 %% @doc Normalize a request's keys and values to the store: the path a
 %% `read', `list', `type', `group' or `resolve' names, every key and value
-%% of a `write', and both paths of a `link'. Every other request carries no
-%% key or value and passes through.
-to_store(Store, write, Req, Opts) ->
+%% of a `write' or `match', and both paths of a `link'. Every other request
+%% carries no key or value and passes through.
+to_store(Store, Function, Req, Opts)
+        when Function =:= write orelse Function =:= match ->
     to_pairs(Store, fun to_value/3, Req, Opts);
 to_store(Store, link, Req, Opts) ->
     to_pairs(Store, fun to_key/3, Req, Opts);
@@ -558,7 +554,7 @@ to_store(_Store, _Function, Req, _Opts) ->
 to_pairs(Store, Values, Req, Opts) ->
     maybe
         {ok, Pairs} ?=
-            each(
+            maybe_each(
                 fun({Path, Value}) ->
                     maybe
                         {ok, NormPath} ?= to_key(Store, Path, Opts),
@@ -576,32 +572,32 @@ to_pairs(Store, Values, Req, Opts) ->
 %% store's `to-key'. A path without the prefix is `not_found' for the store.
 to_key(Store, Path, Opts) ->
     Prefix = maps:get(<<"prefix">>, Store, <<>>),
-    Size = byte_size(Prefix),
+    PrefixBitSize = bit_size(Prefix),
     case Path of
-        <<Prefix:Size/binary, Rest/binary>> ->
+        <<Prefix:PrefixBitSize/bitstring, Rest/bitstring>> ->
             Admitted =
-                case strips(Store) of
+                case must_strip_prefix(Store) of
                     true -> Rest;
                     false -> Path
                 end,
-            normalize(<<"to-key">>, Store, Admitted, Opts);
+            execute_normalizer(<<"to-key">>, Store, Admitted, Opts);
         _ ->
             {error, not_found}
     end.
 
 %% @doc Normalize a value to the store through its `to-value'.
 to_value(Store, Value, Opts) ->
-    normalize(<<"to-value">>, Store, Value, Opts).
+    execute_normalizer(<<"to-value">>, Store, Value, Opts).
 
 %% @doc Whether the store's prefix is stripped from the paths it admits.
-strips(Store) ->
+must_strip_prefix(Store) ->
     hb_util:bool(maps:get(<<"prefix-strip">>, Store, true)).
 
 %% @doc Normalize a store's answer from it: a read's value, the children a
 %% `list' or a composite read enumerates, and a resolved path, which regains
 %% a stripped prefix. Every other answer passes through.
 from_store(Store, read, {ok, Value}, Opts) ->
-    normalize(<<"from-value">>, Store, Value, Opts);
+    execute_normalizer(<<"from-value">>, Store, Value, Opts);
 from_store(Store, read, {composite, Children}, Opts) ->
     maybe
         {ok, Norm} ?= from_children(Store, Children, Opts),
@@ -612,37 +608,38 @@ from_store(Store, list, {ok, Children}, Opts) ->
 from_store(Store, resolve, {ok, Path}, Opts) ->
     Prefix = maps:get(<<"prefix">>, Store, <<>>),
     maybe
-        {ok, Norm} ?= normalize(<<"from-key">>, Store, Path, Opts),
+        {ok, Norm} ?= execute_normalizer(<<"from-key">>, Store, Path, Opts),
         {ok,
-            case strips(Store) of
+            case must_strip_prefix(Store) of
                 true -> <<Prefix/binary, Norm/binary>>;
                 false -> Norm
-            end}
+            end
+        }
     end;
 from_store(_Store, _Function, Result, _Opts) ->
     Result.
 
 %% @doc Normalize the children a store enumerates from it.
 from_children(Store, Children, Opts) ->
-    each(fun(Child) -> from_child(Store, Child, Opts) end, Children).
+    maybe_each(fun(Child) -> from_child(Store, Child, Opts) end, Children).
 
 %% @doc Normalize a child from the store: its key through `from-key', and
 %% the value of a child given as a pair through `from-value'.
 from_child(Store, {Key, Value}, Opts) ->
     maybe
-        {ok, NormKey} ?= normalize(<<"from-key">>, Store, Key, Opts),
-        {ok, NormValue} ?= normalize(<<"from-value">>, Store, Value, Opts),
+        {ok, NormKey} ?= execute_normalizer(<<"from-key">>, Store, Key, Opts),
+        {ok, NormValue} ?= execute_normalizer(<<"from-value">>, Store, Value, Opts),
         {ok, {NormKey, NormValue}}
     end;
 from_child(Store, Key, Opts) ->
-    normalize(<<"from-key">>, Store, Key, Opts).
+    execute_normalizer(<<"from-key">>, Store, Key, Opts).
 
 %% @doc Normalize each term of a list in order, stopping at the first error.
-each(_Fun, []) -> {ok, []};
-each(Fun, [Term | Rest]) ->
+maybe_each(_Fun, []) -> {ok, []};
+maybe_each(Fun, [Term | Rest]) ->
     maybe
         {ok, Norm} ?= Fun(Term),
-        {ok, Others} ?= each(Fun, Rest),
+        {ok, Others} ?= maybe_each(Fun, Rest),
         {ok, [Norm | Others]}
     end.
 
@@ -653,21 +650,22 @@ each(Fun, [Term | Rest]) ->
 %% the term as it is. The resolution sees only the stores that carry no
 %% pipeline of their own, so any loads it performs -- remote devices among
 %% them -- can never recurse into another normalization.
-normalize(Setting, Store, Term, Opts) ->
+execute_normalizer(Setting, Store, Term, Opts) ->
     case maps:get(Setting, Store, []) of
         [] -> {ok, Term};
         Path ->
             hb_ao:raw(
                 #{ <<"path">> => Path, <<"0.body">> => Term },
                 Opts#{
-                    <<"store">> => [ S || S <- stores(Opts), not pipelined(S) ]
+                    <<"store">> =>
+                        [ S || S <- stores(Opts), not has_processing_pipeline(S) ]
                 }
             )
     end.
 
 %% @doc The stores of the node's options as a list.
 stores(Opts) ->
-    case hb_opts:get(store, [], Opts) of
+    case hb_opts:get(<<"store">>, [], Opts) of
         Stores when is_list(Stores) -> Stores;
         Store -> [Store]
     end.
