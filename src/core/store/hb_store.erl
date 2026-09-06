@@ -341,7 +341,7 @@ sort(Stores, ScoreMap) ->
 
 %% @doc Read a key from the store.
 read(Path, Opts) ->
-    read(hb_opts:get(store, [], Opts), Path, Opts).
+    read(hb_opts:get(<<"store">>, [], Opts), Path, Opts).
 read(Modules, Req = #{ <<"read">> := _ }, Opts) ->
     call_function(Modules, read, [Req, Opts]);
 read(Modules, Path, Opts) ->
@@ -349,14 +349,14 @@ read(Modules, Path, Opts) ->
 
 %% @doc Write a key with a value to the store.
 write(Req, Opts) ->
-    write(hb_opts:get(store, [], Opts), Req, Opts).
+    write(hb_opts:get(<<"store">>, [], Opts), Req, Opts).
 write(Modules, Req, Opts) ->
     call_function(Modules, write, [Req, Opts]).
 
 %% @doc Make a group in the store. A group can be seen as a namespace or
 %% 'directory' in a filesystem.
 group(Path, Opts) ->
-    group(hb_opts:get(store, [], Opts), Path, Opts).
+    group(hb_opts:get(<<"store">>, [], Opts), Path, Opts).
 group(Modules, Req = #{ <<"group">> := _ }, Opts) ->
     call_function(Modules, group, [Req, Opts]);
 group(Modules, Path, Opts) ->
@@ -364,7 +364,7 @@ group(Modules, Path, Opts) ->
 
 %% @doc Make a link from one path to another in the store.
 link(Req, Opts) ->
-    link(hb_opts:get(store, [], Opts), Req, Opts).
+    link(hb_opts:get(<<"store">>, [], Opts), Req, Opts).
 link(Modules, Req, Opts) ->
     call_function(Modules, link, [Req, Opts]).
 
@@ -383,7 +383,7 @@ reset(Stores, Req, Opts) ->
 %% @doc Get the type of element of a given path in the store. This can be
 %% a performance killer if the store is remote etc. Use only when necessary.
 type(Path, Opts) ->
-    type(hb_opts:get(store, [], Opts), Path, Opts).
+    type(hb_opts:get(<<"store">>, [], Opts), Path, Opts).
 type(Modules, Req = #{ <<"type">> := _ }, Opts) ->
     call_function(Modules, type, [Req, Opts]);
 type(Modules, Path, Opts) ->
@@ -391,7 +391,7 @@ type(Modules, Path, Opts) ->
 
 %% @doc Follow links through the store to resolve a path to its ultimate target.
 resolve(Path, Opts) ->
-    resolve(hb_opts:get(store, [], Opts), Path, Opts).
+    resolve(hb_opts:get(<<"store">>, [], Opts), Path, Opts).
 resolve(Modules, Req = #{ <<"resolve">> := _ }, Opts) ->
     call_function(Modules, resolve, [Req, Opts]);
 resolve(Modules, Path, Opts) ->
@@ -401,7 +401,7 @@ resolve(Modules, Path, Opts) ->
 %% The hyperbeam model assumes that stores are built as efficient hash-based
 %% structures, so this is likely to be very slow for most stores.
 list(Path, Opts) ->
-    list(hb_opts:get(store, [], Opts), Path, Opts).
+    list(hb_opts:get(<<"store">>, [], Opts), Path, Opts).
 list(Modules, Req = #{ <<"list">> := _ }, Opts) ->
     call_function(Modules, list, [Req, Opts]);
 list(Modules, Path, Opts) ->
@@ -412,7 +412,7 @@ list(Modules, Path, Opts) ->
 %% messages in the store that feature all of the given key-value pairs. `Matches'
 %% is given as a list of IDs.
 match(Match, Opts) ->
-    match(hb_opts:get(store, [], Opts), Match, Opts).
+    match(hb_opts:get(<<"store">>, [], Opts), Match, Opts).
 match(Modules, Match, Opts) ->
     call_function(Modules, match, [Match, Opts]).
 
