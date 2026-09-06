@@ -94,9 +94,11 @@ write_path(Opts, PathComponents, Value) ->
     ok.
 
 %% @doc List contents of a directory in the store.
-list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
+list(Opts, Req = #{ <<"list">> := Path }, _NodeOpts) ->
     case file:list_dir(add_prefix(Opts, hb_path:to_binary(Path))) of
-        {ok, Files} -> {ok, lists:map(fun hb_util:bin/1, Files)};
+        {ok, Files} ->
+            Children = lists:map(fun hb_util:bin/1, Files),
+            {ok, hb_store_utils:apply_list_bounds(Children, Req)};
         {error, _} -> {error, not_found}
     end.
 

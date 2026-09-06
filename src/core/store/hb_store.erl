@@ -30,7 +30,13 @@
 %%%                   term, using a request map of the form `#{ <<"read">> => Path }`.
 %%%     write/3:      Write a request map of the form `#{ Path => Value }`.
 %%%     list/3:       For `composite' type keys, return child keys using a
-%%%                   request map of the form `#{ <<"list">> => Path }`.
+%%%                   request map of the form `#{ <<"list">> => Path }`:
+%%%                   every child, in the store's own order. A request may
+%%%                   instead bound the list: `from' is the child it should
+%%%                   start at, inclusive, in its `direction' (`asc' or
+%%%                   `desc'), and `limit' the most children returned.
+%%%                   `limit' can also be `batch' for every child the store
+%%%                   finds without further work (store determined).
 %%%                   Composite read results may also return children as
 %%%                   `{Key, Value}' pairs when the store can provide a child
 %%%                   value without an additional read.
@@ -536,6 +542,15 @@ to_store(Store, Function, Req, Opts)
     to_pairs(Store, fun to_value/3, Req, Opts);
 to_store(Store, link, Req, Opts) ->
     to_pairs(Store, fun to_key/3, Req, Opts);
+to_store(Store, list, Req = #{ <<"from">> := From }, Opts) ->
+    % The child a list starts from is a key, as the children it answers
+    % with are: it carries no prefix.
+    maybe
+        {ok, NormFrom} ?= execute_normalizer(<<"to-key">>, Store, From, Opts),
+        {ok, NormReq} ?=
+            to_store(Store, list, maps:remove(<<"from">>, Req), Opts),
+        {ok, NormReq#{ <<"from">> => NormFrom }}
+    end;
 to_store(Store, Function, Req, Opts)
         when Function =:= read orelse Function =:= list orelse
             Function =:= type orelse Function =:= group orelse
