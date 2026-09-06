@@ -611,7 +611,7 @@ from_store(Store, resolve, {ok, Path}, Opts) ->
         {ok, Norm} ?= execute_normalizer(<<"from-key">>, Store, Path, Opts),
         {ok,
             case must_strip_prefix(Store) of
-                true -> <<Prefix/binary, Norm/binary>>;
+                true -> <<Prefix/bitstring, Norm/bitstring>>;
                 false -> Norm
             end
         }
@@ -654,20 +654,18 @@ execute_normalizer(Setting, Store, Term, Opts) ->
     case maps:get(Setting, Store, []) of
         [] -> {ok, Term};
         Path ->
+            AllOptsStores = 
+                case hb_opts:get(<<"store">>, [], Opts) of
+                    OptStores when is_list(OptStores) -> OptStores;
+                    OptStore -> [OptStore]
+                end,
             hb_ao:raw(
                 #{ <<"path">> => Path, <<"0.body">> => Term },
                 Opts#{
                     <<"store">> =>
-                        [ S || S <- stores(Opts), not has_processing_pipeline(S) ]
+                        [ S || S <- AllOptsStores, not has_processing_pipeline(S) ]
                 }
             )
-    end.
-
-%% @doc The stores of the node's options as a list.
-stores(Opts) ->
-    case hb_opts:get(<<"store">>, [], Opts) of
-        Stores when is_list(Stores) -> Stores;
-        Store -> [Store]
     end.
 
 %% @doc Apply a store function, checking if the store returns a retry request or
