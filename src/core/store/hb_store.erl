@@ -316,7 +316,7 @@ get_store_scope(Store) ->
 sort(Stores, PreferenceOrder) when is_list(PreferenceOrder) ->
     sort(
         Stores,
-        hb_maps:from_list(
+        maps:from_list(
             [
                 {Scope, -Index}
             ||
@@ -331,8 +331,8 @@ sort(Stores, PreferenceOrder) when is_list(PreferenceOrder) ->
 sort(Stores, ScoreMap) ->
     lists:sort(
         fun(Store1, Store2) ->
-            hb_maps:get(get_store_scope(Store1), ScoreMap, 0) >
-                hb_maps:get(get_store_scope(Store2), ScoreMap, 0)
+            maps:get(get_store_scope(Store1), ScoreMap, 0) >
+                maps:get(get_store_scope(Store2), ScoreMap, 0)
         end,
         Stores
     ).
