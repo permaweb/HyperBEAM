@@ -19,18 +19,18 @@
 %%%                   `local', `remote', `arweave', etc. Used in order to allow
 %%%                   node operators to prioritize their stores for search.
 %%%     group/3:      Create a new group of keys in the store using a request
-%%%                   map of the form `#{<<"group">> => Path}`.
+%%%                   map of the form `#{ <<"group">> => Path }`.
 %%%     link/3:       Create links using a request map of the form
-%%%                   `#{NewPath => ExistingPath}`.
+%%%                   `#{ NewPath => ExistingPath }`.
 %%%     type/3:       Return whether the value found at the given key is a
 %%%                   `composite' (group) type, or a `simple' direct binary,
-%%%                   using a request map of the form `#{<<"type">> => Path}`.
+%%%                   using a request map of the form `#{ <<"type">> => Path }`.
 %%%     read/3:       Read the data at the given location, returning a binary
 %%%                   if it is a `simple' value, or a message if it is a complex
-%%%                   term, using a request map of the form `#{<<"read">> => Path}`.
-%%%     write/3:      Write a request map of the form `#{Path => Value}`.
+%%%                   term, using a request map of the form `#{ <<"read">> => Path }`.
+%%%     write/3:      Write a request map of the form `#{ Path => Value }`.
 %%%     list/3:       For `composite' type keys, return child keys using a
-%%%                   request map of the form `#{<<"list">> => Path}`.
+%%%                   request map of the form `#{ <<"list">> => Path }`.
 %%%                   Composite read results may also return children as
 %%%                   `{Key, Value}' pairs when the store can provide a child
 %%%                   value without an additional read.
@@ -46,7 +46,41 @@
 %%% store is tried. If none of the given store messages are able to execute a
 %%% requested service, the store manager will return the strongest terminal
 %%% result observed, or `{error, not_found}`.
-
+%%%
+%%% A store message may additionally specify a normalization pipeline, called
+%%% upon its paths and values during store invocation. These pipelines allow
+%%% node operators to optimize their setups to store their keys with
+%%% particular representations, while AO-Core and its devices remain agnostic
+%%% to their specifics.
+%%%
+%%% Each store invocation progresses through the following pipeline:
+%%%
+%%% ```
+%%%     Prefix matching/removal ->
+%%%     Pre-normalization ->
+%%%     Store invocation ->
+%%%     Post-normalization ->
+%%%     Re-prefixing (only for `resolve`) ->
+%%%     Return.
+%%% '''
+%%%
+%%% `Key`s and `Value`s are normalized individually -- `to` prior to store
+%%% invocation, and `from` upon responses from store. To configure each, a
+%%% store message may specify:
+%%%
+%%% ```
+%%%     `prefix`:           Admit only `Key`s with the given prefix, skipping
+%%%                         the store otherwise. The prefix is stripped from
+%%%                         the `Key` ahead of store normalization and
+%%%                         invocation, unless an additional `prefix-strip'
+%%%                         store message key is explicitly set to `false'.
+%%%     `[to|from]-key`:    An AO-Core path, resolved in `raw' mode with the
+%%%                         (post-prefix handling) key as its `Base/body`
+%%%                         message. The result is utilized as the key the
+%%%                         store sees.
+%%%     `[to|from]-value`:  An AO-Core path, resolved in `raw' mode with a
+%%%                         successful result as the `Base/body`.
+%%% '''
 -module(hb_store).
 -export([behavior_info/1]).
 -export([
@@ -99,6 +133,11 @@ behavior_info(callbacks) ->
     <<"write">> => [write, link, group, reset] ++ ?COMMON_POLICIES,
     <<"admin">> => [reset] ++ ?COMMON_POLICIES
 }).
+
+%% @doc The store message keys that describe a normalization pipeline.
+-define(PIPELINE_KEYS, [
+    <<"prefix">>, <<"to-key">>, <<"from-key">>, <<"to-value">>, <<"from-value">>
+]).
 
 %%% Store named terms registry functions.
 
@@ -272,7 +311,7 @@ get_store_scope(Store) ->
 sort(Stores, PreferenceOrder) when is_list(PreferenceOrder) ->
     sort(
         Stores,
-        hb_maps:from_list(
+        maps:from_list(
             [
                 {Scope, -Index}
             ||
@@ -287,8 +326,8 @@ sort(Stores, PreferenceOrder) when is_list(PreferenceOrder) ->
 sort(Stores, ScoreMap) ->
     lists:sort(
         fun(Store1, Store2) ->
-            hb_maps:get(get_store_scope(Store1), ScoreMap, 0) >
-                hb_maps:get(get_store_scope(Store2), ScoreMap, 0)
+            maps:get(get_store_scope(Store1), ScoreMap, 0) >
+                maps:get(get_store_scope(Store2), ScoreMap, 0)
         end,
         Stores
     ).
@@ -297,7 +336,7 @@ sort(Stores, ScoreMap) ->
 
 %% @doc Read a key from the store.
 read(Path, Opts) ->
-    read(hb_opts:get(store, [], Opts), Path, Opts).
+    read(hb_opts:get(<<"store">>, [], Opts), Path, Opts).
 read(Modules, Req = #{ <<"read">> := _ }, Opts) ->
     call_function(Modules, read, [Req, Opts]);
 read(Modules, Path, Opts) ->
@@ -305,14 +344,14 @@ read(Modules, Path, Opts) ->
 
 %% @doc Write a key with a value to the store.
 write(Req, Opts) ->
-    write(hb_opts:get(store, [], Opts), Req, Opts).
+    write(hb_opts:get(<<"store">>, [], Opts), Req, Opts).
 write(Modules, Req, Opts) ->
     call_function(Modules, write, [Req, Opts]).
 
 %% @doc Make a group in the store. A group can be seen as a namespace or
 %% 'directory' in a filesystem.
 group(Path, Opts) ->
-    group(hb_opts:get(store, [], Opts), Path, Opts).
+    group(hb_opts:get(<<"store">>, [], Opts), Path, Opts).
 group(Modules, Req = #{ <<"group">> := _ }, Opts) ->
     call_function(Modules, group, [Req, Opts]);
 group(Modules, Path, Opts) ->
@@ -320,7 +359,7 @@ group(Modules, Path, Opts) ->
 
 %% @doc Make a link from one path to another in the store.
 link(Req, Opts) ->
-    link(hb_opts:get(store, [], Opts), Req, Opts).
+    link(hb_opts:get(<<"store">>, [], Opts), Req, Opts).
 link(Modules, Req, Opts) ->
     call_function(Modules, link, [Req, Opts]).
 
@@ -339,7 +378,7 @@ reset(Stores, Req, Opts) ->
 %% @doc Get the type of element of a given path in the store. This can be
 %% a performance killer if the store is remote etc. Use only when necessary.
 type(Path, Opts) ->
-    type(hb_opts:get(store, [], Opts), Path, Opts).
+    type(hb_opts:get(<<"store">>, [], Opts), Path, Opts).
 type(Modules, Req = #{ <<"type">> := _ }, Opts) ->
     call_function(Modules, type, [Req, Opts]);
 type(Modules, Path, Opts) ->
@@ -347,7 +386,7 @@ type(Modules, Path, Opts) ->
 
 %% @doc Follow links through the store to resolve a path to its ultimate target.
 resolve(Path, Opts) ->
-    resolve(hb_opts:get(store, [], Opts), Path, Opts).
+    resolve(hb_opts:get(<<"store">>, [], Opts), Path, Opts).
 resolve(Modules, Req = #{ <<"resolve">> := _ }, Opts) ->
     call_function(Modules, resolve, [Req, Opts]);
 resolve(Modules, Path, Opts) ->
@@ -357,7 +396,7 @@ resolve(Modules, Path, Opts) ->
 %% The hyperbeam model assumes that stores are built as efficient hash-based
 %% structures, so this is likely to be very slow for most stores.
 list(Path, Opts) ->
-    list(hb_opts:get(store, [], Opts), Path, Opts).
+    list(hb_opts:get(<<"store">>, [], Opts), Path, Opts).
 list(Modules, Req = #{ <<"list">> := _ }, Opts) ->
     call_function(Modules, list, [Req, Opts]);
 list(Modules, Path, Opts) ->
@@ -368,7 +407,7 @@ list(Modules, Path, Opts) ->
 %% messages in the store that feature all of the given key-value pairs. `Matches'
 %% is given as a list of IDs.
 match(Match, Opts) ->
-    match(hb_opts:get(store, [], Opts), Match, Opts).
+    match(hb_opts:get(<<"store">>, [], Opts), Match, Opts).
 match(Modules, Match, Opts) ->
     call_function(Modules, match, [Match, Opts]).
 
@@ -431,8 +470,8 @@ do_call_function([Store = #{<<"access">> := Access} | Rest], Function, Args, Fai
             do_call_function(Rest, Function, Args, Failure, Error)
     end;
 do_call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args, Failure, Error) ->
-    % Attempt to apply the function. If it fails, try the next store.
-    try apply_store_function(Mod, Store, Function, Args) of
+    % Attempt to invoke the function. If it fails, try the next store.
+    try invoke(Mod, Store, Function, Args) of
         ok ->
             ok;
         {ok, _} = Result ->
@@ -461,6 +500,172 @@ do_call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args, 
             normalize_result(Other)
     catch _:_:_ ->
         do_call_function(Rest, Function, Args, Failure, Error)
+    end.
+
+%% @doc Invoke a store function through the normalization pipeline its store
+%% message describes: the request's keys and values are normalized to the
+%% store, and its answer's from it. A request the store does not admit is
+%% `not_found' for that store alone, and an answer that fails its
+%% normalization is an error: both move the manager on to the next store.
+invoke(Mod, Store, Function, Args = [Req, Opts]) ->
+    case has_processing_pipeline(Store) of
+        false ->
+            apply_store_function(Mod, Store, Function, Args);
+        true ->
+            maybe
+                {ok, NormReq} ?= to_store(Store, Function, Req, Opts),
+                from_store(
+                    Store,
+                    Function,
+                    apply_store_function(Mod, Store, Function, [NormReq, Opts]),
+                    Opts
+                )
+            end
+    end.
+
+%% @doc Whether a store message describes a normalization pipeline.
+has_processing_pipeline(Store) ->
+    lists:any(fun(Key) -> is_map_key(Key, Store) end, ?PIPELINE_KEYS).
+
+%% @doc Normalize a request's keys and values to the store: the path a
+%% `read', `list', `type', `group' or `resolve' names, every key and value
+%% of a `write' or `match', and both paths of a `link'. Every other request
+%% carries no key or value and passes through.
+to_store(Store, Function, Req, Opts)
+        when Function =:= write orelse Function =:= match ->
+    to_pairs(Store, fun to_value/3, Req, Opts);
+to_store(Store, link, Req, Opts) ->
+    to_pairs(Store, fun to_key/3, Req, Opts);
+to_store(Store, Function, Req, Opts)
+        when Function =:= read orelse Function =:= list orelse
+            Function =:= type orelse Function =:= group orelse
+            Function =:= resolve ->
+    OpKey = hb_util:bin(Function),
+    maybe
+        {ok, Path} ?= to_key(Store, maps:get(OpKey, Req), Opts),
+        {ok, Req#{ OpKey => Path }}
+    end;
+to_store(_Store, _Function, Req, _Opts) ->
+    {ok, Req}.
+
+%% @doc Normalize every pair of a request to the store: its keys as paths,
+%% and its values through the given function -- as paths for a `link', as
+%% values for a `write'.
+to_pairs(Store, Values, Req, Opts) ->
+    maybe
+        {ok, Pairs} ?=
+            maybe_each(
+                fun({Path, Value}) ->
+                    maybe
+                        {ok, NormPath} ?= to_key(Store, Path, Opts),
+                        {ok, NormValue} ?= Values(Store, Value, Opts),
+                        {ok, {NormPath, NormValue}}
+                    end
+                end,
+                maps:to_list(Req)
+            ),
+        {ok, maps:from_list(Pairs)}
+    end.
+
+%% @doc Normalize a path to the store: admit it by the store's `prefix',
+%% stripped from it unless `prefix-strip' is `false', then through the
+%% store's `to-key'. A path without the prefix is `not_found' for the store.
+to_key(Store, Path, Opts) ->
+    Prefix = maps:get(<<"prefix">>, Store, <<>>),
+    PrefixBitSize = bit_size(Prefix),
+    case Path of
+        <<Prefix:PrefixBitSize/bitstring, Rest/bitstring>> ->
+            Admitted =
+                case must_strip_prefix(Store) of
+                    true -> Rest;
+                    false -> Path
+                end,
+            execute_normalizer(<<"to-key">>, Store, Admitted, Opts);
+        _ ->
+            {error, not_found}
+    end.
+
+%% @doc Normalize a value to the store through its `to-value'.
+to_value(Store, Value, Opts) ->
+    execute_normalizer(<<"to-value">>, Store, Value, Opts).
+
+%% @doc Whether the store's prefix is stripped from the paths it admits.
+must_strip_prefix(Store) ->
+    hb_util:bool(maps:get(<<"prefix-strip">>, Store, true)).
+
+%% @doc Normalize a store's answer from it: a read's value, the children a
+%% `list' or a composite read enumerates, and a resolved path, which regains
+%% a stripped prefix. Every other answer passes through.
+from_store(Store, read, {ok, Value}, Opts) ->
+    execute_normalizer(<<"from-value">>, Store, Value, Opts);
+from_store(Store, read, {composite, Children}, Opts) ->
+    maybe
+        {ok, Norm} ?= from_children(Store, Children, Opts),
+        {composite, Norm}
+    end;
+from_store(Store, list, {ok, Children}, Opts) ->
+    from_children(Store, Children, Opts);
+from_store(Store, resolve, {ok, Path}, Opts) ->
+    Prefix = maps:get(<<"prefix">>, Store, <<>>),
+    maybe
+        {ok, Norm} ?= execute_normalizer(<<"from-key">>, Store, Path, Opts),
+        {ok,
+            case must_strip_prefix(Store) of
+                true -> <<Prefix/bitstring, Norm/bitstring>>;
+                false -> Norm
+            end
+        }
+    end;
+from_store(_Store, _Function, Result, _Opts) ->
+    Result.
+
+%% @doc Normalize the children a store enumerates from it.
+from_children(Store, Children, Opts) ->
+    maybe_each(fun(Child) -> from_child(Store, Child, Opts) end, Children).
+
+%% @doc Normalize a child from the store: its key through `from-key', and
+%% the value of a child given as a pair through `from-value'.
+from_child(Store, {Key, Value}, Opts) ->
+    maybe
+        {ok, NormKey} ?= execute_normalizer(<<"from-key">>, Store, Key, Opts),
+        {ok, NormValue} ?= execute_normalizer(<<"from-value">>, Store, Value, Opts),
+        {ok, {NormKey, NormValue}}
+    end;
+from_child(Store, Key, Opts) ->
+    execute_normalizer(<<"from-key">>, Store, Key, Opts).
+
+%% @doc Normalize each term of a list in order, stopping at the first error.
+maybe_each(_Fun, []) -> {ok, []};
+maybe_each(Fun, [Term | Rest]) ->
+    maybe
+        {ok, Norm} ?= Fun(Term),
+        {ok, Others} ?= maybe_each(Fun, Rest),
+        {ok, [Norm | Others]}
+    end.
+
+%% @doc Resolve one of the store message's normalization paths over a term
+%% in `raw' mode, with the term as the `body' of the head of the path: a
+%% bare `body' key would be merged into every stage of the path, clobbering
+%% the values piped between them. A store message without the path leaves
+%% the term as it is. The resolution sees only the stores that carry no
+%% pipeline of their own, so any loads it performs -- remote devices among
+%% them -- can never recurse into another normalization.
+execute_normalizer(Setting, Store, Term, Opts) ->
+    case maps:get(Setting, Store, []) of
+        [] -> {ok, Term};
+        Path ->
+            AllOptsStores = 
+                case hb_opts:get(<<"store">>, [], Opts) of
+                    OptStores when is_list(OptStores) -> OptStores;
+                    OptStore -> [OptStore]
+                end,
+            hb_ao:raw(
+                #{ <<"path">> => Path, <<"0.body">> => Term },
+                Opts#{
+                    <<"store">> =>
+                        [ S || S <- AllOptsStores, not has_processing_pipeline(S) ]
+                }
+            )
     end.
 
 %% @doc Apply a store function, checking if the store returns a retry request or
@@ -1130,6 +1335,161 @@ benchmark_message(nested, N, TestDataSize) ->
                 <<"body">> => <<"test", 0:TestDataSize, N:32>>
             }
     }.
+
+%%% Normalization Pipeline Tests
+
+%% @doc Test that a store with a `prefix' only admits keys bearing it --
+%% writes and reads alike -- stripping the prefix ahead of invocation and
+%% falling through to later stores otherwise, and that a path resolved
+%% through it regains the prefix, as `hb_cache' reuses the resolution.
+prefix_pipeline_test() ->
+    Mounted =
+        (hb_test_utils:test_store(hb_store_fs, <<"pipeline-prefix">>))#{
+            <<"prefix">> => <<"mnt/">>
+        },
+    Plain = hb_test_utils:test_store(hb_store_fs, <<"pipeline-plain">>),
+    StoreList = [Mounted, Plain],
+    Ungated = maps:remove(<<"prefix">>, Mounted),
+    start(StoreList),
+    ?event(testing, {prefix_pipeline_test_started}),
+    % A prefixed write is stripped ahead of the store, so the raw key is
+    % visible once the prefix gate is removed from the store message.
+    ?assertEqual(ok, write(StoreList, write_req(<<"mnt/inner">>, <<"1">>), #{})),
+    ?assertEqual({ok, <<"1">>}, read(StoreList, <<"mnt/inner">>, #{})),
+    ?assertEqual({ok, <<"1">>}, read([Ungated], <<"inner">>, #{})),
+    ?assertEqual({error, not_found}, read([Plain], <<"mnt/inner">>, #{})),
+    ?assertEqual(
+        {ok, <<"mnt/inner">>},
+        resolve(StoreList, <<"mnt/inner">>, #{})
+    ),
+    ?assertEqual(
+        {ok, <<"1">>},
+        hb_cache:read(
+            <<"mnt/inner">>,
+            #{ <<"store">> => Mounted, <<"cache-read-mode">> => raw }
+        )
+    ),
+    ?event(testing, {prefixed_write_and_read_passed}),
+    % A key without the prefix skips the mounted store entirely, for writes
+    % and reads alike.
+    ?assertEqual(ok, write(StoreList, write_req(<<"outer">>, <<"2">>), #{})),
+    ?assertEqual({ok, <<"2">>}, read(StoreList, <<"outer">>, #{})),
+    ?assertEqual({error, not_found}, read([Ungated], <<"outer">>, #{})),
+    % Disabling `prefix-strip' admits the key but passes it through whole.
+    StripOff = Mounted#{ <<"prefix-strip">> => <<"false">> },
+    ?assertEqual(ok, write([StripOff], write_req(<<"mnt/keep">>, <<"3">>), #{})),
+    ?assertEqual({ok, <<"3">>}, read([StripOff], <<"mnt/keep">>, #{})),
+    ?assertEqual({ok, <<"3">>}, read([Ungated], <<"mnt/keep">>, #{})),
+    ?assertEqual(ok, reset([Mounted])),
+    ?assertEqual({error, not_found}, read([Ungated], <<"inner">>, #{})),
+    ?assertEqual({ok, <<"2">>}, read([Plain], <<"outer">>, #{})),
+    ?event(testing, {unprefixed_skip_and_strip_off_passed}).
+
+%% @doc Test that lifecycle operations bypass path preprocessing for a store
+%% carrying a prefix.
+prefix_pipeline_stop_test() ->
+    Store =
+        (hb_test_utils:test_store(hb_store_volatile, <<"pipeline-stop">>))#{
+            <<"prefix">> => <<"mnt/">>
+        },
+    start(Store),
+    #{ <<"pid">> := Pid } = find(Store),
+    Monitor = erlang:monitor(process, Pid),
+    ?assertEqual(ok, stop(Store)),
+    receive
+        {'DOWN', Monitor, process, Pid, normal} -> ok
+    after 1000 ->
+        ?assert(false)
+    end.
+
+%% @doc Test that `to-key' and `to-value' rewrite a request's paths and
+%% values ahead of the store -- for writes and reads alike -- and that
+%% `from-key' and `from-value' normalize its answers: a read's value, each
+%% child a list or a composite read enumerates, and a resolved path, which
+%% regains its prefix. A path the normalization cannot decode, or an answer
+%% that fails its normalization, falls through to the next store with the
+%% caller's original request.
+normalize_pipeline_test() ->
+    Store =
+        (hb_test_utils:test_store(hb_store_fs, <<"pipeline-normalize">>))#{
+            <<"prefix">> => <<"b64/">>,
+            <<"to-key">> => <<"~base64url@1.0/decode/body">>,
+            <<"from-key">> => <<"~base64url@1.0/encode/body">>,
+            <<"to-value">> => <<"~base64url@1.0/encode/body">>,
+            <<"from-value">> => <<"~base64url@1.0/decode/body">>
+        },
+    Fallback = hb_test_utils:test_store(hb_store_fs, <<"pipeline-fallback">>),
+    Raw = maps:without(?PIPELINE_KEYS, Store),
+    start([Store, Fallback]),
+    ?event(testing, {normalize_pipeline_test_started}),
+    % A write under the canonical key is decoded ahead of the store and its
+    % value encoded: both are visible with the pipeline removed from the
+    % message, and the read decodes the value again.
+    EncodedKey = hb_util:encode(<<"inner">>),
+    ?assertEqual(
+        ok,
+        write([Store], write_req(<<"b64/", EncodedKey/binary>>, <<"val">>), #{})
+    ),
+    ?assertEqual(
+        {ok, hb_util:encode(<<"val">>)},
+        read([Raw], <<"inner">>, #{})
+    ),
+    ?assertEqual(
+        {ok, <<"val">>},
+        read([Store], <<"b64/", EncodedKey/binary>>, #{})
+    ),
+    % A single store message is also a valid `store' option.
+    SingleKey = hb_util:encode(<<"single">>),
+    SingleOpts = #{ <<"store">> => Store },
+    ?assertEqual(
+        ok,
+        write(write_req(<<"b64/", SingleKey/binary>>, <<"one">>), SingleOpts)
+    ),
+    ?assertEqual(
+        {ok, <<"one">>},
+        read(<<"b64/", SingleKey/binary>>, SingleOpts)
+    ),
+    ?event(testing, {normalized_write_and_read_passed}),
+    % Each child a list or a composite read enumerates is encoded, and a
+    % resolved path is encoded and regains its prefix.
+    EncodedChild = hb_util:encode(<<"g/a">>),
+    ?assertEqual(
+        ok,
+        write([Store], write_req(<<"b64/", EncodedChild/binary>>, <<"x">>), #{})
+    ),
+    EncodedGroup = hb_util:encode(<<"g">>),
+    ?assertEqual(
+        {ok, [hb_util:encode(<<"a">>)]},
+        list([Store], <<"b64/", EncodedGroup/binary>>, #{})
+    ),
+    ?assertEqual(
+        {composite, [hb_util:encode(<<"a">>)]},
+        read([Store], <<"b64/", EncodedGroup/binary>>, #{})
+    ),
+    ?assertEqual(
+        {ok, <<"b64/", EncodedChild/binary>>},
+        resolve([Store], <<"b64/", EncodedChild/binary>>, #{})
+    ),
+    % An undecodable key skips the store for writes and reads alike, so the
+    % fallback both receives and serves the original request.
+    ?assertEqual(
+        ok,
+        write([Store, Fallback], write_req(<<"b64/!!!">>, <<"f">>), #{})
+    ),
+    ?assertEqual({ok, <<"f">>}, read([Store, Fallback], <<"b64/!!!">>, #{})),
+    ?event(testing, {undecodable_key_fell_through}),
+    % An answer failing its normalization errs the store, falling through to
+    % the next store that carries the key.
+    Bad =
+        (hb_test_utils:test_store(hb_store_fs, <<"pipeline-badresult">>))#{
+            <<"prefix">> => <<"b64/">>,
+            <<"from-value">> => <<"~base64url@1.0/decode">>
+        },
+    start([Bad]),
+    ?assertEqual(ok, write([Bad], write_req(<<"b64/x">>, <<"!!!">>), #{})),
+    ?assertEqual(ok, write([Fallback], write_req(<<"b64/x">>, <<"fb">>), #{})),
+    ?assertEqual({ok, <<"fb">>}, read([Bad, Fallback], <<"b64/x">>, #{})),
+    ?event(testing, {failed_result_normalization_fell_through}).
 
 %%% Access Control Tests
 
