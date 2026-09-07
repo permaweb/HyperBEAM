@@ -95,8 +95,11 @@ read_request(#{ <<"nodes">> := Nodes } = StoreOpts, Key, Opts) when is_list(Node
             ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
             maybe_cache(StoreOpts, Msg, [Key]),
             {ok, Msg};
-        {error, _Err} ->
-            ?event(store_remote_node, {read_not_found, {key, Key}}),
+        {error, Err} ->
+            ?event(store_remote_node,
+                {read_not_found,
+                    {key, {string, Key}},
+                    {error, Err}}),
             {error, not_found}
     end;
 read_request(StoreOpts, _, Opts) ->
@@ -114,6 +117,7 @@ request_config(Nodes, Key, StoreOpts, Opts) ->
             Admissible ->
                 Admissible
         end,
+    ?event(store_remote_node, {request_config, {admissible, Admissible2}}),
     StoreOpts#{
         <<"nodes">> => [ node_request(N) || N <- Nodes ],
         <<"admissible">> => Admissible2
