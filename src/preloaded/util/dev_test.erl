@@ -5,6 +5,7 @@
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
 -export([index/3, postprocess/3, load/3]).
 -export([vary_projection/3, vary_wildcard/3, vary_unspecified/3]).
+-export([vary_overlay/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -266,6 +267,13 @@ vary_wildcard(Base, Req, _Opts) ->
 vary_unspecified(Base, _Req, _Opts) ->
     {ok, maps:get(<<"noise">>, Base)}.
 
+%% @doc Increment a counter in a projection of the base, returning a patch
+%% that the resolver lays over the whole base.
+-spec vary_overlay(#{ counter := integer() }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ '...' := base, counter := integer() }}.
+vary_overlay(Base = #{ <<"counter">> := Counter }, _Req, _Opts) ->
+    {ok, Base#{ <<"counter">> => Counter + 1 }}.
+
 %%% Tests
 
 %% @doc Tests the resolution of a default function.
@@ -404,6 +412,21 @@ vary_unspecified_function_is_identity_test() ->
             Opts
         )
     ).
+
+vary_overlay_patches_unvaried_base_test() ->
+    Opts = vary_opts(),
+    {ok, Res} =
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"counter">> => <<"1">>,
+                <<"noise">> => <<"kept">>
+            },
+            <<"vary-overlay">>,
+            Opts
+        ),
+    ?assertEqual(2, hb_ao:get(<<"counter">>, Res, Opts)),
+    ?assertEqual(<<"kept">>, hb_ao:get(<<"noise">>, Res, Opts)).
 
 vary_projection_uses_projected_cache_key_test() ->
     Store = hb_test_utils:test_store(),
