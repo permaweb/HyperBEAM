@@ -1,225 +1,111 @@
-%%% @doc Extract Dialyzer-style device specs and vary AO-Core inputs.
+%%% @doc Vary the inputs of a device function by its `-spec'.
+%%%
+%%% A device function's Dialyzer spec describes the base and request messages
+%%% it reads and the result it returns. AO-Core uses the spec to <em>vary</em>
+%%% the messages before execution: the function receives the keys it declares,
+%%% loaded and coerced to their declared types, and the execution's hashpath is
+%%% derived from the varied messages alone. Every execution the spec deems
+%%% equivalent thereby shares one cache entry, however its messages otherwise
+%%% differ. A function without a spec executes upon its inputs as given.
+%%%
+%%% Specs are read from a module's BEAM by `extract/1' and compiled into a
+%%% <em>schema</em>: a map from each spec'd function's normalized name and
+%%% arity to the schemas of its arguments and result. `hb_device_load:schema/2'
+%%% memoises them. The type syntax means, for a message argument:
+%%%
+%%% <ul>
+%%%   <li>`#{ key := type() }': `key' must be present; it is loaded if it is
+%%%       a link and coerced to the type. `#{ key => type() }': as above,
+%%%       but the key may be absent.</li>
+%%%   <li>`#{ key := _ }' / `#{ key => _ }': `key' is kept exactly as given,
+%%%       a link staying a link.</li>
+%%%   <li>`#{ _ => _ }': every undeclared key is kept as given. Without it,
+%%%       the message is <em>projected</em>: undeclared keys are removed
+%%%       before execution and take no part in the hashpath.</li>
+%%%   <li>`#{ _ := type() }': every undeclared key is coerced to the type.</li>
+%%%   <li>`_' or `#{}': the function reads nothing from the argument, which
+%%%       is projected to the implicit keys below.</li>
+%%%   <li>`map()', `any()', `term()': the argument is passed through
+%%%       untouched -- as is every value of a type the varier does not
+%%%       understand (remote types, records, type variables).</li>
+%%% </ul>
+%%%
+%%% `device' is always kept in the base and `path' in the request, so a
+%%% projection cannot detach an execution from its device or key. Scalar
+%%% types coerce through the `hb_util' converters; lists, tuples, unions,
+%%% ranges and literals apply recursively. A value that cannot be coerced to
+%%% its type throws `{invalid_type, Schema, Value}'; a required key that is
+%%% absent throws `{required_key_missing, Key}'.
+%%%
+%%% A result spec may declare `#{ '...' := base }' (or `request'): the
+%%% result is then a patch that `hb_ao' lays over the <em>unvaried</em>
+%%% message, so a function that reads only a projection of its base can still
+%%% return the whole of it, updated.
 -module(hb_types).
--export([extract/2, vary/7, beam_to_schema/2]).
+-export([extract/1, vary/6]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Apply the resolved function's base/request schemas to one execution.
-vary(Device, Key, Func, AddKey, Base, Req, Opts) ->
-    case function_schema(Device, Func, Key, Opts) of
-        undefined ->
-            no_spec;
-        Schema ->
+%% The built-in types that coerce and check as scalars, named as their
+%% normalized kinds are.
+-define(SCALARS,
+    #{
+        integer => true, non_neg_integer => true, pos_integer => true,
+        neg_integer => true, float => true, number => true, binary => true,
+        bitstring => true, atom => true, pid => true
+    }
+).
+
+%%% --------------------------------------------------------------------
+%%% Varying an execution
+%%% --------------------------------------------------------------------
+
+%% @doc Vary an execution's base and request by the schema of the function
+%% that will execute `Key'. `AddKey' is the key if the function takes it as
+%% its first argument (a `handler' or `default'), or `false'. Returns the
+%% varied messages and the overlay the result spec declares, or `no_spec'.
+vary(Key, Func, AddKey, Base, Req, Opts) ->
+    case function_schema(Func, Key, Opts) of
+        {ok, Schema} ->
             {BaseSchema, ReqSchema, ReturnSchema} =
                 execution_schemas(Schema, AddKey),
-            ReqWithKey =
-                case AddKey of
-                    false -> Req;
-                    _ -> Req#{ <<"path">> => Key }
-                end,
-            VariedBase = apply_schema(implicit_base(BaseSchema), Base, Opts),
-            VariedReq =
-                apply_schema(implicit_request(ReqSchema), ReqWithKey, Opts),
             {ok,
-                VariedBase,
-                VariedReq,
-                overlay(ReturnSchema)}
-    end.
-
-%% @doc Extract the public function schemas from a device module.
-extract(Device, _Opts) when is_map(Device) ->
-    {error, {unsupported_device_type, Device}};
-extract(Module, Opts) when is_atom(Module) ->
-    case hb_opts:get(<<"caching-schema">>, false, Opts) of
-        true ->
-            {error, caching_schema};
-        false ->
-            case code:ensure_loaded(Module) of
-                {module, Module} -> cached_extract(Module, Opts);
-                {error, Reason} -> {error, {module_not_loaded, Module, Reason}}
-            end
-    end;
-extract(Device, Opts) when is_binary(Device) ->
-    case hb_device_load:reference(Device, Opts) of
-        {ok, Module} -> extract(Module, Opts);
-        Error -> Error
-    end;
-extract(Device, _Opts) ->
-    {error, {unsupported_device_type, Device}}.
-
-cached_extract(Module, Opts) ->
-    Version = module_version(Module),
-    CacheKey = {?MODULE, extract, Module},
-    case erlang:get(CacheKey) of
-        {Version, Schema} ->
-            Schema;
-        _ ->
-            Schema =
-                case hb_device_load:schema(Module, Opts) of
-                    {ok, CachedSchema} -> {ok, CachedSchema};
-                    _ -> do_extract(Module)
-                end,
-            erlang:put(CacheKey, {Version, Schema}),
-            Schema
-    end.
-
-module_version(Module) ->
-    try Module:module_info(md5)
-    catch _:_ -> code:which(Module)
-    end.
-
-do_extract(Module) ->
-    case module_beam(Module) of
-        unavailable ->
-            {error, {abstract_code_unavailable, Module, unavailable}};
-        Beam -> beam_to_schema(Module, Beam)
-    end.
-
-%% @doc Extract a module's public function schemas from its BEAM bytes.
-beam_to_schema(Module, Beam) ->
-    case beam_lib:chunks(Beam, [abstract_code]) of
-        {ok, {_, [{abstract_code, {_, Forms}}]}} ->
-            TypeEnv = build_type_env(Forms),
-            Specs = [ Attr || Attr = {attribute, _, spec, _} <- Forms ],
-            {ok,
-                #{
-                    <<"keys">> =>
-                        lists:foldl(
-                            fun(Spec, Acc) ->
-                                case spec_to_schema(Spec, TypeEnv) of
-                                    false -> Acc;
-                                    {Name, Schema} ->
-                                        store_schema(Name, Schema, Acc)
-                                end
-                            end,
-                            #{},
-                            Specs
-                        )
-                }};
-        Error ->
-            {error, {abstract_code_unavailable, Module, Error}}
-    end.
-
-module_beam(Module) ->
-    case code:get_object_code(Module) of
-        {Module, Beam, _Filename} ->
-            Beam;
-        _ ->
-            case code:which(Module) of
-                Path when is_list(Path); is_binary(Path) -> Path;
-                _ -> unavailable
-            end
-    end.
-
-build_type_env(Forms) ->
-    lists:foldl(
-        fun
-            ({attribute, _, Tag, {Name, Ast, Vars}}, Acc)
-                    when Tag =:= type; Tag =:= opaque ->
-                Acc#{
-                    Name =>
-                        #{
-                            vars => [var_name(Var) || Var <- Vars],
-                            ast => Ast
-                        }
-                };
-            (_, Acc) ->
-                Acc
-        end,
-        #{},
-        Forms
-    ).
-
-spec_to_schema({attribute, _, spec, {{Name, Arity}, [Spec]}}, TypeEnv) ->
-    {Args, Return} = parse_fun_spec(Spec, TypeEnv),
-    {
-        normalize_name(Name),
-        #{
-            <<"arity">> => Arity,
-            <<"args">> => Args,
-            <<"return">> => Return
-        }
-    };
-spec_to_schema(_, _) ->
-    false.
-
-store_schema(Name, Schema, Schemas) ->
-    case maps:get(Name, Schemas, undefined) of
-        undefined ->
-            Schemas#{ Name => Schema };
-        Existing ->
-            ExistingArity = maps:get(<<"arity">>, Existing),
-            SchemaArity = maps:get(<<"arity">>, Schema),
-            Overloads0 =
-                maps:get(
-                    <<"overloads">>,
-                    Existing,
-                    #{ ExistingArity => maps:without([<<"overloads">>], Existing) }
+                apply_schema(implicit_base(BaseSchema), Base, Opts),
+                apply_schema(
+                    implicit_request(ReqSchema),
+                    request_with_key(Req, AddKey),
+                    Opts
                 ),
-            Schemas#{
-                Name =>
-                    Schema#{
-                        <<"overloads">> =>
-                            Overloads0#{
-                                SchemaArity =>
-                                    maps:without([<<"overloads">>], Schema)
-                            }
-                    }
-            }
+                overlay(ReturnSchema)};
+        {error, _} ->
+            no_spec
     end.
 
-function_schema(Device, Func, Key, Opts) ->
-    case extract(Device, Opts) of
-        {ok, #{ <<"keys">> := Schemas }} ->
-            case function_schema(Func, Key, Schemas) of
-                undefined -> function_module_schema(Device, Func, Key, Opts);
-                Schema -> Schema
-            end;
-        {error, _Reason} ->
-            function_module_schema(Device, Func, Key, Opts)
+%% @doc The schema of the function that will execute `Key': its spec, found
+%% in its own module by its name and arity, or -- for a `handler' or
+%% `default' that serves many keys -- by the key.
+function_schema(Func, Key, Opts) ->
+    maybe
+        true ?= is_function(Func) orelse {error, not_found},
+        {module, Module} = erlang:fun_info(Func, module),
+        {name, Name} = erlang:fun_info(Func, name),
+        {arity, Arity} = erlang:fun_info(Func, arity),
+        {ok, Schemas} ?= hb_device_load:schema(Module, Opts),
+        {error, not_found} ?= named_schema(normalize_name(Name), Arity, Schemas),
+        named_schema(Key, Arity, Schemas)
     end.
 
-function_module_schema(Device, Func, Key, Opts) ->
-    case erlang:fun_info(Func, module) of
-        {module, Device} ->
-            undefined;
-        {module, Module} ->
-            case extract(Module, Opts) of
-                {ok, #{ <<"keys">> := Schemas }} ->
-                    function_schema(Func, Key, Schemas);
-                {error, _Reason} ->
-                    undefined
-            end;
-        _ ->
-            undefined
-    end.
-
-function_schema(Func, Key, Schemas) ->
-    {arity, Arity} = erlang:fun_info(Func, arity),
-    ByName =
-        case erlang:fun_info(Func, name) of
-            {name, Name} -> named_schema(Name, Arity, Schemas);
-            _ -> undefined
-        end,
-    case ByName of
-        undefined -> named_schema(Key, Arity, Schemas);
-        Schema -> Schema
-    end.
-
+%% @doc The schema of the function of the given normalized name and arity.
 named_schema(Name, Arity, Schemas) ->
-    case maps:get(normalize_name(Name), Schemas, undefined) of
-        undefined ->
-            undefined;
-        #{ <<"overloads">> := Overloads } ->
-            maps:get(Arity, Overloads, undefined);
-        #{ <<"arity">> := Arity } = Schema ->
-            Schema;
-        _ ->
-            undefined
+    case Schemas of
+        #{ Name := #{ Arity := Schema } } -> {ok, Schema};
+        _ -> {error, not_found}
     end.
 
-execution_schemas(Schema, AddKey) ->
-    Args = maps:get(<<"args">>, Schema, []),
+%% @doc The base, request and result schemas of an execution. A function that
+%% takes the key as its first argument reads the base and request from its
+%% second and third; an argument the spec does not cover is not varied.
+execution_schemas(#{ <<"args">> := Args, <<"return">> := Return }, AddKey) ->
     Offset =
         case AddKey of
             false -> 0;
@@ -228,125 +114,182 @@ execution_schemas(Schema, AddKey) ->
     {
         maybe_nth(1 + Offset, Args, any_type()),
         maybe_nth(2 + Offset, Args, any_type()),
-        maps:get(<<"return">>, Schema, any_type())
+        Return
     }.
 
-maybe_nth(N, List, Default) ->
-    case catch lists:nth(N, List) of
-        {'EXIT', _} -> Default;
-        Value -> Value
-    end.
+%% @doc The `N'th element of a list, or the default if it is shorter.
+maybe_nth(N, List, _Default) when N =< length(List) -> lists:nth(N, List);
+maybe_nth(_N, _List, Default) -> Default.
 
+%% @doc A `handler' or `default' function serves many keys, so the request
+%% it is varied by records the key it was chosen for as its path.
+request_with_key(Req, false) -> Req;
+request_with_key(Req, Key) -> Req#{ <<"path">> => Key }.
+
+%% @doc The base schema always admits the device, and the request schema
+%% always requires the path: a projection keeps an execution attached to its
+%% device and key.
 implicit_base(Schema) ->
     implicit_key(top_level_schema(Schema), <<"device">>, optional).
-
 implicit_request(Schema) ->
     implicit_key(top_level_schema(Schema), <<"path">>, required).
 
-top_level_schema(#{ <<"kind">> := <<"wildcard">> }) ->
-    message_type(#{}, none);
-top_level_schema(Schema) ->
-    Schema.
+%% @doc A bare `_' argument declares that the function reads nothing from
+%% the message: it is projected to the implicit keys alone.
+top_level_schema(#{ <<"kind">> := <<"wildcard">> }) -> message_type(#{}, none);
+top_level_schema(Schema) -> Schema.
 
-implicit_key(Schema = #{ <<"kind">> := <<"message">>, <<"keys">> := Keys }, Key, Presence) ->
-    case maps:is_key(Key, Keys) of
-        true ->
-            Schema;
-        false ->
-            Schema#{
-                <<"keys">> =>
-                    Keys#{
-                        Key =>
-                            #{
-                                <<"presence">> => Presence,
-                                <<"type">> => any_type()
-                            }
-                    }
+%% @doc Add a key to a message schema, unless the schema declares it.
+implicit_key(
+    Schema = #{ <<"kind">> := <<"message">>, <<"keys">> := Keys },
+    Key,
+    Presence
+) when not is_map_key(Key, Keys) ->
+    Schema#{
+        <<"keys">> =>
+            Keys#{
+                Key => #{ <<"presence">> => Presence, <<"type">> => any_type() }
             }
-    end;
+    };
 implicit_key(Schema, _Key, _Presence) ->
     Schema.
 
-overlay(ReturnSchema) ->
-    case overlay_type(ReturnSchema) of
-        base -> base;
-        request -> request;
-        _ -> none
-    end.
-
-overlay_type(#{ <<"kind">> := <<"message">>, <<"keys">> := Keys }) ->
-    overlay_marker(
-        maps:get(
-            <<"type">>,
-            maps:get(<<"...">>, Keys, #{}),
-            #{}
-        )
-    );
-overlay_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }) ->
+%% @doc The overlay a result spec declares: `base' or `request' when the
+%% result message -- directly, or inside a tuple or union such as
+%% `{ok, Result}' -- has a `...' key of that literal or alias type.
+overlay(#{ <<"kind">> := <<"message">>, <<"keys">> := #{ <<"...">> := Field } }) ->
+    overlay_marker(maps:get(<<"type">>, Field));
+overlay(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }) ->
     first_overlay(Items);
-overlay_type(#{ <<"kind">> := <<"union">>, <<"members">> := Members }) ->
+overlay(#{ <<"kind">> := <<"union">>, <<"members">> := Members }) ->
     first_overlay(Members);
-overlay_type(_) ->
+overlay(_Schema) ->
     none.
 
+%% @doc The overlay of the first of the schemas that declares one.
 first_overlay([]) ->
     none;
 first_overlay([Schema | Rest]) ->
-    case overlay_type(Schema) of
+    case overlay(Schema) of
         none -> first_overlay(Rest);
         Overlay -> Overlay
     end.
 
-overlay_marker(#{ <<"kind">> := <<"literal">>, <<"value">> := <<"base">> }) -> base;
-overlay_marker(#{ <<"kind">> := <<"literal">>, <<"value">> := <<"request">> }) -> request;
-overlay_marker(#{ <<"kind">> := <<"alias">>, <<"name">> := <<"base">> }) -> base;
-overlay_marker(#{ <<"kind">> := <<"alias">>, <<"name">> := <<"request">> }) -> request;
-overlay_marker(_) -> none.
+%% @doc The overlay a `...' key's type names.
+overlay_marker(#{ <<"kind">> := <<"literal">>, <<"value">> := Marker }) ->
+    overlay_marker(Marker);
+overlay_marker(#{ <<"kind">> := <<"alias">>, <<"name">> := Marker }) ->
+    overlay_marker(Marker);
+overlay_marker(<<"base">>) -> base;
+overlay_marker(<<"request">>) -> request;
+overlay_marker(_Type) -> none.
 
+%%% --------------------------------------------------------------------
+%%% Extracting schemas from a BEAM
+%%% --------------------------------------------------------------------
+
+%% @doc Extract the function schemas of a module from its BEAM: the given
+%% bytes, or the object code of a module loaded from the code path. A module
+%% compiled without `debug_info' has no abstract code, and so no schemas.
+extract(Beam) when is_binary(Beam) ->
+    case beam_lib:chunks(Beam, [abstract_code]) of
+        {ok, {_Module, [{abstract_code, {_Version, Forms}}]}} ->
+            TypeEnv = build_type_env(Forms),
+            {ok,
+                lists:foldl(
+                    fun(Spec, Acc) -> put_spec(Spec, TypeEnv, Acc) end,
+                    #{},
+                    [ Attr || Attr = {attribute, _, spec, _} <- Forms ]
+                )};
+        Other ->
+            {error, {abstract_code_unavailable, Other}}
+    end;
+extract(Module) when is_atom(Module) ->
+    case code:get_object_code(Module) of
+        {Module, Beam, _Path} -> extract(Beam);
+        error -> {error, {object_code_unavailable, Module}}
+    end.
+
+%% @doc The module's own type declarations, by name, for expansion when a
+%% spec refers to them.
+build_type_env(Forms) ->
+    maps:from_list(
+        [
+            {Name, #{ vars => [ var_name(Var) || Var <- Vars ], ast => Ast }}
+        ||
+            {attribute, _, Tag, {Name, Ast, Vars}} <- Forms,
+            Tag =:= type orelse Tag =:= opaque
+        ]
+    ).
+
+%% @doc The name of a type's parameter.
+var_name({var, _, Name}) -> Name;
+var_name(Name) -> Name.
+
+%% @doc Add a spec to the module schema under its function's normalized name
+%% and arity. A spec with several clauses describes no single shape of input
+%% and is not varied.
+put_spec({attribute, _, spec, {{Name, Arity}, [Clause]}}, TypeEnv, Schemas) ->
+    {Args, Return} = parse_fun_spec(Clause, TypeEnv),
+    NormName = normalize_name(Name),
+    Arities = maps:get(NormName, Schemas, #{}),
+    Schemas#{
+        NormName =>
+            Arities#{
+                Arity => #{ <<"args">> => Args, <<"return">> => Return }
+            }
+    };
+put_spec(_Spec, _TypeEnv, Schemas) ->
+    Schemas.
+
+%% @doc The argument and result schemas of a spec clause, with any `when'
+%% constraints dropped.
 parse_fun_spec({type, _, bounded_fun, [FunSpec, _Constraints]}, TypeEnv) ->
     parse_fun_spec(FunSpec, TypeEnv);
 parse_fun_spec({type, _, 'fun', [{type, _, product, Args}, Return]}, TypeEnv) ->
     {
-        lists:map(fun(Arg) -> parse_type(Arg, TypeEnv, #{}, []) end, Args),
+        [ parse_type(Arg, TypeEnv, #{}, []) || Arg <- Args ],
         parse_type(Return, TypeEnv, #{}, [])
     };
 parse_fun_spec(Other, _TypeEnv) ->
     {[unknown_type(Other)], any_type()}.
 
+%% @doc Compile an abstract type into a schema. `TypeEnv' holds the module's
+%% own types, `VarEnv' the bindings of the type variables of the one being
+%% expanded, and `Seen' the types under expansion, so that a recursive type
+%% becomes an alias rather than a loop.
 parse_type({ann_type, _, [_Var, Type]}, TypeEnv, VarEnv, Seen) ->
     parse_type(Type, TypeEnv, VarEnv, Seen);
 parse_type({var, _, '_'}, _TypeEnv, _VarEnv, _Seen) ->
     wildcard_type();
 parse_type({var, _, Name}, TypeEnv, VarEnv, Seen) ->
-    case maps:get(Name, VarEnv, undefined) of
-        undefined -> variable_type(Name);
-        Bound -> parse_type(Bound, TypeEnv, VarEnv, Seen)
+    case maps:find(Name, VarEnv) of
+        {ok, Bound} -> parse_type(Bound, TypeEnv, VarEnv, Seen);
+        error -> variable_type(Name)
     end;
 parse_type({user_type, _, Name, Args}, TypeEnv, VarEnv, Seen) ->
-    case lists:member(Name, Seen) of
-        true ->
-            alias_type(Name);
-        false ->
-            case maps:get(Name, TypeEnv, undefined) of
-                undefined ->
-                    alias_type(Name);
-                #{ vars := Vars, ast := Ast } ->
-                    parse_type(
-                        Ast,
-                        TypeEnv,
-                        maps:merge(VarEnv, maps:from_list(lists:zip(Vars, Args))),
-                        [Name | Seen]
-                    )
-            end
+    case lists:member(Name, Seen) orelse maps:find(Name, TypeEnv) of
+        {ok, #{ vars := Vars, ast := Ast }} ->
+            parse_type(
+                Ast,
+                TypeEnv,
+                maps:merge(VarEnv, maps:from_list(lists:zip(Vars, Args))),
+                [Name | Seen]
+            );
+        _ ->
+            alias_type(Name)
     end;
-parse_type({remote_type, _, [{atom, _, Mod}, {atom, _, Name}, Args]},
-        TypeEnv, VarEnv, Seen) ->
+parse_type(
+    {remote_type, _, [{atom, _, Mod}, {atom, _, Name}, Args]},
+    TypeEnv,
+    VarEnv,
+    Seen
+) ->
     #{
         <<"kind">> => <<"remote">>,
         <<"module">> => normalize_name(Mod),
         <<"name">> => normalize_name(Name),
-        <<"args">> =>
-            lists:map(fun(Arg) -> parse_type(Arg, TypeEnv, VarEnv, Seen) end, Args)
+        <<"args">> => [ parse_type(Arg, TypeEnv, VarEnv, Seen) || Arg <- Args ]
     };
 parse_type({type, _, map, any}, _TypeEnv, _VarEnv, _Seen) ->
     any_type();
@@ -354,66 +297,65 @@ parse_type({type, _, map, Fields}, TypeEnv, VarEnv, Seen) ->
     {Keys, Wildcard} =
         lists:foldl(
             fun({type, _, Assoc, [KeyAst, ValueAst]}, {KeyAcc, WildAcc}) ->
-                Key = key_name(KeyAst, TypeEnv, VarEnv, Seen),
                 Field =
                     #{
                         <<"presence">> => field_presence(Assoc),
                         <<"type">> => parse_type(ValueAst, TypeEnv, VarEnv, Seen)
                     },
-                case Key of
+                case key_name(KeyAst, TypeEnv, VarEnv, Seen) of
                     <<"_">> -> {KeyAcc, Field};
-                    _ -> {KeyAcc#{ Key => Field }, WildAcc}
+                    Key -> {KeyAcc#{ Key => Field }, WildAcc}
                 end
             end,
             {#{}, none},
             Fields
         ),
     message_type(Keys, Wildcard);
-parse_type({type, _, ListType, [Item]}, TypeEnv, VarEnv, Seen)
+parse_type({type, _, ListType, Items}, TypeEnv, VarEnv, Seen)
         when ListType =:= list; ListType =:= nonempty_list ->
-    #{ <<"kind">> => <<"list">>, <<"item">> => parse_type(Item, TypeEnv, VarEnv, Seen) };
-parse_type({type, _, ListType, []}, _TypeEnv, _VarEnv, _Seen)
-        when ListType =:= list; ListType =:= nonempty_list ->
-    #{ <<"kind">> => <<"list">>, <<"item">> => any_type() };
-parse_type({type, _, ListType, Item}, TypeEnv, VarEnv, Seen)
-        when ListType =:= list; ListType =:= nonempty_list ->
-    #{ <<"kind">> => <<"list">>, <<"item">> => parse_type(Item, TypeEnv, VarEnv, Seen) };
+    #{
+        <<"kind">> => <<"list">>,
+        <<"item">> =>
+            case Items of
+                [] -> any_type();
+                [Item] -> parse_type(Item, TypeEnv, VarEnv, Seen)
+            end
+    };
 parse_type({type, _, tuple, Items}, TypeEnv, VarEnv, Seen) ->
-    #{ <<"kind">> => <<"tuple">>, <<"items">> =>
-        lists:map(fun(Item) -> parse_type(Item, TypeEnv, VarEnv, Seen) end, Items) };
+    #{
+        <<"kind">> => <<"tuple">>,
+        <<"items">> => [ parse_type(Item, TypeEnv, VarEnv, Seen) || Item <- Items ]
+    };
 parse_type({type, _, union, Members}, TypeEnv, VarEnv, Seen) ->
-    #{ <<"kind">> => <<"union">>, <<"members">> =>
-        lists:map(fun(Member) -> parse_type(Member, TypeEnv, VarEnv, Seen) end, Members) };
+    #{
+        <<"kind">> => <<"union">>,
+        <<"members">> =>
+            [ parse_type(Member, TypeEnv, VarEnv, Seen) || Member <- Members ]
+    };
 parse_type({type, _, range, [Min, Max]}, TypeEnv, VarEnv, Seen) ->
     #{
         <<"kind">> => <<"range">>,
         <<"min">> => literal_value(parse_type(Min, TypeEnv, VarEnv, Seen)),
         <<"max">> => literal_value(parse_type(Max, TypeEnv, VarEnv, Seen))
     };
-parse_type({type, _, integer, []}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"integer">>);
-parse_type({type, _, non_neg_integer, []}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"non-neg-integer">>);
-parse_type({type, _, pos_integer, []}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"pos-integer">>);
-parse_type({type, _, neg_integer, []}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"neg-integer">>);
-parse_type({type, _, float, []}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"float">>);
-parse_type({type, _, number, []}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"number">>);
-parse_type({type, _, binary, _}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"binary">>);
-parse_type({type, _, bitstring, _}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"bitstring">>);
-parse_type({type, _, boolean, []}, _TypeEnv, _VarEnv, _Seen) -> boolean_type();
-parse_type({type, _, atom, []}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"atom">>);
-parse_type({type, _, pid, []}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"pid">>);
-parse_type({type, _, any, []}, _TypeEnv, _VarEnv, _Seen) -> any_type();
-parse_type({atom, _, Atom}, _TypeEnv, _VarEnv, _Seen) -> literal_type(hb_util:bin(Atom));
-parse_type({integer, _, Int}, _TypeEnv, _VarEnv, _Seen) -> literal_type(Int);
-parse_type({char, _, Char}, _TypeEnv, _VarEnv, _Seen) -> literal_type(<<Char/utf8>>);
-parse_type({string, _, String}, _TypeEnv, _VarEnv, _Seen) -> literal_type(hb_util:bin(String));
-parse_type({nil, _}, _TypeEnv, _VarEnv, _Seen) -> literal_type([]);
-parse_type(Other, _TypeEnv, _VarEnv, _Seen) ->
-    unknown_type(Other).
+parse_type({type, _, boolean, []}, _, _, _) -> boolean_type();
+parse_type({type, _, any, []}, _, _, _) -> any_type();
+parse_type({type, _, Scalar, _}, _, _, _) when is_map_key(Scalar, ?SCALARS) ->
+    scalar_type(normalize_name(Scalar));
+parse_type({atom, _, Atom}, _, _, _) -> literal_type(hb_util:bin(Atom));
+parse_type({integer, _, Int}, _, _, _) -> literal_type(Int);
+parse_type({char, _, Char}, _, _, _) -> literal_type(<<Char/utf8>>);
+parse_type({string, _, String}, _, _, _) -> literal_type(hb_util:bin(String));
+parse_type({nil, _}, _, _, _) -> literal_type([]);
+parse_type(Other, _TypeEnv, _VarEnv, _Seen) -> unknown_type(Other).
 
+%% @doc `:=' declares a required key, `=>' an optional one.
 field_presence(map_field_exact) -> required;
-field_presence(map_field_assoc) -> optional;
-field_presence(Other) -> normalize_name(Other).
+field_presence(map_field_assoc) -> optional.
 
+%% @doc The message key a map field's key type names. A literal key is the
+%% key itself; `_' is the wildcard; any other type is named by its printed
+%% form, so that it can never match a real key.
 key_name({atom, _, Atom}, _TypeEnv, _VarEnv, _Seen) ->
     normalize_name(Atom);
 key_name({string, _, String}, _TypeEnv, _VarEnv, _Seen) ->
@@ -422,7 +364,8 @@ key_name({var, _, '_'}, _TypeEnv, _VarEnv, _Seen) ->
     <<"_">>;
 key_name(Other, TypeEnv, VarEnv, Seen) ->
     case parse_type(Other, TypeEnv, VarEnv, Seen) of
-        #{ <<"kind">> := <<"literal">>, <<"value">> := Value } when is_binary(Value) ->
+        #{ <<"kind">> := <<"literal">>, <<"value">> := Value }
+                when is_binary(Value) ->
             Value;
         #{ <<"kind">> := <<"literal">>, <<"value">> := Value } ->
             hb_util:bin(io_lib:format("~tp", [Value]));
@@ -430,57 +373,43 @@ key_name(Other, TypeEnv, VarEnv, Seen) ->
             hb_util:bin(io_lib:format("~tp", [Other]))
     end.
 
+%%% --------------------------------------------------------------------
+%%% Applying a schema to a value
+%%% --------------------------------------------------------------------
+
+%% @doc Vary a value by its schema: pass it through if the schema does not
+%% constrain it, else load it if it is a link, then project, coerce or
+%% check it as the schema's kind requires.
 apply_schema(#{ <<"kind">> := <<"any">> }, Value, _Opts) ->
     Value;
 apply_schema(#{ <<"kind">> := <<"wildcard">> }, Value, _Opts) ->
     Value;
 apply_schema(#{ <<"kind">> := Kind }, Value, _Opts)
-        when Kind =:= <<"remote">>;
-             Kind =:= <<"alias">>;
-             Kind =:= <<"variable">>;
-             Kind =:= <<"unknown">> ->
+        when Kind =:= <<"remote">>; Kind =:= <<"alias">>;
+             Kind =:= <<"variable">>; Kind =:= <<"unknown">> ->
     Value;
 apply_schema(Schema, Link, Opts) when ?IS_LINK(Link) ->
     apply_schema(Schema, hb_cache:ensure_loaded(Link, Opts), Opts);
 apply_schema(Schema = #{ <<"kind">> := <<"message">> }, Value, Opts)
         when not is_map(Value) ->
-    apply_coerced_schema(Schema, Value, Opts);
+    case coerce_type(Schema, Value, Opts) of
+        error -> throw({invalid_type, Schema, Value});
+        Value -> throw({invalid_type, Schema, Value});
+        Coerced -> apply_schema(Schema, Coerced, Opts)
+    end;
 apply_schema(
     #{ <<"kind">> := <<"message">>, <<"keys">> := Keys, <<"wildcard">> := Wildcard },
     Message,
     Opts
-) when is_map(Message) ->
-    Explicit =
-        maps:fold(
-            fun(Key, #{ <<"presence">> := Presence, <<"type">> := Type }, Acc) ->
-                case maps:find(Key, Message) of
-                    {ok, Value} ->
-                        Acc#{ Key => apply_schema(Type, Value, Opts) };
-                    error when Presence =:= required ->
-                        throw({required_key_missing, Key});
-                    error ->
-                        Acc
-                end
-            end,
-            #{},
-            Keys
-        ),
-    case Wildcard of
-        none ->
-            Explicit;
-        #{ <<"presence">> := optional } ->
-            maps:merge(
-                maps:without(maps:keys(Keys), Message),
-                Explicit
-            );
-        #{ <<"type">> := Type } ->
-            Rest =
-                maps:map(
-                    fun(_, Value) -> apply_schema(Type, Value, Opts) end,
-                    maps:without(maps:keys(Keys), Message)
-                ),
-            maps:merge(Rest, Explicit)
-    end;
+) ->
+    % The declared keys are varied onto the undeclared ones the wildcard
+    % admits. A key kept as given is put back unchanged, so a message the
+    % schema does not alter stays the same term.
+    maps:fold(
+        fun(Key, Field, Acc) -> apply_key(Key, Field, Message, Acc, Opts) end,
+        apply_wildcard(Wildcard, Keys, Message, Opts),
+        Keys
+    );
 apply_schema(
     Schema = #{ <<"kind">> := <<"list">>, <<"item">> := ItemType },
     Value,
@@ -488,7 +417,7 @@ apply_schema(
 ) ->
     case try_coerce(fun hb_util:list/1, Value) of
         List when is_list(List) ->
-            [apply_schema(ItemType, Item, Opts) || Item <- List];
+            [ apply_schema(ItemType, Item, Opts) || Item <- List ];
         _ ->
             throw({invalid_type, Schema, Value})
     end;
@@ -525,29 +454,42 @@ apply_schema(
         error -> throw({invalid_type, Schema, Value})
     end;
 apply_schema(Type, Value, Opts) ->
+    % A scalar, literal or range: keep a value of the type, else coerce it.
     case check_type(Type, Value) of
         true ->
             Value;
         false ->
-            case coerce_type(Type, Value, Opts) of
-                error -> throw({invalid_type, Type, Value});
-                Coerced ->
-                    case check_type(Type, Coerced) of
-                        true -> Coerced;
-                        false -> throw({invalid_type, Type, Value})
-                    end
+            Coerced = coerce_type(Type, Value, Opts),
+            case Coerced =/= error andalso check_type(Type, Coerced) of
+                true -> Coerced;
+                false -> throw({invalid_type, Type, Value})
             end
     end.
 
-apply_coerced_schema(Schema, Value, Opts) ->
-    case coerce_type(Schema, Value, Opts) of
-        error -> throw({invalid_type, Schema, Value});
-        Value -> throw({invalid_type, Schema, Value});
-        Coerced -> apply_schema(Schema, Coerced, Opts)
+%% @doc The undeclared keys of a message, as its schema's wildcard admits
+%% them: none for a projection, all of them as given for `_ => _', or each
+%% coerced to the wildcard's type for `_ := type()'.
+apply_wildcard(none, _Keys, _Message, _Opts) ->
+    #{};
+apply_wildcard(#{ <<"presence">> := optional }, _Keys, Message, _Opts) ->
+    Message;
+apply_wildcard(#{ <<"type">> := Type }, Keys, Message, Opts) ->
+    maps:map(
+        fun(_Key, Value) -> apply_schema(Type, Value, Opts) end,
+        maps:without(maps:keys(Keys), Message)
+    ).
+
+%% @doc Vary one declared key of a message onto the accumulated result.
+apply_key(Key, Field, Message, Acc, Opts) ->
+    #{ <<"presence">> := Presence, <<"type">> := Type } = Field,
+    case maps:find(Key, Message) of
+        {ok, Value} -> Acc#{ Key => apply_schema(Type, Value, Opts) };
+        error when Presence =:= required -> throw({required_key_missing, Key});
+        error -> Acc
     end.
 
-apply_union([], _Value, _Opts) ->
-    error;
+%% @doc Vary a value by the first member of a union that admits it as it is,
+%% else by the first that it can be coerced to.
 apply_union(Members, Value, Opts) ->
     case matching_union_member(Members, Value) of
         {ok, Member} ->
@@ -558,39 +500,33 @@ apply_union(Members, Value, Opts) ->
                 throw:{required_key_missing, _} ->
                     apply_coerced_union(Members, Value, Opts)
             end;
-        error -> apply_coerced_union(Members, Value, Opts)
+        error ->
+            apply_coerced_union(Members, Value, Opts)
     end.
 
+%% @doc The first constraining member of a union that a value already
+%% satisfies. Members that pass every value through never match, so that
+%% they cannot shadow a constraining member.
 matching_union_member([], _Value) ->
     error;
-matching_union_member(
-    [#{ <<"kind">> := Kind } | Rest],
-    Value
-) when Kind =:= <<"any">>;
-       Kind =:= <<"wildcard">>;
-       Kind =:= <<"remote">>;
-       Kind =:= <<"alias">>;
-       Kind =:= <<"variable">>;
-       Kind =:= <<"unknown">> ->
-    matching_union_member(Rest, Value);
 matching_union_member([Member | Rest], Value) ->
-    case check_type(Member, Value) of
+    case not is_passthrough_schema(Member) andalso check_type(Member, Value) of
         true -> {ok, Member};
         false -> matching_union_member(Rest, Value)
     end.
 
-apply_coerced_union([], _Value, _Opts) ->
-    error;
+%% @doc Vary a value by the first member of a union it can be coerced to,
+%% trying the constraining members before those that pass it through.
 apply_coerced_union(Members, Value, Opts) ->
     {PassThrough, Constrained} =
         lists:partition(fun is_passthrough_schema/1, Members),
     apply_coerced_union_ordered(Constrained ++ PassThrough, Value, Opts).
 
+%% @doc Vary a value by the first of the members it can be coerced to.
 apply_coerced_union_ordered([], _Value, _Opts) ->
     error;
 apply_coerced_union_ordered([Member | Rest], Value, Opts) ->
-    try apply_schema(Member, Value, Opts) of
-        Varied -> {ok, Varied}
+    try {ok, apply_schema(Member, Value, Opts)}
     catch
         throw:{invalid_type, _, _} ->
             apply_coerced_union_ordered(Rest, Value, Opts);
@@ -598,16 +534,23 @@ apply_coerced_union_ordered([Member | Rest], Value, Opts) ->
             apply_coerced_union_ordered(Rest, Value, Opts)
     end.
 
+%% @doc Whether a schema passes every value through unvaried.
 is_passthrough_schema(#{ <<"kind">> := Kind }) ->
     lists:member(
         Kind,
-        [<<"any">>, <<"wildcard">>, <<"remote">>, <<"alias">>,
-            <<"variable">>, <<"unknown">>]
+        [<<"any">>, <<"wildcard">>, <<"remote">>, <<"alias">>, <<"variable">>,
+            <<"unknown">>]
     );
-is_passthrough_schema(_) ->
+is_passthrough_schema(_Schema) ->
     false.
 
-coerce_type(_, undefined, _Opts) -> error;
+%%% --------------------------------------------------------------------
+%%% Coercing and checking values
+%%% --------------------------------------------------------------------
+
+%% @doc Coerce a value to a schema's type through the `hb_util' converters,
+%% or `error' if it cannot be. Compound types coerce their elements in turn.
+coerce_type(_Type, undefined, _Opts) -> error;
 coerce_type(#{ <<"kind">> := <<"integer">> }, Value, _Opts) ->
     try_coerce(fun hb_util:int/1, Value);
 coerce_type(#{ <<"kind">> := <<"non-neg-integer">> }, Value, _Opts) ->
@@ -615,6 +558,8 @@ coerce_type(#{ <<"kind">> := <<"non-neg-integer">> }, Value, _Opts) ->
 coerce_type(#{ <<"kind">> := <<"pos-integer">> }, Value, _Opts) ->
     try_coerce(fun hb_util:int/1, Value);
 coerce_type(#{ <<"kind">> := <<"neg-integer">> }, Value, _Opts) ->
+    try_coerce(fun hb_util:int/1, Value);
+coerce_type(#{ <<"kind">> := <<"range">> }, Value, _Opts) ->
     try_coerce(fun hb_util:int/1, Value);
 coerce_type(#{ <<"kind">> := <<"float">> }, Value, _Opts) ->
     try_coerce(fun hb_util:float/1, Value);
@@ -624,49 +569,47 @@ coerce_type(#{ <<"kind">> := <<"binary">> }, Value, _Opts) ->
     try_coerce(fun hb_util:bin/1, Value);
 coerce_type(#{ <<"kind">> := <<"bitstring">> }, Value, _Opts) ->
     try_coerce(fun hb_util:bin/1, Value);
-coerce_type(#{ <<"kind">> := <<"boolean">> }, Value, _Opts) ->
-    case is_boolean_coercible(Value) of
-        true -> try_coerce(fun hb_util:bool/1, Value);
-        false -> error
-    end;
 coerce_type(#{ <<"kind">> := <<"atom">> }, Value, _Opts) ->
     try_coerce(fun hb_util:atom/1, Value);
 coerce_type(#{ <<"kind">> := <<"message">> }, Value, _Opts) ->
     try_coerce(fun hb_util:map/1, Value);
 coerce_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }, Value, Opts)
         when is_tuple(Value) ->
-    coerce_type(#{ <<"kind">> => <<"tuple">>, <<"items">> => Items }, tuple_to_list(Value), Opts);
+    coerce_type(
+        #{ <<"kind">> => <<"tuple">>, <<"items">> => Items },
+        tuple_to_list(Value),
+        Opts
+    );
 coerce_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }, Value, Opts)
-        when is_list(Value) ->
-    case length(Value) =:= length(Items) of
-        false -> error;
-        true ->
-            case coerce_sequence(lists:zip(Items, Value), Opts) of
-                error -> error;
-                Coerced -> list_to_tuple(Coerced)
-            end
+        when is_list(Value), length(Value) =:= length(Items) ->
+    case coerce_sequence(lists:zip(Items, Value), Opts) of
+        error -> error;
+        Coerced -> list_to_tuple(Coerced)
     end;
 coerce_type(#{ <<"kind">> := <<"list">>, <<"item">> := ItemType }, Value, Opts) ->
     case try_coerce(fun hb_util:list/1, Value) of
-        error -> error;
-        Coerced -> coerce_list(ItemType, Coerced, Opts)
+        List when is_list(List) ->
+            coerce_sequence([ {ItemType, Item} || Item <- List ], Opts);
+        _ ->
+            error
     end;
 coerce_type(#{ <<"kind">> := <<"union">>, <<"members">> := Members }, Value, Opts) ->
-    coerce_union(Members, Value, Opts);
-coerce_type(#{ <<"kind">> := <<"literal">>, <<"value">> := Expected }, Value, _Opts) ->
-    coerce_literal(Expected, Value);
-coerce_type(#{ <<"kind">> := <<"range">> }, Value, _Opts) ->
-    try_coerce(fun hb_util:int/1, Value);
-coerce_type(_, _, _Opts) ->
+    coerce_with(
+        [ fun(V) -> coerce_type(Member, V, Opts) end || Member <- Members ],
+        Value
+    );
+coerce_type(#{ <<"kind">> := <<"literal">>, <<"value">> := Lit }, Value, _Opts) ->
+    coerce_literal(Lit, Value);
+coerce_type(_Type, _Value, _Opts) ->
     error.
 
+%% @doc Apply a converter to a value, or `error' if it rejects it.
 try_coerce(Fun, Value) ->
-    try Fun(Value) of
-        Coerced -> Coerced
-    catch
-        _:_ -> error
+    try Fun(Value)
+    catch _:_ -> error
     end.
 
+%% @doc The result of the first converter that accepts a value.
 coerce_with([], _Value) ->
     error;
 coerce_with([Fun | Rest], Value) ->
@@ -675,6 +618,8 @@ coerce_with([Fun | Rest], Value) ->
         Coerced -> Coerced
     end.
 
+%% @doc Coerce each value of a sequence to its type, or `error' if any cannot
+%% be.
 coerce_sequence([], _Opts) ->
     [];
 coerce_sequence([{Type, Value} | Rest], Opts) ->
@@ -688,116 +633,111 @@ coerce_sequence([{Type, Value} | Rest], Opts) ->
             end
     end.
 
-coerce_list(ItemType, Value, Opts) when is_list(Value) ->
-    coerce_sequence([{ItemType, Item} || Item <- Value], Opts);
-coerce_list(_ItemType, _Value, _Opts) ->
-    error.
-
-coerce_union([], _Value, _Opts) ->
-    error;
-coerce_union([Member | Rest], Value, Opts) ->
-    case coerce_type(Member, Value, Opts) of
-        error -> coerce_union(Rest, Value, Opts);
-        Coerced -> Coerced
-    end.
-
+%% @doc Coerce a value to a literal: the value must convert to the literal's
+%% own type and then equal it.
 coerce_literal(Expected, Value) when is_integer(Expected) ->
     coerce_exact(Expected, try_coerce(fun hb_util:int/1, Value));
 coerce_literal(Expected, Value) when is_float(Expected) ->
     coerce_exact(Expected, try_coerce(fun hb_util:float/1, Value));
 coerce_literal(Expected, Value) when is_binary(Expected) ->
     coerce_exact(Expected, try_coerce(fun hb_util:bin/1, Value));
-coerce_literal(Expected, Value) when is_atom(Expected) ->
-    case is_boolean(Expected) andalso is_boolean_coercible(Value) of
+coerce_literal(Expected, Value) when is_boolean(Expected) ->
+    case is_boolean_coercible(Value) of
         true -> coerce_exact(Expected, try_coerce(fun hb_util:bool/1, Value));
-        false -> coerce_exact(Expected, try_coerce(fun hb_util:atom/1, Value))
+        false -> error
     end;
+coerce_literal(Expected, Value) when is_atom(Expected) ->
+    coerce_exact(Expected, try_coerce(fun hb_util:atom/1, Value));
 coerce_literal(Expected, Value) when is_list(Expected) ->
-    case try_coerce(fun hb_util:list/1, Value) of
-        error -> error;
-        Coerced -> coerce_exact(Expected, Coerced)
-    end;
-coerce_literal(Expected, Value) when Value =:= Expected ->
-    Value;
+    coerce_exact(Expected, try_coerce(fun hb_util:list/1, Value));
+coerce_literal(Expected, Expected) ->
+    Expected;
 coerce_literal(_Expected, _Value) ->
     error.
 
-coerce_exact(Expected, Expected) ->
-    Expected;
-coerce_exact(_Expected, _Value) ->
-    error.
+%% @doc A coerced value, if it is the literal expected.
+coerce_exact(Expected, Expected) -> Expected;
+coerce_exact(_Expected, _Value) -> error.
 
+%% @doc The values `hb_util:bool/1' reads as a boolean.
 is_boolean_coercible(Value) ->
-    lists:member(Value, [true, false, 1, 0, <<"true">>, <<"false">>, <<"1">>, <<"0">>]).
+    lists:member(
+        Value,
+        [true, false, 1, 0, <<"true">>, <<"false">>, <<"1">>, <<"0">>]
+    ).
 
+%% @doc Whether a value is of a schema's type as it is. Types the varier does
+%% not understand admit every value.
 check_type(#{ <<"kind">> := <<"integer">> }, Value) -> is_integer(Value);
-check_type(#{ <<"kind">> := <<"non-neg-integer">> }, Value) -> is_integer(Value) andalso Value >= 0;
-check_type(#{ <<"kind">> := <<"pos-integer">> }, Value) -> is_integer(Value) andalso Value > 0;
-check_type(#{ <<"kind">> := <<"neg-integer">> }, Value) -> is_integer(Value) andalso Value < 0;
+check_type(#{ <<"kind">> := <<"non-neg-integer">> }, Value) ->
+    is_integer(Value) andalso Value >= 0;
+check_type(#{ <<"kind">> := <<"pos-integer">> }, Value) ->
+    is_integer(Value) andalso Value > 0;
+check_type(#{ <<"kind">> := <<"neg-integer">> }, Value) ->
+    is_integer(Value) andalso Value < 0;
 check_type(#{ <<"kind">> := <<"float">> }, Value) -> is_float(Value);
 check_type(#{ <<"kind">> := <<"number">> }, Value) -> is_number(Value);
 check_type(#{ <<"kind">> := <<"binary">> }, Value) -> is_binary(Value);
 check_type(#{ <<"kind">> := <<"bitstring">> }, Value) -> is_bitstring(Value);
-check_type(#{ <<"kind">> := <<"boolean">> }, Value) -> is_boolean(Value);
 check_type(#{ <<"kind">> := <<"atom">> }, Value) -> is_atom(Value);
 check_type(#{ <<"kind">> := <<"pid">> }, Value) -> is_pid(Value);
 check_type(#{ <<"kind">> := <<"message">>, <<"keys">> := Keys }, Value)
         when is_map(Value) ->
-    maps:fold(
+    lists:all(
         fun
-            (Key, #{ <<"presence">> := required }, true) -> maps:is_key(Key, Value);
-            (_, _, Acc) -> Acc
+            ({Key, #{ <<"presence">> := required }}) -> is_map_key(Key, Value);
+            (_Field) -> true
         end,
-        true,
-        Keys
+        maps:to_list(Keys)
     );
-check_type(#{ <<"kind">> := <<"message">> }, Value) -> is_map(Value);
+check_type(#{ <<"kind">> := <<"message">> }, _Value) -> false;
 check_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }, Value) ->
     is_tuple(Value)
         andalso tuple_size(Value) =:= length(Items)
         andalso lists:all(
-            fun({Index, ItemType}) -> check_type(ItemType, element(Index, Value)) end,
-            lists:zip(lists:seq(1, length(Items)), Items)
+            fun({Type, Item}) -> check_type(Type, Item) end,
+            lists:zip(Items, tuple_to_list(Value))
         );
 check_type(#{ <<"kind">> := <<"list">>, <<"item">> := ItemType }, Value) ->
-    is_list(Value) andalso lists:all(fun(Item) -> check_type(ItemType, Item) end, Value);
+    is_list(Value)
+        andalso lists:all(fun(Item) -> check_type(ItemType, Item) end, Value);
 check_type(#{ <<"kind">> := <<"union">>, <<"members">> := Members }, Value) ->
     lists:any(fun(Member) -> check_type(Member, Value) end, Members);
 check_type(#{ <<"kind">> := <<"literal">>, <<"value">> := Expected }, Value) ->
     Value =:= Expected;
-check_type(#{ <<"kind">> := <<"range">>, <<"min">> := Min, <<"max">> := Max }, Value) ->
-    is_integer(Value) andalso Value >= Min andalso Value =< Max;
-check_type(#{ <<"kind">> := <<"remote">> }, _Value) -> true;
-check_type(#{ <<"kind">> := <<"alias">> }, _Value) -> true;
-check_type(#{ <<"kind">> := <<"variable">> }, _Value) -> true;
-check_type(#{ <<"kind">> := <<"unknown">> }, _Value) -> true;
-check_type(_, _) -> true.
+check_type(#{ <<"kind">> := <<"range">>, <<"min">> := Min, <<"max">> := Max }, V) ->
+    is_integer(V) andalso V >= Min andalso V =< Max;
+check_type(_Type, _Value) -> true.
 
+%%% --------------------------------------------------------------------
+%%% Schema constructors
+%%% --------------------------------------------------------------------
+
+%% @doc The normalized form of a function or key name: the dashed binary
+%% that AO-Core keys are matched by.
 normalize_name('_') -> <<"_">>;
 normalize_name(Name) when is_atom(Name) -> hb_util:atom_to_dashed_binary(Name);
 normalize_name(Name) -> hb_util:bin(Name).
 
+%% @doc The value of a literal schema, such as a range's bound.
 literal_value(#{ <<"kind">> := <<"literal">>, <<"value">> := Value }) -> Value;
-literal_value(_) -> undefined.
-
-var_name({var, _, Name}) -> Name;
-var_name(Name) -> Name.
+literal_value(_Type) -> undefined.
 
 message_type(Keys, Wildcard) ->
-    #{
-        <<"kind">> => <<"message">>,
-        <<"keys">> => Keys,
-        <<"wildcard">> => Wildcard
-    }.
-
+    #{ <<"kind">> => <<"message">>, <<"keys">> => Keys, <<"wildcard">> => Wildcard }.
 any_type() -> #{ <<"kind">> => <<"any">> }.
 wildcard_type() -> #{ <<"kind">> => <<"wildcard">> }.
 scalar_type(Name) -> #{ <<"kind">> => Name }.
 literal_type(Value) -> #{ <<"kind">> => <<"literal">>, <<"value">> => Value }.
-alias_type(Name) -> #{ <<"kind">> => <<"alias">>, <<"name">> => normalize_name(Name) }.
-variable_type(Name) -> #{ <<"kind">> => <<"variable">>, <<"name">> => normalize_name(Name) }.
-unknown_type(Other) ->
-    #{ <<"kind">> => <<"unknown">>, <<"ast">> => hb_util:bin(io_lib:format("~tp", [Other])) }.
+alias_type(Name) ->
+    #{ <<"kind">> => <<"alias">>, <<"name">> => normalize_name(Name) }.
+variable_type(Name) ->
+    #{ <<"kind">> => <<"variable">>, <<"name">> => normalize_name(Name) }.
+unknown_type(Ast) ->
+    #{
+        <<"kind">> => <<"unknown">>,
+        <<"ast">> => hb_util:bin(io_lib:format("~tp", [Ast]))
+    }.
 boolean_type() ->
     #{
         <<"kind">> => <<"union">>,
@@ -806,11 +746,15 @@ boolean_type() ->
 
 %%% Tests
 
-parse_empty_projection_test() ->
-    ?assertEqual(
-        #{ <<"kind">> => <<"wildcard">> },
-        parse_type({var, 1, '_'}, #{}, #{}, [])
+%% @doc A message schema requiring one key of a type, and nothing else.
+required(Key, Type) ->
+    message_type(
+        #{ Key => #{ <<"presence">> => required, <<"type">> => Type } },
+        none
     ).
+
+parse_empty_projection_test() ->
+    ?assertEqual(wildcard_type(), parse_type({var, 1, '_'}, #{}, #{}, [])).
 
 map_wildcards_test() ->
     Lazy =
@@ -835,9 +779,7 @@ map_wildcards_test() ->
     Force =
         parse_type(
             {type, 1, map,
-                [
-                    {type, 1, map_field_exact, [{var, 1, '_'}, {var, 1, '_'}]}
-                ]},
+                [{type, 1, map_field_exact, [{var, 1, '_'}, {var, 1, '_'}]}]},
             #{},
             #{},
             []
@@ -851,15 +793,31 @@ map_wildcards_test() ->
     ).
 
 apply_empty_projection_test() ->
-    Schema = implicit_base(wildcard_type()),
     ?assertEqual(
         #{ <<"device">> => <<"test@1.0">> },
         apply_schema(
-            Schema,
+            implicit_base(wildcard_type()),
             #{ <<"device">> => <<"test@1.0">>, <<"extra">> => <<"drop">> },
             #{}
         )
     ).
+
+%% @doc A message that a schema does not alter is returned as the same term.
+unaltered_message_is_identical_test() ->
+    Message = #{ <<"device">> => <<"test@1.0">>, <<"a">> => 1, <<"b">> => <<"x">> },
+    Schema =
+        message_type(
+            #{
+                <<"a">> =>
+                    #{
+                        <<"presence">> => required,
+                        <<"type">> => scalar_type(<<"integer">>)
+                    }
+            },
+            #{ <<"presence">> => optional, <<"type">> => wildcard_type() }
+        ),
+    Varied = apply_schema(implicit_base(Schema), Message, #{}),
+    ?assert(erts_debug:same(Message, Varied)).
 
 selected_links_are_materialized_without_loading_omitted_keys_test() ->
     Store = hb_test_utils:test_store(),
@@ -867,22 +825,7 @@ selected_links_are_materialized_without_loading_omitted_keys_test() ->
     hb_store:reset(Store),
     {ok, SlotPath} = hb_cache:write(<<"7">>, Opts),
     Missing = {link, <<"data/not-present">>, #{}},
-    DeepSchema =
-        message_type(
-            #{
-                <<"slot">> =>
-                    #{ <<"presence">> => required, <<"type">> => scalar_type(<<"integer">>) }
-            },
-            none
-        ),
-    Schema =
-        message_type(
-            #{
-                <<"deep">> =>
-                    #{ <<"presence">> => required, <<"type">> => DeepSchema }
-            },
-            none
-        ),
+    Schema = required(<<"deep">>, required(<<"slot">>, scalar_type(<<"integer">>))),
     ?assertEqual(
         #{ <<"deep">> => #{ <<"slot">> => 7 } },
         apply_schema(
@@ -905,10 +848,7 @@ explicit_wildcard_preserves_lazy_links_test() ->
         message_type(
             #{
                 <<"scheduler">> =>
-                    #{
-                        <<"presence">> => optional,
-                        <<"type">> => wildcard_type()
-                    }
+                    #{ <<"presence">> => optional, <<"type">> => wildcard_type() }
             },
             none
         ),
@@ -930,20 +870,24 @@ optional_wildcard_preserves_links_and_sequences_materialize_test() ->
         ),
     ?assertEqual(
         #{ <<"extra">> => Link },
-        apply_schema(
-            WildcardSchema,
-            #{ <<"extra">> => Link },
-            Opts
-        )
+        apply_schema(WildcardSchema, #{ <<"extra">> => Link }, Opts)
     ),
     Integer = scalar_type(<<"integer">>),
     ?assertEqual(
         [8],
-        apply_schema(#{ <<"kind">> => <<"list">>, <<"item">> => Integer }, [Link], Opts)
+        apply_schema(
+            #{ <<"kind">> => <<"list">>, <<"item">> => Integer },
+            [Link],
+            Opts
+        )
     ),
     ?assertEqual(
         {8},
-        apply_schema(#{ <<"kind">> => <<"tuple">>, <<"items">> => [Integer] }, {Link}, Opts)
+        apply_schema(
+            #{ <<"kind">> => <<"tuple">>, <<"items">> => [Integer] },
+            {Link},
+            Opts
+        )
     ).
 
 union_preserves_an_existing_member_type_test() ->
@@ -965,87 +909,35 @@ union_passthrough_members_do_not_swallow_constrained_members_test() ->
     hb_store:reset(Store),
     {ok, SlotPath} = hb_cache:write(<<"9">>, Opts),
     Integer = scalar_type(<<"integer">>),
-    Message =
-        message_type(
-            #{
-                <<"slot">> =>
-                    #{ <<"presence">> => required, <<"type">> => Integer }
-            },
-            none
-        ),
+    Binary = scalar_type(<<"binary">>),
+    Union =
+        fun(Members) ->
+            #{ <<"kind">> => <<"union">>, <<"members">> => Members }
+        end,
     ?assertEqual(
         #{ <<"slot">> => 9 },
         apply_schema(
-            #{
-                <<"kind">> => <<"union">>,
-                <<"members">> => [unknown_type({record, tx}), Message]
-            },
+            Union([unknown_type({record, tx}), required(<<"slot">>, Integer)]),
             #{ <<"slot">> => {link, SlotPath, #{}} },
             Opts
         )
     ),
-    Binary = scalar_type(<<"binary">>),
     ?assertEqual(
         <<"value">>,
-        apply_schema(
-            #{
-                <<"kind">> => <<"union">>,
-                <<"members">> => [any_type(), wildcard_type(), Binary]
-            },
-            <<"value">>,
-            #{}
-        )
+        apply_schema(Union([any_type(), wildcard_type(), Binary]), <<"value">>, #{})
     ),
-    FirstMessage =
-        message_type(
-            #{
-                <<"first">> =>
-                    #{ <<"presence">> => required, <<"type">> => Integer }
-            },
-            none
-        ),
-    SecondMessage =
-        message_type(
-            #{
-                <<"second">> =>
-                    #{ <<"presence">> => required, <<"type">> => Integer }
-            },
-            none
-        ),
     ?assertEqual(
         #{ <<"second">> => 2 },
         apply_schema(
-            #{
-                <<"kind">> => <<"union">>,
-                <<"members">> => [FirstMessage, SecondMessage]
-            },
+            Union([required(<<"first">>, Integer), required(<<"second">>, Integer)]),
             #{ <<"second">> => 2 },
             #{}
         )
     ),
-    IntMessage =
-        message_type(
-            #{
-                <<"value">> =>
-                    #{ <<"presence">> => required, <<"type">> => Integer }
-            },
-            none
-        ),
-    BinaryMessage =
-        message_type(
-            #{
-                <<"value">> =>
-                    #{ <<"presence">> => required, <<"type">> => Binary }
-            },
-            none
-        ),
     ?assertEqual(
         #{ <<"value">> => <<"text">> },
         apply_schema(
-            #{
-                <<"kind">> => <<"union">>,
-                <<"members">> => [IntMessage, BinaryMessage]
-            },
+            Union([required(<<"value">>, Integer), required(<<"value">>, Binary)]),
             #{ <<"value">> => <<"text">> },
             #{}
         )
