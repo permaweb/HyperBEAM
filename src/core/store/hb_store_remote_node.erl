@@ -74,33 +74,39 @@ read_request(#{<<"node">> := Node} = StoreOpts, Key, Opts) ->
     StoreOpts2 = (hb_maps:without([<<"node">>], StoreOpts, Opts))#{<<"nodes">> => [Node]},
     read_request(StoreOpts2, Key, Opts);
 read_request(#{ <<"nodes">> := Nodes } = StoreOpts, Key, Opts) when is_list(Nodes) ->
-    ?event(store_remote_node, {executing_read, {nodes, length(Nodes)}, {key, Key}}),
-    Config = request_config(Nodes, Key, StoreOpts, Opts),
-    HTTPRes =
-        hb_http:request(
-            <<"GET">>,
-            Config,
-            <<"/~cache@1.0/read">>,
-            #{ <<"read">> => Key },
-            Opts
-        ),
-    case HTTPRes of
-        {ok, Res} ->
-            % returning the whole response to get the test-key
-            {ok, Msg} =
-                hb_message:with_only_committed(
-                    without_transport_commitment(Res, Opts),
+    case read_local_cache(StoreOpts, Key, Opts) of
+        {ok, Value} ->
+            ?event(store_remote_node, {retrieve_from_cache, {key, Key}}),
+            {ok, Value};
+        _ ->
+            ?event(store_remote_node, {executing_read, {nodes, length(Nodes)}, {key, Key}}),
+            Config = request_config(Nodes, Key, StoreOpts, Opts),
+            HTTPRes =
+                hb_http:request(
+                    <<"GET">>,
+                    Config,
+                    <<"/~cache@1.0/read">>,
+                    #{ <<"read">> => Key },
                     Opts
                 ),
-            ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
-            maybe_cache(StoreOpts, Msg, [Key]),
-            {ok, Msg};
-        {error, Err} ->
-            ?event(store_remote_node,
-                {read_not_found,
-                    {key, {string, Key}},
-                    {error, Err}}),
-            {error, not_found}
+            case HTTPRes of
+                {ok, Res} ->
+                    % returning the whole response to get the test-key
+                    {ok, Msg} =
+                        hb_message:with_only_committed(
+                            without_transport_commitment(Res, Opts),
+                            Opts
+                        ),
+                    ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
+                    maybe_cache(StoreOpts, Msg, [Key]),
+                    {ok, Msg};
+                {error, Err} ->
+                    ?event(store_remote_node,
+                        {read_not_found,
+                            {key, {string, Key}},
+                            {error, Err}}),
+                    {error, not_found}
+            end
     end;
 read_request(StoreOpts, _, Opts) ->
     ?event(error,
