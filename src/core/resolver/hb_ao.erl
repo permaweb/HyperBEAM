@@ -437,13 +437,8 @@ resolve_stage(2, Base, Req, Opts) ->
     % equivalent shares one hashpath. If the function's schema declares it to be
     % a patch, the `VariedResult` of the execution is overlaid on top of the 
     % appropriate input message before return.
-    case hb_device:is_direct_key_access(Base, Req, Opts) of
-        true ->
-            % TODO: Just look it up/return it? Through cache control perhaps?
-            todo;
-        false ->
-            {Func, VariedBase, VariedReq, MaybeOverlay, VariedOpts} =
-                vary_loaded(ensure_message_loaded(Base, Opts), Req, Opts),
+    try vary_loaded(ensure_message_loaded(Base, Opts), Req, Opts) of
+        {VariedBase, VariedReq, MaybeOverlay, VariedOpts} ->
             case hb_cache_control:maybe_lookup(VariedBase, VariedReq, VariedOpts) of
                 {ok, Res} ->
                     ?event_debug(
@@ -453,10 +448,13 @@ resolve_stage(2, Base, Req, Opts) ->
                     ),
                     {ok, Res};
                 {continue, NewBase, NewReq} ->
-                    resolve_stage(3, Func, NewBase, NewReq, MaybeOverlay, Opts);
+                    Func = maps:get(<<"resolved-func">>, VariedOpts),
+                    resolve_stage(3, Func, NewBase, NewReq, MaybeOverlay, VariedOpts);
                 {error, CacheResp} ->
                     {error, CacheResp}
             end
+    catch throw:{necessary_message_not_found, _, _} ->
+        {error, #{ <<"status">> => 404 }}
     end.
 resolve_stage(3, Func, Base, Req, MaybeOverlay, Opts) ->
     ?event_debug(debug_ao_core, {stage, 3, validation_check}, Opts),
@@ -714,7 +712,7 @@ resolve_stage(11, Base, Req, Res, MaybeOverlay, ExecName, Opts) ->
     % Set the result as an overlay upon either the base or the request messages
     % if requested by the specification of the resolver function.
     maybe_fork_worker(
-        apply_vary_overlay(Base, Req, Res, MaybeOverlay, Opts),
+        apply_vary_overlay(MaybeOverlay, Base, Req, Res, Opts),
         ExecName,
         Opts
     ).
@@ -924,7 +922,7 @@ vary_loaded(Base, Req, Opts) ->
             add_key -> Key;
             _ -> false
         end,
-    ResolvedOpts = Opts#{ <<"resolved-func">> => {AddKey, Func} },
+    ResolvedOpts = Opts#{ <<"add-key">> => AddKey, <<"resolved-func">> => Func },
     case hb_types:vary(Key, Func, AddKey, Base, Req, UserOpts) of
         {ok, Base, Req, none} ->
             {Base, Req, none, ResolvedOpts};
@@ -942,8 +940,8 @@ apply_vary_overlay(base, Base, _Req, {ok, Res}, Opts) when is_map(Res) ->
     {ok, set(Base, Res, internal_opts(Opts))};
 apply_vary_overlay(request, _Base, Req, {ok, Res}, Opts) when is_map(Res) ->
     {ok, set(Req, Res, internal_opts(Opts))};
-apply_vary_overlay(_IgnoredVaryState, _Base, _Req, {ok, Res}, _Opts) ->
-    {ok, Res}.
+apply_vary_overlay(_IgnoredVaryState, _Base, _Req, Res, _Opts) ->
+    Res.
 
 %% @doc Catch all return if we are in an infinite loop.
 error_infinite(Base, Req, Opts) ->
