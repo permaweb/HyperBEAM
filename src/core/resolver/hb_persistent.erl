@@ -462,6 +462,18 @@ spawn_test_client(Base, Req, Opts) ->
     end),
     Ref.
 
+%% @doc Spawn a test resolver that waits for a shared start signal.
+spawn_gated_test_client(Base, Req, Opts, Gate) ->
+    Ref = make_ref(),
+    TestParent = self(),
+    Pid = spawn_link(fun() ->
+        TestParent ! {ready, Ref},
+        receive {go, Gate} -> ok end,
+        Res = hb_ao:resolve(Base, Req, Opts),
+        TestParent ! {result, Ref, Res}
+    end),
+    {Pid, Ref}.
+
 wait_for_test_result(Ref) ->
     receive {result, Ref, Res} -> Res end.
 
@@ -569,22 +581,43 @@ default_worker_group_identity_test() ->
         default_grouper(Base, undefined, Opts)
     ).
 
-%% @doc Test merging and returning a value with a persistent worker.
+%% @doc Concurrent resolutions share one execution, then release the group.
 deduplicated_execution_test() ->
     TestTime = 200,
-    Base = #{ <<"device">> => test_device() },
+    Executions = atomics:new(1, []),
+    SlowKey =
+        fun(_, #{ <<"wait">> := Wait }) ->
+            _ = atomics:add_get(Executions, 1, 1),
+            receive after Wait ->
+                {ok,
+                    #{
+                        waited => Wait,
+                        pid => self(),
+                        random_bytes =>
+                            hb_util:encode(crypto:strong_rand_bytes(4))
+                    }
+                }
+            end
+        end,
+    Device = (test_device())#{ slow_key := SlowKey },
+    Base = #{ <<"device">> => Device },
     Req = #{ <<"path">> => <<"slow_key">>, <<"wait">> => TestTime },
-    T0 = hb:now(),
-    Ref1 = spawn_test_client(Base, Req),
-    receive after 100 -> ok end,
-    Ref2 = spawn_test_client(Base, Req),
-    Res1 = wait_for_test_result(Ref1),
-    Res2 = wait_for_test_result(Ref2),
-    T1 = hb:now(),
-    % Check the result is the same.
-    ?assertEqual(Res1, Res2),
-    % Check the time it took is less than the sum of the two test times.
-    ?assert(T1 - T0 < (2*TestTime)).
+    Opts = #{
+        <<"await-inprogress">> => true,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    Gate = make_ref(),
+    Clients =
+        [spawn_gated_test_client(Base, Req, Opts, Gate)
+        || _ <- lists:seq(1, 20)],
+    [receive {ready, Ref} -> ok end || {_, Ref} <- Clients],
+    lists:foreach(fun({Pid, _}) -> Pid ! {go, Gate} end, Clients),
+    [First | Rest] =
+        [wait_for_test_result(Ref) || {_, Ref} <- Clients],
+    ?assert(lists:all(fun(Res) -> Res =:= First end, Rest)),
+    ?assertEqual(1, atomics:get(Executions, 1)),
+    ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, Opts)),
+    ?assertEqual(2, atomics:get(Executions, 1)).
 
 %% @doc Test spawning a default persistent worker.
 persistent_worker_test() ->
