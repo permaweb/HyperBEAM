@@ -175,7 +175,7 @@ unregister(Base, Req, Opts) ->
     unregister_groupname(group(Base, Req, Opts), Opts).
 unregister_groupname(Groupname, _Opts) ->
     ?event({unregister_resolver, {explicit, Groupname}}),
-    hb_name:unregister(Groupname).
+    hb_name:unregister(Groupname, self()).
 
 %% @doc If there was already an Erlang process handling this execution,
 %% we should register with them and wait for them to notify us of
@@ -498,6 +498,16 @@ atomic_leader_election_test() ->
     lists:foreach(fun(Worker) -> Worker ! stop end, Workers),
     ?assertEqual(length(Workers) - 1, length(Waiters)),
     ?assert(lists:all(fun(Pid) -> Pid =:= Leader end, Waiters)).
+
+%% @doc A stale leader cannot unregister the current group owner.
+unregister_respects_owner_test() ->
+    GroupName = {?MODULE, unregister_respects_owner, make_ref()},
+    Owner = spawn_link(fun() -> receive stop -> ok end end),
+    ?assertEqual(ok, hb_name:register(GroupName, Owner)),
+    ?assertEqual(ok, unregister_groupname(GroupName, #{})),
+    ?assertEqual(Owner, hb_name:lookup(GroupName)),
+    hb_name:unregister(GroupName),
+    Owner ! stop.
 
 %% @doc A waiter retries rather than blocking after enrollment has closed.
 closed_waiter_enrollment_test() ->
