@@ -535,7 +535,7 @@ immediate_children(Prefix, Rows) ->
             case Key of
                 <<Prefix:PrefixSize/binary, Child/binary>> when Child =/= <<>> ->
                     case binary:match(Child, <<"/">>) of
-                        nomatch -> {true, {Child, Value}};
+                        nomatch -> {true, {Child, child_value(Value)}};
                         _ -> false
                     end;
                 _ ->
@@ -544,6 +544,13 @@ immediate_children(Prefix, Rows) ->
         end,
         Rows
     ).
+
+%% @doc Expose LMDB redirects as typed storage links in composite reads.
+child_value(Value) ->
+    case is_link(Value) of
+        {true, Path} -> {link, Path};
+        false -> Value
+    end.
 
 child_prefix(<<>>) -> <<>>;
 child_prefix(<<"/">>) -> <<>>;
@@ -1254,3 +1261,11 @@ read_prefix_composite_test() ->
     ),
     ?assertEqual({ok, [<<"a">>, <<"b">>]}, test_list(StoreOpts, <<"root">>)),
     test_stop(StoreOpts).
+
+%% @doc Redirects are typed, while escaped literal marker values stay binary.
+child_value_test() ->
+    ?assertEqual(
+        {link, <<"target">>},
+        child_value(<<"link:target">>)
+    ),
+    ?assertEqual(<<"raw:link:literal">>, child_value(<<"raw:link:literal">>)).
