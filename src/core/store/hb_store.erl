@@ -33,7 +33,12 @@
 %%%                   request map of the form `#{ <<"list">> => Path }`.
 %%%                   Composite read results may also return children as
 %%%                   `{Key, Value}' pairs when the store can provide a child
-%%%                   value without an additional read.
+%%%                   value without an additional read. `{link, Path}'
+%%%                   identifies a redirect to an absolute, store-native path.
+%%%                   The manager applies `from-key' to the complete target
+%%%                   and restores any stripped prefix before returning it.
+%%%                   Child names remain relative; link targets returned by
+%%%                   the manager are canonical caller-facing paths.
 %%% '''
 %%% Each function takes a `store' message first, containing an arbitrary set
 %%% of its necessary configuration keys, as well as the `store-module' key which
@@ -60,7 +65,7 @@
 %%%     Pre-normalization ->
 %%%     Store invocation ->
 %%%     Post-normalization ->
-%%%     Re-prefixing (only for `resolve`) ->
+%%%     Re-prefixing (`resolve` results and storage-link targets) ->
 %%%     Return.
 %%% '''
 %%%
@@ -606,6 +611,12 @@ from_store(Store, read, {composite, Children}, Opts) ->
 from_store(Store, list, {ok, Children}, Opts) ->
     from_children(Store, Children, Opts);
 from_store(Store, resolve, {ok, Path}, Opts) ->
+    from_absolute_key(Store, Path, Opts);
+from_store(_Store, _Function, Result, _Opts) ->
+    Result.
+
+%% @doc Normalize an absolute path from a store, restoring a stripped prefix.
+from_absolute_key(Store, Path, Opts) ->
     Prefix = maps:get(<<"prefix">>, Store, <<>>),
     maybe
         {ok, Norm} ?= execute_normalizer(<<"from-key">>, Store, Path, Opts),
@@ -615,21 +626,20 @@ from_store(Store, resolve, {ok, Path}, Opts) ->
                 false -> Norm
             end
         }
-    end;
-from_store(_Store, _Function, Result, _Opts) ->
-    Result.
+    end.
 
 %% @doc Normalize the children a store enumerates from it.
 from_children(Store, Children, Opts) ->
     maybe_each(fun(Child) -> from_child(Store, Child, Opts) end, Children).
 
-%% @doc Normalize a child from the store: its key through `from-key', and
-%% the value of a child given as a pair through `from-value'.
-from_child(Store = #{ <<"store-module">> := hb_store_lmdb },
-        {Key, <<"link:", _/binary>>}, Opts) ->
-    % LMDB link markers carry backend paths. Enumerate their names so callers
-    % resolve the canonical child path through the pipeline.
-    from_child(Store, Key, Opts);
+%% @doc Normalize a child from the store: its key through `from-key', a storage
+%% link's target as an absolute key, and an inline value through `from-value'.
+from_child(Store, {Key, {link, Path}}, Opts) ->
+    maybe
+        {ok, NormKey} ?= execute_normalizer(<<"from-key">>, Store, Key, Opts),
+        {ok, NormPath} ?= from_absolute_key(Store, Path, Opts),
+        {ok, {NormKey, {link, NormPath}}}
+    end;
 from_child(Store, {Key, Value}, Opts) ->
     maybe
         {ok, NormKey} ?= execute_normalizer(<<"from-key">>, Store, Key, Opts),
@@ -1343,6 +1353,17 @@ benchmark_message(nested, N, TestDataSize) ->
 
 %%% Normalization Pipeline Tests
 
+%% @doc A storage-link target regains its prefix, while its child name does not.
+storage_link_normalization_test() ->
+    ?assertEqual(
+        {ok, {<<"child">>, {link, <<"mnt/target">>}}},
+        from_child(
+            #{ <<"prefix">> => <<"mnt/">> },
+            {<<"child">>, {link, <<"target">>}},
+            #{}
+        )
+    ).
+
 %% @doc Test that a store with a `prefix' only admits keys bearing it --
 %% writes and reads alike -- stripping the prefix ahead of invocation and
 %% falling through to later stores otherwise, and that a path resolved
@@ -1402,11 +1423,15 @@ prefix_pipeline_lmdb_link_test() ->
         <<"store">> => [Mounted, Plain],
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
     },
-    start([Mounted, Plain]),
+    ok = start([Mounted, Plain]),
     try
         ok = write(#{ <<"mnt/payload">> => <<"mounted">> }, Opts),
         ok = link(#{ <<"mnt/msg/body">> => <<"mnt/payload">> }, Opts),
         ok = write(#{ <<"payload">> => <<"unrelated">> }, Opts),
+        ?assertEqual(
+            {composite, [{<<"body">>, {link, <<"payload">>}}]},
+            hb_store_lmdb:read(Mounted, #{ <<"read">> => <<"msg">> }, Opts)
+        ),
         lists:foreach(
             fun(Stores) ->
                 ReadOpts = Opts#{ <<"store">> => Stores },
@@ -1414,7 +1439,16 @@ prefix_pipeline_lmdb_link_test() ->
                     {ok, <<"mounted">>},
                     hb_cache:read(<<"mnt/msg/body">>, ReadOpts)
                 ),
+                ?assertEqual(
+                    {composite,
+                        [{<<"body">>, {link, <<"mnt/payload">>}}]},
+                    read(Stores, <<"mnt/msg">>, ReadOpts)
+                ),
                 {ok, Msg} = hb_cache:read(<<"mnt/msg">>, ReadOpts),
+                ?assertMatch(
+                    {link, <<"mnt/payload">>, _},
+                    maps:get(<<"body">>, Msg)
+                ),
                 ?assertEqual(
                     {ok, <<"mounted">>},
                     hb_ao:resolve(Msg, <<"body">>, ReadOpts)
@@ -1424,6 +1458,55 @@ prefix_pipeline_lmdb_link_test() ->
         )
     after
         stop([Mounted, Plain])
+    end.
+
+%% @doc LMDB inline link targets are normalized as complete absolute paths;
+%% they are not rebuilt from independently normalized parent and child keys.
+normalize_pipeline_lmdb_link_test() ->
+    Store =
+        (hb_test_utils:test_store(
+            hb_store_lmdb,
+            <<"pipeline-normalized-link">>
+        ))#{
+            <<"prefix">> => <<"b64/">>,
+            <<"to-key">> => <<"~base64url@1.0/decode/body">>,
+            <<"from-key">> => <<"~base64url@1.0/encode/body">>
+        },
+    Opts = #{
+        <<"store">> => Store,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    Canonical =
+        fun(Path) -> <<"b64/", (hb_util:encode(Path))/binary>> end,
+    PayloadPath = Canonical(<<"payload">>),
+    MessagePath = Canonical(<<"msg">>),
+    BodyPath = Canonical(<<"msg/body">>),
+    BodyKey = hb_util:encode(<<"body">>),
+    ok = start(Store),
+    try
+        ok = write(#{ PayloadPath => <<"mounted">> }, Opts),
+        ok = link(#{ BodyPath => PayloadPath }, Opts),
+        {ok, Msg} = hb_cache:read(MessagePath, Opts),
+        ?assertMatch(
+            {link, PayloadPath, _},
+            maps:get(BodyKey, Msg)
+        ),
+        ?assertEqual(
+            {ok, <<"mounted">>},
+            hb_ao:resolve(Msg, BodyKey, Opts)
+        ),
+        RawOpts = Opts#{ <<"cache-read-mode">> => raw },
+        {ok, RawMsg} = hb_cache:read(MessagePath, RawOpts),
+        ?assertMatch(
+            {link, PayloadPath, _},
+            maps:get(BodyKey, RawMsg)
+        ),
+        ?assertEqual(
+            {ok, <<"mounted">>},
+            hb_ao:resolve(RawMsg, BodyKey, RawOpts)
+        )
+    after
+        stop(Store)
     end.
 
 %% @doc Test that lifecycle operations bypass path preprocessing for a store

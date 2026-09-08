@@ -778,6 +778,12 @@ read_resolved_path(Target, ResolvedFullPath, Store, Opts) ->
                     {subpaths, {explicit, Subpaths}}
                 }
             ),
+            Values =
+                maps:from_list([
+                    {hb_util:bin(Subpath), Value}
+                ||
+                    {Subpath, Value} <- Children
+                ]),
             Msg =
                 case hb_opts:get(cache_read_mode, normal, Opts) of
                     raw ->
@@ -786,7 +792,11 @@ read_resolved_path(Target, ResolvedFullPath, Store, Opts) ->
                                 {
                                     Subpath,
                                     {link,
-                                        hb_path:to_binary([ResolvedFullPath, Subpath]),
+                                        child_path(
+                                            ResolvedFullPath,
+                                            Subpath,
+                                            Values
+                                        ),
                                         #{ <<"lazy">> => true, <<"store">> => Store }
                                     }
                                 }
@@ -796,12 +806,6 @@ read_resolved_path(Target, ResolvedFullPath, Store, Opts) ->
                             ]
                         );
                     _ ->
-                        Values =
-                            maps:from_list([
-                                {hb_util:bin(Subpath), Value}
-                            ||
-                                {Subpath, Value} <- Children
-                            ]),
                         prepare_typed_values(
                             Target,
                             ResolvedFullPath,
@@ -829,6 +833,14 @@ read_resolved_path(Target, ResolvedFullPath, Store, Opts) ->
 child_name({Subpath, _Value}) -> Subpath;
 child_name(Subpath) -> Subpath.
 
+%% @doc Use a typed storage target when available; otherwise address the child
+%% beneath its parent. For `+link' children the target contains the message ID.
+child_path(RootPath, Subpath, Values) ->
+    case maps:get(Subpath, Values, none) of
+        {link, Path} -> Path;
+        _ -> hb_path:to_binary([RootPath, Subpath])
+    end.
+
 %% @doc Prepare child values using `ao-types' where present. Immediate values
 %% are returned directly; linked values remain lazy.
 prepare_typed_values(Target, RootPath, Subpaths, Values, Store, Opts) ->
@@ -850,6 +862,8 @@ prepare_typed_values(Target, RootPath, Subpaths, Values, Store, Opts) ->
                     % `RootPath/commitments/Target' path from scratch.
                     CommPath =
                         case maps:get(<<"commitments">>, Values, none) of
+                            {link, CommGroup} ->
+                                hb_path:to_binary([CommGroup, Target]);
                             <<"link:", CommGroup/binary>> when byte_size(CommGroup) > 0 ->
                                 hb_path:to_binary([CommGroup, Target]);
                             _ ->
@@ -894,7 +908,7 @@ prepare_typed_values(Target, RootPath, Subpaths, Values, Store, Opts) ->
                             {subpath, Subpath}
                         }
                     ),
-                    SubkeyPath = hb_path:to_binary([RootPath, Subpath]),
+                    SubkeyPath = child_path(RootPath, Subpath, Values),
                     case hb_link:is_link_key(Subpath) of
                         false ->
                             % The key is a literal value, not a nested composite
@@ -974,7 +988,7 @@ read_ao_types(Path, Subpaths, Values, Store, Opts) ->
     ?event_debug({reading_ao_types, {path, Path}, {subpaths, {explicit, Subpaths}}}),
     case lists:member(<<"ao-types">>, Subpaths) of
         true ->
-            TypesPath = hb_path:to_binary([Path, <<"ao-types">>]),
+            TypesPath = child_path(Path, <<"ao-types">>, Values),
             TypesBin =
                 case Values of
                     #{ <<"ao-types">> := <<"raw:", Direct/binary>> } -> Direct;
@@ -1439,6 +1453,69 @@ match_store_control_test() ->
     ?assertEqual([Store], match_store(#{ <<"store">> => Store })),
     ?assertEqual([], match_store(#{ <<"store">> => Store, <<"match-index">> => false })),
     ?assertEqual([], match_store(#{ <<"store">> => Store, <<"match-index">> => [] })).
+
+%% @doc Typed storage targets take precedence, while binary markers and child
+%% names retain the path beneath their parent.
+child_path_test() ->
+    Values = #{
+        <<"child">> => {link, <<"canonical">>},
+        <<"legacy">> => <<"link:legacy">>,
+        <<"nested+link">> => {link, <<"target">>}
+    },
+    ?assertEqual(
+        <<"canonical">>,
+        child_path(<<"root">>, <<"child">>, Values)
+    ),
+    ?assertEqual(
+        <<"target">>,
+        child_path(<<"root">>, <<"nested+link">>, Values)
+    ),
+    ?assertEqual(
+        <<"root/legacy">>,
+        child_path(<<"root">>, <<"legacy">>, Values)
+    ),
+    ?assertEqual(
+        <<"root/missing">>,
+        child_path(<<"root">>, <<"missing">>, Values)
+    ).
+
+%% @doc Canonical storage targets load linked type metadata and nested-message
+%% IDs even when the parent and child names cannot reconstruct those targets.
+canonical_child_targets_test() ->
+    Store = hb_test_utils:test_store(hb_store_volatile, <<"canonical-children">>),
+    Opts = #{ <<"store">> => Store },
+    NestedID = hb_util:encode(crypto:hash(sha256, <<"nested-message">>)),
+    Values = #{
+        <<"ao-types">> => {link, <<"canonical-types">>},
+        <<"count">> => <<"7">>,
+        <<"nested+link">> => {link, <<"canonical-id">>}
+    },
+    ok = hb_store:start(Store),
+    try
+        ok = hb_store:write(Store, #{
+            <<"canonical-types">> => <<"count=\"integer\"">>,
+            <<"canonical-id">> => NestedID,
+            <<NestedID/binary, "/value">> => <<"ok">>
+        }, Opts),
+        Msg = prepare_typed_values(
+            <<"root">>, <<"root">>, maps:keys(Values), Values, Store, Opts
+        ),
+        ?assertEqual(7, maps:get(<<"count">>, Msg)),
+        ?assertEqual(
+            #{ <<"value">> => <<"ok">> },
+            ensure_all_loaded(maps:get(<<"nested">>, Msg), Opts)
+        ),
+        RawPath = child_path(<<"root">>, <<"nested+link">>, Values),
+        ?assertEqual(
+            NestedID,
+            ensure_loaded(
+                {link, RawPath, #{ <<"lazy">> => true }},
+                Opts#{ <<"cache-read-mode">> => raw }
+            )
+        )
+    after
+        hb_store:stop(Store)
+    end.
 
 cache_suite_test_() ->
     hb_store:generate_test_suite([
