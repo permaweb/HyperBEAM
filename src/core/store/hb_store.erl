@@ -625,6 +625,11 @@ from_children(Store, Children, Opts) ->
 
 %% @doc Normalize a child from the store: its key through `from-key', and
 %% the value of a child given as a pair through `from-value'.
+from_child(Store = #{ <<"store-module">> := hb_store_lmdb },
+        {Key, <<"link:", _/binary>>}, Opts) ->
+    % LMDB link markers carry backend paths. Enumerate their names so callers
+    % resolve the canonical child path through the pipeline.
+    from_child(Store, Key, Opts);
 from_child(Store, {Key, Value}, Opts) ->
     maybe
         {ok, NormKey} ?= execute_normalizer(<<"from-key">>, Store, Key, Opts),
@@ -1384,6 +1389,42 @@ prefix_pipeline_test() ->
     ?assertEqual({error, not_found}, read([Ungated], <<"inner">>, #{})),
     ?assertEqual({ok, <<"2">>}, read([Plain], <<"outer">>, #{})),
     ?event(testing, {unprefixed_skip_and_strip_off_passed}).
+
+%% @doc A mounted LMDB child's value is the same through direct and parent
+%% reads, even when a later store contains its unprefixed target.
+prefix_pipeline_lmdb_link_test() ->
+    Mounted =
+        (hb_test_utils:test_store(hb_store_lmdb, <<"pipeline-link">>))#{
+            <<"prefix">> => <<"mnt/">>
+        },
+    Plain = hb_test_utils:test_store(hb_store_volatile, <<"pipeline-link-plain">>),
+    Opts = #{
+        <<"store">> => [Mounted, Plain],
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    start([Mounted, Plain]),
+    try
+        ok = write(#{ <<"mnt/payload">> => <<"mounted">> }, Opts),
+        ok = link(#{ <<"mnt/msg/body">> => <<"mnt/payload">> }, Opts),
+        ok = write(#{ <<"payload">> => <<"unrelated">> }, Opts),
+        lists:foreach(
+            fun(Stores) ->
+                ReadOpts = Opts#{ <<"store">> => Stores },
+                ?assertEqual(
+                    {ok, <<"mounted">>},
+                    hb_cache:read(<<"mnt/msg/body">>, ReadOpts)
+                ),
+                {ok, Msg} = hb_cache:read(<<"mnt/msg">>, ReadOpts),
+                ?assertEqual(
+                    {ok, <<"mounted">>},
+                    hb_ao:resolve(Msg, <<"body">>, ReadOpts)
+                )
+            end,
+            [[Mounted, Plain], [Mounted]]
+        )
+    after
+        stop([Mounted, Plain])
+    end.
 
 %% @doc Test that lifecycle operations bypass path preprocessing for a store
 %% carrying a prefix.
