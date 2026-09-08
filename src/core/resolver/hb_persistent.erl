@@ -137,6 +137,7 @@ elect_leader(GroupName, Opts) ->
 %% @doc Unregister as the leader for an execution and notify waiting processes.
 unregister_notify(ungrouped_exec, _Req, _Res, _Opts) -> ok;
 unregister_notify(GroupName, Req, Res, Opts) ->
+    % Close enrollment before draining requests already queued for this leader.
     unregister_groupname(GroupName, Opts),
     notify(GroupName, Req, Res, Opts).
 
@@ -191,16 +192,27 @@ await(Worker, Base, Req, Opts) ->
     % Calculate the compute path that we will wait upon resolution of.
     % Register with the process.
     GroupName = group(Base, Req, Opts),
-    % set monitor to a worker, so we know if it exits
-    _Ref = erlang:monitor(process, Worker),
+    % Monitor before enrolling so that a leader exit cannot be missed.
+    MonitorRef = erlang:monitor(process, Worker),
     Worker ! {resolve, self(), GroupName, Req, Opts},
-    AwaitFun(Worker, GroupName, Base, Req, Opts).
+    % The leader unregisters before draining its enrolled waiters. If it no
+    % longer owns the group, this request may have missed that drain and must
+    % retry election instead of waiting indefinitely.
+    case find_execution(GroupName, Opts) of
+        {ok, Worker} ->
+            try AwaitFun(Worker, GroupName, Base, Req, Opts)
+            after erlang:demonitor(MonitorRef, [flush])
+            end;
+        _ ->
+            erlang:demonitor(MonitorRef, [flush]),
+            {error, leader_died}
+    end.
 
 %% @doc Default await function that waits for a resolution from a worker.
 default_await(Worker, GroupName, Base, Req, Opts) ->
     % Wait for the result.
     receive
-        {resolved, _, GroupName, Req, Res} ->
+        {resolved, Worker, GroupName, Req, Res} ->
             worker_event(GroupName, {resolved_await, Res}, Base, Req, Opts),
             Res;
         {'DOWN', _R, process, Worker, Reason} ->
@@ -486,6 +498,37 @@ atomic_leader_election_test() ->
     lists:foreach(fun(Worker) -> Worker ! stop end, Workers),
     ?assertEqual(length(Workers) - 1, length(Waiters)),
     ?assert(lists:all(fun(Pid) -> Pid =:= Leader end, Waiters)).
+
+%% @doc A waiter retries rather than blocking after enrollment has closed.
+closed_waiter_enrollment_test() ->
+    Base = #{
+        <<"device">> => test_device(),
+        <<"test">> => crypto:strong_rand_bytes(8)
+    },
+    Req = #{ <<"path">> => <<"slow_key">>, <<"wait">> => 1 },
+    Opts = #{ <<"await-inprogress">> => true },
+    Worker = spawn_link(fun() -> receive stop -> ok end end),
+    ?assertEqual({error, leader_died}, await(Worker, Base, Req, Opts)),
+    Worker ! stop,
+    receive
+        {'DOWN', _, process, Worker, _} -> ?assert(false)
+    after 10 -> ok
+    end.
+
+%% @doc A waiter only accepts completion from its elected leader.
+completion_sender_test() ->
+    GroupName = {?MODULE, completion_sender, make_ref()},
+    Req = #{ <<"path">> => <<"test">> },
+    Worker = self(),
+    Other = spawn_link(fun() -> receive stop -> ok end end),
+    self() ! {resolved, Other, GroupName, Req, stale},
+    self() ! {resolved, Worker, GroupName, Req, expected},
+    ?assertEqual(
+        expected,
+        default_await(Worker, GroupName, #{}, Req, #{})
+    ),
+    receive {resolved, Other, GroupName, Req, stale} -> ok end,
+    Other ! stop.
 
 %% @doc The default group uses collision-resistant AO-Core execution identity.
 default_group_identity_test() ->
