@@ -298,6 +298,7 @@ do_is_direct_key_access(Dev, NormKey, Opts) ->
                     {exports, Exports}
                 }
             ),
-            not lists:member(NormKey, Exports ++ ?MESSAGE_KEYS);
+            not lists:member(NormKey, ?MESSAGE_KEYS)
+                andalso not is_exported(Info, NormKey, Opts);
         _ -> false
     end.

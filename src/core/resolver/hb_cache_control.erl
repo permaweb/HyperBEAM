@@ -140,12 +140,7 @@ perform_cache_write(Base, Req, Res, Opts) ->
                 Opts
             );
         Map when is_map(Map) ->
-            % A varied execution is found again only under its varied
-            % hashpath, so its result is linked there.
-            case maps:is_key(<<"varied">>, Opts) of
-                true -> hb_cache:write_hashpath(Res, Opts);
-                false -> hb_cache:write(Res, Opts)
-            end;
+            hb_cache:write_hashpath(Res, Opts);
         _ ->
             ?event({cannot_write_result, Res}),
             skip_caching
