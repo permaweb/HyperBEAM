@@ -60,7 +60,7 @@
 %%%     Pre-normalization ->
 %%%     Store invocation ->
 %%%     Post-normalization ->
-%%%     Re-prefixing (only for `resolve`) ->
+%%%     Re-prefixing (`resolve` and inline link targets) ->
 %%%     Return.
 %%% '''
 %%%
@@ -624,12 +624,18 @@ from_children(Store, Children, Opts) ->
     maybe_each(fun(Child) -> from_child(Store, Child, Opts) end, Children).
 
 %% @doc Normalize a child from the store: its key through `from-key', and
-%% the value of a child given as a pair through `from-value'.
-from_child(Store = #{ <<"store-module">> := hb_store_lmdb },
-        {Key, <<"link:", _/binary>>}, Opts) ->
-    % LMDB link markers carry backend paths. Enumerate their names so callers
-    % resolve the canonical child path through the pipeline.
-    from_child(Store, Key, Opts);
+%% the value of a child given as a pair through `from-value'. Inline links
+%% bypass value normalization and regain any stripped prefix.
+from_child(Store, {Key, <<"link:", Path/bitstring>>}, Opts) when Path =/= <<>> ->
+    maybe
+        {ok, NormKey} ?= from_child(Store, Key, Opts),
+        Prefix =
+            case must_strip_prefix(Store) of
+                true -> maps:get(<<"prefix">>, Store, <<>>);
+                false -> <<>>
+            end,
+        {ok, {NormKey, <<"link:", Prefix/bitstring, Path/bitstring>>}}
+    end;
 from_child(Store, {Key, Value}, Opts) ->
     maybe
         {ok, NormKey} ?= execute_normalizer(<<"from-key">>, Store, Key, Opts),
@@ -1390,6 +1396,29 @@ prefix_pipeline_test() ->
     ?assertEqual({ok, <<"2">>}, read([Plain], <<"outer">>, #{})),
     ?event(testing, {unprefixed_skip_and_strip_off_passed}).
 
+%% @doc Inline links regain stripped prefixes without changing literal values
+%% or targets whose prefix is retained.
+prefix_inline_link_test() ->
+    Store = #{ <<"prefix">> => <<"mnt/">> },
+    lists:foreach(
+        fun({Config, Value, Expected}) ->
+            ?assertEqual(
+                {ok, {<<"body">>, Expected}},
+                from_child(Config, {<<"body">>, Value}, #{})
+            )
+        end,
+        [
+            {Store, <<"link:target">>, <<"link:mnt/target">>},
+            {Store#{ <<"from-value">> => <<"~base64url@1.0/decode/body">> },
+                <<"link:target">>, <<"link:mnt/target">>},
+            {Store#{ <<"prefix-strip">> => <<"false">> },
+                <<"link:mnt/target">>, <<"link:mnt/target">>},
+            {#{}, <<"link:target">>, <<"link:target">>},
+            {Store, <<"raw:link:literal">>, <<"raw:link:literal">>},
+            {Store, <<"link:">>, <<"link:">>}
+        ]
+    ).
+
 %% @doc A mounted LMDB child's value is the same through direct and parent
 %% reads, even when a later store contains its unprefixed target.
 prefix_pipeline_lmdb_link_test() ->
@@ -1402,14 +1431,21 @@ prefix_pipeline_lmdb_link_test() ->
         <<"store">> => [Mounted, Plain],
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
     },
-    start([Mounted, Plain]),
+    ok = start([Mounted, Plain]),
     try
         ok = write(#{ <<"mnt/payload">> => <<"mounted">> }, Opts),
         ok = link(#{ <<"mnt/msg/body">> => <<"mnt/payload">> }, Opts),
         ok = write(#{ <<"payload">> => <<"unrelated">> }, Opts),
+        ?assertEqual(
+            {composite, [{<<"body">>, <<"link:mnt/payload">>}]},
+            read([Mounted], <<"mnt/msg">>, Opts)
+        ),
         lists:foreach(
-            fun(Stores) ->
-                ReadOpts = Opts#{ <<"store">> => Stores },
+            fun({Stores, Mode}) ->
+                ReadOpts = Opts#{
+                    <<"store">> => Stores,
+                    <<"cache-read-mode">> => Mode
+                },
                 ?assertEqual(
                     {ok, <<"mounted">>},
                     hb_cache:read(<<"mnt/msg/body">>, ReadOpts)
@@ -1420,7 +1456,9 @@ prefix_pipeline_lmdb_link_test() ->
                     hb_ao:resolve(Msg, <<"body">>, ReadOpts)
                 )
             end,
-            [[Mounted, Plain], [Mounted]]
+            [{Stores, Mode}
+                || Stores <- [[Mounted, Plain], [Mounted]],
+                    Mode <- [normal, raw]]
         )
     after
         stop([Mounted, Plain])
