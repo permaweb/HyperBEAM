@@ -161,17 +161,18 @@ resolve_path(Opts, CurrPath, [Next | Rest], Depth) ->
     end.
 
 %% @doc List immediate child names under a group path.
-list(Opts, #{ <<"list">> := RawPath }, _NodeOpts) ->
-    list_path(Opts, hb_path:to_binary(RawPath)).
+list(Opts, Req = #{ <<"list">> := RawPath }, _NodeOpts) ->
+    list_path(Opts, hb_path:to_binary(RawPath), Req).
 
-list_path(Opts, <<"">>) ->
-    list_path(Opts, ?ROOT_GROUP);
-list_path(Opts, Path) ->
+list_path(Opts, <<"">>, Req) ->
+    list_path(Opts, ?ROOT_GROUP, Req);
+list_path(Opts, Path, Req) ->
     case lookup_entry(Opts, Path) of
         group ->
-            {ok, immediate_children(Opts, Path)};
+            Children = immediate_children(Opts, Path),
+            {ok, hb_store_utils:apply_list_bounds(Children, Req)};
         {link, Link} ->
-            list_path(Opts, hb_path:to_binary(Link));
+            list_path(Opts, hb_path:to_binary(Link), Req);
         nil when Path =:= ?ROOT_GROUP ->
             %% Empty store at root — no entries here; return `not_found`
             %% rather than `{ok, []}` so a chained store can serve the
@@ -182,7 +183,7 @@ list_path(Opts, Path) ->
             %% links. If resolution yields the same path, it's truly absent.
             case resolve_path(Opts, Path) of
                 Path -> {error, not_found};
-                Resolved -> list_path(Opts, Resolved)
+                Resolved -> list_path(Opts, Resolved, Req)
             end;
         _ ->
             {error, not_found}

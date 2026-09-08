@@ -459,7 +459,7 @@ scope(_) -> scope().
 %% @param StoreOpts Database configuration map
 %% @param Path Binary prefix to search for
 %% @returns {ok, [Key]} list of matching keys, {error, Reason} on failure
-list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
+list(Opts, Req = #{ <<"list">> := Path }, _NodeOpts) ->
     EnvOpts = ensure_env(Opts),
     PathBin =
         case is_binary(Path) of
@@ -468,21 +468,31 @@ list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
         end,
     case read_resolved(EnvOpts, PathBin) of
         {ok, ResolvedPath, <<"group">>} ->
-            list_children(EnvOpts, ResolvedPath);
+            list_children(EnvOpts, ResolvedPath, Req);
         {ok, _ResolvedPath, _Value} ->
             {error, not_found};
         not_found ->
             {error, not_found}
     end.
 
-list_children(Opts, ResolvedPath) ->
-    SearchPath = child_prefix(ResolvedPath),
-    % Use native elmdb:list function
+%% @doc The children of a group through the NIF's cursor: every one, or
+%% those the request names from its `from' in its direction, no more than
+%% its limit -- a batch being every child: LMDB reads a page at a time only
+%% from a key's fixed-size duplicate values, and the database holds none.
+list_children(Opts, ResolvedPath, Req) ->
+    #{
+        <<"from">> := From,
+        <<"limit">> := Limit,
+        <<"direction">> := Direction
+    } = hb_store_utils:list_request_bounds(Req),
     #{ <<"db">> := DBInstance } = find_env(Opts),
-    case elmdb:list(DBInstance, SearchPath) of
+    Options =
+        [ {from, From} || From =/= none ] ++
+        [ {limit, Limit} || Limit =/= all ] ++
+        [ {direction, case Direction of asc -> forward; desc -> backward end} ],
+    case elmdb:list(DBInstance, child_prefix(ResolvedPath), Options) of
         {ok, Children} -> {ok, Children};
-        {error, not_found} -> {ok, []};
-        not_found -> {ok, []}
+        {error, Type, Description} -> {error, {Type, Description}}
     end.
 
 read_prefix_rows(Opts, Path) ->
@@ -816,7 +826,7 @@ test_list(StoreOpts, Path) ->
             not_found ->
                 PathBin
         end,
-    list_children(StoreOpts, ResolvedPath).
+    list_children(StoreOpts, ResolvedPath, #{}).
 
 test_write(StoreOpts, Path, Value) ->
     ok = write(StoreOpts, Path, Value),
