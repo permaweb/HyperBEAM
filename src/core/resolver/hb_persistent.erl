@@ -112,18 +112,25 @@ find_or_register(ungrouped_exec, _Base, _Req, _Opts) ->
 find_or_register(GroupName, _Base, _Req, Opts) ->
     case hb_opts:get(await_inprogress, false, Opts) of
         false -> {leader, GroupName};
-        _ ->
+        _ -> elect_leader(GroupName, Opts)
+    end.
+
+%% @doc Atomically register as leader or return the process that won election.
+elect_leader(GroupName, Opts) ->
+    case register_groupname(GroupName, Opts) of
+        ok ->
+            ?event({register_resolver, {group, GroupName}}),
+            {leader, GroupName};
+        error ->
             Self = self(),
             case find_execution(GroupName, Opts) of
                 {ok, Leader} when Leader =/= Self ->
                     ?event({found_leader, GroupName, {leader, Leader}}),
                     {wait, Leader};
-                {ok, Leader} when Leader =:= Self ->
+                {ok, Self} ->
                     {infinite_recursion, GroupName};
-                _ ->
-                    ?event({register_resolver, {group, GroupName}}),
-                    register_groupname(GroupName, Opts),
-                    {leader, GroupName}
+                not_found ->
+                    elect_leader(GroupName, Opts)
             end
     end.
 
@@ -445,6 +452,40 @@ spawn_test_client(Base, Req, Opts) ->
 
 wait_for_test_result(Ref) ->
     receive {result, Ref, Res} -> Res end.
+
+%% @doc Concurrent elections produce one leader and direct all losers to it.
+atomic_leader_election_test() ->
+    start(),
+    GroupName = {?MODULE, atomic_election, make_ref()},
+    Opts = #{ <<"await-inprogress">> => true },
+    Parent = self(),
+    Workers =
+        [
+            spawn_link(fun() ->
+                Parent ! {ready, self()},
+                receive start -> ok end,
+                Election =
+                    find_or_register(GroupName, undefined, undefined, Opts),
+                Parent ! {elected, self(), Election},
+                receive stop -> ok end
+            end)
+        || _ <- lists:seq(1, 50)
+        ],
+    [receive {ready, Worker} -> ok end || Worker <- Workers],
+    lists:foreach(fun(Worker) -> Worker ! start end, Workers),
+    Elections =
+        [
+            receive {elected, Worker, Election} -> {Worker, Election} end
+        || Worker <- Workers
+        ],
+    Leaders =
+        [{Worker, Name} || {Worker, {leader, Name}} <- Elections],
+    [{Leader, GroupName}] = Leaders,
+    Waiters = [Pid || {_, {wait, Pid}} <- Elections],
+    hb_name:unregister(GroupName),
+    lists:foreach(fun(Worker) -> Worker ! stop end, Workers),
+    ?assertEqual(length(Workers) - 1, length(Waiters)),
+    ?assert(lists:all(fun(Pid) -> Pid =:= Leader end, Waiters)).
 
 %% @doc The default group uses collision-resistant AO-Core execution identity.
 default_group_identity_test() ->
