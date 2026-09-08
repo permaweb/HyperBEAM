@@ -433,6 +433,7 @@ vary_projection_uses_projected_cache_key_test() ->
     Opts =
         #{
             <<"store">> => Store,
+            <<"attested-store">> => hb_test_utils:test_store(),
             <<"cache-control">> => [<<"always">>],
             <<"spawn-worker">> => false
         },

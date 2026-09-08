@@ -87,7 +87,6 @@
 %%% the way that the environment operates:
 %%% 
 %%% `hashpath':         Whether to add the `Req' to `HashPath' for the `Res'.
-%%% `add-key':          Whether to add the key to the start of the arguments.
 %%% `resolve-mode':     Set to `raw' to apply device functions directly,
 %%% 					skipping the resolver's management stages.
 %%% </pre>
@@ -108,14 +107,11 @@
 -define(
     TEMP_OPTS,
     [
-        <<"add-key">>,
         <<"force-message">>,
         <<"cache-control">>,
         <<"spawn-worker">>,
         <<"only">>,
-        <<"prefer">>,
-        <<"resolved-func">>,
-        <<"varied">>
+        <<"prefer">>
     ]
 ).
 
@@ -438,18 +434,17 @@ resolve_stage(2, Base, Req, Opts) ->
     % a patch, the `VariedResult` of the execution is overlaid on top of the 
     % appropriate input message before return.
     try vary_loaded(ensure_message_loaded(Base, Opts), Req, Opts) of
-        {VariedBase, VariedReq, MaybeOverlay, VariedOpts} ->
-            case hb_cache_control:maybe_lookup(VariedBase, VariedReq, VariedOpts) of
+        {Func, VariedBase, VariedReq, MaybeOverlay} ->
+            case hb_cache_control:maybe_lookup(VariedBase, VariedReq, Opts) of
                 {ok, Res} ->
                     ?event_debug(
                         debug_ao_core,
                         {stage, 2, cache_hit, {res, Res}, {opts, Opts}},
                         Opts
                     ),
-                    {ok, Res};
+                    apply_vary_overlay(MaybeOverlay, Base, Req, {ok, Res}, Opts);
                 {continue, NewBase, NewReq} ->
-                    Func = maps:get(<<"resolved-func">>, VariedOpts),
-                    resolve_stage(3, Func, NewBase, NewReq, MaybeOverlay, VariedOpts);
+                    resolve_stage(3, Func, NewBase, NewReq, MaybeOverlay, Opts);
                 {error, CacheResp} ->
                     {error, CacheResp}
             end
@@ -508,7 +503,7 @@ resolve_stage(4, Func, Base, Req, MaybeOverlay, Opts) ->
                 Res ->
                     % Now that we have the result, we can skip right to potential
                     % recursion (step 11) in the outer-wrapper.
-                    Res
+                    apply_vary_overlay(MaybeOverlay, Base, Req, Res, Opts)
             end;
         {infinite_recursion, GroupName} ->
             % We are the leader for this resolution, but we executing the 
@@ -533,14 +528,14 @@ resolve_stage(4, Func, Base, Req, MaybeOverlay, Opts) ->
                     error_infinite(Base, Req, Opts)
             end
     end.
-resolve_stage(5, Func, Base, Req, MaybeOverlay, ExecName, Opts) ->
+resolve_stage(5, Resolver, Base, Req, MaybeOverlay, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 5, ExecName, execution}, Opts),
 	% Execution.
     ExecOpts = execution_opts(Opts),
-	Args =
-		case hb_opts:get(add_key, false, Opts) of
-			false -> [Base, Req, ExecOpts];
-			Key -> [Key, Base, Req, ExecOpts]
+	{Func, Args} =
+		case Resolver of
+			{Key, F} -> {F, [Key, Base, Req, ExecOpts]};
+			F -> {F, [Base, Req, ExecOpts]}
 		end,
     % Try to execute the function.
     Res = 
@@ -890,10 +885,8 @@ ensure_message_loaded(Msg, _Opts) ->
     Msg.
 
 %% @doc Resolve the device function for a loaded base and vary the inputs
-%% by its schema. The function is carried to stage 5 in the `resolved-func'
-%% option rather than resolved twice, and a varied execution is marked as
-%% such for the cache, which links its result under the varied hashpath rather
-%% than the original.
+%% by its schema. Return the function, optionally paired with its handler key,
+%% alongside the varied inputs and original overlay target.
 vary_loaded(Base, Req, Opts) ->
     UserOpts = hb_maps:without(?TEMP_OPTS, Opts, Opts),
     Key = hb_path:hd(Req, UserOpts),
@@ -922,24 +915,24 @@ vary_loaded(Base, Req, Opts) ->
             add_key -> Key;
             _ -> false
         end,
-    ResolvedOpts = Opts#{ <<"add-key">> => AddKey, <<"resolved-func">> => Func },
+    Resolver = case AddKey of false -> Func; _ -> {AddKey, Func} end,
     case hb_types:vary(Key, Func, AddKey, Base, Req, UserOpts) of
-        {ok, Base, Req, none} ->
-            {Base, Req, none, ResolvedOpts};
+        {ok, VariedBase, VariedReq, none} ->
+            {Resolver, VariedBase, VariedReq, no_overlay};
         {ok, VariedBase, VariedReq, Overlay} ->
-            {VariedBase, VariedReq, Overlay, ResolvedOpts};
+            Original = case Overlay of base -> Base; request -> Req end,
+            {Resolver, VariedBase, VariedReq, {Overlay, Original}};
         no_spec ->
-            {Base, Req, none, ResolvedOpts}
+            {Resolver, Base, Req, no_overlay}
     end.
 
 %% @doc `set` a result that the schema declares to be an overlay on top of the
 %% original `Base` or `Request` message as indicated, if and only if the result
 %% is a message itself. Literal values are returned without extending either
 %% input.
-apply_vary_overlay(base, Base, _Req, {ok, Res}, Opts) when is_map(Res) ->
-    {ok, set(Base, Res, internal_opts(Opts))};
-apply_vary_overlay(request, _Base, Req, {ok, Res}, Opts) when is_map(Res) ->
-    {ok, set(Req, Res, internal_opts(Opts))};
+apply_vary_overlay({ExtType, Original}, _Base, _Req, {ok, Res}, Opts)
+        when is_map(Res), (ExtType == base orelse ExtType == request) ->
+    {ok, set(Original, Res, internal_opts(Opts))};
 apply_vary_overlay(_IgnoredVaryState, _Base, _Req, Res, _Opts) ->
     Res.
 
@@ -1319,8 +1312,6 @@ internal_opts(Opts) ->
 %% @doc Return the node message that should be used in order to perform
 %% recursive executions.
 execution_opts(Opts) ->
-	% First, determine the arguments to pass to the function.
-	% While calculating the arguments we unset the add_key option.
 	Opts1 =
         hb_maps:remove(
             <<"trace">>,
