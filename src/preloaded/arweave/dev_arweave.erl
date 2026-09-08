@@ -266,28 +266,30 @@ head_raw_ans104(TXID, ArweaveOffset, Length, Opts) ->
         {error, Error} -> {error, Error}
     end.
 do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
-    case deserialize_ans104_header(Data) of
-        {ok, HeaderSize, HeaderTX} ->
-            ContentType =
-                list_find(
-                    <<"content-type">>,
-                    HeaderTX#tx.tags,
-                    <<"application/octet-stream">>
-                ),
-            {ok,
-                #{
-                    <<"raw-id">> => TXID,
-                    <<"offset">> => ArweaveOffset,
-                    <<"data-offset">> =>
-                        add_data_offset(ArweaveOffset, HeaderSize),
-                    <<"content-type">> => ContentType,
-                    <<"header-length">> => HeaderSize,
-                    <<"content-length">> => Length - HeaderSize,
-                    <<"accept-ranges">> => <<"bytes">>
-                }
-            };
-        Error ->
-            Error
+    maybe
+        {ok, HeaderSize, HeaderTX} ?= deserialize_ans104_header(Data),
+        % Published indexes may match only a prefix of the requested ID.
+        true ?=
+            ar_tx:generate_id(HeaderTX, signed) =:= hb_util:native_id(TXID)
+                orelse {error, not_found},
+        ContentType =
+            list_find(
+                <<"content-type">>,
+                HeaderTX#tx.tags,
+                <<"application/octet-stream">>
+            ),
+        {ok,
+            #{
+                <<"raw-id">> => TXID,
+                <<"offset">> => ArweaveOffset,
+                <<"data-offset">> =>
+                    add_data_offset(ArweaveOffset, HeaderSize),
+                <<"content-type">> => ContentType,
+                <<"header-length">> => HeaderSize,
+                <<"content-length">> => Length - HeaderSize,
+                <<"accept-ranges">> => <<"bytes">>
+            }
+        }
     end.
 
 deserialize_ans104_header(Data) ->
@@ -1556,6 +1558,49 @@ head_raw_ans104_test_parallel() ->
     ?assertEqual(
         {ok, 575},
         hb_maps:find(<<"content-length">>, Result, Opts)
+    ).
+
+%% @doc Raw reads must check the full ID of a published-index candidate.
+raw_published_index_id_test_parallel() ->
+    Store = hb_store_arweave:store_from_opts(hb_opts:default_message()),
+    [_Primary | Published] = maps:get(<<"index-store">>, Store),
+    Local = hb_test_utils:test_store(),
+    IndexStore = Store#{
+        <<"index-store">> => [Local | Published],
+        <<"local-store">> => [Local]
+    },
+    Opts = #{
+        <<"store">> => [Local],
+        <<"arweave-index-store">> => IndexStore
+    },
+    ok = hb_store:start(IndexStore),
+    ID = <<"AAAAhyV8_NwududSxuraAj7DLWiZHDTqVKWrZglpNok">>,
+    <<Prefix:255, Last:1>> = hb_util:native_id(ID),
+    WrongID = hb_util:encode(<<Prefix:255, (Last bxor 1):1>>),
+    {ok, Candidate} = hb_store_arweave:read_index_offset(IndexStore, WrongID),
+    ?assertEqual(381852134215637, maps:get(<<"start">>, Candidate)),
+    lists:foreach(
+        fun({Request, Length}) ->
+            Base = #{ <<"device">> => <<"arweave@2.9">> },
+            Req = Request#{ <<"path">> => <<"raw">> },
+            {ok, Result} =
+                hb_ao:resolve(Base, Req#{ <<"raw">> => ID }, Opts),
+            ?assertEqual(ID, hb_maps:get(<<"raw-id">>, Result, Opts)),
+            ?assertEqual(Length,
+                hb_maps:get(<<"content-length">>, Result, Opts)),
+            ?assertEqual(
+                {error, not_found},
+                hb_ao:resolve(Base, Req#{ <<"raw">> => WrongID }, Opts)
+            )
+        end,
+        [
+            {#{ <<"method">> => <<"HEAD">> }, 2827},
+            {#{ <<"method">> => <<"GET">> }, 2827},
+            {#{
+                <<"method">> => <<"GET">>,
+                <<"range">> => <<"bytes 0-2/2827">>
+            }, 3}
+        ]
     ).
 
 head_raw_ans104_invalid_tags_test() ->
