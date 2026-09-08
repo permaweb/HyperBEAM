@@ -110,11 +110,13 @@ find_body(Base, Opts) ->
 
 %% @doc Parse a comma-separated `name:size[+type]' format.
 parse_format(<<>>) -> {error, {'invalid-format', <<>>}};
+parse_format(<<"repeat(repeat(", _/binary>> = Format) ->
+    {error, {'invalid-format', Format}};
 parse_format(<<"repeat(", Inner/binary>>) ->
     maybe
         {ok, Fields} ?=
-            case binary:split(Inner, <<")">>) of
-                [Format, <<>>] -> parse_format(Format);
+            case hb_util:split_depth_string_aware_single($), Inner) of
+                {$), Format, <<>>} -> parse_format(Format);
                 _ -> {error, {'invalid-format', <<"repeat(", Inner/binary>>}}
             end,
         {ok, {repeat, Fields}}
@@ -355,6 +357,68 @@ from_repeat_test() ->
             },
             #{}
         )
+    ).
+
+%% @doc Decode enum fields inside repeated records, including mixed fields
+%% and an empty body.
+from_repeat_enum_test() ->
+    lists:foreach(
+        fun({Format, Body, Expected}) ->
+            ?assertEqual(
+                {ok, Expected},
+                hb_ao:resolve(
+                    #{
+                        <<"path">> => <<"~bits@1.0/from=", Format/binary>>,
+                        <<"body">> => Body
+                    },
+                    #{}
+                )
+            )
+        end,
+        [
+            {
+                <<"repeat(kind:8+enum(a,b))">>,
+                <<0, 1>>,
+                [#{ <<"kind">> => <<"a">> }, #{ <<"kind">> => <<"b">> }]
+            },
+            {
+                <<"repeat(kind:2+enum(a,b),value:4+integer,"
+                    "flag:2+enum(no,yes))">>,
+                <<0:2, 3:4, 1:2, 1:2, 9:4, 0:2>>,
+                [
+                    #{ <<"kind">> => <<"a">>, <<"value">> => 3,
+                        <<"flag">> => <<"yes">> },
+                    #{ <<"kind">> => <<"b">>, <<"value">> => 9,
+                        <<"flag">> => <<"no">> }
+                ]
+            },
+            {<<"repeat(kind:8+enum(a,b))">>, <<>>, []}
+        ]
+    ).
+
+%% @doc Refuse empty, unbalanced, suffixed and nested repeat formats.
+from_malformed_repeat_format_test() ->
+    lists:foreach(
+        fun(Format) ->
+            ?assertMatch(
+                {error, _},
+                hb_ao:resolve(
+                    #{
+                        <<"path">> => <<"~bits@1.0/from=", Format/binary>>,
+                        <<"body">> => <<0>>
+                    },
+                    #{}
+                )
+            )
+        end,
+        [
+            <<"repeat(">>,
+            <<"repeat()">>,
+            <<"repeat(kind:8+enum(a,b)">>,
+            <<"repeat(kind:8+enum(a,b)))">>,
+            <<"repeat(kind:8+enum(a,b))suffix">>,
+            <<"repeat(repeat(kind:8+enum(a,b)))">>
+        ]
     ).
 
 %% @doc Decode the first chunk of the published RedStone exclusion-interval
