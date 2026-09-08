@@ -367,30 +367,24 @@ default_worker(GroupName, Base, Opts) ->
         unregister(Base, undefined, Opts)
     end.
 
-%% @doc Create a group name from a Base and Req pair as a tuple.
+%% @doc Create a group name from the AO-Core identity of a Base and Req pair.
 default_grouper(Base, Req, Opts) ->
     %?event({calculating_default_group_name, {base, Base}, {req, Req}}),
-    % Use Erlang's `phash2' to hash the result of the Grouper function.
-    % `phash2' is relatively fast and ensures that the group name is short for
-    % storage in `pg'. In production we should only use a hash with a larger
-    % output range to avoid collisions.
-    ?no_prod("Using a hash for group names is not secure."),
     case hb_opts:get(await_inprogress, true, Opts) of
         true ->
-            erlang:phash2(
-                {
-                    hb_maps:without([<<"priv">>], Base, Opts),
-                    hb_maps:without([<<"priv">>], Req, Opts)
-                }
-            );
+            {?MODULE, execution_id(Base, Req, Opts)};
         _ -> ungrouped_exec
     end.
+
+%% @doc Return the AO-Core identity for an execution or persistent worker.
+execution_id(Base, undefined, Opts) -> hb_path:hashpath(Base, Opts);
+execution_id(Base, Req, Opts) -> hb_path:hashpath(Base, Req, Opts).
 
 %% @doc Log an event with the worker process. If we used the default grouper
 %% function, we should also include the Base and Req in the event. If we did not,
 %% we assume that the group name expresses enough information to identify the
 %% request.
-worker_event(Group, Data, Base, Req, Opts) when is_integer(Group) ->
+worker_event(Group = {?MODULE, _}, Data, Base, Req, Opts) ->
     ?event(worker, {worker_event, Group, Data, {base, Base}, {req, Req}}, Opts);
 worker_event(Group, Data, _, _, Opts) ->
     ?event(worker, {worker_event, Group, Data}, Opts).
@@ -451,6 +445,35 @@ spawn_test_client(Base, Req, Opts) ->
 
 wait_for_test_result(Ref) ->
     receive {result, Ref, Res} -> Res end.
+
+%% @doc The default group uses collision-resistant AO-Core execution identity.
+default_group_identity_test() ->
+    Base = #{ <<"device">> => <<"message@1.0">>, <<"value">> => <<"base">> },
+    Req = #{ <<"path">> => <<"value">> },
+    Opts = #{ <<"await-inprogress">> => true },
+    Group = default_grouper(Base, Req, Opts),
+    ?assertEqual(
+        {?MODULE, hb_path:hashpath(Base, Req, Opts)},
+        Group
+    ),
+    ?assertEqual(Group, default_grouper(Base, Req, Opts)),
+    ?assertNotEqual(
+        Group,
+        default_grouper(Base, Req#{ <<"path">> => <<"device">> }, Opts)
+    ),
+    ?assertEqual(
+        ungrouped_exec,
+        default_grouper(Base, Req, Opts#{ <<"await-inprogress">> => named })
+    ).
+
+%% @doc Persistent workers use the collision-resistant identity of their base.
+default_worker_group_identity_test() ->
+    Base = #{ <<"device">> => <<"message@1.0">>, <<"value">> => <<"base">> },
+    Opts = #{ <<"await-inprogress">> => true },
+    ?assertEqual(
+        {?MODULE, hb_path:hashpath(Base, Opts)},
+        default_grouper(Base, undefined, Opts)
+    ).
 
 %% @doc Test merging and returning a value with a persistent worker.
 deduplicated_execution_test() ->
