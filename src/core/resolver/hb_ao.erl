@@ -282,6 +282,11 @@ resolve_stage(1, Link, Req, Opts) when ?IS_LINK(Link) ->
     % continue with the resolution.
     ?event_debug(debug_ao_core, {stage, 1, resolve_base_link, {link, Link}}, Opts),
     resolve_stage(1, hb_cache:ensure_loaded(Link, Opts), Req, Opts);
+resolve_stage(1, BaseID, Req, Opts) when ?IS_ID(BaseID) ->
+    maybe
+        {ok, Base} ?= hb_cache:read(BaseID, Opts),
+        resolve_stage(1, Base, Req, Opts)
+    end;
 resolve_stage(1, Base, Link, Opts) when ?IS_LINK(Link) ->
     % If the second message is a link, we should load the message and
     % continue with the resolution.
@@ -414,6 +419,10 @@ resolve_stage(1, Base, Req, Opts) when is_list(Base) ->
 resolve_stage(1, Base, NonMapReq, Opts) when not is_map(NonMapReq) ->
     ?event_debug(debug_ao_core, {stage, 1, path_normalize}),
     resolve_stage(1, Base, #{ <<"path">> => NonMapReq }, Opts);
+resolve_stage(1, Base, _Req, _Opts) when not is_map(Base) ->
+    % We cannot resolve anything over the given `Base` Erlang data type. Return
+    % `not_found`.
+    {error, not_found};
 resolve_stage(1, RawBase, RawReq, Opts) ->
     % Normalize the path to a private key containing the list of remaining
     % keys to resolve.
