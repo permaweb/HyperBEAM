@@ -457,6 +457,7 @@ vary_projection_uses_projected_cache_key_test() ->
             Opts#{ <<"cache-control">> => [<<"only-if-cached">>] }
         ),
     ?assertEqual(7, hb_ao:get(<<"base/required">>, Second, Opts)),
+    ?assertEqual(hb_path:hashpath(First, Opts), hb_path:hashpath(Second, Opts)),
     ?assertEqual(8, hb_ao:get(<<"base/deep/slot">>, Second, Opts)),
     ?assertEqual(9, hb_ao:get(<<"request/deep-request/slot">>, Second, Opts)).
 

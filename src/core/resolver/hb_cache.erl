@@ -1104,7 +1104,12 @@ read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
 read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
     HP = hb_path:hashpath(BaseMsg, Req, Opts),
     case hb_store:resolve(hb_opts:get(attested_store, [], Opts), HP, Opts) of
-        {ok, Path} when Path =/= HP -> hashpath_read_result(read(Path, Opts));
+        {ok, Path} when Path =/= HP ->
+            case read(Path, Opts) of
+                {ok, Res} when is_map(Res) ->
+                    {hit, {ok, hb_private:set(Res, <<"hashpath">>, HP, Opts)}};
+                Other -> hashpath_read_result(Other)
+            end;
         _ -> miss
     end;
 read_hashpath(_, _, _) -> miss.
