@@ -813,12 +813,20 @@ price(Base, Request, Opts) ->
         not_found ->
             {error, not_found};
         _ ->
-            Target = hb_ao:get_first(
-                [{Request, <<"target">>}, {Base, <<"target">>}], <<>>, Opts),
-            Suffix = case Target of
-                Value when Value == not_found; Value == <<>> -> <<>>;
-                _ -> <<"/", (hb_util:bin(Target))/binary>>
-            end,
+            Target =
+                hb_ao:get_first(
+                    [
+                        {Request, <<"target">>},
+                        {Base, <<"target">>}
+                    ],
+                    <<>>,
+                    Opts
+                ),
+            Suffix =
+                case Target of
+                    Value when Value == not_found; Value == <<>> -> <<>>;
+                    _ -> <<"/", (hb_util:bin(Target))/binary>>
+                end,
             request(
                 <<"GET">>,
                 <<"/price/", (hb_util:bin(Size))/binary, Suffix/binary>>,
