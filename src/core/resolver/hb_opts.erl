@@ -507,6 +507,11 @@ raw_default_message() ->
                 }
             ],
         <<"match-index">> => [?DEFAULT_PRIMARY_STORE],
+        <<"attested-store">> =>
+            #{
+                <<"store-module">> => hb_store_lmdb,
+                <<"name">> => <<"cache-attested">>
+            },
         <<"priv-store">> =>
             [
                 #{
