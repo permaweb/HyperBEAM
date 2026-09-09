@@ -1673,7 +1673,7 @@ setup_two_process_message() ->
     hb_process_test_vectors:init(),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
-        <<"cache-control">> => <<"always">>,
+        <<"cache-control">> => [],
         <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
     },
     Sender = hb_process_test_vectors:aos_process(Opts),
