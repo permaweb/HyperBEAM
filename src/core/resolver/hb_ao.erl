@@ -1,39 +1,39 @@
-%%% @doc This module is the root of the device call logic of the 
+%%% @doc This module is the root of the device call logic of the
 %%% AO-Core protocol in HyperBEAM.
-%%% 
+%%%
 %%% At the implementation level, every message is simply a collection of keys,
 %%% dictated by its `Device', that can be resolved in order to yield their
 %%% values. Each key may contain a link to another message or a raw value:
-%%% 
+%%%
 %%% 	`ao(BaseMessage, RequestMessage) -> {Status, Result}'
-%%% 
+%%%
 %%% Under-the-hood, `AO-Core(BaseMessage, RequestMessage)' leads to a lookup of
 %%% the `device' key of the base message, followed by the evaluation of
-%%% `DeviceMod:PathPart(BaseMessage, RequestMessage)', which defines the user 
-%%% compute to be performed. If `BaseMessage' does not specify a device, 
-%%% `~message@1.0' is assumed. The key to resolve is specified by the `path' 
+%%% `DeviceMod:PathPart(BaseMessage, RequestMessage)', which defines the user
+%%% compute to be performed. If `BaseMessage' does not specify a device,
+%%% `~message@1.0' is assumed. The key to resolve is specified by the `path'
 %%% field of the message.
-%%% 
+%%%
 %%% After each output, the `HashPath' is updated to include the `RequestMessage'
 %%% that was executed upon it.
-%%% 
+%%%
 %%% Because each message implies a device that can resolve its keys, as well
 %%% as generating a merkle tree of the computation that led to the result,
-%%% you can see the AO-Core protocol as a system for cryptographically chaining 
-%%% the execution of `combinators'. See `docs/ao-core-protocol.md' for more 
+%%% you can see the AO-Core protocol as a system for cryptographically chaining
+%%% the execution of `combinators'. See `docs/ao-core-protocol.md' for more
 %%% information about AO-Core.
-%%% 
-%%% The `key(BaseMessage, RequestMessage)' pattern is repeated throughout the 
+%%%
+%%% The `key(BaseMessage, RequestMessage)' pattern is repeated throughout the
 %%% HyperBEAM codebase, sometimes with `BaseMessage' replaced with `Base', `M1'
 %%% or similar, and `RequestMessage' replaced with `Req', `M2', etc.
-%%% 
-%%% The result of any computation can be either a new message or a raw literal 
+%%%
+%%% The result of any computation can be either a new message or a raw literal
 %%% value (a binary, integer, float, atom, or list of such values).
-%%% 
-%%% Devices can be expressed as either modules or maps. They can also be 
-%%% referenced by an Arweave ID, which can be used to load a device from 
+%%%
+%%% Devices can be expressed as either modules or maps. They can also be
+%%% referenced by an Arweave ID, which can be used to load a device from
 %%% the network when `trusted-device-signers' are configured.
-%%% 
+%%%
 %%% HyperBEAM device implementations are defined as follows:
 %%% <pre>
 %%%     DevMod:ExportedFunc : Key resolution functions. All are assumed to be
@@ -45,47 +45,47 @@
 %%%                           needed. Non-exported functions are not assumed
 %%%                           to be device keys.
 %%%
-%%%     DevMod:info : Optional. Returns a map of options for the device. All 
-%%%                   options are optional and assumed to be the defaults if 
-%%%                   not specified. This function can accept a `Base' as 
-%%%                   an argument, allowing it to specify its functionality 
+%%%     DevMod:info : Optional. Returns a map of options for the device. All
+%%%                   options are optional and assumed to be the defaults if
+%%%                   not specified. This function can accept a `Base' as
+%%%                   an argument, allowing it to specify its functionality
 %%%                   based on a specific message if appropriate.
-%%% 
+%%%
 %%%     info/exports : Overrides the export list of the Erlang module, such that
 %%%                   only the functions in this list are assumed to be device
-%%%                   keys. Defaults to all of the functions that DevMod 
+%%%                   keys. Defaults to all of the functions that DevMod
 %%%                   exports in the Erlang environment.
 %%%
 %%%     info/excludes : A list of keys that should not be resolved by the device,
 %%%                     despite being present in the Erlang module exports list.
-%%% 
-%%%     info/handler : A function that should be used to handle _all_ keys for 
+%%%
+%%%     info/handler : A function that should be used to handle _all_ keys for
 %%%                    messages using the device.
-%%% 
+%%%
 %%%     info/default : A function that should be used to handle all keys that
 %%%                    are not explicitly implemented by the device. Defaults to
-%%%                    the `dev_message' device, which contains general keys for 
+%%%                    the `dev_message' device, which contains general keys for
 %%%                    interacting with messages.
-%%% 
+%%%
 %%%     info/default_mod : A different device module that should be used to
 %%%                    handle all keys that are not explicitly implemented
 %%%                    by the device. Defaults to the `dev_message' device.
-%%% 
+%%%
 %%%     info/grouper : A function that returns the concurrency 'group' name for
 %%%                    an execution. Executions with the same group name will
 %%%                    be executed by sending a message to the associated process
-%%%                    and waiting for a response. This allows you to control 
+%%%                    and waiting for a response. This allows you to control
 %%%                    concurrency of execution and to allow executions to share
 %%%                    in-memory state as applicable. Default: A derivation of
 %%%                    Base+Req. This means that concurrent calls for the same
 %%%                    output will lead to only a single execution.
-%%% 
+%%%
 %%%     info/worker : A function that should be run as the 'server' loop of
 %%%                   the executor for interactions using the device.
-%%% 
+%%%
 %%% The HyperBEAM resolver also takes a number of runtime options that change
 %%% the way that the environment operates:
-%%% 
+%%%
 %%% `hashpath':         Whether to add the `Req' to `HashPath' for the `Res'.
 %%% `resolve-mode':     Set to `raw' to apply device functions directly,
 %%% 					skipping the resolver's management stages.
@@ -116,7 +116,7 @@
 ).
 
 %% @doc Get the value of a message's key by running its associated device
-%% function. Optionally, takes options that control the runtime environment. 
+%% function. Optionally, takes options that control the runtime environment.
 %% This function returns the raw result of the device function call:
 %% `{ok | error, NewMessage}.'
 %% The resolver is composed of a series of discrete phases:
@@ -282,6 +282,11 @@ resolve_stage(1, Link, Req, Opts) when ?IS_LINK(Link) ->
     % continue with the resolution.
     ?event_debug(debug_ao_core, {stage, 1, resolve_base_link, {link, Link}}, Opts),
     resolve_stage(1, hb_cache:ensure_loaded(Link, Opts), Req, Opts);
+resolve_stage(1, BaseID, Req, Opts) when ?IS_ID(BaseID) ->
+    maybe
+        {ok, Base} ?= hb_cache:read(BaseID, Opts),
+        resolve_stage(1, Base, Req, Opts)
+    end;
 resolve_stage(1, Base, Link, Opts) when ?IS_LINK(Link) ->
     % If the second message is a link, we should load the message and
     % continue with the resolution.
@@ -375,7 +380,7 @@ resolve_stage(1, {resolve, Subres}, Req, Opts) ->
     end;
 resolve_stage(1, Base, {resolve, Subres}, Opts) ->
     % If the second message is a `{resolve, Subresolution}' tuple, we should
-    % execute the subresolution directly to gain the underlying `Req' for 
+    % execute the subresolution directly to gain the underlying `Req' for
     % our execution. We assume that the subresolution is already in a normalized,
     % executable form, so we pass it to `resolve_many' for execution.
     ?event_debug(debug_ao_core, {stage, 1, subresolving_request_message, {subres, Subres}}, Opts),
@@ -414,6 +419,10 @@ resolve_stage(1, Base, Req, Opts) when is_list(Base) ->
 resolve_stage(1, Base, NonMapReq, Opts) when not is_map(NonMapReq) ->
     ?event_debug(debug_ao_core, {stage, 1, path_normalize}),
     resolve_stage(1, Base, #{ <<"path">> => NonMapReq }, Opts);
+resolve_stage(1, Base, _Req, _Opts) when not is_map(Base) ->
+    % We cannot resolve anything over the given `Base` Erlang data type. Return
+    % `not_found`.
+    {error, not_found};
 resolve_stage(1, RawBase, RawReq, Opts) ->
     % Normalize the path to a private key containing the list of remaining
     % keys to resolve.
@@ -431,7 +440,7 @@ resolve_stage(2, Base, Req, Opts) ->
     % Vary the inputs by the schema of the function that will execute them
     % before the cache lookup, such that every execution the schema deems
     % equivalent shares one hashpath. If the function's schema declares it to be
-    % a patch, the `VariedResult` of the execution is overlaid on top of the 
+    % a patch, the `VariedResult` of the execution is overlaid on top of the
     % appropriate input message before return.
     try vary_loaded(ensure_message_loaded(Base, Opts), Req, Opts) of
         {Func, VariedBase, VariedReq, MaybeOverlay} ->
@@ -469,8 +478,8 @@ resolve_stage(4, Func, Base, Req, MaybeOverlay, Opts) ->
     ?event_debug(debug_ao_core, {stage, 4, persistent_resolver_lookup}, Opts),
     % Persistent-resolver lookup: Search for local (or Distributed
     % Erlang cluster) processes that are already performing the execution.
-    % Before we search for a live executor, we check if the device specifies 
-    % a function that tailors the 'group' name of the execution. For example, 
+    % Before we search for a live executor, we check if the device specifies
+    % a function that tailors the 'group' name of the execution. For example,
     % the `dev_process' device 'groups' all calls to the same process onto
     % calls to a single executor. By default, `{Base, Req}' is used as the
     % group name.
@@ -506,7 +515,7 @@ resolve_stage(4, Func, Base, Req, MaybeOverlay, Opts) ->
                     apply_vary_overlay(MaybeOverlay, Base, Req, Res, Opts)
             end;
         {infinite_recursion, GroupName} ->
-            % We are the leader for this resolution, but we executing the 
+            % We are the leader for this resolution, but we executing the
             % computation again. This may plausibly be OK in _some_ cases,
             % but in general it is the sign of a bug.
             ?event(
@@ -538,7 +547,7 @@ resolve_stage(5, Resolver, Base, Req, MaybeOverlay, ExecName, Opts) ->
 			F -> {F, [Base, Req, ExecOpts]}
 		end,
     % Try to execute the function.
-    Res = 
+    Res =
         try
             TruncatedArgs = hb_device:truncate_args(Func, Args),
             MsgRes = maybe_profiled_apply(Func, TruncatedArgs, Base, Req, Opts),
@@ -715,7 +724,7 @@ resolve_stage(11, Base, Req, Res, MaybeOverlay, ExecName, Opts) ->
 %% @doc Check if spawning a worker was requested after a completed computation.
 %% If it is, start the worker and forward any work assigned to us downstream. If
 %% not, ignore and return the result unmodified.
-%% 
+%%
 %% This represents the 12th and final stage of the AO-Core resolution flow.
 maybe_fork_worker({ok, Res} = Res, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 12, ExecName, maybe_spawn_worker}, Opts),
@@ -758,7 +767,7 @@ subresolve(RawBase, DevID, Req, Opts) ->
                 )
         end,
     % If there is no path but there are elements to the request, we set these on
-    % the base message. If there is a path, we do not modify the base message 
+    % the base message. If there is a path, we do not modify the base message
     % and instead apply the request message directly.
     case hb_path:from_message(request, Req, Opts) of
         undefined ->
@@ -822,7 +831,7 @@ maybe_profiled_apply(Func, Args, Base, Req, Opts) ->
                                 <<"GET">> -> <<"">>;
                                 Method -> <<"<", Method/binary, ">">>
                             end,
-                        << 
+                        <<
                             (hb_util:bin(Device))/binary,
                             "/",
                             MethodStr/binary,
@@ -868,7 +877,7 @@ maybe_profiled_apply(Func, Args, Base, Req, Opts) ->
     Res.
 -endif.
 
-%% @doc Ensure that a message is loaded from the cache if it is an ID, or 
+%% @doc Ensure that a message is loaded from the cache if it is an ID, or
 %% a link, such that it is ready for execution.
 ensure_message_loaded(MsgID, Opts) when ?IS_ID(MsgID) ->
     case hb_cache:read(MsgID, Opts) of
@@ -1004,11 +1013,11 @@ force_message({Status, Map}, _Opts) ->
 %% @doc Shortcut for resolving a key in a message without its status if it is
 %% `ok'. This makes it easier to write complex logic on top of messages while
 %% maintaining a functional style.
-%% 
+%%
 %% Additionally, this function supports the `{as, Device, Msg}' syntax, which
 %% allows the key to be resolved using another device to resolve the key,
 %% while maintaining the traceability of the `HashPath' of the output message.
-%% 
+%%
 %% Returns the value of the key if it is found, otherwise returns the default
 %% provided by the user, or `not_found' if no default is provided.
 get(Path, Msg) ->
@@ -1094,7 +1103,7 @@ set(RawBase, RawReq, Opts) when is_map(RawReq) ->
             Opts
         ),
     ?event_debug(ao_internal, {set_called, {base, Base}, {req, Req}}, Opts),
-    % Get the next key to set. 
+    % Get the next key to set.
     case keys(Req, internal_opts(Opts)) of
         [] -> Base;
         [Key|_] ->
@@ -1130,7 +1139,7 @@ set(Base, Key, Value, Opts) ->
 
 %% @doc Recursively search a map, resolving keys, and set the value of the key
 %% at the given path. This function has special cases for handling `set' calls
-%% where the path is an empty list (`/'). In this case, if the value is an 
+%% where the path is an empty list (`/'). In this case, if the value is an
 %% immediate, non-complex term, we can set it directly. Otherwise, we use the
 %% device's `set' function to set the value.
 deep_set(Msg, [], Value, Opts) when is_map(Msg) or is_list(Msg) ->
@@ -1140,7 +1149,7 @@ deep_set(_Msg, [], Value, _Opts) ->
 deep_set(Msg, [Key], Value, Opts) ->
     device_set(Msg, Key, Value, Opts);
 deep_set(Msg, [Key|Rest], Value, Opts) ->
-    case resolve(Msg, Key, Opts) of 
+    case resolve(Msg, Key, Opts) of
         {ok, SubMsg} ->
             ?event_debug(debug_set,
                 {traversing_deeper_to_set,

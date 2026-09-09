@@ -368,7 +368,7 @@ singleton_id_base_test() ->
     ),
     MissingID = hb_util:human_id(<<0:256>>),
     ?assertMatch(
-        {error, #{ <<"status">> := 404 }},
+        {error, not_found},
         hb_ao:resolve(<<"/", MissingID/binary, "/keys">>, Opts)
     ).
 
