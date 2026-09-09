@@ -897,9 +897,9 @@ get(Key, Msg, _Req, Opts) ->
     case hb_private:is_private(Key) of
         true -> {error, not_found};
         false ->
-            case hb_maps:get(Key, Msg, not_found, Opts) of
-                not_found -> case_insensitive_get(Key, Msg, Opts);
-                Value -> {ok, Value}
+            case hb_maps:find(Key, Msg, Opts) of
+                error -> case_insensitive_get(Key, Msg, Opts);
+                {ok, Value} -> {ok, Value}
             end
     end.
 
@@ -909,9 +909,9 @@ get(Key, Msg, _Req, Opts) ->
 case_insensitive_get(Key, Msg, Opts) ->
     NormKey = hb_util:to_lower(hb_util:bin(Key)),
     NormMsg = hb_ao:normalize_keys(Msg, Opts),
-    case hb_maps:get(NormKey, NormMsg, not_found, Opts) of
-        not_found -> {error, not_found};
-        Value -> {ok, Value}
+    case hb_maps:find(NormKey, NormMsg, Opts) of
+        error -> {error, not_found};
+        {ok, Value} -> {ok, Value}
     end.
 
 %%% Tests
@@ -980,6 +980,11 @@ cannot_get_private_keys_test() ->
     ).
 
 key_from_device_test() ->
+    {ok, ID} = hb_cache:write(#{ <<"a">> => not_found }, #{}),
+    ?assertEqual(
+        {ok, not_found},
+        hb_ao:resolve(ID, <<"a">>, #{})
+    ),
     ?assertEqual({ok, 1}, hb_ao:resolve(#{ <<"a">> => 1 }, <<"a">>, #{})).
 
 remove_test() ->
