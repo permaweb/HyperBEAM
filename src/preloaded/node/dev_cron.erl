@@ -157,7 +157,8 @@ stop(_Base, Req, Opts) ->
 					?event({cron_stopping_task, {task_id, TaskID}, {pid, Pid}}),
 					exit(Pid, kill),
 					hb_name:unregister(Name),
-					{ok, #{<<"status">> => 200, <<"body">> => #{
+					{ok, #{<<"status">> => 200,
+                        <<"cache-control">> => [<<"no-store">>], <<"body">> => #{
 						<<"message">> => <<"Task stopped successfully">>,
 						<<"task_id">> => TaskID
 					}}};
@@ -189,6 +190,7 @@ report(_Base, Req, Opts) ->
 				end,
 			{ok, #{
 				<<"status">> => 200,
+				<<"cache-control">> => [<<"no-store">>],
 				<<"task-id">> => TaskID,
 				<<"active">> => Active
 			}}

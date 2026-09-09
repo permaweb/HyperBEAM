@@ -357,7 +357,9 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
             Opts
         ),
     KeyID = hb_maps:get(<<"keyid">>, Commitment, Opts),
-    Base = RespBase#{ <<"body">> => KeyID },
+    Base = RespBase#{
+        <<"body">> => KeyID, <<"cache-control">> => [<<"no-store">>]
+    },
     % Determine how to persist the wallet.
     case hb_maps:get(<<"persist">>, WalletDetails, <<"in-memory">>, Opts) of
         <<"client">> ->

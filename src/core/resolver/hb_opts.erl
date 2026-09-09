@@ -526,7 +526,7 @@ raw_default_message() ->
         <<"http-extra-opts">> =>
             #{
                 <<"force-message">> => true,
-                <<"cache-control">> => [<<"always">>]
+                <<"cache-control">> => []
             },
         % Should the node store all signed messages?
         <<"store-all-signed">> => true,

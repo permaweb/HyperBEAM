@@ -117,7 +117,7 @@ init(M1, _M2, Opts) ->
     % Set the WASM Instance, handler, and standard library invokation function.
     ?event({setting_wasm_instance, Instance, {prefix, Prefix}}),
     {ok,
-        hb_private:set(M1,
+        hb_private:set(M1#{ <<"cache-control">> => [<<"no-store">>] },
             #{
                 <<Prefix/binary, "/write">> =>
                     fun(Binary) ->

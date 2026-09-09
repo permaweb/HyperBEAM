@@ -128,7 +128,7 @@ handle_initialize([], _NodeMsg) ->
 %% as-is, aside all keys that are private (according to `hb_private').
 -spec info(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 info(_, Request, NodeMsg) ->
-    case hb_ao:get(<<"method">>, Request, NodeMsg) of
+    {ok, Res} = case hb_ao:get(<<"method">>, Request, NodeMsg) of
         <<"POST">> ->
             case is_permanent(NodeMsg) of
                 true ->
@@ -146,7 +146,8 @@ info(_, Request, NodeMsg) ->
             ?event({get_config_req, Request, NodeMsg}),
             DynamicKeys = add_dynamic_keys(NodeMsg),
             embed_status({ok, filter_node_msg(DynamicKeys, NodeMsg)}, NodeMsg)
-    end.
+    end,
+    {ok, Res#{ <<"cache-control">> => [<<"no-store">>] }}.
 
 %% @doc Remove items from the node message that are not encodable into a
 %% message.
