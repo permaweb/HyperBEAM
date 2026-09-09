@@ -1098,6 +1098,7 @@ step_hook_test(InitOpts) ->
                 }
         },
     Msg = #{
+        <<"device">> => <<"test-device@1.0">>,
         <<"a">> =>
             #{
                 <<"b">> =>
@@ -1111,7 +1112,7 @@ step_hook_test(InitOpts) ->
         {ok, <<"1">>},
         hb_ao:resolve(
             Msg,
-            #{ <<"path">> => <<"a/b/c">> },
+            #{ <<"path">> => <<"load/a/b/c">> },
             Opts
         )
     ),

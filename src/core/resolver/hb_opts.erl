@@ -269,7 +269,7 @@ raw_default_message() ->
                 }
             ],
         % Default execution cache control options
-        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"cache-control">> => [],
         <<"cache-lookup-hueristics">> => false,
         % Should we await in-progress executions, rather than re-running?
         % Has three settings: false, only `named' executions, or all executions.
