@@ -1182,6 +1182,7 @@ post_remote_schedule(RawProcID, Redirect, OnlyCommitted, Opts) ->
                 [] ->
                     {error, #{
                         <<"status">> => 422,
+                        <<"require-codec">> => <<"ans104@1.0">>,
                         <<"body">> =>
                             <<
                                 "Process resides on legacy scheduler. ",
@@ -1234,6 +1235,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
             ?event({could_not_encode_for_legacy_scheduler, {error, EncodingErr}}),
             {error, #{
                 <<"status">> => 422,
+                <<"require-codec">> => <<"ans104@1.0">>,
                 <<"body">> =>
                     <<"Incorrect encoding. Scheduler has variant: ao.TN.1">>
                 }

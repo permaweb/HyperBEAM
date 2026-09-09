@@ -2,7 +2,7 @@
 %%% pushes the resulting messages to other processes. The `push'ing mechanism
 %%% continues until the there are no remaining messages to push.
 -module(dev_push).
--device_libraries([lib_process]).
+-device_libraries([lib_arweave_common, lib_process]).
 %%% Public API
 -export([push/3]).
 -include("include/hb.hrl").
@@ -214,6 +214,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                             hb_ao:get(
                                                 <<"scheduler">>,
                                                 PrimaryProcess,
+                                                unset,
                                                 Opts
                                             ),
                                         <<"from-authority">> =>
@@ -318,6 +319,13 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
                 Opts
             ),
             case schedule_result(TargetProcess, MsgToPush, Origin, Opts) of
+                {ok, Assignment = #{ <<"status">> := 202 }} ->
+                    #{
+                        <<"id">> => hb_ao:get(<<"txid">>, Assignment, Opts),
+                        <<"target">> => TargetID,
+                        <<"status">> => 202,
+                        <<"resulted-in">> => <<"pending">>
+                    };
                 {ok, Assignment} ->
                     % Analyze the result of the message push.
                     NextSlotOnProc = hb_ao:get(<<"slot">>, Assignment, Opts),
@@ -557,6 +565,7 @@ calculate_base_id(GivenProcess, Opts) ->
 %% @doc Add the necessary keys to the message to be scheduled, then schedule it.
 %% If the remote scheduler does not support the given codec, it will be
 %% downgraded and re-signed.
+%% Schedulers can also request another codec explicitly.
 schedule_result(TargetProcess, MsgToPush, Origin, Opts) ->
     schedule_result(
         TargetProcess,
@@ -584,7 +593,7 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
     AugmentedMsg = augment_message(Origin, MsgToPush, Opts),
     ?event(push, {prepared_msg, {msg, AugmentedMsg}}, Opts),
     % Load the `accept-id`'d wallet into the `Opts` map, if requested.
-    SignedMsg = apply_security(AugmentedMsg, TargetProcess, Codec, Opts),
+    SignedMsg = sign_result(AugmentedMsg, TargetProcess, Codec, Opts),
     % Verify the signed message before writing to cache
     true = hb_message:verify(SignedMsg, signers, Opts),
     % Write the signed message to cache before including it in the schedule request
@@ -620,6 +629,8 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
     case {ErlStatus, hb_ao:get(<<"status">>, Res, 200, Opts)} of
         {ok, 200} ->
             {ok, Res};
+        {ok, 202} ->
+            {ok, Res};
         {ok, 307} ->
             Location = hb_ao:get(<<"location">>, Res, Opts),
             ?event(push, {redirect, {location, {explicit, Location}}}),
@@ -628,14 +639,50 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
             % `from-*' provenance and honoring the policy, rather than
             % re-committing the raw message with the default wallet.
             NormMsg = normalize_message(AugmentedMsg, Opts),
-            SignedNormMsg = apply_security(NormMsg, TargetProcess, Codec, Opts),
-            remote_schedule_result(Location, SignedNormMsg, Opts);
+            SignedNormMsg = sign_result(NormMsg, TargetProcess, Codec, Opts),
+            retry_required_codec(
+                TargetProcess,
+                MsgToPush,
+                Codec,
+                Origin,
+                remote_schedule_result(Location, SignedNormMsg, Opts),
+                Opts
+            );
         {error, 422} ->
             ?event(push, {wrong_format, {422, Res}, {codec, Codec}}, Opts),
-            case Codec of
-                <<"ans104@1.0">> ->
-                    {error, Res};
-                <<"httpsig@1.0">> ->
+            retry_required_codec(
+                TargetProcess,
+                MsgToPush,
+                Codec,
+                Origin,
+                {error, Res},
+                Opts
+            );
+        {error, _} ->
+            {error, Res}
+    end.
+
+%% @doc Retry an encoding rejection with the scheduler's required codec.
+retry_required_codec(
+        TargetProcess, Msg, Codec, Origin, Result = {error, Res}, Opts) ->
+    DefaultCodec = hb_opts:get(
+        scheduler_default_commitment_spec, <<"httpsig@1.0">>, Opts),
+    RequiredCodec =
+        case hb_maps:get(<<"require-codec">>, Res, not_found, Opts) of
+            not_found when Codec =:= <<"httpsig@1.0">> -> <<"ans104@1.0">>;
+            not_found -> Codec;
+            Required -> Required
+        end,
+    case {
+        hb_ao:get(<<"status">>, Res, 500, Opts),
+        Codec,
+        RequiredCodec
+    } of
+        {422, DefaultCodec, RequiredCodec}
+                when is_binary(RequiredCodec),
+                     RequiredCodec =/= DefaultCodec ->
+            case {Codec, RequiredCodec} of
+                {<<"httpsig@1.0">>, <<"ans104@1.0">>} ->
                     ?event(push,
                         {downgrading_to_ans104,
                             {422, Res},
@@ -643,18 +690,105 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
                             {origin, Origin}
                         },
                         Opts
-                    ),
-                    schedule_result(
-                        TargetProcess,
-                        MsgToPush,
-                        <<"ans104@1.0">>,
-                        Origin,
+                    );
+                _ ->
+                    ?event(push,
+                        {retrying_schedule_codec,
+                            {from, Codec},
+                            {to, RequiredCodec},
+                            {origin, Origin}
+                        },
                         Opts
                     )
-            end;
-        {error, _} ->
-            {error, Res}
-    end.
+            end,
+            schedule_result(
+                TargetProcess,
+                Msg,
+                RequiredCodec,
+                Origin,
+                Opts
+            );
+        _ ->
+            Result
+    end;
+retry_required_codec(_TargetProcess, _Msg, _Codec, _Origin, Result, _Opts) ->
+    Result.
+
+%% @doc Sign a result using the scheduler's required codec.
+sign_result(Msg, TargetProcess, <<"tx@1.0">>, Opts) ->
+    Selected = apply_security(
+        Msg, TargetProcess, <<"httpsig@1.0">>, Opts),
+    case hb_message:signers(Selected, Opts) of
+        [Signer | _] -> sign_l1(Msg, Signer, Opts);
+        [] -> Selected
+    end;
+sign_result(Msg, TargetProcess, Codec, Opts) ->
+    apply_security(Msg, TargetProcess, Codec, Opts).
+
+%% @doc Sign a data-free L1 transaction with an already-selected identity.
+sign_l1(Msg, Signer, Opts) ->
+    Normalized = normalize_message(Msg, Opts),
+    {ok, SignerOpts} = hb_opts:as(Signer, Opts),
+    {ok, Price} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"/price">>,
+                <<"size">> => 0,
+                <<"target">> => hb_ao:get(<<"target">>, Normalized, Opts)
+            },
+            Opts
+        ),
+    {ok, Anchor} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{ <<"path">> => <<"/tx_anchor">> },
+            Opts
+        ),
+    commit_l1(
+        Normalized,
+        SignerOpts,
+        Price,
+        Anchor
+    ).
+
+%% @doc Build and sign a data-free L1 transaction from process intent.
+commit_l1(Msg, SignerOpts, Price, Anchor) ->
+    TagMsg =
+        hb_maps:map(
+            fun(_, Value) -> hb_util:bin(Value) end,
+            hb_maps:without(
+                [
+                    <<"anchor">>, <<"ao-data-key">>, <<"ao-types">>,
+                    <<"commitments">>,
+                    <<"data">>, <<"data_root">>, <<"data_size">>,
+                    <<"format">>, <<"reward">>, <<"tags">>, <<"target">>
+                ],
+                hb_private:reset(Msg),
+                SignerOpts
+            ),
+            SignerOpts
+        ),
+    TX0 = #tx{
+        format = 2,
+        target = hb_util:decode(hb_ao:get(<<"target">>, Msg, SignerOpts)),
+        quantity = 1,
+        anchor = Anchor,
+        reward = Price
+    },
+    TX = TX0#tx{
+        tags = lib_arweave_common:tags(
+            TX0, not_found, TagMsg, [], SignerOpts)
+    },
+    {ok, Signed} =
+        hb_ao:raw(
+            <<"tx@1.0">>,
+            <<"commit">>,
+            TX,
+            #{ <<"type">> => <<"signed">> },
+            SignerOpts
+        ),
+    Signed.
 
 %% @doc Set the necessary keys in order for the recipient to know where the
 %% message came from.
@@ -815,6 +949,7 @@ remote_schedule_result(Location, SignedReq, Opts) ->
             ?event(push, {remote_schedule_result, {res, Res}}, Opts),
             case hb_ao:get(<<"status">>, Res, 200, Opts) of
                 200 -> {ok, Res};
+                202 -> {ok, Res};
                 307 ->
                     NewLocation = hb_ao:get(<<"location">>, Res, Opts),
                     remote_schedule_result(NewLocation, SignedReq, Opts)
@@ -871,8 +1006,69 @@ max_depth_test_cases() ->
         {timeout, 30, fun test_max_depth_one_walks_one_hop/0},
         {timeout, 30, fun test_compute_push_hook_idempotent/0},
         fun test_paranoid_push_result/0,
+        fun test_tx_codec_uses_compute_authority/0,
         fun test_parse_max_depth/0
     ].
+
+test_tx_codec_uses_compute_authority() ->
+    DefaultWallet = ar_wallet:new(),
+    ComputeWallet = ar_wallet:new(),
+    ComputeID = hb_util:human_id(ComputeWallet),
+    Opts =
+        #{
+            <<"priv-wallet">> => DefaultWallet,
+            <<"identities">> =>
+                #{
+                    ComputeID =>
+                        #{ <<"priv-wallet">> => ComputeWallet }
+                }
+        },
+    Target = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    FromProcess = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Msg =
+        #{
+            <<"target">> => <<Target/binary, "?scheduler=test">>,
+            <<"ao-data-key">> => <<"body">>,
+            <<"quantity">> => 42,
+            <<"from-process">> => FromProcess
+        },
+    Selected =
+        apply_security(
+            Msg,
+            #{ <<"authority">> => ComputeID },
+            <<"httpsig@1.0">>,
+            Opts
+        ),
+    ?assertEqual([ComputeID], hb_message:signers(Selected, Opts)),
+    Reward = 7,
+    Anchor = crypto:strong_rand_bytes(32),
+    Signed = commit_l1(
+        normalize_message(Msg, Opts),
+        Opts#{ <<"priv-wallet">> => ComputeWallet },
+        Reward,
+        Anchor
+    ),
+    TX = hb_message:convert(Signed, <<"tx@1.0">>, Opts),
+    ?assertEqual([<<"tx@1.0">>], hb_message:commitment_devices(Signed, Opts)),
+    ?assertEqual([ComputeID], hb_message:signers(Signed, Opts)),
+    ?assert(hb_message:verify(Signed, signers, Opts)),
+    ?assertEqual(hb_util:decode(Target), TX#tx.target),
+    ?assertEqual(1, TX#tx.quantity),
+    ?assertEqual(Reward, TX#tx.reward),
+    ?assertEqual(Anchor, TX#tx.anchor),
+    ?assertEqual(0, TX#tx.data_size),
+    ?assertEqual(
+        {<<"quantity">>, <<"42">>},
+        lists:keyfind(<<"quantity">>, 1, TX#tx.tags)
+    ),
+    ?assertEqual(
+        {<<"from-process">>, FromProcess},
+        lists:keyfind(<<"from-process">>, 1, TX#tx.tags)
+    ),
+    ?assertEqual(
+        false,
+        lists:keyfind(<<"ao-data-key">>, 1, TX#tx.tags)
+    ).
 
 cron_depth_zero_push_test_() ->
     {timeout, 120, fun test_cron_depth_zero_push/0}.

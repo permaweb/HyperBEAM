@@ -100,7 +100,16 @@ post_schedule(Base, Req, Opts) ->
         {ok, TX} ?= valid_transaction(Committed, Opts),
         Targets = dev_arweave_scheduler_sync:targets(TX),
         true ?= lists:member(ProcessID, Targets),
-        {ok, _} ?= dev_arweave:post_tx_header(TX, Opts),
+        {ok, _} ?=
+            hb_ao:resolve(
+                {as, <<"arweave@2.9">>, Committed},
+                #{
+                    <<"path">> => <<"tx">>,
+                    <<"method">> => <<"POST">>,
+                    <<"target">> => <<"base">>
+                },
+                Opts
+            ),
         {ok, _} = dev_arweave_scheduler_cache:write_header(Committed, Opts),
         {ok,
             #{
@@ -269,6 +278,7 @@ invalid_transaction() ->
     {error,
         #{
             <<"status">> => 422,
+            <<"require-codec">> => <<"tx@1.0">>,
             <<"reason">> =>
                 <<"Message must have a valid signed tx@1.0 commitment.">>
         }
@@ -281,4 +291,30 @@ slot_range_test() ->
     ?assertEqual(
         {0, 42},
         slot_range(#{ <<"from">> => -5, <<"to">> => 42 }, #{})
+    ).
+
+invalid_commitment_requires_tx_codec_test() ->
+    ProcessID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Opts =
+        #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()]
+        },
+    Message = hb_message:commit(#{ <<"target">> => ProcessID }, Opts),
+    ?assertMatch(
+        {error,
+            #{
+                <<"status">> := 422,
+                <<"require-codec">> := <<"tx@1.0">>
+            }},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave-scheduler@1.0">> },
+            #{
+                <<"path">> => <<"schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"target">> => ProcessID,
+                <<"body">> => Message
+            },
+            Opts
+        )
     ).
