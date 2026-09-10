@@ -39,7 +39,7 @@
 
 info(_Opts) ->
     #{
-        excludes => [<<"keys">>, <<"set">>],
+        excludes => [<<"keys">>, <<"set">>, <<"schema">>],
         default => fun default/4
     }.
 

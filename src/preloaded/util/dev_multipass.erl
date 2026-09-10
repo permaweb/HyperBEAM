@@ -8,7 +8,8 @@
 
 info(_M1) ->
     #{
-        handler => fun handle/4
+        handler => fun handle/4,
+        excludes => [<<"schema">>]
     }.
 
 %% @doc Forward the keys function to the message device, handle all others

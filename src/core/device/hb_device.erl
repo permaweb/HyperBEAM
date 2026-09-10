@@ -57,19 +57,6 @@ truncate_args(Fun, Args) ->
 message_to_fun(Msg, Key, Opts) ->
     % Get the device module from the message and recurse.
     message_to_fun(message_to_device(Msg, Opts), Msg, Key, Opts).
-message_to_fun(Dev, Msg, <<"schema">> = Key, Opts) ->
-    % Schema is inherited from message@1.0 unless explicitly implemented.
-    % Catch-all handlers must not interpret it as an application request.
-    case find_exported_function(Msg, Dev, Key, 3, 1, Opts) of
-        {ok, Func} -> {ok, Dev, Func};
-        not_found ->
-            MessageDev = message_to_device(#{}, Opts),
-            case find_exported_function(#{}, MessageDev, Key, 3, 1, Opts) of
-                {ok, Func} -> {ok, MessageDev, Func};
-                not_found ->
-                    throw({error, default_device_could_not_resolve_key, {key, Key}})
-            end
-    end;
 message_to_fun(Dev, Msg, Key, Opts) ->
     Info = info(Dev, Msg, Opts),
     % Is the key exported by the device?

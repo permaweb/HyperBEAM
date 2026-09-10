@@ -21,7 +21,7 @@
 %% the message device for direct key access.
 info() ->
     #{
-        excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>],
+        excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>, <<"schema">>],
         default => fun dev_arweave_offset:get/4
     }.
 

@@ -10,7 +10,7 @@
 info() ->
     #{
         default => fun route/4,
-        excludes => [keys, set, committers]
+        excludes => [keys, set, committers, schema]
     }.
 
 %% @doc Return the fallback index page when the manifest itself is requested.

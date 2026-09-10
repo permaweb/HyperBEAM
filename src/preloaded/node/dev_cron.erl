@@ -7,7 +7,7 @@
 
 %% @doc Exported function for getting device info.
 info(_) -> 
-	#{ default => fun handler/4 }.
+	#{ default => fun handler/4, excludes => [<<"schema">>] }.
 
 -spec info(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
     {ok, #{ status := integer(), body := #{ _ => _ }, _ => _ }}.

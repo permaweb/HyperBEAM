@@ -22,7 +22,7 @@
 %% resolved with the `apply/4' function.
 info(_) ->
     #{
-        excludes => [<<"keys">>, <<"set">>, <<"set_path">>, <<"remove">>],
+        excludes => [<<"keys">>, <<"set">>, <<"set_path">>, <<"remove">>, <<"schema">>],
         default => fun default/4
     }.
 

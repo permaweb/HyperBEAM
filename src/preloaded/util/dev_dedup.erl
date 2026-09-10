@@ -25,6 +25,7 @@
 info(_M1) ->
     #{
         default => fun handle/4,
+        excludes => [<<"schema">>],
         exclude => [keys, set, id, commit]
     }.
 

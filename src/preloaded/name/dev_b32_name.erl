@@ -8,7 +8,7 @@
 info(_Opts) ->
     #{
         default => fun get/4,
-        excludes => [<<"keys">>, <<"set">>]
+        excludes => [<<"keys">>, <<"set">>, <<"schema">>]
     }.
 
 %% @doc Try to resolve 52char subdomain back to its original TX ID

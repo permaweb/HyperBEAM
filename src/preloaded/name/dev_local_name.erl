@@ -12,7 +12,7 @@
 %% @doc Export only the `lookup' and `register' functions.
 info(_Opts) ->
     #{
-        excludes => [<<"keys">>, <<"set">>],
+        excludes => [<<"keys">>, <<"set">>, <<"schema">>],
         default => fun default_lookup/4
     }.
 

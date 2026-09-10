@@ -36,6 +36,7 @@
 info() ->
     #{
         default => fun get/4,
+        excludes => [<<"schema">>],
         reserved => ?RESERVED_KEYS
      }.
 

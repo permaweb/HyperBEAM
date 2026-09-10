@@ -27,7 +27,7 @@
 %% @doc Handle all requests aside `known` with the `location/4' resolver.
 info() ->
     #{
-        excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>],
+        excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>, <<"schema">>],
         default => fun read/4
     }.
 

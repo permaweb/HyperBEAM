@@ -30,7 +30,7 @@ info(Opts) ->
             <<"styles.css">> => <<"styles.css">>,
             <<"script.js">> => <<"script.js">>
         },
-        excludes => [<<"return_file">>]
+        excludes => [<<"return_file">>, <<"schema">>]
     }.
 
 %% @doc The main HTML page for the REPL device.

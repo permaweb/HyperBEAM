@@ -356,7 +356,7 @@ resolve_simple_test(Opts) ->
     Res = hb_ao:resolve(#{ <<"a">> => <<"RESULT">> }, <<"a">>, Opts),
     ?assertEqual({ok, <<"RESULT">>}, Res).
 
-%% @doc Schema inherits through handlers and keeps the original device.
+%% @doc Device exclusions inherit schema for the original Base, despite literals.
 inherited_schema_test_() ->
     Opts = #{
         <<"store">> => hb_test_utils:test_store(),
@@ -364,27 +364,50 @@ inherited_schema_test_() ->
     },
     [
         {Device, fun() ->
-            Base = #{ <<"device">> => Device, <<"schema">> => <<"literal">> },
-            {ok, Schema} = hb_ao:resolve(Base, <<"schema">>, Opts),
-            ?assertMatch(
-                #{ <<"args">> := _, <<"return">> := _ },
-                hb_maps:get(Arity, hb_maps:get(Key, Schema, undefined, Opts), undefined, Opts)
+            lists:foreach(
+                fun(Fields) ->
+                    Base = Fields#{ <<"device">> => Device },
+                    {ok, Schema} = hb_ao:resolve(Base, <<"schema">>, Opts),
+                    ?assertMatch(
+                        #{ <<"args">> := _, <<"return">> := _ },
+                        hb_maps:get(Arity,
+                            hb_maps:get(Key, Schema, undefined, Opts),
+                            undefined, Opts)
+                    )
+                end,
+                [#{}, #{ <<"schema">> => <<"literal">> }]
             )
         end}
     || {Device, Key, Arity} <- [
             {<<"message@1.0">>, <<"set">>, 3},
             {<<"json@1.0">>, <<"serialize">>, 3},
+            {<<"arweave@2.9">>, <<"status">>, 3},
+            {<<"manifest@1.0">>, <<"index">>, 3},
+            {<<"b32-name@1.0">>, <<"get">>, 4},
+            {<<"local-name@1.0">>, <<"lookup">>, 3},
+            {<<"name@1.0">>, <<"request">>, 3},
+            {<<"location@1.0">>, <<"known">>, 3},
+            {<<"node-process@1.0">>, <<"lookup">>, 4},
+            {<<"profile@1.0">>, <<"eval">>, 4},
+            {<<"match@1.0">>, <<"all">>, 3},
+            {<<"query@1.0">>, <<"graphql">>, 3},
+            {<<"apply@1.0">>, <<"pair">>, 3},
             {<<"lua@5.3a">>, <<"init">>, 3},
             {<<"stack@1.0">>, <<"prefix">>, 3},
-            {<<"multipass@1.0">>, <<"handle">>, 4}
+            {<<"multipass@1.0">>, <<"handle">>, 4},
+            {<<"dedup@1.0">>, <<"handle">>, 4},
+            {<<"cron@1.0">>, <<"once">>, 3},
+            {<<"hyperbuddy@1.0">>, <<"format">>, 3},
+            {<<"trie@1.0">>, <<"get">>, 3},
+            {<<"scheduler@1.0">>, <<"status">>, 3}
         ]
     ] ++ [?_assertMatch({ok, #{}}, hb_ao:resolve(#{}, <<"schema">>, Opts))].
 
-%% @doc An explicit schema wins over a handler; missing metadata is an error.
+%% @doc An explicit schema wins over a default; missing metadata is an error.
 schema_override_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     Device = #{
-        info => fun() -> #{ handler => fun(_, _, _, _) -> error(handler_called) end } end,
+        info => fun() -> #{ default => fun(_, _, _, _) -> error(default_called) end } end,
         schema => fun(Base, _, _) -> {ok, maps:get(<<"expected">>, Base)} end
     },
     ?assertEqual(
@@ -397,8 +420,40 @@ schema_override_test() ->
     ),
     ?assertEqual(
         {error, not_found},
-        hb_ao:resolve(#{ <<"device">> => maps:remove(schema, Device) }, <<"schema">>, Opts)
+        hb_ao:resolve(#{ <<"device">> => #{} }, <<"schema">>, Opts)
     ).
+
+%% @doc Catch-alls may handle schema themselves or opt into message inheritance.
+schema_handler_test_() ->
+    [
+        {atom_to_list(Kind), fun() ->
+            Opts = #{ <<"store">> => hb_test_utils:test_store() },
+            Info = #{ Kind => fun(Key, _, _, _) -> {ok, Key} end },
+            Device = #{ info => fun() -> Info end },
+            ?assertEqual(
+                {ok, <<"schema">>},
+                hb_ao:resolve(#{ <<"device">> => Device }, <<"schema">>, Opts)
+            ),
+            Override = Device#{ schema => fun(_, _, _) -> {ok, <<"custom">>} end },
+            Expected =
+                case Kind of
+                    handler -> <<"schema">>;
+                    default -> <<"custom">>
+                end,
+            ?assertEqual(
+                {ok, Expected},
+                hb_ao:resolve(#{ <<"device">> => Override }, <<"schema">>, Opts)
+            ),
+            Excluded = Device#{
+                info => fun() -> Info#{ excludes => [<<"schema">>] } end
+            },
+            ?assertEqual(
+                {error, not_found},
+                hb_ao:resolve(#{ <<"device">> => Excluded }, <<"schema">>, Opts)
+            )
+        end}
+    || Kind <- [handler, default]
+    ].
 
 %% @doc Cached and cross-process schema reads use the loaded package's metadata.
 cached_schema_test() ->

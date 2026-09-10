@@ -9,7 +9,7 @@
 %% index.
 info() ->
     #{
-        excludes => [<<"set">>, <<"remove">>, <<"id">>, <<"verify">>],
+        excludes => [<<"set">>, <<"remove">>, <<"id">>, <<"verify">>, <<"schema">>],
         default => fun match/4
     }.
 

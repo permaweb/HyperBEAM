@@ -40,6 +40,7 @@ info(Base) ->
                 <<"commitments">>,
                 <<"committers">>,
                 <<"keys">>,
+                <<"schema">>,
                 <<"path">>,
                 <<"set">>,
                 <<"remove">>,

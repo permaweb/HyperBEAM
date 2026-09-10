@@ -108,7 +108,7 @@ info(Msg, Opts) ->
     hb_maps:merge(
         #{
             handler => fun router/4,
-            excludes => [<<"set">>, <<"keys">>]
+            excludes => [<<"set">>, <<"keys">>, <<"schema">>]
         },
         case hb_maps:get(<<"stack-keys">>, Msg, not_found, Opts) of
             not_found -> #{};
