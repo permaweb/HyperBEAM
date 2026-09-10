@@ -1034,6 +1034,9 @@ read_resolved(BaseMsg, Key, Opts) when is_binary(Key) ->
     read_resolved(BaseMsg, #{ <<"path">> => Key }, Opts);
 read_resolved({link, ID, LinkOpts}, Req, Opts) ->
     read_resolved(ID, Req, maps:merge(LinkOpts, Opts));
+read_resolved(Base, Req, Opts = #{ <<"on">> := #{ <<"step">> := _ } }) ->
+    % A literal read still needs execution when a step hook observes it.
+    read_hashpath(Base, Req, Opts);
 read_resolved(BaseMsgID, Req = #{ <<"path">> := Key }, Opts) when ?IS_ID(BaseMsgID) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     _NormKey = hb_ao:normalize_key(Key, Opts),
@@ -1480,6 +1483,22 @@ test_device_map_cannot_be_written_test() ->
     catch
         _:_:_ -> ?assert(true)
     end.
+
+%% @doc Hooks require literal execution but do not replay cached computations.
+step_hook_skips_only_literal_shortcuts_test() ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store(),
+        <<"attested-store">> => hb_test_utils:test_store() },
+    Base = #{ <<"value">> => <<"literal">> },
+    Req = #{ <<"path">> => <<"value">> },
+    HookOpts = Opts#{ <<"on">> => #{ <<"step">> => #{} } },
+    ?assertEqual({hit, {ok, <<"literal">>}}, read_resolved(Base, Req, Opts)),
+    ?assertEqual(miss, read_resolved(Base, Req, HookOpts)),
+    DeviceBase = Base#{ <<"device">> => <<"test-device@1.0">> },
+    DeviceReq = #{ <<"path">> => <<"load">> },
+    {ok, _} = hb_ao:resolve(
+        DeviceBase, DeviceReq, Opts#{ <<"cache-control">> => [<<"always">>] }
+    ),
+    ?assertMatch({hit, {ok, _}}, read_resolved(DeviceBase, DeviceReq, HookOpts)).
 
 %% @doc Cache writes are best-effort with respect to the configured store
 %% list: a list whose only entry rejects write-class operations (e.g. a
