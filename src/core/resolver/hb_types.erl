@@ -340,6 +340,8 @@ parse_type({type, _, ListType, Items}, TypeEnv, VarEnv, Seen)
                 [Item] -> parse_type(Item, TypeEnv, VarEnv, Seen)
             end
     };
+parse_type({type, _, tuple, any}, _TypeEnv, _VarEnv, _Seen) ->
+    #{ <<"kind">> => <<"tuple">> };
 parse_type({type, _, tuple, Items}, TypeEnv, VarEnv, Seen) ->
     #{
         <<"kind">> => <<"tuple">>,
@@ -709,6 +711,7 @@ check_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }, Value) ->
             fun({Type, Item}) -> check_type(Type, Item) end,
             lists:zip(Items, tuple_to_list(Value))
         );
+check_type(#{ <<"kind">> := <<"tuple">> }, Value) -> is_tuple(Value);
 check_type(#{ <<"kind">> := <<"list">>, <<"item">> := ItemType }, Value) ->
     is_list(Value) andalso lists:all(fun(Item) -> check_type(ItemType, Item) end, Value);
 check_type(#{ <<"kind">> := <<"union">>, <<"members">> := Members }, Value) ->
@@ -806,6 +809,16 @@ map_wildcards_test() ->
         },
         Force
     ).
+
+unconstrained_tuple_schema_test() ->
+    Schema = parse_type({type, 1, tuple, any}, #{}, #{}, []),
+    ?assertEqual({}, apply_schema(Schema, {}, #{})),
+    ?assertEqual({1, <<"value">>}, apply_schema(Schema, {1, <<"value">>}, #{})),
+    ?assertEqual(none, overlay(Schema)),
+    ?assertThrow({invalid_type, Schema, []}, apply_schema(Schema, [], #{})),
+    Fixed = parse_type({type, 1, tuple, [{type, 1, integer, []}]}, #{}, #{}, []),
+    ?assertEqual({1}, apply_schema(Fixed, {<<"1">>}, #{})),
+    ?assertThrow({invalid_type, Fixed, {}}, apply_schema(Fixed, {}, #{})).
 
 nested_alias_parameters_test() ->
     Parameter = {var, 1, 'Item'},
