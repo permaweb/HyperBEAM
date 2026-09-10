@@ -50,7 +50,7 @@ info(_Base, _Opts) ->
 %% @doc Boot a WASM image on the image stated in the `process/image' field of
 %% the message.
 -spec init(
-    #{ body => binary(), image => binary() | #{ _ => _ }, 'input-prefix' => binary(), _ => _ },
+    #{ body => _, image => binary() | #{ _ => _ }, 'input-prefix' => binary(), _ => _ },
     #{ _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
