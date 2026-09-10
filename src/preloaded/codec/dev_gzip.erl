@@ -8,8 +8,8 @@
 %% containting a gzip-encoded payload. Returns the rest of the base message 
 %% unchanged, with the `content-encoding' key unset.
 %% 
--spec unzip(#{ body => binary(), 'content-encoding' => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, #{ body => binary(), _ => _ }}.
+-spec unzip(#{ body => _, 'content-encoding' => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body => _, _ => _ }}.
 unzip(Base, _Req, Opts) ->
     case hb_maps:get(<<"content-encoding">>, Base, <<"gzip">>, Opts) of
         <<"gzip">> ->
@@ -21,7 +21,8 @@ unzip(Base, _Req, Opts) ->
                         Opts
                     ),
                     {ok, Base};
-                {ok, Body} ->
+                {ok, RawBody} ->
+                    Body = hb_util:bin(RawBody),
                     ?event(
                         debug_gzip,
                         {unzipping_body, {size, byte_size(Body)}},
@@ -71,6 +72,25 @@ zip(Base, _Req, Opts) ->
     end.
 
 %%% Tests
+
+%% @doc Identity encoding preserves structured bodies without loading links.
+unzip_identity_body_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"hashpath">> => ignore
+    },
+    lists:foreach(
+        fun(Body) ->
+            Base = #{
+                <<"device">> => <<"gzip@1.0">>,
+                <<"content-encoding">> => <<"identity">>,
+                <<"body">> => Body
+            },
+            ?assertEqual({ok, Base}, hb_ao:resolve(Base, <<"unzip">>, Opts))
+        end,
+        [#{ <<"nested">> => 42 }, {link, <<"missing">>, #{}}]
+    ).
 
 unzip_encoded_response_test() ->
     Opts = #{},
