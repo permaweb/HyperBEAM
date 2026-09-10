@@ -340,6 +340,8 @@ parse_type({type, _, ListType, Items}, TypeEnv, VarEnv, Seen)
                 [Item] -> parse_type(Item, TypeEnv, VarEnv, Seen)
             end
     };
+parse_type({type, _, tuple, any}, _TypeEnv, _VarEnv, _Seen) ->
+    #{ <<"kind">> => <<"tuple">> };
 parse_type({type, _, tuple, Items}, TypeEnv, VarEnv, Seen) ->
     #{
         <<"kind">> => <<"tuple">>,
@@ -736,6 +738,7 @@ check_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }, Value) ->
             fun({Type, Item}) -> check_type(Type, Item) end,
             lists:zip(Items, tuple_to_list(Value))
         );
+check_type(#{ <<"kind">> := <<"tuple">> }, Value) -> is_tuple(Value);
 check_type(#{ <<"kind">> := <<"list">>, <<"item">> := ItemType }, Value) ->
     is_list(Value) andalso lists:all(fun(Item) -> check_type(ItemType, Item) end, Value);
 check_type(#{ <<"kind">> := <<"union">>, <<"members">> := Members }, Value) ->
