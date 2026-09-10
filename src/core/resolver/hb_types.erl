@@ -69,14 +69,14 @@ vary(Key, Func, AddKey, Base, Req, Opts) ->
         {ok, Schema} ->
             {BaseSchema, ReqSchema, ReturnSchema} =
                 execution_schemas(Schema, AddKey),
-            {ok,
-                apply_schema(implicit_base(BaseSchema), Base, Opts),
+            {VariedBase, _} = apply_schema(implicit_base(BaseSchema), Base, Opts),
+            {VariedReq, _} =
                 apply_schema(
                     implicit_request(ReqSchema),
                     request_with_key(Req, AddKey),
                     Opts
                 ),
-                overlay(ReturnSchema)};
+            {ok, VariedBase, VariedReq, overlay(ReturnSchema)};
         {error, _} ->
             no_spec
     end.
@@ -377,17 +377,18 @@ key_name(Other, TypeEnv, VarEnv, Seen) ->
 
 %% @doc Vary a value by its schema: pass it through if the schema does not
 %% constrain it, else load it if it is a link, then project, coerce or
-%% check it as the schema's kind requires.
+%% check it as the schema's kind requires. Return the value and whether its
+%% content changed, excluding link loading alone.
 apply_schema(#{ <<"kind">> := <<"any">> }, Value, _Opts) ->
-    Value;
+    {Value, false};
 apply_schema(#{ <<"kind">> := <<"wildcard">> }, Value, _Opts) ->
-    Value;
+    {Value, false};
 apply_schema(#{ <<"kind">> := Kind }, Value, _Opts)
         when Kind =:= <<"remote">>;
              Kind =:= <<"alias">>;
              Kind =:= <<"variable">>;
              Kind =:= <<"unknown">> ->
-    Value;
+    {Value, false};
 apply_schema(Schema, Link, Opts) when ?IS_LINK(Link) ->
     apply_schema(Schema, hb_cache:ensure_loaded(Link, Opts), Opts);
 apply_schema(Schema = #{ <<"kind">> := <<"message">> }, Value, Opts)
@@ -395,7 +396,9 @@ apply_schema(Schema = #{ <<"kind">> := <<"message">> }, Value, Opts)
     case coerce_type(Schema, Value, Opts) of
         error -> throw({invalid_type, Schema, Value});
         Value -> throw({invalid_type, Schema, Value});
-        Coerced -> apply_schema(Schema, Coerced, Opts)
+        Coerced ->
+            {Varied, _Changed} = apply_schema(Schema, Coerced, Opts),
+            {Varied, true}
     end;
 apply_schema(
     #{ <<"kind">> := <<"message">>, <<"keys">> := Keys, <<"wildcard">> := Wildcard },
@@ -405,11 +408,16 @@ apply_schema(
     % The declared keys are varied onto the undeclared ones the wildcard
     % admits. A key kept as given is put back unchanged, so a message the
     % schema does not alter stays the same term.
-    maps:fold(
-        fun(Key, Field, Acc) -> apply_key(Key, Field, Message, Acc, Opts) end,
-        apply_wildcard(Wildcard, Keys, Message, Opts),
-        Keys
-    );
+    {Varied, Changed} =
+        maps:fold(
+            fun(Key, Field, Acc) -> apply_key(Key, Field, Message, Acc, Opts) end,
+            apply_wildcard(Wildcard, Keys, Message, Opts),
+            Keys
+        ),
+    case Changed orelse map_size(Varied) =/= map_size(Message) of
+        true -> {hb_message:uncommitted(Varied, Opts), true};
+        false -> {Varied, false}
+    end;
 apply_schema(
     Schema = #{ <<"kind">> := <<"list">>, <<"item">> := ItemType },
     Value,
@@ -417,7 +425,14 @@ apply_schema(
 ) ->
     case try_coerce(fun hb_util:list/1, Value) of
         List when is_list(List) ->
-            [apply_schema(ItemType, Item, Opts) || Item <- List];
+            lists:mapfoldl(
+                fun(Item, Changed) ->
+                    {Varied, ItemChanged} = apply_schema(ItemType, Item, Opts),
+                    {Varied, Changed orelse ItemChanged}
+                end,
+                List =/= Value,
+                List
+            );
         _ ->
             throw({invalid_type, Schema, Value})
     end;
@@ -434,13 +449,16 @@ apply_schema(
         end,
     case is_list(Values) andalso length(Values) =:= length(Items) of
         true ->
-            list_to_tuple(
-                [
-                    apply_schema(Type, Item, Opts)
-                ||
-                    {Type, Item} <- lists:zip(Items, Values)
-                ]
-            );
+            {Varied, Changed} =
+                lists:mapfoldl(
+                    fun({Type, Item}, Acc) ->
+                        {VariedItem, ItemChanged} = apply_schema(Type, Item, Opts),
+                        {VariedItem, Acc orelse ItemChanged}
+                    end,
+                    not is_tuple(Value),
+                    lists:zip(Items, Values)
+                ),
+            {list_to_tuple(Varied), Changed};
         false ->
             throw({invalid_type, Schema, Value})
     end;
@@ -450,42 +468,51 @@ apply_schema(
     Opts
 ) ->
     case apply_union(Members, Value, Opts) of
-        {ok, Varied} -> Varied;
+        {ok, Result} -> Result;
         error -> throw({invalid_type, Schema, Value})
     end;
 apply_schema(Type, Value, Opts) ->
     % A scalar, literal or range: keep a value of the type, else coerce it.
     case check_type(Type, Value) of
         true ->
-            Value;
+            {Value, false};
         false ->
             Coerced = coerce_type(Type, Value, Opts),
             case Coerced =/= error andalso check_type(Type, Coerced) of
-                true -> Coerced;
+                true -> {Coerced, true};
                 false -> throw({invalid_type, Type, Value})
             end
     end.
 
 %% @doc The undeclared keys of a message, as its schema's wildcard admits
 %% them: none for a projection, all of them as given for `_ => _', or each
-%% coerced to the wildcard's type for `_ := type()'.
+%% coerced to the wildcard's type for `_ := type()'. Track coercions separately
+%% from link loads.
 apply_wildcard(none, _Keys, _Message, _Opts) ->
-    #{};
+    {#{}, false};
 apply_wildcard(#{ <<"presence">> := optional }, _Keys, Message, _Opts) ->
-    Message;
-apply_wildcard(#{ <<"type">> := Type }, Keys, Message, Opts) ->
-    maps:map(
-        fun(_Key, Value) -> apply_schema(Type, Value, Opts) end,
+    {Message, false};
+apply_wildcard(Field, Keys, Message, Opts) ->
+    maps:fold(
+        fun(Key, _Value, Acc) -> apply_key(Key, Field, Message, Acc, Opts) end,
+        {#{}, false},
         maps:without(maps:keys(Keys), Message)
     ).
 
 %% @doc Vary one declared key of a message onto the accumulated result.
-apply_key(Key, Field, Message, Acc, Opts) ->
+apply_key(Key, Field, Message, {Acc, Changed} = State, Opts) ->
     #{ <<"presence">> := Presence, <<"type">> := Type } = Field,
     case maps:find(Key, Message) of
-        {ok, Value} -> Acc#{ Key => apply_schema(Type, Value, Opts) };
+        {ok, RawValue} ->
+            Value =
+                case is_passthrough_schema(Type) of
+                    true -> RawValue;
+                    false -> hb_cache:ensure_loaded(RawValue, Opts)
+                end,
+            {Coerced, ChildChanged} = apply_schema(Type, Value, Opts),
+            {Acc#{ Key => Coerced }, Changed orelse ChildChanged};
         error when Presence =:= required -> throw({required_key_missing, Key});
-        error -> Acc
+        error -> State
     end.
 
 %% @doc Vary a value by the first member of a union that admits it as it is,
