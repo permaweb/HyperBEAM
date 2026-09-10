@@ -40,7 +40,7 @@ compute(Base, Req, Opts) -> patches(Base, Req, Opts).
 %% @doc Get the value found at the `patch-from' key of the message, or the
 %% `from' key if the former is not present. Remove it from the message and set
 %% the new source to the value found.
--spec all(#{ _ => _ }, #{ from => binary(), to => binary(), 'patch-from' => binary(), 'patch-to' => binary(), _ => _ }, #{ _ => _ }) ->
+-spec all(#{ _ => _ }, #{ from => _, to => _, 'patch-from' => _, 'patch-to' => _, _ => _ }, #{ _ => _ }) ->
     {ok, #{ _ => _ }} | {error, _}.
 all(Base, Req, Opts) ->
     move(all, Base, Req, Opts).
@@ -48,7 +48,7 @@ all(Base, Req, Opts) ->
 %% @doc Find relevant `PATCH' messages in the given source key of the execution
 %% and request messages, and apply them to the given destination key of the
 %% request.
--spec patches(#{ _ => _ }, #{ from => binary(), to => binary(), 'patch-from' => binary(), 'patch-to' => binary(), _ => _ }, #{ _ => _ }) ->
+-spec patches(#{ _ => _ }, #{ from => _, to => _, 'patch-from' => _, 'patch-to' => _, _ => _ }, #{ _ => _ }) ->
     {ok, #{ _ => _ }} | {error, _}.
 patches(Base, Req, Opts) ->
     move(patches, Base, Req, Opts).

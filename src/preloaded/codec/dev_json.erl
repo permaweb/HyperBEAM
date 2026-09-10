@@ -120,7 +120,7 @@ committed(Msg, _Req, Opts) ->
     hb_message:committed(Msg, all, Opts).
 
 %% @doc Deserialize the JSON string found at the given path.
--spec deserialize(#{ _ => _ }, #{ target => binary(), _ => _ }, #{ _ => _ }) ->
+-spec deserialize(#{ _ => _ }, #{ target => binary() | list(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ _ => _ }} | {error, #{ status := integer(), body := binary(), _ => _ }}.
 deserialize(Base, Req, Opts) ->
     Payload = 
@@ -141,7 +141,7 @@ deserialize(Base, Req, Opts) ->
             <<"body">> =>
                 <<
                     "JSON payload not found in the base message.",
-                    "Searched for: ", Target/binary
+                    "Searched for: ", (hb_path:to_binary(Target))/binary
                 >>
             }};
         _ ->
@@ -160,6 +160,24 @@ serialize(Base, Msg, Opts) ->
     }.
 
 %%% Tests
+
+%% @doc Component targets select nested JSON and retain missing-path diagnostics.
+deserialize_component_target_test() ->
+    Opts = #{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
+    Base = #{
+        <<"device">> => <<"json@1.0">>,
+        <<"a">> => #{ <<"b">> => <<"{\"x\":1}">> },
+        <<"ab">> => <<"{\"x\":99}">>
+    },
+    Req = #{ <<"path">> => <<"deserialize">>,
+        <<"target">> => [<<"a">>, <<"b">>] },
+    {ok, Result} = hb_ao:resolve(Base, Req, Opts),
+    ?assertEqual(<<"1">>, hb_maps:get(<<"x">>, Result, Opts)),
+    ?assertMatch(
+        {error, #{ <<"status">> := 404, <<"body">> := Body }}
+            when is_binary(Body),
+        hb_ao:resolve(maps:remove(<<"a">>, Base), Req, Opts)
+    ).
 
 decode_with_atom_test() ->
     JSON =
