@@ -801,6 +801,43 @@ to_with_private_cookies_does_not_load_body_test() ->
         dev_cookie:to(Msg, #{ <<"format">> => <<"set-cookie">> }, #{})
     ).
 
+%% @doc Cookie links are loaded only after selecting the private store.
+private_store_cookie_link_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"hashpath">> => ignore
+    },
+    PrivateOpts = hb_private:opts(Opts),
+    {ok, CookieID} = hb_cache:write(<<"foo=bar">>, PrivateOpts),
+    ?assertEqual({error, not_found}, hb_cache:read(CookieID, Opts)),
+    lists:foreach(
+        fun(Key) ->
+            Base = #{
+                <<"device">> => <<"cookie@1.0">>,
+                <<"body">> => missing_link(),
+                Key => {link, CookieID, #{}}
+            },
+            {ok, Parsed} = hb_ao:resolve(Base, <<"from">>, Opts),
+            {ok, Expected} = hb_ao:resolve(
+                Base#{ Key => <<"foo=bar">> }, <<"from">>, Opts
+            ),
+            ?assertEqual(
+                hb_private:get(<<"cookie">>, Expected, PrivateOpts),
+                hb_private:get(<<"cookie">>, Parsed, PrivateOpts)
+            ),
+            {ok, Encoded} = hb_ao:resolve(
+                Base,
+                #{ <<"path">> => <<"to">>, <<"format">> => <<"cookie">> },
+                Opts
+            ),
+            ?assertEqual(<<"foo=\"bar\"">>, maps:get(<<"cookie">>, Encoded)),
+            ?assertEqual(missing_link(), maps:get(<<"body">>, Encoded))
+        end,
+        [<<"cookie">>, <<"set-cookie">>]
+    ).
+
 malformed_cookie_pair_test() ->
     {ok, Msg} = dev_cookie:from(
         #{ <<"cookie">> => <<68, 3, 67, 56, "; sid=valid">> }, #{}, #{}
