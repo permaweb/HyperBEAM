@@ -168,7 +168,7 @@ reset(Base, _Req, Opts) ->
 %% Note that the `format: cookie' form is information lossy: All provided
 %% attributes and flags are discarded.
 -spec to(
-    #{ cookie => binary() | [binary()], 'set-cookie' => binary() | [binary()], _ => _ },
+    #{ cookie => _, 'set-cookie' => _, _ => _ },
     #{ format => binary(), _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ cookie => binary(), 'set-cookie' => [binary()], _ => _ }}.
@@ -273,7 +273,7 @@ to_cookie_line(Key, Cookie) ->
 %% @doc Normalize a message containing a `cookie', `set-cookie', and potentially
 %% a `priv/cookie' key into a message with only the `priv/cookie' key.
 -spec from(
-    #{ cookie => binary() | [binary()], 'set-cookie' => binary() | [binary()], _ => _ },
+    #{ cookie => _, 'set-cookie' => _, _ => _ },
     #{ _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
