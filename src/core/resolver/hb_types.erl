@@ -272,16 +272,16 @@ parse_fun_spec(Other, _TypeEnv) ->
     {[unknown_type(Other)], any_type()}.
 
 %% @doc Compile an abstract type into a schema. `TypeEnv' holds the module's
-%% own types, `VarEnv' the bindings of the type variables of the one being
+%% own types, `VarEnv' the schemas bound to the type variables of the one being
 %% expanded, and `Seen' the types under expansion, so that a recursive type
 %% becomes an alias rather than a loop.
 parse_type({ann_type, _, [_Var, Type]}, TypeEnv, VarEnv, Seen) ->
     parse_type(Type, TypeEnv, VarEnv, Seen);
 parse_type({var, _, '_'}, _TypeEnv, _VarEnv, _Seen) ->
     wildcard_type();
-parse_type({var, _, Name}, TypeEnv, VarEnv, Seen) ->
+parse_type({var, _, Name}, _TypeEnv, VarEnv, _Seen) ->
     case maps:find(Name, VarEnv) of
-        {ok, Bound} -> parse_type(Bound, TypeEnv, VarEnv, Seen);
+        {ok, Bound} -> Bound;
         error -> variable_type(Name)
     end;
 parse_type({user_type, _, Name, Args}, TypeEnv, VarEnv, Seen) ->
@@ -291,7 +291,12 @@ parse_type({user_type, _, Name, Args}, TypeEnv, VarEnv, Seen) ->
             parse_type(
                 Ast,
                 TypeEnv,
-                maps:merge(VarEnv, maps:from_list(lists:zip(Vars, Args))),
+                maps:from_list(
+                    lists:zip(
+                        Vars,
+                        [ parse_type(Arg, TypeEnv, VarEnv, Seen) || Arg <- Args ]
+                    )
+                ),
                 [TypeKey | Seen]
             );
         _ ->
@@ -800,6 +805,33 @@ map_wildcards_test() ->
             <<"wildcard">> := #{ <<"presence">> := required }
         },
         Force
+    ).
+
+nested_alias_parameters_test() ->
+    Parameter = {var, 1, 'Item'},
+    TypeEnv = build_type_env([
+        {attribute, 1, type, {inner, Parameter, [Parameter]}},
+        {attribute, 1, type,
+            {outer, {user_type, 1, inner, [Parameter]}, [Parameter]}},
+        {attribute, 1, type,
+            {recursive, {user_type, 1, recursive, [Parameter]}, [Parameter]}}
+    ]),
+    lists:foreach(
+        fun(Argument) ->
+            ?assertEqual(
+                parse_type(Argument, #{}, #{}, []),
+                parse_type({user_type, 1, outer, [Argument]}, TypeEnv, #{}, [])
+            )
+        end,
+        [{type, 1, integer, []},
+            {type, 1, list, [{type, 1, integer, []}]}]
+    ),
+    ?assertEqual(
+        alias_type(recursive),
+        parse_type(
+            {user_type, 1, recursive, [{type, 1, integer, []}]},
+            TypeEnv, #{}, []
+        )
     ).
 
 type_alias_arities_test() ->
