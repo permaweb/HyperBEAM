@@ -120,7 +120,7 @@ committed(Msg, _Req, Opts) ->
     hb_message:committed(Msg, all, Opts).
 
 %% @doc Deserialize the JSON string found at the given path.
--spec deserialize(#{ _ => _ }, #{ target => binary(), _ => _ }, #{ _ => _ }) ->
+-spec deserialize(#{ _ => _ }, #{ target => binary() | list(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ _ => _ }} | {error, #{ status := integer(), body := binary(), _ => _ }}.
 deserialize(Base, Req, Opts) ->
     Payload = 
@@ -141,7 +141,7 @@ deserialize(Base, Req, Opts) ->
             <<"body">> =>
                 <<
                     "JSON payload not found in the base message.",
-                    "Searched for: ", Target/binary
+                    "Searched for: ", (hb_path:to_binary(Target))/binary
                 >>
             }};
         _ ->
