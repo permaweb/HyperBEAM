@@ -149,7 +149,7 @@ verify(Base, Req, RawOpts) ->
 %% parameter is `unsigned', we default to the hmac-sha256 algorithm.
 -spec commit(
     #{ _ => _ },
-    #{ type := binary(), bundle => boolean(), committed => [_], _ => _ },
+    #{ type := binary(), bundle => boolean(), committed => [_] | #{ _ => _ }, _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
 commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
