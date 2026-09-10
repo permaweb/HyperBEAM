@@ -8,8 +8,8 @@
 %% containting a gzip-encoded payload. Returns the rest of the base message 
 %% unchanged, with the `content-encoding' key unset.
 %% 
--spec unzip(#{ body => binary(), 'content-encoding' => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, #{ body => binary(), _ => _ }}.
+-spec unzip(#{ body => _, 'content-encoding' => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body => _, _ => _ }}.
 unzip(Base, _Req, Opts) ->
     case hb_maps:get(<<"content-encoding">>, Base, <<"gzip">>, Opts) of
         <<"gzip">> ->
@@ -21,7 +21,8 @@ unzip(Base, _Req, Opts) ->
                         Opts
                     ),
                     {ok, Base};
-                {ok, Body} ->
+                {ok, RawBody} ->
+                    Body = hb_util:bin(RawBody),
                     ?event(
                         debug_gzip,
                         {unzipping_body, {size, byte_size(Body)}},
