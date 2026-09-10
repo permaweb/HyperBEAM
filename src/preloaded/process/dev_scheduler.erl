@@ -368,10 +368,22 @@ status(_M1, _M2, _Opts) ->
     }.
 
 %% @doc A router for choosing between getting the existing schedule, or
-%% scheduling a new message.
+%% scheduling a new message. Method literals admit the case-insensitive
+%% dispatch below; only GET interprets from/to as pagination bounds.
 -spec schedule(
     #{ _ => _ },
-    #{ method => binary(), from => integer(), to => integer(), accept => binary(), _ => _ },
+    #{
+        method => 'GET' | 'GEt' | 'GeT' | 'Get' | 'gET' | 'gEt' | 'geT' | 'get',
+        from => integer(), to => integer(), accept => binary(), _ => _
+    }
+    |
+    #{
+        method := 'POST' | 'POSt' | 'POsT' | 'POst'
+            | 'PoST' | 'PoSt' | 'PosT' | 'Post'
+            | 'pOST' | 'pOSt' | 'pOsT' | 'pOst'
+            | 'poST' | 'poSt' | 'posT' | 'post',
+        accept => binary(), _ => _
+    },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ } | binary()} | {error, _}.
 schedule(Base, Req, Opts) ->
@@ -829,8 +841,7 @@ get_schedule(Base, Req, Opts) ->
     From =
         case hb_ao:get(<<"from">>, Req, not_found, Opts) of
             not_found -> 0;
-            X when X < 0 -> 0;
-            FromRes -> hb_util:int(FromRes)
+            FromRes -> max(0, hb_util:int(FromRes))
         end,
     To =
         case hb_ao:get(<<"to">>, Req, not_found, Opts) of
@@ -1587,6 +1598,80 @@ redirect_from_graphql() ->
             }
         )
     ).
+
+%% @doc POST fields remain committed data; only GET interprets slot bounds.
+schedule_application_fields_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"priv-wallet">> => hb:wallet(),
+        <<"scheduling-mode">> => local_confirmation,
+        <<"bundler-httpsig">> => not_found,
+        <<"scheduler-follow-redirects">> => false
+    },
+    Process = hb_message:commit(
+        (test_process(Opts))#{ <<"nonce">> => crypto:strong_rand_bytes(16) },
+        Opts
+    ),
+    ProcessID = hb_message:id(Process, all, Opts),
+    try
+        lists:foreach(
+            fun(Slot) ->
+                Request = hb_message:commit(#{
+                    <<"path">> => <<"schedule">>,
+                    <<"method">> => <<"POST">>, <<"subject">> => <<"self">>,
+                    <<"type">> => <<"Message">>, <<"target">> => ProcessID,
+                    <<"from">> => <<"sender">>, <<"to">> => <<"recipient">>,
+                    <<"test-slot">> => Slot
+                }, Opts),
+                {ok, Assignment} = hb_ao:resolve(Process, Request, Opts),
+                Scheduled = hb_maps:get(<<"body">>, Assignment, Opts),
+                ?assertEqual(Slot, hb_maps:get(<<"slot">>, Assignment, Opts)),
+                ?assertEqual(ProcessID,
+                    hb_maps:get(<<"process">>, Assignment, Opts)),
+                ?assertEqual(hb_message:id(Request, all, Opts),
+                    hb_message:id(Scheduled, all, Opts)),
+                ?assert(hb_message:verify(Scheduled, all, Opts)),
+                ?assertEqual(<<"sender">>, hb_maps:get(<<"from">>, Scheduled, Opts)),
+                ?assertEqual(<<"recipient">>, hb_maps:get(<<"to">>, Scheduled, Opts))
+            end,
+            [0, 1, 2]
+        ),
+        lists:foreach(
+            fun({From, To, Expected}) ->
+                {ok, Schedule} = hb_ao:resolve(Process, #{
+                    <<"path">> => <<"schedule">>, <<"method">> => <<"GET">>,
+                    <<"target">> => ProcessID, <<"from">> => From, <<"to">> => To
+                }, Opts),
+                Assignments = hb_message:uncommitted(
+                    hb_maps:get(<<"assignments">>, Schedule, Opts), Opts
+                ),
+                ?assertEqual(Expected, lists:sort([
+                    hb_maps:get(<<"slot">>, Assignment, Opts)
+                    || Assignment <- hb_maps:values(Assignments, Opts)
+                ]))
+            end,
+            [{<<"1">>, <<"1">>, [1]}, {0, 1, [0, 1]}, {2, 2, [2]},
+                {-1, 0, [0]}, {<<"-1">>, <<"0">>, [0]}]
+        )
+    after
+        Name = {<<"scheduler@1.0">>,
+            hb_util:human_id(maps:get(<<"priv-wallet">>, Opts)), ProcessID},
+        case hb_name:lookup(Name) of
+            undefined -> ok;
+            Scheduler ->
+                Monitor = monitor(process, Scheduler),
+                Scheduler ! stop,
+                receive
+                    {'DOWN', Monitor, process, Scheduler, normal} -> ok;
+                    {'DOWN', Monitor, process, Scheduler, Reason} -> error(Reason)
+                after 2000 ->
+                    exit(Scheduler, kill),
+                    receive {'DOWN', Monitor, process, Scheduler, _} -> ok end,
+                    error(scheduler_stop_timeout)
+                end
+        end
+    end.
 
 get_local_schedule_test_parallel() ->
     start(),
