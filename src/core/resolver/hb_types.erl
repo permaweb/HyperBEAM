@@ -144,6 +144,19 @@ top_level_schema(Schema) ->
 
 %% @doc Add a key to a message schema, unless the schema declares it.
 implicit_key(
+    Schema = #{ <<"kind">> := <<"union">>, <<"members">> := Members },
+    Key,
+    Presence
+) ->
+    Schema#{
+        <<"members">> =>
+            [
+                implicit_key(top_level_schema(Member), Key, Presence)
+            ||
+                Member <- Members
+            ]
+    };
+implicit_key(
     Schema = #{ <<"kind">> := <<"message">>, <<"keys">> := Keys },
     Key,
     Presence
@@ -786,6 +799,40 @@ map_wildcards_test() ->
         },
         Force
     ).
+
+implicit_union_execution_keys_test() ->
+    Integer = scalar_type(<<"integer">>),
+    Schema = #{
+        <<"kind">> => <<"union">>,
+        <<"members">> =>
+            [required(<<"a">>, Integer), required(<<"b">>, Integer)]
+    },
+    lists:foreach(
+        fun(Key) ->
+            Base = #{ <<"device">> => <<"test@1.0">>, Key => 1 },
+            Request = #{ <<"path">> => <<"run">>, Key => 2 },
+            ?assertEqual(Base, apply_schema(implicit_base(Schema), Base, #{})),
+            ?assertEqual(
+                Request,
+                apply_schema(implicit_request(Schema), Request, #{})
+            )
+        end,
+        [<<"a">>, <<"b">>]
+    ),
+    Nested = required(<<"nested">>, Schema),
+    Base = #{ <<"device">> => <<"test@1.0">>,
+        <<"nested">> => #{ <<"a">> => 1 } },
+    ?assertEqual(
+        Base,
+        apply_schema(
+            implicit_base(Nested),
+            Base#{ <<"nested">> =>
+                #{ <<"a">> => 1, <<"device">> => <<"discard">> } },
+            #{}
+        )
+    ),
+    Explicit = required(<<"device">>, Integer),
+    ?assertEqual(Explicit, implicit_base(Explicit)).
 
 apply_empty_projection_test() ->
     ?assertEqual(
