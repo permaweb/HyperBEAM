@@ -334,8 +334,8 @@ schema(Module, Opts) ->
     end.
 
 %% @doc Memoise the function schemas of every module in a loaded archive in
-%% the shared `loaded-device-store'. Archive modules are loaded from memory
-%% rather than the code path, so their BEAMs are in hand here alone. The
+%% the process cache and shared `loaded-device-store'. Archive modules are
+%% loaded from memory, so their BEAMs are in hand here alone. The
 %% schemas are Erlang terms: the store must be an `hb_store_volatile'.
 put_schemas(Archive, Opts) ->
     {ok, Modules, _Resources} = hb_device_archive:contents(Archive),
@@ -343,7 +343,10 @@ put_schemas(Archive, Opts) ->
         loaded_device_store(Opts),
         maps:from_list(
             [
-                {schema_key(Module), Schemas}
+                begin
+                    erlang:put({?MODULE, schema, Module}, {ok, Schemas}),
+                    {schema_key(Module), Schemas}
+                end
             ||
                 {Module, _Path, Beam} <- Modules,
                 {ok, Schemas} <- [hb_types:extract(Beam)]
