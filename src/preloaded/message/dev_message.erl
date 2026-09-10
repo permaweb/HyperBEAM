@@ -8,6 +8,7 @@
 %%% Base AO-Core reserved keys:
 -export([info/0, keys/1, keys/2]).
 -export([set/3, set_path/3, remove/3, get/3, get/4]).
+-export([schema/3]).
 %%% Commitment-specific keys:
 -export([id/1, id/2, id/3]).
 -export([commit/3, committed/3, committers/1, committers/2, committers/3, verify/3]).
@@ -20,6 +21,7 @@
 
 %% The list of keys that are exported by this device.
 -define(DEVICE_KEYS, [
+    <<"schema">>,
     <<"id">>,
     <<"commitments">>,
     <<"committers">>,
@@ -35,6 +37,14 @@ info() ->
     #{
         default => fun dev_message:get/4
     }.
+
+%% @doc Return the function schemas of the base message's loaded device.
+-spec schema(#{ device => _ }, #{}, #{ _ => _ }) -> {ok, map()} | {error, _}.
+schema(Base, _Req, Opts) ->
+    case hb_device:message_to_device(Base, Opts) of
+        Module when is_atom(Module) -> hb_device_load:schema(Module, Opts);
+        _ -> {error, not_found}
+    end.
 
 %% @doc Generate an index page for a message, in the event that the `body' and
 %% `content-type' of a message returned to the client are both empty. We do this

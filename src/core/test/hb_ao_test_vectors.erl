@@ -356,6 +356,74 @@ resolve_simple_test(Opts) ->
     Res = hb_ao:resolve(#{ <<"a">> => <<"RESULT">> }, <<"a">>, Opts),
     ?assertEqual({ok, <<"RESULT">>}, Res).
 
+%% @doc Schema inherits through handlers and keeps the original device.
+inherited_schema_test_() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    [
+        {Device, fun() ->
+            Base = #{ <<"device">> => Device, <<"schema">> => <<"literal">> },
+            {ok, Schema} = hb_ao:resolve(Base, <<"schema">>, Opts),
+            ?assertMatch(
+                #{ <<"args">> := _, <<"return">> := _ },
+                hb_maps:get(Arity, hb_maps:get(Key, Schema, undefined, Opts), undefined, Opts)
+            )
+        end}
+    || {Device, Key, Arity} <- [
+            {<<"message@1.0">>, <<"set">>, 3},
+            {<<"json@1.0">>, <<"serialize">>, 3},
+            {<<"lua@5.3a">>, <<"init">>, 3},
+            {<<"stack@1.0">>, <<"prefix">>, 3},
+            {<<"multipass@1.0">>, <<"handle">>, 4}
+        ]
+    ] ++ [?_assertMatch({ok, #{}}, hb_ao:resolve(#{}, <<"schema">>, Opts))].
+
+%% @doc An explicit schema wins over a handler; missing metadata is an error.
+schema_override_test() ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
+    Device = #{
+        info => fun() -> #{ handler => fun(_, _, _, _) -> error(handler_called) end } end,
+        schema => fun(Base, _, _) -> {ok, maps:get(<<"expected">>, Base)} end
+    },
+    ?assertEqual(
+        {ok, <<"custom">>},
+        hb_ao:resolve(
+            #{ <<"device">> => Device, <<"expected">> => <<"custom">> },
+            <<"schema">>,
+            Opts
+        )
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_ao:resolve(#{ <<"device">> => maps:remove(schema, Device) }, <<"schema">>, Opts)
+    ).
+
+%% @doc Cached and cross-process schema reads use the loaded package's metadata.
+cached_schema_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"attested-store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"always">>]
+    },
+    Base = #{ <<"device">> => <<"json@1.0">> },
+    Path = <<"schema/serialize/3">>,
+    {ok, Resolved} = hb_ao:resolve(Base, Path, Opts),
+    Schema = hb_private:reset(Resolved),
+    ReadOpts = Opts#{ <<"cache-control">> => [<<"only-if-cached">>] },
+    {ok, Cached} = hb_ao:resolve(Base, Path, ReadOpts),
+    ?assertEqual(Schema, hb_private:reset(hb_cache:ensure_all_loaded(Cached, Opts))),
+    Parent = self(),
+    Ref = make_ref(),
+    FreshOpts = Opts#{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
+    spawn(fun() -> Parent ! {Ref, hb_ao:resolve(Base, Path, FreshOpts)} end),
+    receive
+        {Ref, {ok, Result}} ->
+            ?assertEqual(Schema, hb_private:reset(hb_cache:ensure_all_loaded(Result, Opts)))
+    after 5000 -> error(schema_read_timeout)
+    end.
+
 singleton_id_base_test() ->
     Opts = #{
         <<"store">> => hb_test_utils:test_store(),
