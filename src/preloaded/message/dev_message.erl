@@ -306,7 +306,8 @@ commit(Self, Req, Opts) ->
             Req#{ <<"type">> => maps:get(<<"type">>, Req, <<"signed">>) },
             CommitOpts
         ),
-    {ok, hb_message:convert(Committed, <<"structured@1.0">>, tabm, CommitOpts)}.
+    Res = Base#{ <<"commitments">> => maps:get(<<"commitments">>, Committed) },
+    {ok, hb_private:merge(Res, Committed, Opts)}.
 
 %% @doc Verify a message. By default, all commitments are verified. The
 %% `committers' key in the request can be used to specify that only the 
