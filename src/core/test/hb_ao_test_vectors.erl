@@ -219,6 +219,89 @@ test_opts() ->
 
 %%% Standalone test vectors
 
+%% @doc Cache addresses do not become receipts on the shared patch. The resolver
+%% constructs the caller's receipt from the original inputs on every return.
+hashpath_cached_patch_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"attested-store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"always">>]
+    },
+    Base = #{
+        <<"device">> => <<"test-device@1.0">>,
+        <<"counter">> => 1,
+        <<"other">> => <<"retained">>
+    },
+    Req = #{ <<"path">> => <<"vary-overlay">> },
+    {ok, Result} = hb_ao:resolve(Base, Req, Opts),
+    {ok, Context} = hb_ao:resolve(Base, Req, Opts#{
+        <<"cache-control">> => [<<"only-if-cached">>],
+        <<"return-context">> => true
+    }),
+    Patch = maps:get(<<"varied-result">>, Context),
+    ?assertEqual(2, hb_maps:get(<<"counter">>, Patch, undefined, Opts)),
+    ?assertNot(hb_maps:is_key(<<"other">>, Patch, Opts)),
+    ?assertNot(maps:is_key(<<"hashpath">>, hb_private:from_message(Patch))),
+    ?assertEqual(hb_private:reset(Result),
+        hb_private:reset(maps:get(<<"result">>, Context))).
+
+%% @doc A public hashpath field is a varied input, not private metadata that
+%% the computation cache can omit from its address.
+hashpath_request_input_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"attested-store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"always">>]
+    },
+    Base = #{ <<"device">> => <<"test-device@1.0">> },
+    FirstReq = #{
+        <<"path">> => <<"vary-unspecified">>,
+        <<"hashpath">> => hb_message:id(#{ <<"value">> => 1 }, all, Opts)
+    },
+    SecondReq = FirstReq#{
+        <<"hashpath">> => hb_message:id(#{ <<"value">> => 2 }, all, Opts)
+    },
+    % A literal key cannot masquerade as the ID of a different request.
+    ?assertNotEqual(hb_path:hashpath(Base, FirstReq, Opts),
+        hb_path:hashpath(Base,
+            #{ <<"path">> => hb_message:id(FirstReq, all, Opts) }, Opts)),
+    {ok, _} = hb_ao:resolve(Base, FirstReq, Opts),
+    ?assertMatch({error, #{ <<"status">> := 504 }},
+        hb_ao:resolve(Base, SecondReq,
+            Opts#{ <<"cache-control">> => [<<"only-if-cached">>] })),
+    {ok, Result} = hb_ao:resolve(Base, SecondReq, Opts),
+    ?assertEqual(SecondReq,
+        hb_private:reset(hb_ao:get(<<"request">>, Result, Opts))),
+    ?assert(hb_hashpath:verify_all(hb_path:hashpath(Result, Opts), Opts)).
+
+%% @doc Reset and abnormal statuses remove the receipt and its result binding.
+%% Ignoring hashpaths preserves the device's result without adding a receipt.
+hashpath_reset_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    Base = #{ <<"child">> => #{ <<"value">> => 7 } },
+    {ok, Result} = hb_ao:resolve(Base, <<"child">>, Opts),
+    Container = #{ <<"result">> => Result },
+    {ok, Ignored} = hb_ao:resolve(Container, <<"result">>,
+        Opts#{ <<"hashpath">> => ignore }),
+    ?assertEqual(Result, Ignored),
+    {ok, Reset} = hb_ao:resolve(Container, <<"result">>,
+        Opts#{ <<"hashpath">> => reset }),
+    Hook = fun(_Base, Req, _Opts) -> {ok, Req#{ <<"status">> => error }} end,
+    {error, Failed} = hb_ao:resolve(Container, <<"result">>, Opts#{
+        <<"on">> => #{ <<"step">> => #{ <<"device">> => #{ step => Hook } } }
+    }),
+    lists:foreach(
+        fun(Msg) ->
+            ?assertEqual(hb_private:reset(Result), hb_private:reset(Msg)),
+            ?assertEqual(#{}, maps:with([<<"hashpath">>, <<"hashpath-result">>],
+                hb_private:from_message(Msg)))
+        end,
+        [Reset, Failed]
+    ).
+
 %% @doc Ensure that we can read a device from the cache then execute it. By 
 %% extension, this will also allow us to load a device from Arweave due to the
 %% remote store implementations.

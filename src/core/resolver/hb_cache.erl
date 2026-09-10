@@ -41,6 +41,7 @@
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
+-export([write_hashpath/3]).
 -export([match/2, list/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
@@ -670,6 +671,8 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either
 %% a richly typed map or a direct binary. If `cache-read-mode' is `raw',
 %% composite reads return lazy links without decoding `ao-types'.
+read(Path, Opts) when ?IS_HASHPATH(Path) ->
+    hb_hashpath:load(Path, Opts);
 read(Path, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     case {
@@ -1104,11 +1107,7 @@ read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
     HP = hb_path:hashpath(BaseMsg, Req, Opts),
     case hb_store:resolve(hb_opts:get(attested_store, [], Opts), HP, Opts) of
         {ok, Path} when Path =/= HP ->
-            case read(Path, Opts) of
-                {ok, Res} when is_map(Res) ->
-                    {hit, {ok, hb_private:set(Res, <<"hashpath">>, HP, Opts)}};
-                Other -> hashpath_read_result(Other)
-            end;
+            hashpath_read_result(read(Path, Opts));
         _ -> miss
     end;
 read_hashpath(_, _, _) -> miss.

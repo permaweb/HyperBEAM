@@ -5,7 +5,7 @@
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
 -export([index/3, postprocess/3, load/3]).
 -export([vary_projection/3, vary_wildcard/3, vary_unspecified/3]).
--export([vary_overlay/3]).
+-export([vary_overlay/3, vary_request_overlay/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -273,6 +273,13 @@ vary_unspecified(Base, Req, _Opts) ->
     {ok, #{ '...' := base, counter := integer() }}.
 vary_overlay(Base = #{ <<"counter">> := Counter }, _Req, _Opts) ->
     {ok, Base#{ <<"counter">> => Counter + 1 }}.
+
+%% @doc Increment a counter in a projection of the request, returning a patch
+%% that the resolver lays over the whole request.
+-spec vary_request_overlay(#{ _ => _ }, #{ counter := integer() }, #{ _ => _ }) ->
+    {ok, #{ '...' := request, counter := integer() }}.
+vary_request_overlay(_Base, Req = #{ <<"counter">> := Counter }, _Opts) ->
+    {ok, Req#{ <<"counter">> => Counter + 1 }}.
 
 %%% Tests
 
@@ -648,7 +655,19 @@ vary_projection_uses_projected_cache_key_test() ->
             Opts#{ <<"cache-control">> => [<<"only-if-cached">>] }
         ),
     ?assertEqual(7, hb_ao:get(<<"base/required">>, Second, Opts)),
-    ?assertEqual(hb_path:hashpath(First, Opts), hb_path:hashpath(Second, Opts)),
+    FirstCtx = hb_hashpath:context(hb_path:hashpath(First, Opts), Opts),
+    SecondCtx = hb_hashpath:context(hb_path:hashpath(Second, Opts), Opts),
+    ?assertNotEqual(
+        maps:get(<<"base-id">>, FirstCtx), maps:get(<<"base-id">>, SecondCtx)
+    ),
+    ?assertEqual(
+        maps:get(<<"varied-base-id">>, FirstCtx),
+        maps:get(<<"varied-base-id">>, SecondCtx)
+    ),
+    ?assertEqual(
+        maps:get(<<"varied-result-id">>, FirstCtx),
+        maps:get(<<"varied-result-id">>, SecondCtx)
+    ),
     ?assertEqual(8, hb_ao:get(<<"base/deep/slot">>, Second, Opts)),
     ?assertEqual(9, hb_ao:get(<<"request/deep-request/slot">>, Second, Opts)).
 

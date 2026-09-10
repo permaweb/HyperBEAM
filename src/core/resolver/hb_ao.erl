@@ -110,6 +110,7 @@
         <<"force-message">>,
         <<"cache-control">>,
         <<"spawn-worker">>,
+        <<"return-context">>,
         <<"only">>,
         <<"prefer">>
     ]
@@ -127,12 +128,11 @@
 %%      5: Execution.
 %%      6: Execution of the `step' hook.
 %%      7: Subresolution.
-%%      8: Cryptographic linking.
-%%      9: Result caching.
-%%     10: Notify waiters.
-%%     11: Apply message extension.
-%%     12: Fork worker.
-%%     13: Recurse or terminate.
+%%      8: Result caching.
+%%      9: Notify waiters.
+%%     10: Apply overlay and cryptographic linking.
+%%     11: Fork worker.
+%%     12: Recurse or terminate.
 resolve(Path, Opts) when is_binary(Path) ->
     resolve(#{ <<"path">> => Path }, Opts);
 resolve(SingletonMsg, _Opts)
@@ -254,7 +254,7 @@ resolve_many(MsgList, Opts) ->
 do_resolve_many([], _Opts) ->
     {failure, <<"Attempted to resolve an empty message sequence.">>};
 do_resolve_many([Res], Opts) ->
-    ?event_debug(debug_ao_core, {stage, 11, resolve_complete, Res}),
+    ?event_debug(debug_ao_core, {stage, 12, resolve_complete, Res}),
     hb_cache:ensure_loaded(maybe_force_message(Res, Opts), Opts);
 do_resolve_many([Base, Req | MsgList], Opts) ->
     ?event_debug(debug_ao_core, {stage, 0, resolve_many, {base, Base}, {req, Req}}),
@@ -263,7 +263,7 @@ do_resolve_many([Base, Req | MsgList], Opts) ->
             ?event_debug(debug_ao_core,
                 {
                     stage,
-                    13,
+                    12,
                     resolved_step,
                     {res, Res},
                     {opts, Opts}
@@ -273,7 +273,7 @@ do_resolve_many([Base, Req | MsgList], Opts) ->
             do_resolve_many([Res | MsgList], Opts);
         Res ->
             % The result is not a resolvable message. Return it.
-            ?event_debug(debug_ao_core, {stage, 13, resolve_many_terminating_early, Res}),
+            ?event_debug(debug_ao_core, {stage, 12, resolve_many_terminating_early, Res}),
             maybe_force_message(Res, Opts)
     end.
 
@@ -439,11 +439,12 @@ resolve_stage(2, Base, Req, Opts) ->
     ?event_debug(debug_ao_core, {stage, 2, vary_and_cache_lookup}, Opts),
     % Vary the inputs by the schema of the function that will execute them
     % before the cache lookup, such that every execution the schema deems
-    % equivalent shares one hashpath. If the function's schema declares it to be
-    % a patch, the `VariedResult` of the execution is overlaid on top of the 
+    % equivalent shares one cached result. If the function's schema declares
+    % it to be a patch, the `VariedResult` of the execution is overlaid on the
     % appropriate input message before return.
     try vary_loaded(ensure_message_loaded(Base, Opts), Req, Opts) of
-        {Func, VariedBase, VariedReq, MaybeOverlay} ->
+        {Func, VariedBase, VariedReq, Overlay} ->
+            Original = {Base, Req, Overlay},
             case hb_cache_control:maybe_lookup(VariedBase, VariedReq, Opts) of
                 {ok, Res} ->
                     ?event_debug(
@@ -451,16 +452,21 @@ resolve_stage(2, Base, Req, Opts) ->
                         {stage, 2, cache_hit, {res, Res}, {opts, Opts}},
                         Opts
                     ),
-                    apply_vary_overlay(MaybeOverlay, Base, Req, {ok, Res}, Opts);
+                    resolve_stage(
+                        10, VariedBase, VariedReq, {ok, Res}, Original,
+                        undefined, Opts
+                    );
                 {continue, NewBase, NewReq} ->
-                    resolve_stage(3, Func, NewBase, NewReq, MaybeOverlay, Opts);
+                    resolve_stage(
+                        3, Func, NewBase, NewReq, Original, Opts
+                    );
                 {error, CacheResp} ->
                     {error, CacheResp}
             end
     catch throw:{necessary_message_not_found, _, _} ->
         {error, #{ <<"status">> => 404 }}
     end.
-resolve_stage(3, Func, Base, Req, MaybeOverlay, Opts) ->
+resolve_stage(3, Func, Base, Req, Original, Opts) ->
     ?event_debug(debug_ao_core, {stage, 3, validation_check}, Opts),
     % Validation checks: If `paranoid_message_verification' is enabled, we should
     % verify the base and request messages prior to execution.
@@ -473,8 +479,8 @@ resolve_stage(3, Func, Base, Req, MaybeOverlay, Opts) ->
         },
         Opts
     ),
-    resolve_stage(4, Func, Base, Req, MaybeOverlay, Opts);
-resolve_stage(4, Func, Base, Req, MaybeOverlay, Opts) ->
+    resolve_stage(4, Func, Base, Req, Original, Opts);
+resolve_stage(4, Func, Base, Req, Original, Opts) ->
     ?event_debug(debug_ao_core, {stage, 4, persistent_resolver_lookup}, Opts),
     % Persistent-resolver lookup: Search for local (or Distributed
     % Erlang cluster) processes that are already performing the execution.
@@ -490,7 +496,7 @@ resolve_stage(4, Func, Base, Req, MaybeOverlay, Opts) ->
                 true -> ?event(worker_spawns, {will_become, ExecName});
                 _ -> ok
             end,
-            resolve_stage(5, Func, Base, Req, MaybeOverlay, ExecName, Opts);
+            resolve_stage(5, Func, Base, Req, Original, ExecName, Opts);
         {wait, Leader} ->
             % There is another executor of this resolution in-flight.
             % Bail execution, register to receive the response, then
@@ -508,11 +514,10 @@ resolve_stage(4, Func, Base, Req, MaybeOverlay, Opts) ->
                         Opts
                     ),
                     % Re-try again if the group leader has died.
-                    resolve_stage(4, Func, Base, Req, MaybeOverlay, Opts);
+                    resolve_stage(4, Func, Base, Req, Original, Opts);
                 Res ->
-                    % Now that we have the result, we can skip right to potential
-                    % recursion (step 11) in the outer-wrapper.
-                    apply_vary_overlay(MaybeOverlay, Base, Req, Res, Opts)
+                    % Apply this caller's overlay and generate its hashpath.
+                    resolve_stage(10, Base, Req, Res, Original, undefined, Opts)
             end;
         {infinite_recursion, GroupName} ->
             % We are the leader for this resolution, but we executing the 
@@ -531,13 +536,13 @@ resolve_stage(4, Func, Base, Req, MaybeOverlay, Opts) ->
             case hb_opts:get(allow_infinite, false, Opts) of
                 true ->
                     % We are OK with infinite loops, so we just continue.
-                    resolve_stage(5, Func, Base, Req, MaybeOverlay, GroupName, Opts);
+                    resolve_stage(5, Func, Base, Req, Original, GroupName, Opts);
                 false ->
                     % We are not OK with infinite loops, so we raise an error.
                     error_infinite(Base, Req, Opts)
             end
     end.
-resolve_stage(5, Resolver, Base, Req, MaybeOverlay, ExecName, Opts) ->
+resolve_stage(5, Resolver, Base, Req, Original, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 5, ExecName, execution}, Opts),
 	% Execution.
     ExecOpts = execution_opts(Opts),
@@ -605,13 +610,13 @@ resolve_stage(5, Resolver, Base, Req, MaybeOverlay, ExecName, Opts) ->
         },
         Opts
     ),
-    resolve_stage(6, Base, Req, Res, MaybeOverlay, ExecName, Opts);
+    resolve_stage(6, Base, Req, Res, Original, ExecName, Opts);
 resolve_stage(
     6,
     Base,
     Req,
     {St, Res},
-    MaybeOverlay,
+    Original,
     ExecName,
     Opts = #{ <<"on">> := _On = #{ <<"step">> := _ }}
 ) ->
@@ -628,7 +633,7 @@ resolve_stage(
     },
     case hb_hook:on(<<"step">>, HookReq, Opts) of
         {ok, #{ <<"status">> := NewStatus, <<"body">> := NewRes }} ->
-            resolve_stage(7, Base, Req, {NewStatus, NewRes}, MaybeOverlay, ExecName, Opts);
+            resolve_stage(7, Base, Req, {NewStatus, NewRes}, Original, ExecName, Opts);
         Error ->
             ?event(
                 ao_core,
@@ -640,94 +645,76 @@ resolve_stage(
             ),
             Error
     end;
-resolve_stage(6, Base, Req, Res, MaybeOverlay, ExecName, Opts) ->
+resolve_stage(6, Base, Req, Res, Original, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 6, ExecName, no_step_hook}, Opts),
-    resolve_stage(7, Base, Req, Res, MaybeOverlay, ExecName, Opts);
-resolve_stage(7, Base, Req, {ok, {resolve, Sublist}}, MaybeOverlay, ExecName, Opts) ->
+    resolve_stage(7, Base, Req, Res, Original, ExecName, Opts);
+resolve_stage(7, Base, Req, {ok, {resolve, Sublist}}, Original, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 7, ExecName, subresolve_result}, Opts),
     % If the result is a `{resolve, Sublist}' tuple, we need to execute it
     % as a sub-resolution.
-    resolve_stage(8, Base, Req, resolve_many(Sublist, Opts), MaybeOverlay, ExecName, Opts);
-resolve_stage(7, Base, Req, Res, MaybeOverlay, ExecName, Opts) ->
+    SubOpts = maps:remove(<<"return-context">>, Opts),
+    resolve_stage(8, Base, Req, resolve_many(Sublist, SubOpts), Original, ExecName, Opts);
+resolve_stage(7, Base, Req, Res, Original, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 7, ExecName, no_subresolution_necessary}, Opts),
-    resolve_stage(8, Base, Req, Res, MaybeOverlay, ExecName, Opts);
-resolve_stage(8, Base, Req, {ok, Res}, MaybeOverlay, ExecName, Opts) when is_map(Res) ->
-    ?event_debug(debug_ao_core, {stage, 8, ExecName, generate_hashpath}, Opts),
-    % Cryptographic linking. Now that we have generated the result, we
-    % need to cryptographically link the output to its input via a hashpath.
-    resolve_stage(9, Base, Req,
-        case hb_opts:get(hashpath, update, Opts#{ <<"only">> => local }) of
-            update ->
-                NormRes = Res,
-                Priv = hb_private:from_message(NormRes),
-                HP = hb_path:hashpath(Base, Req, Opts),
-                if not is_binary(HP) or not is_map(Priv) ->
-                    throw({invalid_hashpath, {hp, HP}, {res, NormRes}});
-                true ->
-                    {ok, NormRes#{ <<"priv">> => Priv#{ <<"hashpath">> => HP } }}
-                end;
-            reset ->
-                Priv = hb_private:from_message(Res),
-                {ok, Res#{ <<"priv">> => hb_maps:without([<<"hashpath">>], Priv, Opts) }};
-            ignore ->
-                Priv = hb_private:from_message(Res),
-                if not is_map(Priv) ->
-                    throw({invalid_private_message, {res, Res}});
-                true ->
-                    {ok, Res}
-                end
-        end,
-        MaybeOverlay,
-        ExecName,
-        Opts
-    );
-resolve_stage(8, Base, Req, {Status, Res}, MaybeOverlay, ExecName, Opts) when is_map(Res) ->
-    ?event_debug(debug_ao_core, {stage, 8, ExecName, abnormal_status_reset_hashpath}, Opts),
-    ?event(hashpath, {resetting_hashpath_res, {base, Base}, {req, Req}, {opts, Opts}}),
-    % Skip cryptographic linking and reset the hashpath if the result is abnormal.
-    Priv = hb_private:from_message(Res),
-    resolve_stage(
-        9, Base, Req,
-        {Status, Res#{ <<"priv">> => maps:without([<<"hashpath">>], Priv) }},
-        MaybeOverlay, ExecName, Opts
-    );
-resolve_stage(8, Base, Req, Res, MaybeOverlay, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 8, ExecName, non_map_result_skipping_hash_path}, Opts),
-    % Skip cryptographic linking and continue if we don't have a map that can have
-    % a hashpath at all.
-    resolve_stage(9, Base, Req, Res, MaybeOverlay, ExecName, Opts);
-resolve_stage(9, Base, Req, {ok, Res}, MaybeOverlay, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 9, ExecName, result_caching}, Opts),
-    % Result caching: Optionally, cache the result of the computation locally.
+    resolve_stage(8, Base, Req, Res, Original, ExecName, Opts);
+resolve_stage(8, Base, Req, {ok, Res}, Original, ExecName, Opts) ->
+    ?event_debug(debug_ao_core, {stage, 8, ExecName, result_caching}, Opts),
+    % Cache the generic result before applying the caller's overlay.
     hb_cache_control:maybe_store(Base, Req, Res, Opts),
-    resolve_stage(10, Base, Req, {ok, Res}, MaybeOverlay, ExecName, Opts);
-resolve_stage(9, Base, Req, Res, MaybeOverlay, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 9, ExecName, abnormal_status_skip_caching}, Opts),
+    resolve_stage(9, Base, Req, {ok, Res}, Original, ExecName, Opts);
+resolve_stage(8, Base, Req, Res, Original, ExecName, Opts) ->
+    ?event_debug(debug_ao_core, {stage, 8, ExecName, abnormal_status_skip_caching}, Opts),
     % Skip result caching if the result is abnormal.
-    resolve_stage(10, Base, Req, Res, MaybeOverlay, ExecName, Opts);
-resolve_stage(10, Base, Req, Res, MaybeOverlay, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 10, ExecName, notify_waiting}, Opts),
+    resolve_stage(9, Base, Req, Res, Original, ExecName, Opts);
+resolve_stage(9, Base, Req, Res, Original, ExecName, Opts) ->
+    ?event_debug(debug_ao_core, {stage, 9, ExecName, notify_waiting}, Opts),
     % Notify processes that requested the resolution while we were executing and
     % unregister ourselves from the group.
     hb_persistent:unregister_notify(ExecName, Req, Res, Opts),
-    resolve_stage(11, Base, Req, Res, MaybeOverlay, ExecName, Opts);
-resolve_stage(11, Base, Req, Res, MaybeOverlay, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 11, ExecName, apply_result_extension}, Opts),
-    % Set the result as an overlay upon either the base or the request messages
-    % if requested by the specification of the resolver function.
-    maybe_fork_worker(
-        apply_vary_overlay(MaybeOverlay, Base, Req, Res, Opts),
+    resolve_stage(10, Base, Req, Res, Original, ExecName, Opts);
+resolve_stage(10, VariedBase, VariedReq, {ok, RawRes}, {Base, Req, Overlay}, ExecName, Opts) ->
+    ?event_debug(debug_ao_core, {stage, 10, ExecName, generate_hashpath}, Opts),
+    % Materialize this caller's result and cryptographically link it to its
+    % original inputs. Cached and awaited patches enter at this same stage.
+    VariedRes = hb_cache:ensure_loaded(RawRes, Opts),
+    Res =
+        case Overlay of
+            base when is_map(VariedRes) ->
+                set(Base, VariedRes, internal_opts(Opts));
+            request when is_map(VariedRes) ->
+                set(Req, VariedRes, internal_opts(Opts));
+            _ -> VariedRes
+        end,
+    ReturnContext = hb_opts:get(<<"return-context">>, false, Opts),
+    resolve_stage(11, VariedBase, VariedReq,
+        case {ReturnContext, hb_opts:get(hashpath, update, Opts)} of
+            {false, ignore} -> {ok, Res};
+            {false, reset} -> {ok, hb_hashpath:reset(Res)};
+            _ ->
+                {HP, Context} =
+                    hb_hashpath:generate(
+                        Base, Req, Res, VariedBase, VariedReq, VariedRes, Overlay, Opts
+                    ),
+                case ReturnContext of
+                    true -> {ok, Context};
+                    false -> {ok, hb_hashpath:attach(Res, HP, Opts)}
+                end
+        end,
+        {Base, Req, Overlay},
         ExecName,
         Opts
-    ).
-
-%% @doc Check if spawning a worker was requested after a completed computation.
-%% If it is, start the worker and forward any work assigned to us downstream. If
-%% not, ignore and return the result unmodified.
-%% 
-%% This represents the 12th and final stage of the AO-Core resolution flow.
-maybe_fork_worker({ok, Res} = Res, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 12, ExecName, maybe_spawn_worker}, Opts),
+    );
+resolve_stage(10, Base, Req, {Status, Res}, Original, ExecName, Opts) when is_map(Res) ->
+    ?event_debug(debug_ao_core, {stage, 10, ExecName, abnormal_status_reset_hashpath}, Opts),
+    % Abnormal results cannot retain a successful transition's receipt.
+    resolve_stage(11, Base, Req, {Status, hb_hashpath:reset(Res)}, Original, ExecName, Opts);
+resolve_stage(10, Base, Req, Res, Original, ExecName, Opts) ->
+    resolve_stage(11, Base, Req, Res, Original, ExecName, Opts);
+resolve_stage(11, _Base, _Req, Res, _Original, undefined, _Opts) ->
+    % Cached and awaited results do not start a worker.
+    Res;
+resolve_stage(11, _Base, _Req, {ok, Res} = Res, _Original, ExecName, Opts) ->
+    ?event_debug(debug_ao_core, {stage, 11, ExecName, maybe_spawn_worker}, Opts),
     % Check if we should fork out a new worker process for the current execution
     case
         {is_map(Res), hb_opts:get(spawn_worker, false, Opts#{ <<"prefer">> => local })}
@@ -740,8 +727,8 @@ maybe_fork_worker({ok, Res} = Res, ExecName, Opts) ->
             hb_persistent:forward_work(WorkerPID, Opts),
             Res
     end;
-maybe_fork_worker(OtherRes, _ExecName, _Opts) ->
-    ?event_debug(debug_ao_core, {stage, 12, _ExecName, abnormal_status_skip_spawning}, _Opts),
+resolve_stage(11, _Base, _Req, OtherRes, _Original, _ExecName, _Opts) ->
+    ?event_debug(debug_ao_core, {stage, 11, _ExecName, abnormal_status_skip_spawning}, _Opts),
     OtherRes.
 
 %% @doc Execute a sub-resolution.
@@ -895,7 +882,7 @@ ensure_message_loaded(Msg, _Opts) ->
 
 %% @doc Resolve the device function for a loaded base and vary the inputs
 %% by its schema. Return the function, optionally paired with its handler key,
-%% alongside the varied inputs and original overlay target.
+%% alongside the varied inputs and overlay target.
 vary_loaded(Base, Req, Opts) ->
     UserOpts = hb_maps:without(?TEMP_OPTS, Opts, Opts),
     Key = hb_path:hd(Req, UserOpts),
@@ -929,21 +916,10 @@ vary_loaded(Base, Req, Opts) ->
         {ok, VariedBase, VariedReq, none} ->
             {Resolver, VariedBase, VariedReq, no_overlay};
         {ok, VariedBase, VariedReq, Overlay} ->
-            Original = case Overlay of base -> Base; request -> Req end,
-            {Resolver, VariedBase, VariedReq, {Overlay, Original}};
+            {Resolver, VariedBase, VariedReq, Overlay};
         no_spec ->
             {Resolver, Base, Req, no_overlay}
     end.
-
-%% @doc `set` a result that the schema declares to be an overlay on top of the
-%% original `Base` or `Request` message as indicated, if and only if the result
-%% is a message itself. Literal values are returned without extending either
-%% input.
-apply_vary_overlay({ExtType, Original}, _Base, _Req, {ok, Res}, Opts)
-        when is_map(Res), (ExtType == base orelse ExtType == request) ->
-    {ok, set(Original, Res, internal_opts(Opts))};
-apply_vary_overlay(_IgnoredVaryState, _Base, _Req, Res, _Opts) ->
-    Res.
 
 %% @doc Catch all return if we are in an infinite loop.
 error_infinite(Base, Req, Opts) ->

@@ -4,6 +4,7 @@
 %%% response to a request.
 -module(hb_cache_control).
 -export([maybe_store/4, maybe_lookup/3]).
+-export([derive_cache_settings/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -140,7 +141,7 @@ perform_cache_write(Base, Req, Res, Opts) ->
                 Opts
             );
         Map when is_map(Map) ->
-            hb_cache:write_hashpath(Res, Opts);
+            hb_cache:write_hashpath(hb_path:hashpath(Base, Req, Opts), Res, Opts);
         _ ->
             ?event({cannot_write_result, Res}),
             skip_caching
