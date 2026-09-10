@@ -272,16 +272,16 @@ parse_fun_spec(Other, _TypeEnv) ->
     {[unknown_type(Other)], any_type()}.
 
 %% @doc Compile an abstract type into a schema. `TypeEnv' holds the module's
-%% own types, `VarEnv' the bindings of the type variables of the one being
+%% own types, `VarEnv' the schemas bound to the type variables of the one being
 %% expanded, and `Seen' the types under expansion, so that a recursive type
 %% becomes an alias rather than a loop.
 parse_type({ann_type, _, [_Var, Type]}, TypeEnv, VarEnv, Seen) ->
     parse_type(Type, TypeEnv, VarEnv, Seen);
 parse_type({var, _, '_'}, _TypeEnv, _VarEnv, _Seen) ->
     wildcard_type();
-parse_type({var, _, Name}, TypeEnv, VarEnv, Seen) ->
+parse_type({var, _, Name}, _TypeEnv, VarEnv, _Seen) ->
     case maps:find(Name, VarEnv) of
-        {ok, Bound} -> parse_type(Bound, TypeEnv, VarEnv, Seen);
+        {ok, Bound} -> Bound;
         error -> variable_type(Name)
     end;
 parse_type({user_type, _, Name, Args}, TypeEnv, VarEnv, Seen) ->
@@ -291,7 +291,12 @@ parse_type({user_type, _, Name, Args}, TypeEnv, VarEnv, Seen) ->
             parse_type(
                 Ast,
                 TypeEnv,
-                maps:merge(VarEnv, maps:from_list(lists:zip(Vars, Args))),
+                maps:from_list(
+                    lists:zip(
+                        Vars,
+                        [ parse_type(Arg, TypeEnv, VarEnv, Seen) || Arg <- Args ]
+                    )
+                ),
                 [TypeKey | Seen]
             );
         _ ->
