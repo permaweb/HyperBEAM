@@ -68,11 +68,17 @@
 %% The published Arweave offset index: a mined transaction holding
 %% 8,560,638,056 packed rows mapping ANS-104 data item IDs to their weave
 %% byte ranges, read in place by `hb_store_arlmdb'. Offset resolution
-%% through it is served by Arweave peers alone.
+%% through it is served by Arweave peers alone. The store pipeline maps
+%% `~arweave@2.9/offset=<id>' keys onto its values: an ID's leading 77 bits
+%% seek, and a value's trailing bits are the item's `start' and `length'.
 -define(DEFAULT_OFFSET_INDEX, #{
     <<"store-module">> => hb_store_arlmdb,
     <<"name">> => <<"published-offset-index">>,
-    <<"root">> => <<"7vg2832WFsisEcBr1oBQ8ldc4EGOkjQdwW46hDvJsOs">>
+    <<"root">> => <<"7vg2832WFsisEcBr1oBQ8ldc4EGOkjQdwW46hDvJsOs">>,
+    <<"prefix">> => <<"~arweave@2.9/offset=">>,
+    <<"to-key">> => <<"~base64url@1.0/decode/~bits@1.0/take=77">>,
+    <<"from-value">> =>
+        <<"~bits@1.0/from=_:77,start:49+integer,length:34+integer">>
 }).
 -define(DEFAULT_GATEWAY, <<"https://arweave.net">>).
 -define(
