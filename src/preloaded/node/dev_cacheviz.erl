@@ -3,10 +3,11 @@
 -module(dev_cacheviz).
 -export([dot/3, svg/3, json/3, index/3, js/3]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %% @doc Output the dot representation of the cache, or a specific path within
 %% the cache set by the `target' key in the request.
--spec dot(#{ _ => _ }, #{ target => binary(), 'render-data' => boolean(), _ => _ }, #{ _ => _ }) ->
+-spec dot(#{ _ => _ }, #{ target => _, 'render-data' => boolean(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ 'content-type' := binary(), body := binary() }}.
 dot(_, Req, Opts) ->
     Target = hb_ao:get(<<"target">>, Req, all, Opts),
@@ -25,7 +26,7 @@ dot(_, Req, Opts) ->
 
 %% @doc Output the SVG representation of the cache, or a specific path within
 %% the cache set by the `target' key in the request.
--spec svg(#{ _ => _ }, #{ target => binary(), 'render-data' => boolean(), _ => _ }, #{ _ => _ }) ->
+-spec svg(#{ _ => _ }, #{ target => _, 'render-data' => boolean(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ 'content-type' := binary(), body := binary() }}.
 svg(Base, Req, Opts) ->
     {ok, #{ <<"body">> := Dot }} = dot(Base, Req, Opts),
@@ -37,7 +38,7 @@ svg(Base, Req, Opts) ->
 %% the `graph.js' library. If the request specifies a `target' key, we use that
 %% target. Otherwise, we generate a new target by writing the message to the
 %% cache and using the ID of the written message.
--spec json(#{ _ => _ }, #{ target => binary(), 'max-size' => integer(), _ => _ }, #{ _ => _ }) ->
+-spec json(#{ _ => _ }, #{ target => _, 'max-size' => integer(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ _ => _ }} | #{ _ => _ }.
 json(Base, Req, Opts) ->
     ?event({json, {base, Base}, {req, Req}}),
@@ -75,3 +76,25 @@ index(Base, _, Opts) ->
 -spec js(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 js(_, _, Opts) ->
     hb_http_server:static(<<"cacheviz@1.0">>, <<"graph.js">>, Opts).
+
+%%% Tests
+
+%% @doc An explicit native all target includes every seeded cache entry.
+native_all_target_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    Paths = lists:map(
+        fun(Value) ->
+            {ok, ID} = hb_cache:write(#{ <<"value">> => Value }, Opts),
+            {ok, Path} = hb_store:resolve(maps:get(<<"store">>, Opts), ID, Opts),
+            Path
+        end,
+        [<<"first">>, <<"second">>, <<"third">>]
+    ),
+    {ok, Result} = hb_ao:resolve(#{ <<"device">> => <<"cacheviz@1.0">> },
+        #{ <<"path">> => <<"json">>, <<"target">> => all }, Opts),
+    Graph = hb_json:decode(hb_maps:get(<<"body">>, Result, Opts)),
+    Nodes = [maps:get(<<"id">>, Node) || Node <- maps:get(<<"nodes">>, Graph)],
+    lists:foreach(fun(Path) -> ?assert(lists:member(Path, Nodes)) end, Paths).
