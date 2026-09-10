@@ -642,8 +642,8 @@ schedule_result(TargetProcess, MsgToPush, CommitSpec, Origin, Opts) ->
             % `from-*' provenance and honoring the policy, rather than
             % re-committing the raw message with the default wallet.
             NormMsg = normalize_message(MsgToPush, Opts),
-            SignedNormMsg = apply_security(
-                NormMsg, TargetProcess, CommitSpec, Opts),
+            SignedNormMsg =
+                apply_security(NormMsg, TargetProcess, CommitSpec, Opts),
             retry_required_codec(
                 TargetProcess,
                 MsgToPush,
@@ -743,10 +743,12 @@ retry_required_codec(
             {ToSign, CommitSpec} =
                 case Spec of
                     _ when is_map(Spec) ->
-                        {normalize_message(Msg, Opts),
+                        {
+                            normalize_message(Msg, Opts),
                             quoted_commitment_spec(
                                 Spec#{ <<"commitment-device">> => RequiredCodec }
-                            )};
+                            )
+                        };
                     _ -> {Msg, RequiredCodec}
                 end,
             schedule_result(
