@@ -100,7 +100,7 @@ events(_, _Req, _Opts) ->
 %% `debug-resolve-links' option; `true' resolves all levels.
 -spec format(
     #{ _ => _ },
-    #{ format => binary() | [binary()], 'truncate-keys' => integer(), _ => _ },
+    #{ format => binary() | [binary()], 'truncate-keys' => _, _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ body := binary(), _ => _ }}.
 format(Base, Req, Opts) ->
@@ -206,6 +206,25 @@ return_error(ErrorMsg, Opts) ->
     ).
 
 %%% Tests
+
+%% @doc Native infinity retains every application field in formatted output.
+format_infinity_test() ->
+    Opts = #{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
+    Fields = [{<<"field-", (integer_to_binary(N))/binary>>,
+        <<"value-", (integer_to_binary(N))/binary, "-end">>}
+        || N <- lists:seq(1, 40)],
+    Base = (maps:from_list(Fields))#{ <<"device">> => <<"hyperbuddy@1.0">> },
+    {ok, Result} = hb_ao:resolve(Base, #{
+        <<"path">> => <<"format">>, <<"truncate-keys">> => infinity
+    }, Opts),
+    Body = hb_maps:get(<<"body">>, Result, Opts),
+    lists:foreach(
+        fun({Key, Value}) ->
+            ?assertNotEqual(nomatch, binary:match(Body, Key)),
+            ?assertNotEqual(nomatch, binary:match(Body, Value))
+        end,
+        Fields
+    ).
 
 return_templated_file_test() ->
     {ok, #{ <<"body">> := Body }} =
