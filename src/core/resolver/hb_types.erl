@@ -144,6 +144,19 @@ top_level_schema(Schema) ->
 
 %% @doc Add a key to a message schema, unless the schema declares it.
 implicit_key(
+    Schema = #{ <<"kind">> := <<"union">>, <<"members">> := Members },
+    Key,
+    Presence
+) ->
+    Schema#{
+        <<"members">> =>
+            [
+                implicit_key(top_level_schema(Member), Key, Presence)
+            ||
+                Member <- Members
+            ]
+    };
+implicit_key(
     Schema = #{ <<"kind">> := <<"message">>, <<"keys">> := Keys },
     Key,
     Presence
