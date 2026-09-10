@@ -888,6 +888,115 @@ invoke_non_compute_key_test() ->
     ?event({result2, Result2}),
     ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
 
+top_holders_fixture(MaxAge) ->
+    Store = hb_test_utils:test_store(),
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"store">> => [Store],
+        <<"priv-wallet">> => Wallet,
+        <<"cache-control">> => [<<"always">>]
+    },
+    Balances = #{ <<"alice">> => <<"1">>, <<"bob">> => <<"3">> },
+    Trie = maps:fold(
+        fun(Address, Balance, Acc) ->
+            {ok, Updated} = hb_ao:resolve(
+                Acc,
+                #{ <<"path">> => <<"set">>, Address => Balance },
+                Opts
+            ),
+            Updated
+        end,
+        #{ <<"device">> => <<"trie@1.0">> },
+        Balances
+    ),
+    Process = hb_message:commit(
+        #{
+            <<"device">> => <<"process@1.0">>,
+            <<"scheduler-device">> => <<"scheduler@1.0">>,
+            <<"scheduler-location">> =>
+                hb_util:human_id(ar_wallet:to_address(Wallet)),
+            <<"execution-device">> => <<"message@1.0">>,
+            <<"type">> => <<"Process">>
+        },
+        Opts
+    ),
+    ProcessID = hb_util:human_id(hb_message:id(Process, all, Opts)),
+    {ok, TrieID} = hb_cache:write(Trie, Opts),
+    {ok, StateID} = hb_cache:write(
+        (hb_message:uncommitted(Process, Opts))#{
+            <<"at-slot">> => 0,
+            <<"balances">> => {link, TrieID, #{ <<"type">> => <<"link">> }},
+            <<"process">> => Process
+        },
+        Opts
+    ),
+    ok = hb_cache:link(
+        StateID,
+        <<"computed/", ProcessID/binary, "/slot/0">>,
+        Opts
+    ),
+    {ok, Script} = file:read_file("scripts/lua-top-holders.lua"),
+    Function = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"content-type">> => <<"application/lua">>,
+        <<"body">> => Script
+    },
+    Req = #{
+        <<"path">> => <<"top">>,
+        <<"top">> => 2,
+        <<"process-id">> => ProcessID,
+        <<"max-age">> => MaxAge
+    },
+    {Function, Req, Opts}.
+
+top_holders_cache_test() ->
+    {Function, Req, Opts} = top_holders_fixture(60),
+    {ok, Result} = hb_ao:resolve(Function, Req, Opts),
+    Holders = hb_json:decode(hb_maps:get(<<"body">>, Result, Opts)),
+    ?assertEqual(<<"bob">>, hb_maps:get(<<"address">>, hd(Holders), Opts)).
+
+top_holders_max_age_cache_test() ->
+    {Function, Req, Opts} = top_holders_fixture(60),
+    assert_top_holders_max_age_cache(Function, Req, Opts).
+
+%% @doc Cache and expire a Lua map when the function is addressed by its ID.
+top_holders_max_age_cache_by_id_test() ->
+    {Function, Req, Opts} = top_holders_fixture(60),
+    {ok, FunctionID} = hb_cache:write(Function, Opts),
+    assert_top_holders_max_age_cache(FunctionID, Req, Opts).
+
+%% @doc Assert the fresh and stale cache behavior for a Lua function reference.
+assert_top_holders_max_age_cache(Function, Req, Opts) ->
+    {ok, First} = hb_ao:resolve(Function, Req, Opts),
+    CacheOnlyOpts = Opts#{ <<"cache-control">> => [<<"only-if-cached">>] },
+    {ok, Fresh} = hb_ao:resolve(Function, Req, CacheOnlyOpts),
+    ?assertEqual(
+        hb_message:id(First, none, Opts),
+        hb_message:id(Fresh, none, Opts)
+    ),
+    ?assertEqual(
+        hb_message:id(First, all, Opts),
+        hb_message:id(Fresh, all, Opts)
+    ),
+    ?assertEqual(
+        hb_maps:get(<<"commitments">>, First, Opts),
+        hb_maps:get(<<"commitments">>, Fresh, Opts)
+    ),
+    ?assert(hb_message:verify(Fresh, all, Opts)),
+    ?assertEqual(false, maps:is_key(<<"priv-created-at">>, Fresh)),
+    ?assertEqual(false, maps:is_key(<<"created-at">>, Fresh)),
+    CacheAddress = hb_cache:resolved_address(Function, Req, Opts),
+    {ok, _} = hb_cache:write_resolved(
+        CacheAddress,
+        First,
+        os:system_time(second) - 61,
+        Opts
+    ),
+    ?assertMatch(
+        {error, #{ <<"status">> := 504, <<"cache-status">> := <<"miss">> }},
+        hb_ao:resolve(Function, Req, CacheOnlyOpts)
+    ).
+
 %% @doc Use a Lua module as a hook on the HTTP server via `~meta@1.0'.
 lua_http_hook_test() ->
     {ok, Module} = file:read_file("test/test.lua"),

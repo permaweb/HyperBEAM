@@ -3,7 +3,7 @@
 -export([info/3]).
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
--export([index/3, postprocess/3, load/3]).
+-export([index/3, max_age/3, postprocess/3, load/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -42,6 +42,7 @@ info(_Base, _Req, _Opts) ->
 			<<"mul">> => <<"Multiply function">>,
 			<<"snapshot">> => <<"Snapshot function">>,
 			<<"response">> => <<"Response function">>,
+			<<"max-age">> => <<"Return a one-second cache response">>,
 			<<"append">> => <<"Append a test value">>,
 			<<"update_state">> => <<"Update state function">>
 		}
@@ -55,6 +56,16 @@ index(Msg, _Req, Opts) ->
         #{
             <<"content-type">> => <<"text/html">>,
             <<"body">> => <<"i like ", Name/binary, "!">>
+        }
+    }.
+
+%% @doc Return a response with a one-second freshness lifetime.
+max_age(_Base, _Req, _Opts) ->
+    {ok,
+        #{
+            <<"status">> => 200,
+            <<"body">> => <<"cached">>,
+            <<"cache-control">> => <<"max-age=1">>
         }
     }.
 
