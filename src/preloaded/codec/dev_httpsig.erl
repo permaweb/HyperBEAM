@@ -149,7 +149,7 @@ verify(Base, Req, RawOpts) ->
 %% parameter is `unsigned', we default to the hmac-sha256 algorithm.
 -spec commit(
     #{ _ => _ },
-    #{ type := binary(), bundle => boolean(), committed => [_], _ => _ },
+    #{ type := binary(), bundle => boolean(), committed => [_] | #{ _ => _ }, _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
 commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
@@ -617,6 +617,25 @@ validate_large_message_from_http_test() ->
             Opts
         ),
     ?assertEqual([<<"hashpath">>], HashpathCommitted).
+
+committed_key_input_forms_test() ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
+    Numbered = #{ <<"1">> => <<"x">> },
+    {ok, Path} = hb_cache:write(Numbered, Opts),
+    lists:foreach(
+        fun(Keys) ->
+            {ok, Signed} = hb_ao:resolve(
+                #{ <<"device">> => <<"httpsig@1.0">>, <<"x">> => <<"value">> },
+                #{ <<"path">> => <<"commit">>, <<"type">> => <<"unsigned">>,
+                    <<"committed">> => Keys },
+                Opts
+            ),
+            ?assert(hb_message:verify(Signed, all, Opts)),
+            ?assertEqual([<<"x">>], hb_message:committed(Signed, all, Opts))
+        end,
+        [[<<"x">>], Numbered, {link, Path, #{}}]
+    ).
 
 committed_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },

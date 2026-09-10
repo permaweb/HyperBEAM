@@ -334,8 +334,8 @@ schema(Module, Opts) ->
     end.
 
 %% @doc Memoise the function schemas of every module in a loaded archive in
-%% the shared `loaded-device-store'. Archive modules are loaded from memory
-%% rather than the code path, so their BEAMs are in hand here alone. The
+%% the process cache and shared `loaded-device-store'. Archive modules are
+%% loaded from memory, so their BEAMs are in hand here alone. The
 %% schemas are Erlang terms: the store must be an `hb_store_volatile'.
 put_schemas(Archive, Opts) ->
     {ok, Modules, _Resources} = hb_device_archive:contents(Archive),
@@ -343,7 +343,10 @@ put_schemas(Archive, Opts) ->
         loaded_device_store(Opts),
         maps:from_list(
             [
-                {schema_key(Module), Schemas}
+                begin
+                    erlang:put({?MODULE, schema, Module}, {ok, Schemas}),
+                    {schema_key(Module), Schemas}
+                end
             ||
                 {Module, _Path, Beam} <- Modules,
                 {ok, Schemas} <- [hb_types:extract(Beam)]
@@ -482,6 +485,30 @@ compatible(Msg, Opts) ->
         [] -> ok;
         _ -> {error, {failed_requirements, Failed}}
     end.
+
+%% @doc Archive schemas are available in each loading process without a store.
+schema_without_shared_store_test() ->
+    lists:foreach(
+        fun(_) ->
+            {Worker, Monitor} = spawn_monitor(fun() ->
+                Opts = #{ <<"loaded-device-store">> => [] },
+                {ok, Module} = reference(<<"test-device@1.0">>, Opts),
+                ?assertMatch(
+                    {ok, #{ <<"vary-wildcard">> := #{ 3 := _ } }},
+                    schema(Module, Opts)
+                )
+            end),
+            receive
+                {'DOWN', Monitor, process, Worker, Reason} ->
+                    ?assertEqual(normal, Reason)
+            after 5000 ->
+                exit(Worker, kill),
+                erlang:demonitor(Monitor, [flush]),
+                error(schema_load_timeout)
+            end
+        end,
+        [first_process, second_process]
+    ).
 
 %% @doc Loading a device memoises its modules' schemas in the shared store,
 %% where a process that never loaded the archive finds them.
