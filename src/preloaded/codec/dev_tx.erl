@@ -17,6 +17,10 @@ commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"unsigned-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => ?RSA_SIGN_TYPE }, Opts);
+commit(Msg, Req = #{ <<"type">> := ?RSA_SIGN_TYPE,
+                    <<"tx-header">> := Header }, Opts) ->
+    {ok, TX} = header(Msg, Header, Opts),
+    commit(TX, maps:remove(<<"tx-header">>, Req), Opts);
 commit(Msg, Req = #{ <<"type">> := ?RSA_SIGN_TYPE }, Opts) ->
     ?event({committing, {msg, Msg}, {req, Req}}),
     % Convert the given message to an L1 TX record, sign it, and convert
@@ -139,7 +143,49 @@ to(TABM, Req, Opts) when is_map(TABM) ->
     {ok, TX};
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
-    
+
+%% @doc Encode a data-free scheduling TX with a native quantity of one winston
+%% and the quoted reward and anchor.
+header(TABM, Header, Opts) ->
+    TagMsg =
+        hb_maps:without(
+            [
+                <<"anchor">>, <<"ao-data-key">>, <<"ao-types">>,
+                <<"commitments">>, <<"data">>, <<"data_root">>,
+                <<"data_size">>, <<"format">>, <<"reward">>,
+                <<"tags">>, <<"target">>
+            ],
+            hb_private:reset(TABM),
+            Opts
+        ),
+    % Re-signing a committed header preserves its original tag list.
+    TX0 =
+        case hb_message:commitment(
+                #{ <<"commitment-device">> => <<"tx@1.0">> }, TABM, Opts) of
+            not_found ->
+                #tx{ tags = lib_arweave_common:tags(
+                    #tx{}, not_found, TagMsg, [], Opts) };
+            _ -> hb_util:ok(to(TABM, #{}, Opts))
+        end,
+    TX = TX0#tx{
+        format = 2,
+        target = hb_util:decode(hb_maps:get(<<"target">>, TABM, not_found, Opts)),
+        quantity = 1,
+        reward = hb_util:int(hb_maps:get(<<"reward">>, Header, not_found, Opts)),
+        anchor = hb_util:decode(hb_maps:get(<<"anchor">>, Header, not_found, Opts)),
+        data = <<>>,
+        data_size = 0,
+        data_root = <<>>
+    },
+    enforce_valid_tx(TX),
+    % L1 tags have a 2048-byte budget and must fit the codec's tag count limit.
+    case length(TX#tx.tags) =< ?MAX_TAG_COUNT andalso
+            iolist_size([[Key, Value] || {Key, Value} <- TX#tx.tags]) =< 2048 of
+        true -> ok;
+        false -> throw({tx_header_too_large, TX#tx.tags})
+    end,
+    {ok, ar_tx:normalize(TX)}.
+
 %% @doc Verifies that the given transaction is a minimally valid signed or
 %% unsigned transaction.
 %% 
@@ -1455,6 +1501,52 @@ do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req) ->
     % TX -> TABM
     FinalTABM = hb_util:ok(from(SignedTX, Req, #{})),
     ?assertEqual(SignedTABM, FinalTABM, signed_tabm_roundtrip).
+
+header_commitment_test() ->
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"store">> => [hb_test_utils:test_store()]
+    },
+    Target = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Anchor = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Msg = #{
+        <<"target">> => Target,
+        <<"quantity">> => 42,
+        <<"action">> => <<"Test">>
+    },
+    Header = #{ <<"reward">> => 7, <<"anchor">> => Anchor },
+    {ok, HeaderID} = hb_cache:write(Header, Opts),
+    Spec = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"tx-header">> => Header
+    },
+    lists:foreach(
+        fun(QuoteHeader) ->
+            Signed = hb_message:commit(
+                Msg, Opts, Spec#{ <<"tx-header">> => QuoteHeader }),
+            TX = hb_message:convert(Signed, <<"tx@1.0">>, Opts),
+            ?assertEqual(hb_util:decode(Target), TX#tx.target),
+            ?assertEqual(1, TX#tx.quantity),
+            ?assertEqual(7, TX#tx.reward),
+            ?assertEqual(hb_util:decode(Anchor), TX#tx.anchor),
+            ?assertEqual(<<>>, TX#tx.data),
+            ?assertEqual(0, TX#tx.data_size),
+            ?assertEqual(
+                [{<<"action">>, <<"Test">>}, {<<"quantity">>, <<"42">>}],
+                TX#tx.tags
+            ),
+            Decoded = hb_message:convert(
+                TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
+            ?assert(hb_message:verify(Decoded, signers, Opts)),
+            ?assertEqual(TX, hb_message:convert(Decoded, <<"tx@1.0">>, Opts))
+        end,
+        [Header, {link, HeaderID, #{}}]
+    ),
+    ?assertThrow(
+        {tx_header_too_large, _},
+        hb_message:commit(
+            Msg#{ <<"action">> => binary:copy(<<"x">>, 2048) }, Opts, Spec)
+    ).
 
 bundle_commitment_test() ->
     test_bundle_commitment(unbundled, unbundled, unbundled),

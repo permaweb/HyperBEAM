@@ -7,7 +7,7 @@
 -implements(<<"arweave-scheduler@1.0">>).
 -device_libraries([lib_process]).
 -export([info/0, router/4]).
--export([schedule/3, next/3, slot/3, status/3, sync/3, checkpoint/1]).
+-export([schedule/3, quote/3, next/3, slot/3, status/3, sync/3, checkpoint/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -21,6 +21,7 @@ info() ->
                 <<"sync">>,
                 <<"next">>,
                 <<"schedule">>,
+                <<"quote">>,
                 <<"slot">>,
                 <<"init">>,
                 <<"checkpoint">>
@@ -68,6 +69,50 @@ schedule(Base, Req, Opts) ->
     case hb_util:key_to_atom(hb_maps:get(<<"method">>, Req, <<"GET">>, Opts)) of
         post -> post_schedule(Base, Req, Opts);
         get -> get_schedule(Base, Req, Opts)
+    end.
+
+%% @doc Quote the reward and anchor for a data-free transaction. The quote is
+%% a commitment specification; the sender supplies its own signing identity.
+quote(Base, Req, Opts) ->
+    RawTarget =
+        hb_ao:get_first(
+            [{Req, <<"body/target">>}, {Req, <<"target">>}, {Base, <<"target">>}],
+            Opts
+        ),
+    [Target | _] = binary:split(RawTarget, [<<"?">>, <<"&">>]),
+    FreshOpts = Opts#{
+        <<"hashpath">> => ignore,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    maybe
+        {ok, Reward} ?=
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{
+                    <<"path">> => <<"price">>,
+                    <<"size">> => 0,
+                    <<"target">> => Target
+                },
+                FreshOpts
+            ),
+        {ok, Anchor} ?=
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{ <<"path">> => <<"tx-anchor">> },
+                FreshOpts
+            ),
+        {ok,
+            #{
+                <<"commitment-spec">> => #{
+                    <<"commitment-device">> => <<"tx@1.0">>,
+                    <<"tx-header">> => #{
+                        <<"reward">> => Reward,
+                        <<"anchor">> => hb_util:encode(Anchor)
+                    }
+                },
+                <<"cache-control">> => <<"no-store">>
+            }
+        }
     end.
 
 get_schedule(Base, Req, Opts) ->
@@ -131,6 +176,11 @@ post_schedule(Base, Req, Opts) ->
                     <<"process">> => ProcessID
                 }
             };
+        {error, #{ <<"require-codec">> := _ } = Rejection} ->
+            maybe
+                {ok, Quote} ?= quote(Base, Req, Opts),
+                {error, hb_maps:merge(Quote, Rejection, Opts)}
+            end;
         Error -> Error
     end.
 
@@ -295,26 +345,59 @@ slot_range_test() ->
 
 invalid_commitment_requires_tx_codec_test() ->
     ProcessID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Anchor = hb_util:encode(crypto:strong_rand_bytes(48)),
+    {Server, Routes} = hb_mock_server:start_arweave_gateway(#{
+        price => {200, <<"7">>},
+        tx_anchor => {200, Anchor}
+    }),
     Opts =
-        #{
+        Routes#{
             <<"priv-wallet">> => ar_wallet:new(),
             <<"store">> => [hb_test_utils:test_store()]
         },
     Message = hb_message:commit(#{ <<"target">> => ProcessID }, Opts),
-    ?assertMatch(
-        {error,
+    try
+        ?assertMatch(
+            {error,
+                #{
+                    <<"status">> := 422,
+                    <<"require-codec">> := <<"tx@1.0">>,
+                    <<"commitment-spec">> := #{
+                        <<"commitment-device">> := <<"tx@1.0">>,
+                        <<"tx-header">> := #{
+                            <<"reward">> := 7,
+                            <<"anchor">> := Anchor
+                        }
+                    }
+                }},
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave-scheduler@1.0">> },
+                #{
+                    <<"path">> => <<"schedule">>,
+                    <<"method">> => <<"POST">>,
+                    <<"target">> => ProcessID,
+                    <<"body">> => Message
+                },
+                Opts
+            )
+        ),
+        Node = hb_http_server:start_node(Opts),
+        {ok, Quote} = hb_http:post(
+            Node,
             #{
-                <<"status">> := 422,
-                <<"require-codec">> := <<"tx@1.0">>
-            }},
-        hb_ao:resolve(
-            #{ <<"device">> => <<"arweave-scheduler@1.0">> },
-            #{
-                <<"path">> => <<"schedule">>,
-                <<"method">> => <<"POST">>,
-                <<"target">> => ProcessID,
+                <<"path">> => <<"/~arweave-scheduler@1.0/quote">>,
                 <<"body">> => Message
             },
             Opts
+        ),
+        ?assertEqual(7,
+            hb_ao:get(<<"commitment-spec/tx-header/reward">>, Quote, Opts)),
+        ?assertEqual([], hb_mock_server:get_requests(Server, tx)),
+        [PriceReq, _] = hb_mock_server:get_requests(Server, price),
+        ?assertEqual(
+            <<"/price/0/", ProcessID/binary>>,
+            hb_ao:get(<<"path">>, PriceReq, Opts)
         )
-    ).
+    after
+        hb_mock_server:stop(Server)
+    end.
