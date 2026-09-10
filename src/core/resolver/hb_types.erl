@@ -840,145 +840,74 @@ unaltered_message_is_identical_test() ->
     {Varied, _} = apply_schema(implicit_base(Schema), Message, #{}),
     ?assert(erts_debug:same(Message, Varied)).
 
-%% @doc Projecting only a child invalidates both signatures, not just the child's.
-nested_projection_drops_commitments_test() ->
-    Wallet = ar_wallet:new(),
-    Signer = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Opts = #{
-        <<"store">> => hb_test_utils:test_store(),
-        <<"priv-wallet">> => Wallet
-    },
-    Child = hb_message:commit(
-        #{ <<"slot">> => 7, <<"noise">> => 8 }, Opts, <<"httpsig@1.0">>
-    ),
-    Signed = hb_message:commit(
-        #{ <<"child">> => Child }, Opts, <<"httpsig@1.0">>
-    ),
-    ?assert(hb_message:verify(Signed, [Signer], Opts)),
-    Keep = #{ <<"presence">> => optional, <<"type">> => wildcard_type() },
-    ChildSchema = message_type(
-        #{
-            <<"slot">> => #{
-                <<"presence">> => required, <<"type">> => scalar_type(<<"integer">>)
-            },
-            <<"commitments">> => Keep
-        },
-        none
-    ),
-    Schema = message_type(
-        #{ <<"child">> => #{ <<"presence">> => required, <<"type">> => ChildSchema } },
-        Keep
-    ),
-    {Varied, _} = apply_schema(Schema, Signed, Opts),
-    ?assertEqual(#{ <<"child">> => #{ <<"slot">> => 7 } }, Varied).
 
-%% @doc Each wildcard/projection case runs independently of the others.
-wildcard_commitments_test_() ->
+%% @doc Typed wildcards exclude declared keys and distinguish loading from coercion.
+wildcard_changes_test_() ->
     [
-        {atom_to_list(Operation), fun() -> wildcard_commitments(Operation) end}
-    || Operation <- [unchanged, loaded, coerced, projected, optional_absent]
+        {binary_to_list(Type), fun() -> wildcard_changes(Type) end}
+    ||
+        Type <- [<<"integer">>, <<"binary">>]
     ].
 
-%% @doc Keep signatures only when the admitted message's content is unchanged.
-wildcard_commitments(Operation) ->
-    Wallet = ar_wallet:new(),
-    Signer = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Opts = #{
-        <<"store">> => hb_test_utils:test_store(),
-        <<"priv-wallet">> => Wallet
-    },
-    Payload = #{ <<"slot">> => 7, <<"extra">> => 8 },
-    Signed = hb_message:commit(Payload, Opts, <<"httpsig@1.0">>),
-    SignedID = hb_message:id(Signed, [Signer], Opts),
-    {ok, _} = hb_cache:write(Signed, Opts),
-    {ok, Lazy} = hb_cache:read(SignedID, Opts),
+%% @doc Only changing a wildcard's values sets the content-change flag.
+wildcard_changes(Type) ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
+    Message = #{ <<"slot">> => 7, <<"extra">> => 8 },
+    {ok, ID} = hb_cache:write(Message, Opts),
+    {ok, Lazy} = hb_cache:read(ID, Opts),
     ?assertMatch({link, _, _}, maps:get(<<"slot">>, Lazy)),
-    ?assert(hb_message:verify(Lazy, [Signer], Opts)),
-    Projection = required(<<"commitments">>, wildcard_type()),
-    Integer = #{
-        <<"presence">> => required, <<"type">> => scalar_type(<<"integer">>)
-    },
-    {Schema, Input, Expected, Preserve} =
-        case Operation of
-            unchanged ->
-                {Projection#{ <<"wildcard">> => Integer }, Signed, Payload, true};
-            loaded ->
-                {Projection#{ <<"wildcard">> => Integer }, Lazy, Payload, true};
-            coerced ->
-                {Projection#{ <<"wildcard">> => Integer#{
-                    <<"type">> => scalar_type(<<"binary">>)
-                } }, Lazy, #{ <<"slot">> => <<"7">>, <<"extra">> => <<"8">> }, false};
-            projected ->
-                {Projection#{ <<"keys">> =>
-                    (maps:get(<<"keys">>, Projection))#{ <<"slot">> => Integer }
-                }, Signed, #{ <<"slot">> => 7 }, false};
-            optional_absent ->
-                {message_type(
-                    #{ <<"absent">> => Integer#{ <<"presence">> => optional } },
-                    #{ <<"presence">> => optional, <<"type">> => wildcard_type() }
-                ), Signed, Payload, true}
+    Wildcard = #{ <<"presence">> => required, <<"type">> => scalar_type(Type) },
+    {Expected, Changed} =
+        case Type of
+            <<"integer">> -> {Message, false};
+            <<"binary">> -> {#{ <<"slot">> => <<"7">>, <<"extra">> => <<"8">> }, true}
         end,
-    {Varied, _} = apply_schema(Schema, Input, Opts),
-    ?assertEqual(Expected, hb_message:uncommitted(Varied, Opts)),
-    case Preserve of
-        true ->
-            ?assert(lists:member(Signer, hb_message:signers(Varied, Opts))),
-            ?assertEqual(SignedID, hb_message:id(Varied, [Signer], Opts)),
-            ?assert(hb_message:verify(Varied, [Signer], Opts));
-        false -> ?assertNot(hb_maps:is_key(<<"commitments">>, Varied, Opts))
-    end.
+    Schema = (required(<<"keep">>, wildcard_type()))#{ <<"wildcard">> => Wildcard },
+    ?assertEqual(
+        {Expected#{ <<"keep">> => <<"x">> }, Changed},
+        apply_schema(Schema, Lazy#{ <<"keep">> => <<"x">> }, Opts)
+    ).
 
-%% @doc List loading is identity-preserving; changing an element is not.
-list_commitments_test_() ->
+%% @doc List elements propagate content changes, including nested messages.
+list_changes_test_() ->
+    Cases =
+        [
+            {"loaded list", 7, false, false},
+            {"coerced list element", <<"007">>, false, true},
+            {"loaded child in list", 7, true, false},
+            {"coerced child in list", <<"007">>, true, true}
+        ],
     [
-        {Description, fun() -> list_commitments(Value, Nested, Preserve) end}
-    || {Description, Value, Nested, Preserve} <- [
-        {"loaded list", 7, false, true},
-        {"coerced list element", <<"007">>, false, false},
-        {"loaded child in list", 7, true, true},
-        {"coerced child in list", <<"007">>, true, false}
-    ]
+        {Description, fun() -> list_changes(Value, Nested, Changed) end}
+    ||
+        {Description, Value, Nested, Changed} <- Cases
     ].
 
-%% @doc Exercise a cached list independently from nested message variation.
-list_commitments(Value, Nested, Preserve) ->
-    Wallet = ar_wallet:new(),
-    Signer = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Opts = #{ <<"store">> => hb_test_utils:test_store(), <<"priv-wallet">> => Wallet },
-    Item = case Nested of true -> #{ <<"slot">> => Value }; false -> Value end,
-    Signed = hb_message:commit(#{ <<"items">> => [Item] }, Opts, <<"httpsig@1.0">>),
-    SignedID = hb_message:id(Signed, [Signer], Opts),
-    {ok, _} = hb_cache:write(Signed, Opts),
-    {ok, Lazy} = hb_cache:read(SignedID, Opts),
+%% @doc Materialization alone must not set the enclosing message's change flag.
+list_changes(Value, Nested, Changed) ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
+    Item =
+        case Nested of
+            true -> #{ <<"slot">> => Value };
+            false -> Value
+        end,
+    {ok, ID} = hb_cache:write(#{ <<"items">> => [Item] }, Opts),
+    {ok, Lazy} = hb_cache:read(ID, Opts),
     ?assertMatch({link, _, _}, maps:get(<<"items">>, Lazy)),
-    ?assert(hb_message:verify(Lazy, [Signer], Opts)),
     Integer = scalar_type(<<"integer">>),
-    Keep = #{ <<"presence">> => optional, <<"type">> => wildcard_type() },
     {ItemType, Expected} =
         case Nested of
             true ->
                 [LazyItem] = hb_maps:get(<<"items">>, Lazy, not_found, Opts),
                 ?assertMatch({link, _, _}, maps:get(<<"slot">>, LazyItem)),
-                {(required(<<"slot">>, Integer))#{ <<"wildcard">> => Keep },
-                    #{ <<"slot">> => 7 }};
+                {required(<<"slot">>, Integer), #{ <<"slot">> => 7 }};
             false -> {Integer, 7}
         end,
-    Schema = (required(<<"items">>, #{
-        <<"kind">> => <<"list">>, <<"item">> => ItemType
-    }))#{ <<"wildcard">> => Keep },
-    {Varied, _} = apply_schema(Schema, Lazy, Opts),
+    List = #{ <<"kind">> => <<"list">>, <<"item">> => ItemType },
+    Schema = required(<<"items">>, List),
+    {Varied, ActualChanged} = apply_schema(Schema, Lazy, Opts),
     ?assertEqual([Expected], maps:get(<<"items">>, Varied)),
-    case Preserve of
-        true ->
-            % Prove that materializing the list did not change its signed content.
-            ?assert(hb_message:verify(
-                Signed#{ <<"items">> => maps:get(<<"items">>, Varied) }, [Signer], Opts
-            )),
-            ?assert(lists:member(Signer, hb_message:signers(Varied, Opts))),
-            ?assertEqual(SignedID, hb_message:id(Varied, [Signer], Opts)),
-            ?assert(hb_message:verify(Varied, [Signer], Opts));
-        false -> ?assertNot(hb_maps:is_key(<<"commitments">>, Varied, Opts))
-    end.
+    ?assertEqual(Changed, ActualChanged).
 
 selected_links_are_materialized_without_loading_omitted_keys_test() ->
     Store = hb_test_utils:test_store(),
@@ -1004,26 +933,20 @@ selected_links_are_materialized_without_loading_omitted_keys_test() ->
 
 explicit_wildcard_preserves_lazy_links_test_() ->
     [
-        {atom_to_list(Presence) ++ " " ++ binary_to_list(maps:get(<<"kind">>, Type)), fun() ->
-            explicit_wildcard_preserves_lazy_links(Presence, Type)
-        end}
-    || Presence <- [required, optional], Type <- [wildcard_type(), any_type()]
+        {atom_to_list(Presence),
+            {binary_to_list(maps:get(<<"kind">>, Type)),
+                fun() ->
+                    explicit_wildcard_preserves_lazy_links(Presence, Type)
+                end}}
+    ||
+        Presence <- [required, optional], Type <- [wildcard_type(), any_type()]
     ].
 
 %% @doc Unconstrained fields must not attempt to load even a missing link.
 explicit_wildcard_preserves_lazy_links(Presence, Type) ->
     Missing = {link, <<"data/not-present">>, #{}},
-    Schema =
-        message_type(
-            #{
-                <<"scheduler">> =>
-                    #{
-                        <<"presence">> => Presence,
-                        <<"type">> => Type
-                    }
-            },
-            none
-        ),
+    Field = #{ <<"presence">> => Presence, <<"type">> => Type },
+    Schema = message_type(#{ <<"scheduler">> => Field }, none),
     {Varied, _} = apply_schema(Schema, #{ <<"scheduler">> => Missing }, #{}),
     ?assertEqual(#{ <<"scheduler">> => Missing }, Varied).
 
@@ -1039,11 +962,7 @@ optional_wildcard_preserves_links_and_sequences_materialize_test() ->
             #{ <<"presence">> => optional, <<"type">> => wildcard_type() }
         ),
     {Varied, _} =
-        apply_schema(
-            WildcardSchema,
-            #{ <<"extra">> => Link },
-            Opts
-        ),
+        apply_schema(WildcardSchema, #{ <<"extra">> => Link }, Opts),
     ?assertEqual(#{ <<"extra">> => Link }, Varied),
     Integer = scalar_type(<<"integer">>),
     {VariedList, _} =
@@ -1057,12 +976,8 @@ union_preserves_an_existing_member_type_test() ->
     Binary = scalar_type(<<"binary">>),
     List = #{ <<"kind">> => <<"list">>, <<"item">> => Binary },
     Value = [<<"one">>, <<"two">>],
-    {Varied, _} =
-        apply_schema(
-            #{ <<"kind">> => <<"union">>, <<"members">> => [Binary, List] },
-            Value,
-            #{}
-        ),
+    Schema = #{ <<"kind">> => <<"union">>, <<"members">> => [Binary, List] },
+    {Varied, _} = apply_schema(Schema, Value, #{}),
     ?assertEqual(Value, Varied).
 
 union_passthrough_members_do_not_swallow_constrained_members_test() ->

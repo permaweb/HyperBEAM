@@ -256,8 +256,9 @@ vary_projection(Base, Req, _Opts) ->
 
 %% @doc Return schema-selected inputs while retaining wildcard keys.
 -spec vary_wildcard(
-    #{ required := integer(), child => #{ slot := integer(), _ => _ }, _ => _ },
-    #{ path := binary(), required => integer(), _ => _ },
+    #{ required := integer(), child => #{ slot := integer(), commitments => _ },
+        _ => _ },
+    #{ path := binary(), optional => integer(), _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ base := #{ _ => _ }, request := #{ _ => _ } }}.
 vary_wildcard(Base, Req, _Opts) ->
@@ -399,190 +400,54 @@ vary_wildcard_preserves_other_keys_test() ->
         maps:get(<<"extra">>, maps:get(<<"request">>, Res))
     ).
 
-%% @doc Loading a typed field preserves the message's signed identity.
-vary_loaded_link_preserves_commitments_test_() ->
+%% @doc Varying either argument preserves signatures only for unchanged content.
+vary_commitments_test_() ->
+    Cases =
+        [
+            {"unchanged", inline, 7, <<"vary-wildcard">>},
+            {"loaded", lazy, 7, <<"vary-wildcard">>},
+            {"coerced", inline, <<"007">>, <<"vary-wildcard">>},
+            {"loaded and coerced", lazy, <<"007">>, <<"vary-wildcard">>},
+            {"no schema", lazy, 7, <<"vary-unspecified">>}
+        ],
     [
-        {Description, fun() ->
-            vary_loaded_link_preserves_commitments(Which, Mode, Function)
-        end}
+        {binary_to_list(Which) ++ " " ++ Name,
+            fun() -> vary_commitments(Which, Mode, Value, Function) end}
     ||
-        {Description, Which, Mode, Function} <- [
-            {"unchanged base", <<"base">>, inline, <<"vary-wildcard">>},
-            {"loaded base", <<"base">>, lazy, <<"vary-wildcard">>},
-            {"unchanged request", <<"request">>, inline, <<"vary-wildcard">>},
-            {"loaded request", <<"request">>, lazy, <<"vary-wildcard">>},
-            {"no-schema base", <<"base">>, lazy, <<"vary-unspecified">>},
-            {"no-schema request", <<"request">>, lazy, <<"vary-unspecified">>}
-        ]
+        Which <- [<<"base">>, <<"request">>],
+        {Name, Mode, Value, Function} <- Cases
     ].
 
-%% @doc Check signed identity before and after varying and caching an input.
-vary_loaded_link_preserves_commitments(Which, Mode, Function) ->
+%% @doc Check signatures and the original cache entry after varying and caching.
+vary_commitments(Which, Mode, Value, Function) ->
     Wallet = ar_wallet:new(),
     Signer = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Opts = (vary_opts())#{ <<"priv-wallet">> => Wallet },
-    Signed = hb_message:commit(
-        #{
-            <<"device">> => <<"test-device@1.0">>,
-            <<"path">> => Function,
-            <<"required">> => 7
-        },
-        Opts,
-        <<"httpsig@1.0">>
-    ),
+    Key =
+        case Which of
+            <<"base">> -> <<"required">>;
+            <<"request">> -> <<"optional">>
+        end,
+    Signed =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"path">> => Function,
+                Key => Value
+            },
+            Opts,
+            <<"httpsig@1.0">>
+        ),
     SignedID = hb_message:id(Signed, [Signer], Opts),
     {ok, _} = hb_cache:write(Signed, Opts),
     {ok, Lazy} = hb_cache:read(SignedID, Opts),
-    ?assertMatch({link, _, _}, maps:get(<<"required">>, Lazy)),
+    ?assertMatch({link, _, _}, maps:get(Key, Lazy)),
     ?assert(hb_message:verify(Lazy, [Signer], Opts)),
-    Input = case Mode of inline -> Signed; lazy -> Lazy end,
-    Varied = vary_signed_input(Which, Input, Function, Opts),
-    case Function of
-        <<"vary-unspecified">> ->
-            ?assertEqual(maps:get(<<"required">>, Lazy),
-                maps:get(<<"required">>, Varied));
-        _ -> ?assertEqual(7, maps:get(<<"required">>, Varied))
-    end,
-    ?assert(lists:member(Signer, hb_message:signers(Varied, Opts))),
-    ?assertEqual(SignedID, hb_message:id(Varied, [Signer], Opts)),
-    ?assert(hb_message:verify(Varied, [Signer], Opts)),
-    {ok, _} = hb_cache:write(Varied, Opts),
-    {ok, Cached} = hb_cache:read(SignedID, Opts),
-    ?assertEqual(7, hb_maps:get(<<"required">>, Cached, not_found, Opts)),
-    ?assert(lists:member(Signer, hb_message:signers(Cached, Opts))),
-    ?assertEqual(SignedID, hb_message:id(Cached, [Signer], Opts)),
-    ?assert(hb_message:verify(Cached, [Signer], Opts)).
-
-%% @doc Only changes to signed content invalidate parent or child commitments.
-vary_child_commitments_test_() ->
-    [
-        {Description, fun() ->
-            vary_child_commitments(Required, Slot, Mode, Keep)
-        end}
-    ||
-        {Description, Required, Slot, Mode, Keep} <- [
-            {"unchanged parent and child", 7, 7, inline, {true, true}},
-            {"loaded child", 7, 7, lazy, {true, true}},
-            {"coerced child", 7, <<"007">>, inline, {false, false}},
-            {"loaded and coerced child", 7, <<"007">>, lazy, {false, false}},
-            {"coerced parent preserves child", <<"007">>, 7, inline,
-                {true, false}}
-        ]
-    ].
-
-%% @doc Check each signed cache entry as well as the varied parent and child.
-vary_child_commitments(Required, Slot, Mode, {KeepChild, KeepParent}) ->
-    Wallet = ar_wallet:new(),
-    Signer = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Opts = (vary_opts())#{ <<"priv-wallet">> => Wallet },
-    Child = hb_message:commit(#{ <<"slot">> => Slot }, Opts, <<"httpsig@1.0">>),
-    ChildID = hb_message:id(Child, [Signer], Opts),
-    {ok, _} = hb_cache:write(Child, Opts),
-    Parent = hb_message:commit(
-        #{
-            <<"device">> => <<"test-device@1.0">>,
-            <<"required">> => Required,
-            <<"child">> => Child
-        },
-        Opts,
-        <<"httpsig@1.0">>
-    ),
-    ParentID = hb_message:id(Parent, [Signer], Opts),
-    {ok, _} = hb_cache:write(Parent, Opts),
-    {ok, Lazy} = hb_cache:read(ParentID, Opts),
-    ?assertMatch({link, _, _}, maps:get(<<"child">>, Lazy)),
-    LazyChild = hb_maps:get(<<"child">>, Lazy, not_found, Opts),
-    ?assertMatch({link, _, _}, maps:get(<<"slot">>, LazyChild)),
-    ?assert(hb_message:verify(Lazy, [Signer], Opts)),
-    % Keep the parent's scalar inline so only its child needs loading.
-    Input = case Mode of inline -> Parent; lazy -> Lazy#{ <<"required">> => Required } end,
-    {ok, Res} = hb_ao:resolve(Input, <<"vary-wildcard">>, Opts),
-    Varied = hb_maps:get(<<"base">>, Res, not_found, Opts),
-    VariedChild = maps:get(<<"child">>, Varied),
-    ?assertEqual(7, maps:get(<<"required">>, Varied)),
-    ?assertEqual(7, maps:get(<<"slot">>, VariedChild)),
-    {ok, _} = hb_cache:write(Varied, Opts),
-    {ok, CachedParent} = hb_cache:read(ParentID, Opts),
-    {ok, CachedChild} = hb_cache:read(ChildID, Opts),
-    ?assertEqual(Required,
-        hb_maps:get(<<"required">>, CachedParent, not_found, Opts)),
-    ?assertEqual(Slot, hb_maps:get(<<"slot">>, CachedChild, not_found, Opts)),
-    ?assertEqual(Slot, hb_maps:get(<<"slot">>,
-        hb_maps:get(<<"child">>, CachedParent, not_found, Opts), not_found, Opts)),
-    ?assert(hb_message:verify(CachedChild, [Signer], Opts)),
-    ?assert(hb_message:verify(CachedParent, [Signer], Opts)),
-    ?assertEqual(
-        {KeepChild, KeepParent},
-        {
-            lists:member(Signer, hb_message:signers(VariedChild, Opts)),
-            lists:member(Signer, hb_message:signers(Varied, Opts))
-        }
-    ),
-    lists:foreach(
-        fun({Message, ID, Keep}) ->
-            case Keep of
-                true ->
-                    ?assertEqual(ID, hb_message:id(Message, [Signer], Opts)),
-                    ?assert(hb_message:verify(Message, [Signer], Opts));
-                false -> ?assertNot(hb_maps:is_key(<<"commitments">>, Message, Opts))
-            end
+    Input =
+        case Mode of
+            inline -> Signed;
+            lazy -> Lazy
         end,
-        [{VariedChild, ChildID, KeepChild}, {Varied, ParentID, KeepParent}]
-    ).
-
-%% @doc Caching coerced inputs must not change the original signed message.
-vary_coercion_preserves_original_signed_cache_entry_test_() ->
-    [
-        {binary_to_list(Which) ++ " " ++ atom_to_list(Mode), fun() ->
-            vary_coercion_preserves_original_signed_cache_entry(Which, Mode)
-        end}
-    || Which <- [<<"base">>, <<"request">>], Mode <- [inline, lazy]
-    ].
-
-%% @doc Exercise coercion of both in-memory and linked signed values.
-vary_coercion_preserves_original_signed_cache_entry(Which, Mode) ->
-    Wallet = ar_wallet:new(),
-    Signer = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Opts = (vary_opts())#{ <<"priv-wallet">> => Wallet },
-    Signed = hb_message:commit(
-        #{
-            <<"device">> => <<"test-device@1.0">>,
-            <<"path">> => <<"vary-wildcard">>,
-            <<"required">> => <<"007">>
-        },
-        Opts,
-        <<"httpsig@1.0">>
-    ),
-    ?assert(lists:member(Signer, hb_message:signers(Signed, Opts))),
-    ?assert(hb_message:is_signed_key(<<"required">>, Signed, Opts)),
-    SignedID = hb_message:id(Signed, [Signer], Opts),
-    {ok, _} = hb_cache:write(Signed, Opts),
-    {ok, Original} = hb_cache:read(SignedID, Opts),
-    ?assertMatch({link, _, _}, maps:get(<<"required">>, Original)),
-    ?assertEqual(
-        <<"007">>, hb_maps:get(<<"required">>, Original, not_found, Opts)
-    ),
-    ?assert(hb_message:verify(Original, [Signer], Opts)),
-    Input = case Mode of inline -> Signed; lazy -> Original end,
-    Varied = vary_signed_input(Which, Input, <<"vary-wildcard">>, Opts),
-    ?assertEqual(7, hb_maps:get(<<"required">>, Varied, not_found, Opts)),
-    {ok, VariedID} = hb_cache:write(Varied, Opts),
-    {ok, CachedVaried} = hb_cache:read(VariedID, Opts),
-    ?assertEqual(7, hb_maps:get(<<"required">>, CachedVaried, not_found, Opts)),
-    {ok, CachedOriginal} = hb_cache:read(SignedID, Opts),
-    ?assert(lists:member(Signer, hb_message:signers(CachedOriginal, Opts))),
-    ?assertEqual(SignedID, hb_message:id(CachedOriginal, [Signer], Opts)),
-    ?assertEqual(
-        {<<"007">>, true},
-        {
-            hb_maps:get(<<"required">>, CachedOriginal, not_found, Opts),
-            hb_message:verify(CachedOriginal, [Signer], Opts)
-        }
-    ),
-    ?assertNot(hb_maps:is_key(<<"commitments">>, Varied, Opts)).
-
-%% @doc Exercise either signed argument through the device's resolver path.
-vary_signed_input(Which, Input, Function, Opts) ->
     {Base, Request} =
         case Which of
             <<"base">> -> {Input, Function};
@@ -590,14 +455,114 @@ vary_signed_input(Which, Input, Function, Opts) ->
                 {#{ <<"device">> => <<"test-device@1.0">>, <<"required">> => 7 }, Input}
         end,
     {ok, Res} = hb_ao:resolve(Base, Request, Opts),
-    hb_maps:get(Which, Res, not_found, Opts).
+    Varied = hb_maps:get(Which, Res, not_found, Opts),
+    case Function of
+        <<"vary-unspecified">> ->
+            ?assertEqual(maps:get(Key, Lazy), maps:get(Key, Varied));
+        _ -> ?assertEqual(7, maps:get(Key, Varied))
+    end,
+    case Value of
+        7 ->
+            ?assert(lists:member(Signer, hb_message:signers(Varied, Opts))),
+            ?assertEqual(SignedID, hb_message:id(Varied, [Signer], Opts)),
+            ?assert(hb_message:verify(Varied, [Signer], Opts));
+        _ -> ?assertNot(hb_maps:is_key(<<"commitments">>, Varied, Opts))
+    end,
+    {ok, VariedID} = hb_cache:write(Varied, Opts),
+    {ok, CachedVaried} = hb_cache:read(VariedID, Opts),
+    ?assertEqual(7, hb_maps:get(Key, CachedVaried, not_found, Opts)),
+    {ok, CachedOriginal} = hb_cache:read(SignedID, Opts),
+    ?assertEqual(Value, hb_maps:get(Key, CachedOriginal, not_found, Opts)),
+    ?assert(lists:member(Signer, hb_message:signers(CachedOriginal, Opts))),
+    ?assertEqual(SignedID, hb_message:id(CachedOriginal, [Signer], Opts)),
+    ?assert(hb_message:verify(CachedOriginal, [Signer], Opts)).
+
+%% @doc Only changes to signed content invalidate parent or child commitments.
+vary_child_commitments_test_() ->
+    Child = #{ <<"slot">> => 7 },
+    Coerced = #{ <<"slot">> => <<"007">> },
+    Projected = #{ <<"slot">> => 7, <<"noise">> => 8 },
+    Cases =
+        [
+            {"unchanged parent and child", 7, Child, inline, {true, true}},
+            {"loaded child", 7, Child, lazy, {true, true}},
+            {"coerced child", 7, Coerced, inline, {false, false}},
+            {"loaded and coerced child", 7, Coerced, lazy, {false, false}},
+            {"projected child", 7, Projected, inline, {false, false}},
+            {"coerced parent preserves child", <<"007">>, Child, inline, {true, false}}
+        ],
+    [
+        {Description,
+            fun() -> vary_child_commitments(Required, Body, Mode, Keep) end}
+    ||
+        {Description, Required, Body, Mode, Keep} <- Cases
+    ].
+
+%% @doc Check each signed cache entry as well as the varied parent and child.
+vary_child_commitments(Required, Body, Mode, {KeepChild, KeepParent}) ->
+    Wallet = ar_wallet:new(),
+    Signer = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = (vary_opts())#{ <<"priv-wallet">> => Wallet },
+    Child = hb_message:commit(Body, Opts, <<"httpsig@1.0">>),
+    ChildID = hb_message:id(Child, [Signer], Opts),
+    Parent =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"required">> => Required,
+                <<"child">> => Child
+            },
+            Opts,
+            <<"httpsig@1.0">>
+        ),
+    ParentID = hb_message:id(Parent, [Signer], Opts),
+    {ok, _} = hb_cache:write(Parent, Opts),
+    {ok, Lazy} = hb_cache:read(ParentID, Opts),
+    ?assertMatch({link, _, _}, maps:get(<<"child">>, Lazy)),
+    LazyChild = hb_maps:get(<<"child">>, Lazy, not_found, Opts),
+    ?assertMatch({link, _, _}, maps:get(<<"slot">>, LazyChild)),
+    ?assert(hb_message:verify(Lazy, [Signer], Opts)),
+    Original = hb_cache:ensure_all_loaded(Lazy, Opts),
+    % Keep the parent's scalar inline so only its child needs loading.
+    Input =
+        case Mode of
+            inline -> Parent;
+            lazy -> Lazy#{ <<"required">> => Required }
+        end,
+    {ok, Res} = hb_ao:resolve(Input, <<"vary-wildcard">>, Opts),
+    Varied = hb_maps:get(<<"base">>, Res, not_found, Opts),
+    VariedChild = maps:get(<<"child">>, Varied),
+    ?assertEqual(7, maps:get(<<"required">>, Varied)),
+    ?assertEqual(#{ <<"slot">> => 7 }, hb_message:uncommitted(VariedChild, Opts)),
+    {ok, _} = hb_cache:write(Varied, Opts),
+    lists:foreach(
+        fun({Message, ID, Keep, Expected}) ->
+            {ok, Cached} = hb_cache:read(ID, Opts),
+            ?assertEqual(Expected, hb_cache:ensure_all_loaded(Cached, Opts)),
+            ?assert(lists:member(Signer, hb_message:signers(Cached, Opts))),
+            ?assert(hb_message:verify(Cached, [Signer], Opts)),
+            case Keep of
+                true ->
+                    ?assert(lists:member(Signer, hb_message:signers(Message, Opts))),
+                    ?assertEqual(ID, hb_message:id(Message, [Signer], Opts)),
+                    ?assert(hb_message:verify(Message, [Signer], Opts));
+                false -> ?assertNot(hb_maps:is_key(<<"commitments">>, Message, Opts))
+            end
+        end,
+        [
+            {VariedChild, ChildID, KeepChild, maps:get(<<"child">>, Original)},
+            {Varied, ParentID, KeepParent, Original}
+        ]
+    ).
 
 vary_unspecified_function_is_identity_test() ->
     Opts = vary_opts(),
     {ok, Path} = hb_cache:write(<<"kept">>, Opts),
-    Base = #{
-        <<"device">> => <<"test-device@1.0">>, <<"noise">> => {link, Path, #{}}
-    },
+    Base =
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"noise">> => {link, Path, #{}}
+        },
     {ok, Res} = hb_ao:resolve(Base, <<"vary-unspecified">>, Opts),
     ?assertEqual(
         Base,
