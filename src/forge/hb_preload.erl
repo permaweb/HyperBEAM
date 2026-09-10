@@ -68,10 +68,12 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
     % Reset store before building for deterministic re-builds.
     hb_store:reset(StoreCfg, #{ <<"reset">> => <<"all">> }, Opts),
     hb_store:start(StoreCfg, #{}, Opts),
+    % The device loader reads the store raw, so no `cache-write' hook runs.
     LocalOpts =
         Opts#{
             <<"store">> => [StoreCfg],
-            <<"priv-wallet">> => Wallet
+            <<"priv-wallet">> => Wallet,
+            <<"on">> => #{}
         },
     % Sign and write each spec + each impl message; collect signed IDs.
     {SpecIDs, ImplIDs} =
