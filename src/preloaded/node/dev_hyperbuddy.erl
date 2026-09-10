@@ -100,7 +100,7 @@ events(_, _Req, _Opts) ->
 %% `debug-resolve-links' option; `true' resolves all levels.
 -spec format(
     #{ _ => _ },
-    #{ format => binary() | [binary()], 'truncate-keys' => integer(), _ => _ },
+    #{ format => binary() | [binary()], 'truncate-keys' => integer() | infinity, _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ body := binary(), _ => _ }}.
 format(Base, Req, Opts) ->
@@ -143,11 +143,7 @@ format(Base, Req, Opts) ->
             {ok, Depth} -> Depth;
             {error, invalid} -> hb_util:bool(ResolveLinksValue)
         end,
-    TruncateKeys =
-        case hb_maps:get(<<"truncate-keys">>, Req, infinity, Opts) of
-            infinity -> infinity;
-            MaxKeys -> hb_util:int(MaxKeys)
-        end,
+    TruncateKeys = maps:get(<<"truncate-keys">>, Req, infinity),
     ?event(debug_format, {using_truncation, TruncateKeys}),
     {ok,
         #{
