@@ -22,7 +22,8 @@
 %% Base is not used, such that it can specify cache control information about 
 %% itself, without affecting its outputs.
 maybe_store(Base, Req, Res, Opts) ->
-    case derive_cache_settings([Res, Req], Opts) of
+    {_PolicyBase, PolicyReq} = cache_sources(Base, Req, Opts),
+    case derive_cache_settings([Res, PolicyReq], Opts) of
         #{ <<"store">> := true } ->
             ?event(caching, {caching_result, {base, Base}, {req, Req}, {res, Res}}),
             dispatch_cache_write(Base, Req, Res, Opts);
@@ -46,7 +47,8 @@ maybe_lookup(Base, Req, Opts) ->
     end.
 
 lookup(Base, Req, Opts) ->
-    case derive_cache_settings([Base, Req], Opts) of
+    {PolicyBase, PolicyReq} = cache_sources(Base, Req, Opts),
+    case derive_cache_settings([PolicyBase, PolicyReq], Opts) of
         #{ <<"lookup">> := false } ->
             ?event({skip_cache_check, lookup_disabled}),
             maybe_load_base(Base, Req, Opts);
@@ -80,6 +82,10 @@ lookup(Base, Req, Opts) ->
     end.
 
 %%% Internal functions
+
+%% @doc Original policy sources, separate from the inputs used as cache keys.
+cache_sources(Base, Req, Opts) ->
+    maps:get(<<"cache-control-sources">>, Opts, {Base, Req}).
 
 %% @doc Load an ID base required to execute the request.
 maybe_load_base(Base, Req, _Opts) when not ?IS_ID(Base) ->
@@ -298,6 +304,33 @@ msg_with_cc(CC) -> #{ <<"cache-control">> => CC }.
 opts_with_cc(CC) -> #{ <<"cache-control">> => CC }.
 
 %% Test precedence order (Opts > Res > Req)
+projected_cache_policy_precedence_test() ->
+    Base = msg_with_cc([<<"no-cache">>]),
+    Req = msg_with_cc([<<"store">>, <<"only-if-cached">>]),
+    Opts = (opts_with_cc([]))#{ <<"cache-control-sources">> => {Base, Req} },
+    {PolicyBase, PolicyReq} = cache_sources(#{}, #{}, Opts),
+    ?assertEqual(
+        #{ <<"store">> => true, <<"lookup">> => false,
+            <<"only-if-cached">> => true },
+        derive_cache_settings([PolicyBase, PolicyReq], Opts)
+    ),
+    ?assertEqual({continue, #{}, #{}}, maybe_lookup(#{}, #{}, Opts)),
+    Response = msg_with_cc([<<"no-store">>]),
+    ?assertEqual(not_caching, maybe_store(#{}, #{}, Response, Opts)),
+    ?assertMatch(
+        #{ <<"store">> := false, <<"only-if-cached">> := true },
+        derive_cache_settings([Response, PolicyReq], Opts)
+    ),
+    ?assertMatch(
+        #{ <<"store">> := true, <<"lookup">> := true,
+            <<"only-if-cached">> := true },
+        derive_cache_settings(
+            [Response, PolicyReq],
+            Opts#{ <<"cache-control">> => [<<"always">>] }
+        )
+    ),
+    ?assertEqual({Base, Req}, cache_sources(Base, Req, #{})).
+
 opts_override_message_settings_test() ->
     Req = msg_with_cc([<<"no-store">>]),
     Res = msg_with_cc([<<"no-cache">>]),

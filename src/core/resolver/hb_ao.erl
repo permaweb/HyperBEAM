@@ -109,6 +109,7 @@
     [
         <<"force-message">>,
         <<"cache-control">>,
+        <<"cache-control-sources">>,
         <<"spawn-worker">>,
         <<"only">>,
         <<"prefer">>
@@ -435,7 +436,11 @@ resolve_stage(2, Base, Req, Opts = #{ <<"resolve-mode">> := raw }) ->
     % Raw mode: apply the device function directly, skipping the cache,
     % validation, persistence, linking, and worker stages.
     raw(Base, Req, Opts);
-resolve_stage(2, Base, Req, Opts) ->
+resolve_stage(2, Base, Req, RawOpts) ->
+    % Cache policy belongs to the original inputs, not their projection.
+    Opts = RawOpts#{ <<"cache-control-sources">> =>
+        {hb_maps:with([<<"cache-control">>], Base, RawOpts),
+            hb_maps:with([<<"cache-control">>], Req, RawOpts)} },
     ?event_debug(debug_ao_core, {stage, 2, vary_and_cache_lookup}, Opts),
     % Vary the inputs by the schema of the function that will execute them
     % before the cache lookup, such that every execution the schema deems

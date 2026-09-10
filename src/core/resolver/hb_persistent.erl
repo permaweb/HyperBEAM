@@ -143,7 +143,8 @@ find_execution(Groupname, _Opts) ->
 
 %% @doc Calculate the group name for a Base and Req pair. Uses the Base's
 %% `group' function if it is found in the `info', otherwise uses the default.
-group(Base, Req, Opts) ->
+group(Base, Req, RawOpts) ->
+    Opts = maps:remove(<<"cache-control-sources">>, RawOpts),
     Grouper =
         hb_maps:get(
             grouper,
@@ -173,21 +174,22 @@ unregister_groupname(Groupname, _Opts) ->
 %% we should register with them and wait for them to notify us of
 %% completion.
 await(Worker, Base, Req, Opts) ->
+    CallbackOpts = maps:remove(<<"cache-control-sources">>, Opts),
     % Get the device's await function, if it exists.
     AwaitFun =
         hb_maps:get(
             await,
-            hb_device:info(Base, Opts),
+            hb_device:info(Base, CallbackOpts),
             fun default_await/5,
-			Opts
+			CallbackOpts
         ),
     % Calculate the compute path that we will wait upon resolution of.
     % Register with the process.
-    GroupName = group(Base, Req, Opts),
+    GroupName = group(Base, Req, CallbackOpts),
     % set monitor to a worker, so we know if it exits
     _Ref = erlang:monitor(process, Worker),
     Worker ! {resolve, self(), GroupName, Req, Opts},
-    AwaitFun(Worker, GroupName, Base, Req, Opts).
+    AwaitFun(Worker, GroupName, Base, Req, CallbackOpts).
 
 %% @doc Default await function that waits for a resolution from a worker.
 default_await(Worker, GroupName, Base, Req, Opts) ->
@@ -268,7 +270,8 @@ send_response(Listener, GroupName, Req, Res) ->
 start_worker(Msg, Opts) ->
     start_worker(group(Msg, undefined, Opts), Msg, Opts).
 start_worker(_, NotMsg, _) when not is_map(NotMsg) -> not_started;
-start_worker(GroupName, Msg, Opts) ->
+start_worker(GroupName, Msg, RawOpts) ->
+    Opts = maps:remove(<<"cache-control-sources">>, RawOpts),
     start(),
     ?event(worker_spawns,
         {starting_worker, {group, GroupName}, {msg, Msg}, {opts, Opts}}
@@ -328,11 +331,17 @@ default_worker(GroupName, Base, Opts) ->
                     {group, GroupName}
                 }
             ),
+            % Restore only this listener's policy before the request is varied
+            % again. Replies still identify the original envelope request.
+            ReplayReq = replay_request(Req, ListenerOpts),
             Res =
                 hb_ao:resolve(
                     Base,
-                    Req,
-                    hb_maps:merge(ListenerOpts, Opts, Opts)
+                    ReplayReq,
+                    maps:remove(
+                        <<"cache-control-sources">>,
+                        hb_maps:merge(ListenerOpts, Opts, Opts)
+                    )
                 ),
             send_response(Listener, GroupName, Req, Res),
             notify(GroupName, Req, Res, Opts),
@@ -366,6 +375,14 @@ default_worker(GroupName, Base, Opts) ->
         % state to the cache).
         unregister(Base, undefined, Opts)
     end.
+
+%% @doc Restore projected request policy without retaining stale commitments.
+replay_request(Req, #{ <<"cache-control-sources">> := {_, Policy} } = Opts) ->
+    case maps:merge(Req, Policy) of
+        Req -> Req;
+        Restored -> hb_message:uncommitted(Restored, Opts)
+    end;
+replay_request(Req, _Opts) -> Req.
 
 %% @doc Create a group name from a Base and Req pair as a tuple.
 default_grouper(Base, Req, Opts) ->
@@ -451,6 +468,107 @@ spawn_test_client(Base, Req, Opts) ->
 
 wait_for_test_result(Ref) ->
     receive {result, Ref, Res} -> Res end.
+
+%% @doc Temporary cache policy is not exposed as device callback options.
+cache_policy_callback_isolation_test() ->
+    Parent = self(),
+    Group = make_ref(),
+    CheckOpts = fun(Opts) ->
+        ?assertNot(maps:is_key(<<"cache-control-sources">>, Opts))
+    end,
+    Device = test_device(#{
+        grouper => fun(_, _, Opts) -> CheckOpts(Opts), Group end,
+        await => fun(_, _, _, _, Opts) -> CheckOpts(Opts), ok end,
+        worker => fun(_, _, Opts) ->
+            Parent ! {worker_policy, self(),
+                maps:is_key(<<"cache-control-sources">>, Opts)}
+        end
+    }),
+    Base = #{ <<"device">> => Device },
+    Req = #{ <<"path">> => <<"self">> },
+    Opts = #{ <<"cache-control-sources">> =>
+        {#{}, #{ <<"cache-control">> => [<<"store">>] }} },
+    ?assertEqual(Group, group(Base, Req, Opts)),
+    {Awaiter, AwaitMonitor} = spawn_monitor(fun() ->
+        Self = self(),
+        ?assertEqual(ok, await(Self, Base, Req, Opts)),
+        receive {resolve, Self, Group, Req, Opts} -> ok
+        after 1000 -> error(missing_worker_envelope)
+        end
+    end),
+    try
+        receive {'DOWN', AwaitMonitor, process, Awaiter, Reason} ->
+            ?assertEqual(normal, Reason)
+        after 5000 -> error(await_callback_timeout)
+        end
+    after
+        exit(Awaiter, kill),
+        erlang:demonitor(AwaitMonitor, [flush])
+    end,
+    Worker = start_worker(Group, Base, Opts),
+    WorkerMonitor = erlang:monitor(process, Worker),
+    try
+        receive {worker_policy, Worker, HasPolicy} -> ?assertNot(HasPolicy)
+        after 5000 -> error(missing_worker_callback)
+        end
+    after
+        exit(Worker, kill),
+        receive {'DOWN', WorkerMonitor, process, Worker, _} -> ok
+        after 1000 -> error(worker_stop_timeout)
+        end,
+        hb_name:unregister(Group)
+    end.
+
+%% @doc A default worker replays request storage policy, not just its projection.
+projected_request_worker_cache_test() ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store(),
+        <<"attested-store">> => hb_test_utils:test_store(),
+        <<"await-inprogress">> => true, <<"spawn-worker">> => false },
+    Base = #{ <<"device">> => <<"test-device@1.0">>,
+        <<"required">> => erlang:unique_integer([positive]),
+        <<"deep">> => #{ <<"slot">> => 8 } },
+    Req = #{ <<"path">> => <<"vary-projection">>,
+        <<"deep-request">> => #{ <<"slot">> => 9 } },
+    Group = group(Base, Req, Opts),
+    Parent = self(),
+    Hook = #{ <<"device">> => #{ <<"step">> =>
+        fun(_, Event, _) ->
+            case maps:get(<<"request">>, Event) of
+                #{ <<"path">> := <<"vary-projection">> } ->
+                    Parent ! {worker_executed, self()};
+                _ -> ok
+            end,
+            {ok, Event}
+        end } },
+    {Worker, Monitor} = spawn_monitor(fun() ->
+        hb_name:register(Group),
+        Parent ! {worker_ready, self()},
+        default_worker(Group, Base, Opts#{ <<"static-worker">> => true,
+            <<"is-worker">> => true, <<"allow-infinite">> => true,
+            <<"on">> => #{ <<"step">> => Hook } })
+    end),
+    try
+        receive {worker_ready, Worker} -> ok
+        after 5000 -> error(worker_start_timeout)
+        end,
+        {ok, _} = hb_ao:resolve(
+            Base, Req#{ <<"cache-control">> => [<<"store">>] }, Opts
+        ),
+        receive {worker_executed, Worker} -> ok
+        after 1000 -> error(request_did_not_execute_in_worker)
+        end,
+        {ok, Cached} = hb_ao:resolve(
+            Base, Req#{ <<"cache-control">> => [<<"only-if-cached">>] },
+            Opts#{ <<"await-inprogress">> => false }
+        ),
+        ?assertEqual(9, hb_ao:get(<<"request/deep-request/slot">>, Cached, Opts))
+    after
+        exit(Worker, kill),
+        receive {'DOWN', Monitor, process, Worker, _} -> ok
+        after 1000 -> error(worker_stop_timeout)
+        end,
+        hb_name:unregister(Group)
+    end.
 
 %% @doc Test merging and returning a value with a persistent worker.
 deduplicated_execution_test() ->
