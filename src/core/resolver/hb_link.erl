@@ -39,7 +39,7 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                             case maps:get(<<"lazy">>, LinkOpts, false) of
                                 true ->
                                     case hb_cache:read(ID, Opts) of
-                                        {ok, Underlying} when ?IS_ID(Underlying) ->
+                                        {ok, Underlying} when ?IS_ID(Underlying) orelse ?IS_HASHPATH(Underlying) ->
                                             Underlying;
                                         Err ->
                                             throw(

@@ -8,6 +8,8 @@
 %% @doc Macro usable in guards that validates whether a term is a
 %% human-readable ID encoding.
 -define(IS_ID(X), (is_binary(X) andalso (byte_size(X) == 42 orelse byte_size(X) == 43 orelse byte_size(X) == 32))).
+%% @doc Macro usable in guards that recognizes the hashpath URI scheme.
+-define(IS_HASHPATH(X), (is_binary(X) andalso byte_size(X) >= 5 andalso binary_part(X, 0, 5) == <<"ao://">>)).
 %% @doc Macro for checking a term is a link.
 -define(IS_LINK(X), (is_tuple(X) andalso element(1, X) == link)).
 %% @doc List of special keys that are used in the AO-Core protocol.

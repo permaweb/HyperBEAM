@@ -428,7 +428,7 @@ assert_offset_matches(Path, Expected, Opts) ->
     TX = hb_message:convert(Item, <<"ans104@1.0">>, <<"structured@1.0">>, Opts),
     ?assert(hb_message:verify(Item, all, Opts)),
     ?assertEqual(
-        hb_message:id(Expected, signed, Opts),
+        hb_message:id(Expected, hb_message:signers(Item, Opts), Opts),
         hb_message:id(Item, signed, Opts)
     ),
     ?assertEqual(ExpectedTX#tx.data_size, TX#tx.data_size),
