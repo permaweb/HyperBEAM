@@ -53,7 +53,7 @@ info(Base) ->
 %% @doc Initialize the device state, loading the script into memory if it is 
 %% a reference.
 -spec init(
-    #{ module => _ , 'content-type' => binary(), body => binary(), sandbox => _, _ => _ },
+    #{ module => _ , 'content-type' => binary(), body => _, sandbox => _, _ => _ },
     #{ _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {error, _}.
