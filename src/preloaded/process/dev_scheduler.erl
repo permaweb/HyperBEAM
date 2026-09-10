@@ -368,10 +368,22 @@ status(_M1, _M2, _Opts) ->
     }.
 
 %% @doc A router for choosing between getting the existing schedule, or
-%% scheduling a new message.
+%% scheduling a new message. Method literals admit the case-insensitive
+%% dispatch below; only GET interprets from/to as pagination bounds.
 -spec schedule(
     #{ _ => _ },
-    #{ method => binary(), from => integer(), to => integer(), accept => binary(), _ => _ },
+    #{
+        method => 'GET' | 'GEt' | 'GeT' | 'Get' | 'gET' | 'gEt' | 'geT' | 'get',
+        from => integer(), to => integer(), accept => binary(), _ => _
+    }
+    |
+    #{
+        method := 'POST' | 'POSt' | 'POsT' | 'POst'
+            | 'PoST' | 'PoSt' | 'PosT' | 'Post'
+            | 'pOST' | 'pOSt' | 'pOsT' | 'pOst'
+            | 'poST' | 'poSt' | 'posT' | 'post',
+        accept => binary(), _ => _
+    },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ } | binary()} | {error, _}.
 schedule(Base, Req, Opts) ->
@@ -829,8 +841,7 @@ get_schedule(Base, Req, Opts) ->
     From =
         case hb_ao:get(<<"from">>, Req, not_found, Opts) of
             not_found -> 0;
-            X when X < 0 -> 0;
-            FromRes -> hb_util:int(FromRes)
+            FromRes -> max(0, hb_util:int(FromRes))
         end,
     To =
         case hb_ao:get(<<"to">>, Req, not_found, Opts) of
