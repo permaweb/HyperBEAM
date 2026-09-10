@@ -495,12 +495,12 @@ apply_schema(
     end;
 apply_schema(Type, Value, Opts) ->
     % A scalar, literal or range: keep a value of the type, else coerce it.
-    case check_type(Type, Value) of
+    case check_type(Type, Value, Opts) of
         true ->
             {Value, false};
         false ->
             Coerced = coerce_type(Type, Value, Opts),
-            case Coerced =/= error andalso check_type(Type, Coerced) of
+            case Coerced =/= error andalso check_type(Type, Coerced, Opts) of
                 true -> {Coerced, true};
                 false -> throw({invalid_type, Type, Value})
             end
@@ -540,7 +540,7 @@ apply_key(Key, Field, Message, {Acc, Changed} = State, Opts) ->
 %% @doc Vary a value by the first member of a union that admits it as it is,
 %% else by the first that it can be coerced to.
 apply_union(Members, Value, Opts) ->
-    case matching_union_member(Members, Value) of
+    case matching_union_member(Members, Value, Opts) of
         {ok, Member} ->
             try {ok, apply_schema(Member, Value, Opts)}
             catch
@@ -555,12 +555,12 @@ apply_union(Members, Value, Opts) ->
 %% @doc The first constraining member of a union that a value already
 %% satisfies. Members that pass every value through never match, so that
 %% they cannot shadow a constraining member.
-matching_union_member([], _Value) ->
+matching_union_member([], _Value, _Opts) ->
     error;
-matching_union_member([Member | Rest], Value) ->
-    case not is_passthrough_schema(Member) andalso check_type(Member, Value) of
+matching_union_member([Member | Rest], Value, Opts) ->
+    case not is_passthrough_schema(Member) andalso check_type(Member, Value, Opts) of
         true -> {ok, Member};
-        false -> matching_union_member(Rest, Value)
+        false -> matching_union_member(Rest, Value, Opts)
     end.
 
 %% @doc Vary a value by the first member of a union it can be coerced to,
@@ -709,45 +709,71 @@ coerce_exact(_Expected, _Value) ->
 is_boolean_coercible(Value) ->
     lists:member(Value, [true, false, 1, 0, <<"true">>, <<"false">>, <<"1">>, <<"0">>]).
 
-%% @doc Whether a value is of a schema's type as it is. Types the varier does
-%% not understand admit every value.
-check_type(#{ <<"kind">> := <<"integer">> }, Value) -> is_integer(Value);
-check_type(#{ <<"kind">> := <<"non-neg-integer">> }, Value) -> is_integer(Value) andalso Value >= 0;
-check_type(#{ <<"kind">> := <<"pos-integer">> }, Value) -> is_integer(Value) andalso Value > 0;
-check_type(#{ <<"kind">> := <<"neg-integer">> }, Value) -> is_integer(Value) andalso Value < 0;
-check_type(#{ <<"kind">> := <<"float">> }, Value) -> is_float(Value);
-check_type(#{ <<"kind">> := <<"number">> }, Value) -> is_number(Value);
-check_type(#{ <<"kind">> := <<"binary">> }, Value) -> is_binary(Value);
-check_type(#{ <<"kind">> := <<"bitstring">> }, Value) -> is_bitstring(Value);
-check_type(#{ <<"kind">> := <<"atom">> }, Value) -> is_atom(Value);
-check_type(#{ <<"kind">> := <<"pid">> }, Value) -> is_pid(Value);
-check_type(#{ <<"kind">> := <<"message">>, <<"keys">> := Keys }, Value)
+%% @doc Whether a value is of a schema's type without coercion. Constrained
+%% links are checked by their contents; passthrough fields stay unread.
+check_type(Type, Link, Opts) when ?IS_LINK(Link) ->
+    is_passthrough_schema(Type) orelse
+        try check_type(Type, hb_cache:ensure_loaded(Link, Opts), Opts)
+        catch
+            % An unreadable candidate cannot establish an exact match.
+            % Applying the selected schema still requires its links to load.
+            throw:{necessary_message_not_found, _, _} -> false
+        end;
+check_type(#{ <<"kind">> := <<"integer">> }, Value, _Opts) -> is_integer(Value);
+check_type(#{ <<"kind">> := <<"non-neg-integer">> }, Value, _Opts) -> is_integer(Value) andalso Value >= 0;
+check_type(#{ <<"kind">> := <<"pos-integer">> }, Value, _Opts) -> is_integer(Value) andalso Value > 0;
+check_type(#{ <<"kind">> := <<"neg-integer">> }, Value, _Opts) -> is_integer(Value) andalso Value < 0;
+check_type(#{ <<"kind">> := <<"float">> }, Value, _Opts) -> is_float(Value);
+check_type(#{ <<"kind">> := <<"number">> }, Value, _Opts) -> is_number(Value);
+check_type(#{ <<"kind">> := <<"binary">> }, Value, _Opts) -> is_binary(Value);
+check_type(#{ <<"kind">> := <<"bitstring">> }, Value, _Opts) -> is_bitstring(Value);
+check_type(#{ <<"kind">> := <<"atom">> }, Value, _Opts) -> is_atom(Value);
+check_type(#{ <<"kind">> := <<"pid">> }, Value, _Opts) -> is_pid(Value);
+check_type(
+    #{ <<"kind">> := <<"message">>, <<"keys">> := Keys,
+        <<"wildcard">> := Wildcard },
+    Value,
+    Opts
+)
         when is_map(Value) ->
     lists:all(
-        fun
-            ({Key, #{ <<"presence">> := required }}) -> is_map_key(Key, Value);
-            (_Field) -> true
+        fun({Key, #{ <<"presence">> := Presence, <<"type">> := Type }}) ->
+            case maps:find(Key, Value) of
+                {ok, Item} -> check_type(Type, Item, Opts);
+                error -> Presence =:= optional
+            end
         end,
         maps:to_list(Keys)
-    );
-check_type(#{ <<"kind">> := <<"message">> }, _Value) -> false;
-check_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }, Value) ->
+    ) andalso check_wildcard(Wildcard, Keys, Value, Opts);
+check_type(#{ <<"kind">> := <<"message">> }, _Value, _Opts) -> false;
+check_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }, Value, Opts) ->
     is_tuple(Value)
         andalso tuple_size(Value) =:= length(Items)
         andalso lists:all(
-            fun({Type, Item}) -> check_type(Type, Item) end,
+            fun({Type, Item}) -> check_type(Type, Item, Opts) end,
             lists:zip(Items, tuple_to_list(Value))
         );
-check_type(#{ <<"kind">> := <<"tuple">> }, Value) -> is_tuple(Value);
-check_type(#{ <<"kind">> := <<"list">>, <<"item">> := ItemType }, Value) ->
-    is_list(Value) andalso lists:all(fun(Item) -> check_type(ItemType, Item) end, Value);
-check_type(#{ <<"kind">> := <<"union">>, <<"members">> := Members }, Value) ->
-    lists:any(fun(Member) -> check_type(Member, Value) end, Members);
-check_type(#{ <<"kind">> := <<"literal">>, <<"value">> := Expected }, Value) ->
+check_type(#{ <<"kind">> := <<"tuple">> }, Value, _Opts) -> is_tuple(Value);
+check_type(#{ <<"kind">> := <<"list">>, <<"item">> := ItemType }, Value, Opts) ->
+    is_list(Value) andalso lists:all(fun(Item) -> check_type(ItemType, Item, Opts) end, Value);
+check_type(#{ <<"kind">> := <<"union">>, <<"members">> := Members }, Value, Opts) ->
+    lists:any(fun(Member) -> check_type(Member, Value, Opts) end, Members);
+check_type(#{ <<"kind">> := <<"literal">>, <<"value">> := Expected }, Value, _Opts) ->
     Value =:= Expected;
-check_type(#{ <<"kind">> := <<"range">>, <<"min">> := Min, <<"max">> := Max }, V) ->
+check_type(#{ <<"kind">> := <<"range">>, <<"min">> := Min, <<"max">> := Max }, V, _Opts) ->
     is_integer(V) andalso V >= Min andalso V =< Max;
-check_type(_Type, _Value) -> true.
+check_type(_Type, _Value, _Opts) -> true.
+
+%% @doc Check undeclared fields only when the wildcard constrains their type.
+check_wildcard(#{ <<"presence">> := required, <<"type">> := Type }, Keys, Value, Opts) ->
+    maps:fold(
+        fun(Key, Item, Matches) ->
+            Matches andalso (is_map_key(Key, Keys) orelse check_type(Type, Item, Opts))
+        end,
+        true,
+        Value
+    );
+check_wildcard(_Wildcard, _Keys, _Value, _Opts) -> true.
 
 %%% --------------------------------------------------------------------
 %%% Schema constructors
