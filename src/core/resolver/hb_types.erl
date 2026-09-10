@@ -226,12 +226,13 @@ extract(Module) when is_atom(Module) ->
         error -> {error, {object_code_unavailable, Module}}
     end.
 
-%% @doc The module's own type declarations, by name, for expansion when a
+%% @doc The module's own type declarations, by name and arity, for expansion when a
 %% spec refers to them.
 build_type_env(Forms) ->
     maps:from_list(
         [
-            {Name, #{ vars => [ var_name(Var) || Var <- Vars ], ast => Ast }}
+            {{Name, length(Vars)},
+                #{ vars => [ var_name(Var) || Var <- Vars ], ast => Ast }}
         ||
             {attribute, _, Tag, {Name, Ast, Vars}} <- Forms,
             Tag =:= type orelse Tag =:= opaque
@@ -284,13 +285,14 @@ parse_type({var, _, Name}, TypeEnv, VarEnv, Seen) ->
         error -> variable_type(Name)
     end;
 parse_type({user_type, _, Name, Args}, TypeEnv, VarEnv, Seen) ->
-    case lists:member(Name, Seen) orelse maps:find(Name, TypeEnv) of
+    TypeKey = {Name, length(Args)},
+    case lists:member(TypeKey, Seen) orelse maps:find(TypeKey, TypeEnv) of
         {ok, #{ vars := Vars, ast := Ast }} ->
             parse_type(
                 Ast,
                 TypeEnv,
                 maps:merge(VarEnv, maps:from_list(lists:zip(Vars, Args))),
-                [Name | Seen]
+                [TypeKey | Seen]
             );
         _ ->
             alias_type(Name)
@@ -798,6 +800,25 @@ map_wildcards_test() ->
             <<"wildcard">> := #{ <<"presence">> := required }
         },
         Force
+    ).
+
+type_alias_arities_test() ->
+    TypeEnv = build_type_env([
+        {attribute, 1, type, {value, {type, 1, integer, []}, []}},
+        {attribute, 1, type,
+            {value, {user_type, 1, value, []}, [{var, 1, 'Item'}]}}
+    ]),
+    Integer = scalar_type(<<"integer">>),
+    ?assertEqual(
+        Integer,
+        parse_type({user_type, 1, value, []}, TypeEnv, #{}, [])
+    ),
+    ?assertEqual(
+        Integer,
+        parse_type(
+            {user_type, 1, value, [{type, 1, binary, []}]},
+            TypeEnv, #{}, []
+        )
     ).
 
 implicit_union_execution_keys_test() ->
