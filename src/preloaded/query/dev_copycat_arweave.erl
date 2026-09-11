@@ -3,6 +3,9 @@
 %%% If `to' is omitted, it keeps moving downward from `from' until it reaches a
 %%% block that is already indexed at the requested mode. If `to' is provided,
 %%% every block in the range is processed.
+%%%
+%%% Every transaction header and, in `full' mode, every bundled item an index
+%%% run caches carries its weave offset as `priv/offset'.
 -module(dev_copycat_arweave).
 -device_libraries([lib_arweave_common]).
 -export([arweave/3]).
@@ -453,7 +456,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, IndexMode, Opts) ->
                     % its fields are locally matchable. Bundle transactions are
                     % handled below -- caching their data-free header here would
                     % shadow the full bundle written by the bundle indexer.
-                    ok = cache_tx_header(TX, Opts),
+                    ok = cache_tx_header(TX, TXStartOffset, Opts),
                     counters(0, 0, 0);
                 true when IndexMode =/= shallow ->
                     try
@@ -611,14 +614,29 @@ index_full_bundle_bytes(BundleData, BundleStartOffset, IndexMode, Store, Opts) -
 index_pending(IndexMode, Opts) ->
     case hb_ao:resolve(<<?ARWEAVE_DEVICE/binary, "/pending">>, Opts) of
         {ok, TXIDs} when is_list(TXIDs) ->
+            PendingOpts = pending_opts(Opts),
             Results = parallel_map(
                 TXIDs,
-                fun(TXID) -> process_pending_tx(TXID, IndexMode, Opts) end,
+                fun(TXID) ->
+                    process_pending_tx(TXID, IndexMode, PendingOpts)
+                end,
                 Opts
             ),
             {ok, (sum_counters(Results))#{ total_txs => length(TXIDs) }};
         Error ->
             Error
+    end.
+
+%% @doc The options the mempool is indexed with: the node's `pending-index'
+%% store -- emptied ahead of each index run, so it must be a store of the
+%% mempool's own -- as the match index of every message the run caches. A
+%% node without one indexes the mempool with everything else.
+pending_opts(Opts) ->
+    case hb_opts:get(pending_index, [], Opts) of
+        [] -> Opts;
+        Store ->
+            ok = hb_store:reset(Store),
+            Opts#{ <<"match-index">> => Store }
     end.
 
 process_pending_tx(TXID, IndexMode, Opts) ->
@@ -687,6 +705,7 @@ resolve_pending_tx_header(TXID, Opts) ->
 index_pending_children(TXID, TX, IndexMode, Store, Opts) ->
     case is_bundle_tx(TX, Opts) of
         false ->
+            ok = cache_tx_header(TX, infinity, Opts),
             counters(0, 0, 0);
         true ->
             Offset = #{ <<"relative">> => TXID, <<"offset">> => 0 },
@@ -739,7 +758,11 @@ index_full_bundle_items(
                         LocalOpts = hb_store:scope(Opts, local),
                         Msg = hb_message:convert(
                             Parsed, <<"structured@1.0">>, <<"ans104@1.0">>, LocalOpts),
-                        {ok, _Path} = hb_cache:write(Msg, LocalOpts),
+                        {ok, _Path} =
+                            hb_cache:write(
+                                with_offset(Msg, ItemStartOffset, LocalOpts),
+                                LocalOpts
+                            ),
                         ok;
                     _ -> ok
                 end,
@@ -863,25 +886,27 @@ resolve_tx_header(TXID, Opts) ->
     end.
 
 %% @doc Cache a transaction's header -- already resolved during the block scan
-%% -- as a structured message in the local store, so that its fields (notably
-%% `target') are matchable via `hb_cache:match'/`~query@1.0' without a further
-%% gateway fetch. The header carries no data (it is resolved with
-%% `exclude-data'), so storing it is cheap and is done in every index mode. A
-%% header that fails to convert or write is logged and skipped rather than
-%% failing the whole block.
-cache_tx_header(TX, Opts) ->
+%% -- as a structured message in the local store at its weave offset, so that
+%% its fields (notably `target') are matchable via `hb_cache:match'/`~query@1.0'
+%% without a further gateway fetch. The header carries no data (it is resolved
+%% with `exclude-data'), so storing it is cheap and is done in every index
+%% mode. A header that fails to convert or write is logged and skipped rather
+%% than failing the whole block.
+cache_tx_header(TX, Offset, Opts) ->
     case hb_opts:get(arweave_index_txs, true, Opts) of
-        true -> write_tx_header(TX, Opts);
+        true -> write_tx_header(TX, Offset, Opts);
         false -> ok
     end.
 
-write_tx_header(TX, Opts) ->
+%% @doc Write a transaction's header to the local store at its weave offset.
+write_tx_header(TX, Offset, Opts) ->
     LocalOpts = hb_store:scope(Opts, local),
     try
         Msg =
             hb_message:convert(
                 TX, <<"structured@1.0">>, <<"tx@1.0">>, LocalOpts),
-        {ok, _} = hb_cache:write(Msg, LocalOpts),
+        {ok, _} =
+            hb_cache:write(with_offset(Msg, Offset, LocalOpts), LocalOpts),
         ok
     catch
         Class:Reason ->
@@ -895,6 +920,13 @@ write_tx_header(TX, Opts) ->
             ),
             ok
     end.
+
+%% @doc A message carrying its weave offset privately, for `hb_cache' to
+%% index it by: an item in a pending bundle is pending itself.
+with_offset(Msg, #{ <<"relative">> := _ }, Opts) ->
+    with_offset(Msg, infinity, Opts);
+with_offset(Msg, Offset, Opts) ->
+    hb_private:set(Msg, <<"offset">>, Offset, Opts).
 
 %% @doc Record event metrics (count and duration) using hb_event:record.
 record_event_metrics(MetricName, Count, Duration) ->
@@ -1634,11 +1666,13 @@ pending_range_indexes_bundle_children_test() ->
         }
     ],
     ReadStore = StoreOpts#{ <<"routes">> => Routes },
+    Pending = hb_test_utils:test_store(hb_store_volatile),
     Opts =
         DefaultOpts#{
             <<"routes">> => Routes,
             <<"arweave-index-blocks">> => false,
-            <<"arweave-index-store">> => ReadStore
+            <<"arweave-index-store">> => ReadStore,
+            <<"pending-index">> => [Pending]
         },
     try
         {ok, #{ items_count := 1, total_txs := 1 }} =
@@ -1662,7 +1696,17 @@ pending_range_indexes_bundle_children_test() ->
             {ok, _},
             hb_cache:read(ChildID, hb_store:scope(Opts, local))
         ),
-        ?assertEqual(ChildID, hb_message:id(ChildMsg, signed, Opts))
+        ?assertEqual(ChildID, hb_message:id(ChildMsg, signed, Opts)),
+        % The mempool's items are indexed in the node's pending index alone.
+        ?assertMatch(
+            {ok, [ChildID]},
+            hb_ao:raw(
+                <<"match@1.0">>,
+                #{ <<"content-type">> => <<"text/plain">> },
+                #{ <<"path">> => <<"content-type">> },
+                (hb_store:scope(Opts, local))#{ <<"match-index">> => [Pending] }
+            )
+        )
     after
         hb_mock_server:stop(MockHandle)
     end.
@@ -1748,7 +1792,7 @@ tx_header_cache_respects_index_txs_test() ->
     TX = ar_tx:sign(#tx{ format = 2 }, hb:wallet()),
     TXID = hb_util:encode(TX#tx.id),
     LocalOpts = hb_store:scope(Opts, local),
-    ok = cache_tx_header(TX, Opts#{ <<"arweave-index-txs">> => false }),
+    ok = cache_tx_header(TX, 7, Opts#{ <<"arweave-index-txs">> => false }),
     ?assertEqual({error, not_found}, hb_cache:read(TXID, LocalOpts)),
-    ok = cache_tx_header(TX, Opts),
+    ok = cache_tx_header(TX, 7, Opts),
     ?assertMatch({ok, _}, hb_cache:read(TXID, LocalOpts)).
