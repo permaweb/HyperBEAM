@@ -2,7 +2,7 @@
 %%% pushes the resulting messages to other processes. The `push'ing mechanism
 %%% continues until the there are no remaining messages to push.
 -module(dev_push).
--device_libraries([lib_arweave_common, lib_process]).
+-device_libraries([lib_process]).
 %%% Public API
 -export([push/3]).
 -include("include/hb.hrl").
@@ -563,37 +563,40 @@ calculate_base_id(GivenProcess, Opts) ->
     BaseID.
 
 %% @doc Add the necessary keys to the message to be scheduled, then schedule it.
-%% If the remote scheduler does not support the given codec, it will be
-%% downgraded and re-signed.
-%% Schedulers can also request another codec explicitly.
+%% HEAD the schedule for a commitment spec, otherwise negotiate on rejection.
+%% The recipient's security policy selects the local signing wallet.
 schedule_result(TargetProcess, MsgToPush, Origin, Opts) ->
-    schedule_result(
-        TargetProcess,
-        MsgToPush,
-        hb_opts:get(
-            scheduler_default_commitment_spec,
-            <<"httpsig@1.0">>,
-            Opts
-        ),
-        Origin,
-        Opts
-    ).
-schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
+    Augmented = augment_message(Origin, MsgToPush, Opts),
+    Prepared = normalize_message(Augmented, Opts),
+    case scheduler_commitment_spec(TargetProcess, Opts) of
+        {ok, Spec} ->
+            schedule_result(TargetProcess, Prepared, Spec, Origin, Opts);
+        not_found ->
+            schedule_result(
+                TargetProcess,
+                Augmented,
+                hb_opts:get(
+                    scheduler_default_commitment_spec, <<"httpsig@1.0">>, Opts),
+                Origin,
+                Opts
+            );
+        Error -> Error
+    end.
+schedule_result(TargetProcess, MsgToPush, CommitSpec, Origin, Opts) ->
     Target = hb_ao:get(<<"target">>, MsgToPush, Opts),
     ?event(push,
         {push_scheduling_result,
             {target, {string, Target}},
             {target_process, TargetProcess},
             {msg, MsgToPush},
-            {codec, Codec},
+            {codec, CommitSpec},
             {origin, Origin}
         },
         Opts
     ),
-    AugmentedMsg = augment_message(Origin, MsgToPush, Opts),
-    ?event(push, {prepared_msg, {msg, AugmentedMsg}}, Opts),
+    ?event(push, {prepared_msg, {msg, MsgToPush}}, Opts),
     % Load the `accept-id`'d wallet into the `Opts` map, if requested.
-    SignedMsg = sign_result(AugmentedMsg, TargetProcess, Codec, Opts),
+    SignedMsg = apply_security(MsgToPush, TargetProcess, CommitSpec, Opts),
     % Verify the signed message before writing to cache
     true = hb_message:verify(SignedMsg, signers, Opts),
     % Write the signed message to cache before including it in the schedule request
@@ -638,22 +641,23 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
             % already-augmented message to the target's policy -- preserving the
             % `from-*' provenance and honoring the policy, rather than
             % re-committing the raw message with the default wallet.
-            NormMsg = normalize_message(AugmentedMsg, Opts),
-            SignedNormMsg = sign_result(NormMsg, TargetProcess, Codec, Opts),
-            retry_required_codec(
+            NormMsg = normalize_message(MsgToPush, Opts),
+            SignedNormMsg =
+                apply_security(NormMsg, TargetProcess, CommitSpec, Opts),
+            retry_schedule(
                 TargetProcess,
                 MsgToPush,
-                Codec,
+                CommitSpec,
                 Origin,
                 remote_schedule_result(Location, SignedNormMsg, Opts),
                 Opts
             );
         {error, 422} ->
-            ?event(push, {wrong_format, {422, Res}, {codec, Codec}}, Opts),
-            retry_required_codec(
+            ?event(push, {wrong_format, {422, Res}, {codec, CommitSpec}}, Opts),
+            retry_schedule(
                 TargetProcess,
                 MsgToPush,
-                Codec,
+                CommitSpec,
                 Origin,
                 {error, Res},
                 Opts
@@ -662,133 +666,66 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
             {error, Res}
     end.
 
-%% @doc Retry an encoding rejection with the scheduler's required codec.
-retry_required_codec(
-        TargetProcess, Msg, Codec, Origin, Result = {error, Res}, Opts) ->
-    DefaultCodec = hb_opts:get(
+%% @doc Ask the target process's schedule for a commitment spec using HEAD.
+scheduler_commitment_spec(TargetProcess, Opts) ->
+    QuoteOpts = Opts#{
+        <<"hashpath">> => ignore,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    maybe
+        {ok, Res} ?=
+            hb_ao:resolve(
+                {as, <<"process@1.0">>, TargetProcess},
+                #{ <<"path">> => <<"schedule">>, <<"method">> => <<"HEAD">> },
+                QuoteOpts
+            ),
+        Status = hb_ao:get(<<"status">>, Res, 200, QuoteOpts),
+        true ?= (Status >= 200 andalso Status < 300) orelse {error, Res},
+        case hb_ao:get(<<"commitment-device">>, Res, not_found, QuoteOpts) of
+            not_found -> not_found;
+            _ -> {ok, Res}
+        end
+    else
+        Error -> Error
+    end.
+
+%% @doc Retry a rejection with its commitment spec, or the legacy ANS-104 fallback.
+retry_schedule(
+        TargetProcess, Msg, CurrentSpec, Origin, Result = {error, Res}, Opts) ->
+    DefaultSpec = hb_opts:get(
         scheduler_default_commitment_spec, <<"httpsig@1.0">>, Opts),
-    RequiredCodec =
-        case hb_maps:get(<<"require-codec">>, Res, not_found, Opts) of
-            not_found when Codec =:= <<"httpsig@1.0">> -> <<"ans104@1.0">>;
-            not_found -> Codec;
-            Required -> Required
+    Spec =
+        case hb_ao:get(<<"commitment-device">>, Res, not_found, Opts) of
+            not_found when CurrentSpec =:= <<"httpsig@1.0">> -> <<"ans104@1.0">>;
+            not_found -> CurrentSpec;
+            _ -> Res
         end,
     case {
         hb_ao:get(<<"status">>, Res, 500, Opts),
-        Codec,
-        RequiredCodec
+        CurrentSpec,
+        Spec
     } of
-        {422, DefaultCodec, RequiredCodec}
-                when is_binary(RequiredCodec),
-                     RequiredCodec =/= DefaultCodec ->
-            case {Codec, RequiredCodec} of
-                {<<"httpsig@1.0">>, <<"ans104@1.0">>} ->
-                    ?event(push,
-                        {downgrading_to_ans104,
-                            {422, Res},
-                            {codec, Codec},
-                            {origin, Origin}
-                        },
-                        Opts
-                    );
-                _ ->
-                    ?event(push,
-                        {retrying_schedule_codec,
-                            {from, Codec},
-                            {to, RequiredCodec},
-                            {origin, Origin}
-                        },
-                        Opts
-                    )
-            end,
+        {422, DefaultSpec, Spec} when Spec =/= CurrentSpec ->
+            ?event(push,
+                {retrying_schedule_commitment,
+                    {from, CurrentSpec},
+                    {to, Spec},
+                    {origin, Origin}
+                },
+                Opts
+            ),
             schedule_result(
                 TargetProcess,
                 Msg,
-                RequiredCodec,
+                Spec,
                 Origin,
                 Opts
             );
         _ ->
             Result
     end;
-retry_required_codec(_TargetProcess, _Msg, _Codec, _Origin, Result, _Opts) ->
+retry_schedule(_TargetProcess, _Msg, _Spec, _Origin, Result, _Opts) ->
     Result.
-
-%% @doc Sign a result using the scheduler's required codec.
-sign_result(Msg, TargetProcess, <<"tx@1.0">>, Opts) ->
-    Selected = apply_security(
-        Msg, TargetProcess, <<"httpsig@1.0">>, Opts),
-    case hb_message:signers(Selected, Opts) of
-        [Signer | _] -> sign_l1(Msg, Signer, Opts);
-        [] -> Selected
-    end;
-sign_result(Msg, TargetProcess, Codec, Opts) ->
-    apply_security(Msg, TargetProcess, Codec, Opts).
-
-%% @doc Sign a data-free L1 transaction with an already-selected identity.
-sign_l1(Msg, Signer, Opts) ->
-    Normalized = normalize_message(Msg, Opts),
-    {ok, SignerOpts} = hb_opts:as(Signer, Opts),
-    {ok, Price} =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"arweave@2.9">> },
-            #{
-                <<"path">> => <<"/price">>,
-                <<"size">> => 0,
-                <<"target">> => hb_ao:get(<<"target">>, Normalized, Opts)
-            },
-            Opts
-        ),
-    {ok, Anchor} =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"arweave@2.9">> },
-            #{ <<"path">> => <<"/tx_anchor">> },
-            Opts
-        ),
-    commit_l1(
-        Normalized,
-        SignerOpts,
-        Price,
-        Anchor
-    ).
-
-%% @doc Build and sign a data-free L1 transaction from process intent.
-commit_l1(Msg, SignerOpts, Price, Anchor) ->
-    TagMsg =
-        hb_maps:map(
-            fun(_, Value) -> hb_util:bin(Value) end,
-            hb_maps:without(
-                [
-                    <<"anchor">>, <<"ao-data-key">>, <<"ao-types">>,
-                    <<"commitments">>,
-                    <<"data">>, <<"data_root">>, <<"data_size">>,
-                    <<"format">>, <<"reward">>, <<"tags">>, <<"target">>
-                ],
-                hb_private:reset(Msg),
-                SignerOpts
-            ),
-            SignerOpts
-        ),
-    TX0 = #tx{
-        format = 2,
-        target = hb_util:decode(hb_ao:get(<<"target">>, Msg, SignerOpts)),
-        quantity = 1,
-        anchor = Anchor,
-        reward = Price
-    },
-    TX = TX0#tx{
-        tags = lib_arweave_common:tags(
-            TX0, not_found, TagMsg, [], SignerOpts)
-    },
-    {ok, Signed} =
-        hb_ao:raw(
-            <<"tx@1.0">>,
-            <<"commit">>,
-            TX,
-            #{ <<"type">> => <<"signed">> },
-            SignerOpts
-        ),
-    Signed.
 
 %% @doc Set the necessary keys in order for the recipient to know where the
 %% message came from.
@@ -1010,6 +947,169 @@ max_depth_test_cases() ->
         fun test_parse_max_depth/0
     ].
 
+%% @doc Exercise HEAD scheduling through the selected scheduler and TX codec.
+%% Arweave submission is captured to avoid spending from a test wallet.
+scheduler_commitment_spec_test_() ->
+    [
+        {atom_to_list(Mode),
+            {timeout, 30, fun() -> test_push_scheduler_spec(Mode) end}}
+        || Mode <- [default, tx, rejection, unavailable, multiple_authorities]
+    ].
+
+legacy_scheduler_spec_test() ->
+    Opts = #{
+        <<"priv-wallet">> => Wallet = ar_wallet:new(),
+        <<"store">> => [hb_test_utils:test_store()]
+    },
+    Authority = hb_util:human_id(Wallet),
+    Process = hb_message:commit(#{
+        <<"device">> => <<"process@1.0">>,
+        <<"type">> => <<"Process">>,
+        <<"scheduler">> => Authority,
+        <<"authority">> => Authority
+    }, Opts),
+    {ok, _} = hb_cache:write(Process, Opts),
+    ?assertEqual(not_found, scheduler_commitment_spec(Process, Opts)),
+    {ok, _} = hb_ao:resolve(Process, #{
+        <<"path">> => <<"schedule">>,
+        <<"method">> => <<"POST">>,
+        <<"body">> => Process
+    }, Opts),
+    Msg = #{
+        <<"target">> => hb_message:id(Process, all, Opts),
+        <<"action">> => <<"Test">>
+    },
+    lists:foreach(
+        fun(Rejection) ->
+            {ok, Assignment} = retry_schedule(
+                Process, Msg, <<"httpsig@1.0">>, #{}, {error, Rejection}, Opts),
+            Scheduled = hb_ao:get(<<"body">>, Assignment, Opts),
+            ?assertEqual([<<"ans104@1.0">>],
+                hb_message:commitment_devices(Scheduled, Opts)),
+            ?assertEqual([Authority], hb_message:signers(Scheduled, Opts)),
+            ?assert(hb_message:verify(Scheduled, signers, Opts)),
+            RetrySpec =
+                case hb_maps:is_key(<<"commitment-device">>, Rejection, Opts) of
+                    true -> Rejection;
+                    false -> <<"ans104@1.0">>
+                end,
+            ?assertEqual({error, Rejection}, retry_schedule(
+                Process, Msg, RetrySpec, #{}, {error, Rejection}, Opts))
+        end,
+        [
+            #{ <<"status">> => 422 },
+            #{
+                <<"status">> => 422,
+                <<"commitment-device">> => <<"ans104@1.0">>
+            }
+        ]
+    ).
+
+test_push_scheduler_spec(Mode) ->
+    Anchor = hb_util:encode(crypto:strong_rand_bytes(48)),
+    {Server, Routes} = hb_mock_server:start_arweave_gateway(#{
+        price =>
+            case Mode of
+                unavailable -> {503, <<"Unavailable">>};
+                _ -> {200, <<"7">>}
+            end,
+        tx_anchor => {200, Anchor},
+        tx => {200, <<"OK">>}
+    }),
+    Wallet = ar_wallet:new(),
+    Authority = hb_util:human_id(Wallet),
+    {Authorities, Identities} =
+        case Mode of
+            multiple_authorities ->
+                OtherWallet = ar_wallet:new(),
+                OtherAuthority = hb_util:human_id(OtherWallet),
+                {[OtherAuthority, Authority],
+                    #{
+                        OtherAuthority => #{ <<"priv-wallet">> => OtherWallet },
+                        Authority => #{ <<"priv-wallet">> => Wallet }
+                    }};
+            _ ->
+                {Authority, #{ Authority => #{ <<"priv-wallet">> => Wallet } }}
+        end,
+    Opts = Routes#{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"identities">> => Identities,
+        <<"scheduler-default-commitment-spec">> =>
+            case Mode of
+                tx -> <<"tx@1.0">>;
+                _ -> <<"httpsig@1.0">>
+            end,
+        <<"store">> => [hb_test_utils:test_store()]
+    },
+    Process = hb_message:commit(
+        #{
+            <<"device">> => <<"process@1.0">>,
+            <<"scheduler-device">> => <<"arweave-scheduler@1.0">>,
+            <<"authority">> => Authorities
+        },
+        Opts
+    ),
+    Target = hb_util:human_id(hb_message:id(Process, all, Opts)),
+    Source = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Origin = #{
+        <<"process">> => Source,
+        <<"from-uncommitted">> => Source,
+        <<"from-base">> => Source,
+        <<"from-scheduler">> => Authority,
+        <<"from-authority">> => Authority
+    },
+    Msg = #{
+        <<"target">> => Target,
+        <<"quantity">> => 42,
+        <<"action">> => <<"Test">>
+    },
+    try
+        Outcome =
+            case Mode of
+                rejection ->
+                    schedule_result(
+                        Process,
+                        augment_message(Origin, Msg, Opts),
+                        <<"httpsig@1.0">>,
+                        Origin,
+                        Opts
+                    );
+                _ -> schedule_result(Process, Msg, Origin, Opts)
+            end,
+        case Mode of
+            unavailable ->
+                ?assertMatch({error, _}, Outcome),
+                ?assertEqual([], hb_mock_server:get_requests(Server, tx)),
+                ?assertEqual([], hb_mock_server:get_requests(Server, tx_anchor));
+            _ ->
+                {ok, Result} = Outcome,
+                ?assertEqual(202, hb_ao:get(<<"status">>, Result, Opts)),
+                [Submitted] = hb_mock_server:get_requests(tx, 1, Server),
+                TX = ar_tx:json_struct_to_tx(
+                    hb_json:decode(hb_ao:get(<<"body">>, Submitted, Opts))),
+                ?assertEqual(hb_util:human_id(TX#tx.id),
+                    hb_ao:get(<<"txid">>, Result, Opts)),
+                ?assertEqual(hb_util:decode(Target), TX#tx.target),
+                ?assertEqual(1, TX#tx.quantity),
+                ?assertEqual(7, TX#tx.reward),
+                ?assertEqual(hb_util:decode(Anchor), TX#tx.anchor),
+                ?assertEqual(0, TX#tx.data_size),
+                Decoded = hb_message:convert(
+                    TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
+                ?assert(hb_message:verify(Decoded, signers, Opts)),
+                ?assertEqual([Authority], hb_message:signers(Decoded, Opts)),
+                ?assertEqual({<<"quantity">>, <<"42">>},
+                    lists:keyfind(<<"quantity">>, 1, TX#tx.tags)),
+                ?assertEqual(<<"Test">>, hb_ao:get(<<"action">>, Decoded, Opts)),
+                ?assertEqual(Source, hb_ao:get(<<"from-process">>, Decoded, Opts)),
+                ?assertEqual(1,
+                    length(hb_mock_server:get_requests(Server, tx_anchor)))
+        end,
+        ?assertEqual(1, length(hb_mock_server:get_requests(Server, price)))
+    after
+        hb_mock_server:stop(Server)
+    end.
+
 test_tx_codec_uses_compute_authority() ->
     DefaultWallet = ar_wallet:new(),
     ComputeWallet = ar_wallet:new(),
@@ -1032,22 +1132,22 @@ test_tx_codec_uses_compute_authority() ->
             <<"quantity">> => 42,
             <<"from-process">> => FromProcess
         },
-    Selected =
-        apply_security(
-            Msg,
-            #{ <<"authority">> => ComputeID },
-            <<"httpsig@1.0">>,
-            Opts
-        ),
-    ?assertEqual([ComputeID], hb_message:signers(Selected, Opts)),
     Reward = 7,
     Anchor = crypto:strong_rand_bytes(32),
-    Signed = commit_l1(
-        normalize_message(Msg, Opts),
-        Opts#{ <<"priv-wallet">> => ComputeWallet },
-        Reward,
-        Anchor
-    ),
+    Spec = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"field-quantity">> => 1,
+        <<"field-data_size">> => 0,
+        <<"field-reward">> => Reward,
+        <<"field-anchor">> => hb_util:encode(Anchor)
+    },
+    Signed =
+        apply_security(
+            normalize_message(Msg, Opts),
+            #{ <<"authority">> => ComputeID },
+            Spec,
+            Opts
+        ),
     TX = hb_message:convert(Signed, <<"tx@1.0">>, Opts),
     ?assertEqual([<<"tx@1.0">>], hb_message:commitment_devices(Signed, Opts)),
     ?assertEqual([ComputeID], hb_message:signers(Signed, Opts)),

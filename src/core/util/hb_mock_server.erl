@@ -65,6 +65,7 @@ start_arweave_gateway(Responses) ->
         {"/chunk", chunk, maps:get(chunk, Responses, DefaultResponse)},
         {"/tx", tx, maps:get(tx, Responses, DefaultResponse)},
         {"/price/:size", price, maps:get(price, Responses, DefaultResponse)},
+        {"/price/:size/:target", price, maps:get(price, Responses, DefaultResponse)},
         {"/tx_anchor", tx_anchor, maps:get(tx_anchor, Responses, DefaultResponse)}
     ],
     {ok, MockServer, ServerHandle} = start(Endpoints),

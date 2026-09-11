@@ -63,11 +63,52 @@ find_assignment(ProcessID, Slot, Opts) ->
             }
     end.
 
-%% @doc Read a schedule or relay a presigned data-free L1 transaction.
+%% @doc Read a schedule, prepare a commitment, or relay a presigned L1 TX.
 schedule(Base, Req, Opts) ->
     case hb_util:key_to_atom(hb_maps:get(<<"method">>, Req, <<"GET">>, Opts)) of
+        head -> head_schedule(Base, Req, Opts);
         post -> post_schedule(Base, Req, Opts);
         get -> get_schedule(Base, Req, Opts)
+    end.
+
+%% @doc Quote the reward and anchor for a data-free transaction. The quote is
+%% a commitment specification; the sender supplies its own signing identity.
+head_schedule(Base, Req, Opts) ->
+    Target = find_process_id(Base, Req, Opts),
+    FreshOpts = Opts#{
+        <<"hashpath">> => ignore,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    maybe
+        {ok, Reward} ?=
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{
+                    <<"path">> => <<"price">>,
+                    <<"size">> => 0,
+                    <<"target">> => Target
+                },
+                FreshOpts
+            ),
+        {ok, Anchor} ?=
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{ <<"path">> => <<"tx-anchor">> },
+                FreshOpts
+            ),
+        {ok,
+            #{
+                <<"commitment-device">> => <<"tx@1.0">>,
+                <<"field-format">> => 2,
+                <<"field-target">> => Target,
+                <<"field-quantity">> => 1,
+                <<"field-reward">> => Reward,
+                <<"field-anchor">> => hb_util:encode(Anchor),
+                <<"field-data_size">> => 0,
+                <<"field-data_root">> => <<>>,
+                <<"cache-control">> => <<"no-store">>
+            }
+        }
     end.
 
 get_schedule(Base, Req, Opts) ->
@@ -131,6 +172,11 @@ post_schedule(Base, Req, Opts) ->
                     <<"process">> => ProcessID
                 }
             };
+        {error, #{ <<"commitment-device">> := _ } = Rejection} ->
+            maybe
+                {ok, Quote} ?= head_schedule(Base, Req, Opts),
+                {error, hb_maps:merge(Quote, Rejection, Opts)}
+            end;
         Error -> Error
     end.
 
@@ -278,7 +324,7 @@ invalid_transaction() ->
     {error,
         #{
             <<"status">> => 422,
-            <<"require-codec">> => <<"tx@1.0">>,
+            <<"commitment-device">> => <<"tx@1.0">>,
             <<"reason">> =>
                 <<"Message must have a valid signed tx@1.0 commitment.">>
         }
@@ -293,21 +339,26 @@ slot_range_test() ->
         slot_range(#{ <<"from">> => -5, <<"to">> => 42 }, #{})
     ).
 
-invalid_commitment_requires_tx_codec_test() ->
-    ProcessID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+schedule_commitment_spec_test() ->
+    Anchor = hb_util:encode(crypto:strong_rand_bytes(48)),
+    {Server, Routes} = hb_mock_server:start_arweave_gateway(#{
+        price => {200, <<"7">>},
+        tx_anchor => {200, Anchor}
+    }),
     Opts =
-        #{
+        Routes#{
             <<"priv-wallet">> => ar_wallet:new(),
             <<"store">> => [hb_test_utils:test_store()]
         },
+    Process = hb_message:commit(#{
+        <<"device">> => <<"process@1.0">>,
+        <<"scheduler-device">> => <<"arweave-scheduler@1.0">>
+    }, Opts),
+    {ok, _} = hb_cache:write(Process, Opts),
+    ProcessID = hb_message:id(Process, all, Opts),
     Message = hb_message:commit(#{ <<"target">> => ProcessID }, Opts),
-    ?assertMatch(
-        {error,
-            #{
-                <<"status">> := 422,
-                <<"require-codec">> := <<"tx@1.0">>
-            }},
-        hb_ao:resolve(
+    try
+        {error, Rejection} = hb_ao:resolve(
             #{ <<"device">> => <<"arweave-scheduler@1.0">> },
             #{
                 <<"path">> => <<"schedule">>,
@@ -316,5 +367,43 @@ invalid_commitment_requires_tx_codec_test() ->
                 <<"body">> => Message
             },
             Opts
+        ),
+        ?assertMatch(
+            #{
+                <<"status">> := 422,
+                <<"commitment-device">> := <<"tx@1.0">>,
+                <<"field-reward">> := 7,
+                <<"field-anchor">> := Anchor
+            },
+            Rejection
+        ),
+        Signed = hb_message:commit(Message, Opts, Rejection),
+        ?assert(hb_message:verify(Signed, signers, Opts)),
+        Node = hb_http_server:start_node(Opts),
+        {ok, Quote} = hb_http:request(
+            <<"HEAD">>,
+            Node,
+            <<"/", ProcessID/binary, "/schedule">>,
+            #{ <<"accept">> => <<"application/httpsig">> },
+            Opts
+        ),
+        ?assertEqual(7, hb_ao:get(<<"field-reward">>, Quote, Opts)),
+        ?assertEqual(Anchor, hb_ao:get(<<"field-anchor">>, Quote, Opts)),
+        ?assertEqual(<<"tx@1.0">>,
+            hb_ao:get(<<"commitment-device">>, Quote, Opts)),
+        HeadSigned = hb_message:commit(Message, Opts, Quote),
+        TX = hb_message:convert(HeadSigned, <<"tx@1.0">>, Opts),
+        ?assertEqual(hb_util:decode(ProcessID), TX#tx.target),
+        ?assertEqual(7, TX#tx.reward),
+        ?assertEqual(hb_util:decode(Anchor), TX#tx.anchor),
+        ?assertEqual(1, TX#tx.quantity),
+        ?assert(hb_message:verify(HeadSigned, signers, Opts)),
+        ?assertEqual([], hb_mock_server:get_requests(Server, tx)),
+        [PriceReq, _] = hb_mock_server:get_requests(Server, price),
+        ?assertEqual(
+            <<"/price/0/", ProcessID/binary>>,
+            hb_ao:get(<<"path">>, PriceReq, Opts)
         )
-    ).
+    after
+        hb_mock_server:stop(Server)
+    end.
