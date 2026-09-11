@@ -164,27 +164,36 @@ permissive_id(Msg, Opts) when is_map(Msg) -> hb_message:id(Msg, signed, Opts).
 %% returns only the name component of the host, if it is present. If no name is
 %% present, an empty binary is returned.
 name_from_host(Host, no_host) ->
+    HostName = host_name(Host),
     % Handle the case where no host key is present in the node message. This 
     % logic is also used when parsing of the host key from the node message
     % fails, or the node message host is not found in the client provided value
     % (node claims to be `x.com`, but the user request is for `abc.y.com`).
-    case binary:split(Host, <<".">>, [global, trim_all]) of
+    case binary:split(HostName, <<".">>, [global, trim_all]) of
         [_Host] ->
             {skip, <<"No subdomain found in `Host: ", Host/binary, "`.">>};
         [Name|_] ->
-            case inet:parse_address(hb_util:list(Host)) of
+            case inet:parse_address(hb_util:list(HostName)) of
                 {ok, _} ->
                     {skip, <<"No subdomain found in `Host: ", Host/binary, "`.">>};
                 _ -> {ok, Name}
             end
     end;
 name_from_host(ReqHost, RawNodeHost) ->
+    ReqHostName = host_name(ReqHost),
     NodeHostName = maps:get(host, uri_string:parse(RawNodeHost), RawNodeHost),
-    case binary:split(ReqHost, <<".", NodeHostName/binary>>) of
+    case binary:split(ReqHostName, <<".", NodeHostName/binary>>) of
         [Subdomain, <<>>] -> {ok, Subdomain};
-        _ when ReqHost =:= NodeHostName ->
+        _ when ReqHostName =:= NodeHostName ->
             {skip, <<"No subdomain found in `Host: ", ReqHost/binary, "`.">>};
         _ -> name_from_host(ReqHost, no_host)
+    end.
+
+%% @doc Extract the hostname from an HTTP authority.
+host_name(RawHost) ->
+    case uri_string:parse(<<"//", RawHost/binary>>) of
+        #{host := Host} -> Host;
+        _ -> RawHost
     end.
 
 %% @doc Reject host-derived names that the node has reserved for gateway
@@ -420,8 +429,16 @@ reserved_host_labels_do_not_block_direct_resolution_test_parallel() ->
 
 name_from_host_test_parallel() ->
     ?assertMatch({skip, _}, name_from_host(<<"127.0.0.1">>, no_host)),
+    ?assertMatch({skip, _}, name_from_host(<<"localhost:8734">>, no_host)),
+    ?assertMatch(
+        {skip, _},
+        name_from_host(<<"example.com:8734">>, <<"example.com">>)
+    ),
     ?assertEqual({ok, <<"abc">>}, name_from_host(<<"abc.127.0.0.1">>, no_host)),
     ?assertEqual(
         {ok, <<"sub3.sub2">>},
-        name_from_host(<<"sub3.sub2.sub1.abc.xyz">>, <<"sub1.abc.xyz">>)
+        name_from_host(
+            <<"sub3.sub2.sub1.abc.xyz:8734">>,
+            <<"sub1.abc.xyz">>
+        )
     ).
