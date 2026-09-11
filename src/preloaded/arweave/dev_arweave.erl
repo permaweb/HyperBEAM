@@ -1038,6 +1038,8 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
             false ->
                 DataRes =
                     case Type of
+                        tx when TXHeader#tx.format =:= 1 ->
+                            {ok, TXHeader#tx.data};
                         tx ->
                             request(<<"GET">>, <<"/raw/", ID/binary>>, Opts);
                         pending ->
@@ -1427,6 +1429,19 @@ get_tx_basic_data_test_parallel() ->
     },
     ?assert(hb_message:match(ExpectedMsg, StructuredWithHash, only_present)),
     ok.
+
+get_tx_format_one_data_test_parallel() ->
+    {ok, TX} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => <<"U-rx7euDqM6GPl9fLTGrirZxLIihy-ZsfuIZOYHJjPk">>,
+            <<"exclude-data">> => false
+        },
+        #{}
+    ),
+    ?assertEqual(17967, byte_size(hb_ao:get(<<"data">>, TX))),
+    ?assert(hb_message:verify(TX, all, #{})).
 
 %% @doc The data for this transaction ends with two smaller chunks.
 get_tx_split_chunk_test_parallel() ->
