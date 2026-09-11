@@ -6,6 +6,7 @@
 -export([bundle_hint/4, data/3, tags/5, excluded_tags/3]).
 -export([to/3, to/6, siginfo/4, fields_to_tx/4]).
 -export([bundle_header/2, bundle_header/3]).
+-export([best_response/1]).
 -include("include/hb.hrl").
 
 -define(ANS104_BASE_FIELDS, [<<"anchor">>, <<"target">>]).
@@ -777,3 +778,29 @@ read_bundle_header(BundleStartOffset, HeaderSize, FirstChunk, Opts) ->
         Error ->
             Error
     end.
+
+%% @doc Select the best response from a (potentially multi-node) request result
+%% by sorting the responses ascending by HTTP status code and returning the
+%% first (best) one. Shared by the Arweave devices, which broadcast requests to
+%% several nodes and take the most successful reply.
+best_response({error, {no_viable_responses, Responses}}) ->
+    best_response(Responses);
+best_response([]) ->
+    {error, no_viable_responses};
+best_response(Responses) when is_list(Responses) ->
+    Sorted = lists:sort(
+        fun({_, ResponseA}, {_, ResponseB}) ->
+            StatusA = response_status(ResponseA),
+            StatusB = response_status(ResponseB),
+            StatusA =< StatusB
+        end,
+        Responses
+    ),
+    hd(Sorted);
+best_response(Response) ->
+    Response.
+
+response_status(Response) when is_map(Response) ->
+    maps:get(<<"status">>, Response, 999);
+response_status(_Response) ->
+    999.

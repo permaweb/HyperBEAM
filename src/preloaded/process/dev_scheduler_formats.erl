@@ -238,9 +238,4 @@ aos2_normalize_types(Msg) ->
 
 %% @doc For all scheduler format operations, we do not calculate hashpaths,
 %% perform cache lookups, or await inprogress results.
-format_opts(Opts) ->
-    Opts#{
-        <<"hashpath">> => ignore,
-        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
-        <<"await-inprogress">> => false
-    }.
+format_opts(Opts) -> lib_scheduler:format_opts(Opts).

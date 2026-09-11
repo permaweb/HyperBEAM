@@ -15,7 +15,7 @@
 %%% </pre>
 
 -module(dev_scheduler).
--device_libraries([lib_process]).
+-device_libraries([lib_process, lib_scheduler]).
 %%% AO-Core API functions:
 -export([info/0]).
 %%% Local scheduling functions:
@@ -30,8 +30,6 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%%% The maximum number of assignments that we will query/return at a time.
--define(MAX_ASSIGNMENT_QUERY_LEN, 1000).
 %%% The timeout for a lookahead worker.
 -define(LOOKAHEAD_TIMEOUT, 1500).
 
@@ -84,14 +82,7 @@ next(Base, Req, Opts) ->
     ?event(next, started_next),
     ?event(next_profiling, started_next),
     Schedule = message_cached_assignments(Base, Opts),
-    LastProcessed =
-        hb_util:int(
-            hb_ao:get(
-                <<"at-slot">>,
-                Base,
-                Opts#{ <<"hashpath">> => ignore }
-            )
-        ),
+    LastProcessed = lib_scheduler:at_slot(Base, Opts),
     ?event(next_profiling, got_last_processed),
     ?event(debug_next, {in_message_cache, {schedule, Schedule}}),
     ?event(next, {last_processed, LastProcessed, {message_cache, length(Schedule)}}),
@@ -111,12 +102,7 @@ next(Base, Req, Opts) ->
             ?event(next_profiling, got_no_assignments),
             {error, Reason};
         {ok, [], _} ->
-            {error, #{
-                <<"status">> => 404,
-                <<"reason">> =>
-                    <<"Requested slot not yet available in schedule.">>
-            }
-        };
+            lib_scheduler:slot_unavailable();
         {ok, Assignments, Lookahead} ->
             ?event(next_profiling, got_assignments),
             validate_next_slot(Base, Assignments, Lookahead, LastProcessed, Opts)
@@ -375,21 +361,9 @@ schedule(Base, Req, Opts) ->
 %% for this scheduler. If so, it schedules the message and returns the assignment.
 post_schedule(Base, Req, Opts) ->
     ?event(scheduling_message),
-    % Find the target message to schedule:
-    RawToSched = find_message_to_schedule(Base, Req, Opts),
-    % If the message can not be properly loaded, this will throw an error
-    % before scheduling the message.    
-    try hb_cache:ensure_all_loaded(RawToSched, Opts) of
-        ToSched ->
-            do_post_schedule(Base, Req, ToSched, Opts)
-    catch
-        error:{necessary_message_not_found, _, _} ->
-            {error,
-                #{
-                    <<"status">> => 404,
-                    <<"body">> => <<"Cannot fully load message to schedule.">>
-                }
-            }
+    maybe
+        {ok, ToSched} ?= lib_scheduler:load_message_to_schedule(Base, Req, Opts),
+        do_post_schedule(Base, Req, ToSched, Opts)
     end.
 
 do_post_schedule(Base, Req, ToSched, Opts) ->
@@ -397,53 +371,44 @@ do_post_schedule(Base, Req, ToSched, Opts) ->
     % Find the ProcessID of the target message:
     % - If it is a Process, use the ID of the message.
     % - If not, use the target as the ProcessID.
-    ProcID = find_target_id(Base, Req, ToSched, Opts),
+    ProcID = lib_scheduler:find_target_id(Base, Req, ToSched, Opts),
     ?event({proc_id, ProcID}),
     % Filter all unsigned keys from the source message.
-    case hb_message:with_only_committed(ToSched, Opts) of
-        {ok, OnlyCommitted} ->
-            ?event(
-                {post_schedule,
-                    {schedule_id, ProcID},
-                    {message, ToSched}
-                }
-            ),
-            % Find the relevant scheduler server for the given process and
-            % message, start a new one if necessary, or return a redirect to the
-            % correct remote scheduler.
-            case find_server(ProcID, Base, ToSched, Opts) of
-                {local, PID} ->
-                    ?event({scheduling_locally, {proc_id, ProcID}, {pid, PID}}),
-                    post_local_schedule(ProcID, PID, OnlyCommitted, Opts);
-                {redirect, Redirect} ->
-                    ?event({process_is_remote, {redirect, Redirect}}),
-                    case hb_opts:get(scheduler_follow_redirects, true, Opts) of
-                        true ->
-                            ?event({proxying_to_remote_scheduler,
-                                {redirect, Redirect},
-                                {msg, OnlyCommitted}
-                            }),
-                            post_remote_schedule(
-                                ProcID,
-                                Redirect,
-                                OnlyCommitted,
-                                Opts
-                            );
-                        false -> {ok, Redirect}
-                    end;
-                {error, Error} ->
-                    ?event({error_finding_scheduler, {error, Error}}),
-                    {error, Error}
-            end;
-        {error, Err} ->
-            {error,
-                #{
-                    <<"status">> => 400,
-                    <<"body">> => <<"Message invalid: ",
-                        "Committed components cannot be validated.">>,
-                    <<"reason">> => Err
-                }
+    maybe
+        {ok, OnlyCommitted} ?= lib_scheduler:only_committed(ToSched, Opts),
+        ?event(
+            {post_schedule,
+                {schedule_id, ProcID},
+                {message, ToSched}
             }
+        ),
+        % Find the relevant scheduler server for the given process and
+        % message, start a new one if necessary, or return a redirect to the
+        % correct remote scheduler.
+        case find_server(ProcID, Base, ToSched, Opts) of
+            {local, PID} ->
+                ?event({scheduling_locally, {proc_id, ProcID}, {pid, PID}}),
+                post_local_schedule(ProcID, PID, OnlyCommitted, Opts);
+            {redirect, Redirect} ->
+                ?event({process_is_remote, {redirect, Redirect}}),
+                case hb_opts:get(scheduler_follow_redirects, true, Opts) of
+                    true ->
+                        ?event({proxying_to_remote_scheduler,
+                            {redirect, Redirect},
+                            {msg, OnlyCommitted}
+                        }),
+                        post_remote_schedule(
+                            ProcID,
+                            Redirect,
+                            OnlyCommitted,
+                            Opts
+                        );
+                    false -> {ok, Redirect}
+                end;
+            {error, Error} ->
+                ?event({error_finding_scheduler, {error, Error}}),
+                {error, Error}
+        end
     end.
 
 %% @doc Post schedule the message. `Req' by this point has been refined to only
@@ -717,7 +682,7 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
 %% @doc Returns information about the current slot for a process.
 slot(M1, M2, Opts) ->
     ?event({getting_current_slot, {msg, M1}}),
-    ProcID = find_target_id(M1, M2, Opts),
+    ProcID = lib_scheduler:find_target_id(M1, M2, Opts),
     case find_server(ProcID, M1, Opts) of
         {local, PID} ->
             ?event({getting_current_slot, {proc_id, ProcID}}),
@@ -813,18 +778,8 @@ remote_slot(<<"ao.TN.1">>, ProcID, Node, Opts) ->
 %% two slots -- labelled as `from' and `to'. If the schedule is not local,
 %% we redirect to the remote scheduler or proxy based on the node opts.
 get_schedule(Base, Req, Opts) ->
-    ProcID = hb_util:human_id(find_target_id(Base, Req, Opts)),
-    From =
-        case hb_ao:get(<<"from">>, Req, not_found, Opts) of
-            not_found -> 0;
-            X when X < 0 -> 0;
-            FromRes -> hb_util:int(FromRes)
-        end,
-    To =
-        case hb_ao:get(<<"to">>, Req, not_found, Opts) of
-            not_found -> undefined;
-            ToRes -> hb_util:int(ToRes)
-        end,
+    ProcID = hb_util:human_id(lib_scheduler:find_target_id(Base, Req, Opts)),
+    {From, To} = lib_scheduler:parse_slot_range(Req, Opts),
     Format = hb_ao:get(<<"accept">>, Req, <<"application/http">>, Opts),
     ?event(
         {parsed_get_schedule,
@@ -963,7 +918,7 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                 <<
                     ProcID/binary, "?process-id=", ProcID/binary,
                     FromBin/binary, ToParam/binary,
-                    "&limit=", (hb_util:bin(?MAX_ASSIGNMENT_QUERY_LEN))/binary
+                    "&limit=", (hb_util:bin(lib_scheduler:max_assignment_query_len()))/binary
                 >>
         end,
     ?event({getting_remote_schedule, {node, {string, Node}}, {path, {string, Path}}}),
@@ -1295,80 +1250,6 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
 
 %%% Private methods
 
-%% @doc Find the schedule ID from a given request. The precidence order for 
-%% search is as follows:
-%% 1. `ToSched/id' when `ToSched' has `type: Process'
-%% 2. `ToSched/target' when `ToSched' has a `target' key
-%% 2. `Req/target'
-%% 3. `Req/id' when `Req' has `type: Process'
-%% 4. `Base/process/id'
-%% 5. `Base/id' when `Base' has `type: Process'
-%% 6. `Req/id'
-find_target_id(Base, Req, ToSched, Opts) ->
-    case hb_ao:get(<<"type">>, ToSched, not_found, Opts) of
-        <<"Process">> ->
-            lib_process:process_id(ToSched, #{}, Opts);
-        _ ->
-            case hb_ao:get(<<"target">>, ToSched, not_found, Opts) of
-                not_found -> find_target_id(Base, Req, Opts);
-                Target -> hb_util:human_id(Target)
-            end
-    end.
-find_target_id(Base, Req, Opts) ->
-    TempOpts = Opts#{ <<"hashpath">> => ignore },
-    Res = case hb_ao:resolve(Req, <<"target">>, TempOpts) of
-        {ok, Target} ->
-            % ID found at Req/target
-            Target;
-        _ ->
-            case hb_ao:resolve(Req, <<"type">>, TempOpts) of
-                {ok, <<"Process">>} ->
-                    % Req is a Process, so the ID is at Req/id
-                    lib_process:process_id(Req, #{}, Opts);
-                _ ->
-                    case hb_ao:resolve(Base, <<"process">>, TempOpts) of
-                        {ok, _Process} ->
-                            lib_process:process_id(Base, #{}, Opts);
-                        _ ->
-                            % Does the message have a type of process?
-                            case hb_ao:get(<<"type">>, Base, TempOpts) of
-                                <<"Process">> ->
-                                    % Yes: Base is the process.
-                                    lib_process:process_id(Base, #{}, Opts);
-                                _ ->
-                                    % No: Req is the target process.
-                                    lib_process:process_id(Req, #{}, Opts)
-                            end
-                end
-            end
-    end,
-    ?event({found_id, {id, Res}, {base, Base}, {req, Req}}),
-    Res.
-
-%% @doc Search the given base and request message pair to find the message to
-%% schedule. The precidence order for search is as follows:
-%% 1. A key in `Req' with the value `self', indicating that the entire message
-%%    is the subject.
-%% 2. A key in `Req' with another value, present in that message.
-%% 3. The body of the message.
-%% 4. The message itself.
-find_message_to_schedule(Base, Req, Opts) ->
-    Subject =
-        hb_ao:get(
-            <<"subject">>,
-            Req,
-            not_found,
-            Opts#{ <<"hashpath">> => ignore }
-        ),
-    case Subject of
-        <<"base">> -> Base;
-        <<"self">> -> Req;
-        not_found ->
-            hb_ao:get(<<"body">>, Req, Req, Opts#{ <<"hashpath">> => ignore });
-        Subject ->
-            hb_ao:get(Subject, Req, Opts#{ <<"hashpath">> => ignore })
-    end.
-
 %% @doc Generate a `GET /schedule' response for a process.
 generate_local_schedule(Format, ProcID, From, To, Opts) ->
     ?event(
@@ -1405,35 +1286,8 @@ get_local_assignments(ProcID, From, undefined, Opts) ->
     end;
 get_local_assignments(ProcID, From, RequestedTo, Opts) ->
     ?event({handling_req_to_get_assignments, ProcID, {from, From}, {to, RequestedTo}}),
-    ComputedTo =
-        case (RequestedTo - From) > ?MAX_ASSIGNMENT_QUERY_LEN of
-            true -> From + ?MAX_ASSIGNMENT_QUERY_LEN;
-            false -> RequestedTo
-        end,
-    {
-        read_local_assignments(ProcID, From, ComputedTo, Opts),
-        ComputedTo < RequestedTo
-    }.
-
-%% @doc Get the assignments for a process.
-read_local_assignments(_ProcID, From, To, _Opts) when From > To ->
-    [];
-read_local_assignments(ProcID, CurrentSlot, To, Opts) ->
-    case dev_scheduler_cache:read(ProcID, CurrentSlot, Opts) of
-        not_found ->
-            % No assignment found in cache.
-            [];
-        {ok, Assignment} ->
-            [
-                Assignment
-                | read_local_assignments(
-                    ProcID,
-                    CurrentSlot + 1,
-                    To,
-                    Opts
-                )
-            ]
-    end.
+    lib_scheduler:read_assignment_range(
+        dev_scheduler_cache, ProcID, From, RequestedTo, Opts).
 
 %% @doc Returns the current state of the scheduler.
 checkpoint(State) -> {ok, State}.
