@@ -125,6 +125,17 @@ fetch_and_insert_ids(Opts) ->
     ?event(blacklist_short, {fetched_and_inserted_ids, Total}, Opts),
     {ok, Total}.
 
+%% @doc Refresh the blacklist without allowing a failure to stop future refreshes.
+refresh_cache(Opts) ->
+    try fetch_and_insert_ids(Opts)
+    catch
+        _:Reason:Stacktrace ->
+            ?event(error, {blacklist_refresh_error,
+                {reason, Reason}, 
+                {stacktrace, Stacktrace}}),
+            {error, Reason}
+    end.
+
 %% @doc Resolve the configured providers into a list.
 resolve_providers(Opts) ->
     case hb_opts:get(blacklist_providers, [], Opts) of
@@ -282,7 +293,7 @@ ensure_cache_table(Msg, Opts) ->
                         ]
                     ),
                     ?event({table_created, TableName}),
-                    fetch_and_insert_ids(Opts),
+                    refresh_cache(Opts),
                     refresh_loop(Opts)
                 end
             ),
@@ -327,7 +338,7 @@ refresh_loop(Opts) ->
     ),
     receive
         refresh ->
-            fetch_and_insert_ids(Opts),
+            refresh_cache(Opts),
             refresh_loop(Opts);
         stop -> ok
     end.
@@ -585,6 +596,34 @@ refresh_periodically_test() ->
         hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
     ),
     ok.
+
+%% @doc Test that a failed refresh does not stop the periodic refresh loop.
+refresh_error_resilience_test_parallel() ->
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"blacklist-refresh-frequency">> => 1
+    },
+    erlang:trace_pattern({?MODULE, fetch_and_insert_ids, 1}, true, [local]),
+    Pid = spawn(fun() -> refresh_loop(Opts) end),
+    erlang:trace(Pid, true, [call]),
+    try
+        assert_refreshes(Pid, 2)
+    after
+        Pid ! stop,
+        erlang:trace_pattern(
+            {?MODULE, fetch_and_insert_ids, 1}, false, [local]
+        )
+    end.
+
+%% @doc Wait for the refresh loop to attempt the expected number of refreshes.
+assert_refreshes(_Pid, 0) -> ok;
+assert_refreshes(Pid, Count) ->
+    receive
+        {trace, Pid, call, {?MODULE, fetch_and_insert_ids, [_Opts]}} ->
+            assert_refreshes(Pid, Count - 1)
+    after 3000 ->
+        ?assert(false)
+    end.
 
 %% @doc Test that parse_blacklist/2 can handle 1 million IDs within 2000ms.
 parse_blacklist_performance_test() ->
