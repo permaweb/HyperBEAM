@@ -366,6 +366,7 @@ status(_M1, _M2, _Opts) ->
 schedule(Base, Req, Opts) ->
     ?event({resolving_schedule_request, {req, Req}, {state_msg, Base}}),
     case hb_util:key_to_atom(hb_ao:get(<<"method">>, Req, <<"GET">>, Opts)) of
+        head -> {ok, #{}};
         post -> post_schedule(Base, Req, Opts);
         get -> get_schedule(Base, Req, Opts)
     end.
@@ -1182,7 +1183,7 @@ post_remote_schedule(RawProcID, Redirect, OnlyCommitted, Opts) ->
                 [] ->
                     {error, #{
                         <<"status">> => 422,
-                        <<"require-codec">> => <<"ans104@1.0">>,
+                        <<"commitment-device">> => <<"ans104@1.0">>,
                         <<"body">> =>
                             <<
                                 "Process resides on legacy scheduler. ",
@@ -1235,7 +1236,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
             ?event({could_not_encode_for_legacy_scheduler, {error, EncodingErr}}),
             {error, #{
                 <<"status">> => 422,
-                <<"require-codec">> => <<"ans104@1.0">>,
+                <<"commitment-device">> => <<"ans104@1.0">>,
                 <<"body">> =>
                     <<"Incorrect encoding. Scheduler has variant: ao.TN.1">>
                 }

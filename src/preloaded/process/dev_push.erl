@@ -563,12 +563,12 @@ calculate_base_id(GivenProcess, Opts) ->
     BaseID.
 
 %% @doc Add the necessary keys to the message to be scheduled, then schedule it.
-%% Use a scheduler quote when available, otherwise negotiate the codec on
-%% rejection. The recipient's security policy selects the local signing wallet.
+%% HEAD the schedule for a commitment spec, otherwise negotiate on rejection.
+%% The recipient's security policy selects the local signing wallet.
 schedule_result(TargetProcess, MsgToPush, Origin, Opts) ->
     Augmented = augment_message(Origin, MsgToPush, Opts),
     Prepared = normalize_message(Augmented, Opts),
-    case scheduler_quote(TargetProcess, Prepared, Opts) of
+    case scheduler_commitment_spec(TargetProcess, Opts) of
         {ok, Spec} ->
             schedule_result(TargetProcess, Prepared, Spec, Origin, Opts);
         not_found ->
@@ -644,7 +644,7 @@ schedule_result(TargetProcess, MsgToPush, CommitSpec, Origin, Opts) ->
             NormMsg = normalize_message(MsgToPush, Opts),
             SignedNormMsg =
                 apply_security(NormMsg, TargetProcess, CommitSpec, Opts),
-            retry_required_codec(
+            retry_schedule(
                 TargetProcess,
                 MsgToPush,
                 CommitSpec,
@@ -654,7 +654,7 @@ schedule_result(TargetProcess, MsgToPush, CommitSpec, Origin, Opts) ->
             );
         {error, 422} ->
             ?event(push, {wrong_format, {422, Res}, {codec, CommitSpec}}, Opts),
-            retry_required_codec(
+            retry_schedule(
                 TargetProcess,
                 MsgToPush,
                 CommitSpec,
@@ -666,102 +666,65 @@ schedule_result(TargetProcess, MsgToPush, CommitSpec, Origin, Opts) ->
             {error, Res}
     end.
 
-%% @doc Ask an explicitly advertised scheduler quote key for a signing spec.
-scheduler_quote(TargetProcess, Msg, Opts) ->
+%% @doc Ask the target process's schedule for a commitment spec using HEAD.
+scheduler_commitment_spec(TargetProcess, Opts) ->
     QuoteOpts = Opts#{
         <<"hashpath">> => ignore,
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
     },
     maybe
-        {ok, Scheduler} ?=
+        {ok, Res} ?=
             hb_ao:resolve(
                 {as, <<"process@1.0">>, TargetProcess},
-                #{ <<"path">> => <<"as">>, <<"as">> => <<"scheduler">> },
+                #{ <<"path">> => <<"schedule">>, <<"method">> => <<"HEAD">> },
                 QuoteOpts
             ),
-        Info = hb_device:info(Scheduler, QuoteOpts),
-        true ?= lists:member(<<"quote">>, maps:get(exports, Info, [])),
-        {ok, Quote} ?=
-            hb_ao:resolve(
-                Scheduler,
-                #{ <<"path">> => <<"quote">>, <<"body">> => Msg },
-                QuoteOpts
-            ),
-        Spec = hb_ao:get(<<"commitment-spec">>, Quote, QuoteOpts),
-        true ?= is_map(Spec) orelse {error, invalid_commitment_spec},
-        {ok, quoted_commitment_spec(Spec)}
+        Status = hb_ao:get(<<"status">>, Res, 200, QuoteOpts),
+        true ?= (Status >= 200 andalso Status < 300) orelse {error, Res},
+        case hb_ao:get(<<"commitment-device">>, Res, not_found, QuoteOpts) of
+            not_found -> not_found;
+            _ -> {ok, Res}
+        end
     else
-        false -> not_found;
         Error -> Error
     end.
 
-%% @doc Apply a quote to the outgoing message using a signed commitment.
-quoted_commitment_spec(Spec) ->
-    Spec#{ <<"target">> => <<"self">>, <<"type">> => <<"signed">> }.
-
-%% @doc Retry an encoding rejection with the scheduler's required codec.
-retry_required_codec(
+%% @doc Retry a rejection with its commitment spec, or the legacy ANS-104 fallback.
+retry_schedule(
         TargetProcess, Msg, CurrentSpec, Origin, Result = {error, Res}, Opts) ->
-    DefaultCodec = hb_opts:get(
+    DefaultSpec = hb_opts:get(
         scheduler_default_commitment_spec, <<"httpsig@1.0">>, Opts),
-    RequiredCodec =
-        case hb_maps:get(<<"require-codec">>, Res, not_found, Opts) of
+    Spec =
+        case hb_ao:get(<<"commitment-device">>, Res, not_found, Opts) of
             not_found when CurrentSpec =:= <<"httpsig@1.0">> -> <<"ans104@1.0">>;
             not_found -> CurrentSpec;
-            Required -> Required
+            _ -> Res
         end,
     case {
         hb_ao:get(<<"status">>, Res, 500, Opts),
         CurrentSpec,
-        RequiredCodec
+        Spec
     } of
-        {422, DefaultCodec, RequiredCodec}
-                when is_binary(RequiredCodec),
-                     RequiredCodec =/= DefaultCodec ->
-            case {CurrentSpec, RequiredCodec} of
-                {<<"httpsig@1.0">>, <<"ans104@1.0">>} ->
-                    ?event(push,
-                        {downgrading_to_ans104,
-                            {422, Res},
-                            {codec, CurrentSpec},
-                            {origin, Origin}
-                        },
-                        Opts
-                    );
-                _ ->
-                    ?event(push,
-                        {retrying_schedule_codec,
-                            {from, CurrentSpec},
-                            {to, RequiredCodec},
-                            {origin, Origin}
-                        },
-                        Opts
-                    )
-            end,
-            Spec =
-                hb_maps:get(<<"commitment-spec">>, Res, RequiredCodec, Opts),
-            {ToSign, CommitSpec} =
-                case Spec of
-                    _ when is_map(Spec) ->
-                        {
-                            normalize_message(Msg, Opts),
-                            quoted_commitment_spec(
-                                Spec#{ <<"commitment-device">> => RequiredCodec }
-                            )
-                        };
-                    _ -> {Msg, RequiredCodec}
-                end,
+        {422, DefaultSpec, Spec} when Spec =/= CurrentSpec ->
+            ?event(push,
+                {retrying_schedule_commitment,
+                    {from, CurrentSpec},
+                    {to, Spec},
+                    {origin, Origin}
+                },
+                Opts
+            ),
             schedule_result(
                 TargetProcess,
-                ToSign,
-                CommitSpec,
+                Msg,
+                Spec,
                 Origin,
                 Opts
             );
         _ ->
             Result
     end;
-retry_required_codec(_TargetProcess, _Msg, _Spec, _Origin, Result, _Opts) ->
+retry_schedule(_TargetProcess, _Msg, _Spec, _Origin, Result, _Opts) ->
     Result.
 
 %% @doc Set the necessary keys in order for the recipient to know where the
@@ -984,16 +947,65 @@ max_depth_test_cases() ->
         fun test_parse_max_depth/0
     ].
 
-%% @doc Exercise quoted scheduling through the selected scheduler and TX codec.
+%% @doc Exercise HEAD scheduling through the selected scheduler and TX codec.
 %% Arweave submission is captured to avoid spending from a test wallet.
-scheduler_quote_test_() ->
+scheduler_commitment_spec_test_() ->
     [
         {atom_to_list(Mode),
-            {timeout, 30, fun() -> test_push_scheduler_quote(Mode) end}}
-        || Mode <- [default, tx, required_codec, unavailable, multiple_authorities]
+            {timeout, 30, fun() -> test_push_scheduler_spec(Mode) end}}
+        || Mode <- [default, tx, rejection, unavailable, multiple_authorities]
     ].
 
-test_push_scheduler_quote(Mode) ->
+legacy_scheduler_spec_test() ->
+    Opts = #{
+        <<"priv-wallet">> => Wallet = ar_wallet:new(),
+        <<"store">> => [hb_test_utils:test_store()]
+    },
+    Authority = hb_util:human_id(Wallet),
+    Process = hb_message:commit(#{
+        <<"device">> => <<"process@1.0">>,
+        <<"type">> => <<"Process">>,
+        <<"scheduler">> => Authority,
+        <<"authority">> => Authority
+    }, Opts),
+    {ok, _} = hb_cache:write(Process, Opts),
+    ?assertEqual(not_found, scheduler_commitment_spec(Process, Opts)),
+    {ok, _} = hb_ao:resolve(Process, #{
+        <<"path">> => <<"schedule">>,
+        <<"method">> => <<"POST">>,
+        <<"body">> => Process
+    }, Opts),
+    Msg = #{
+        <<"target">> => hb_message:id(Process, all, Opts),
+        <<"action">> => <<"Test">>
+    },
+    lists:foreach(
+        fun(Rejection) ->
+            {ok, Assignment} = retry_schedule(
+                Process, Msg, <<"httpsig@1.0">>, #{}, {error, Rejection}, Opts),
+            Scheduled = hb_ao:get(<<"body">>, Assignment, Opts),
+            ?assertEqual([<<"ans104@1.0">>],
+                hb_message:commitment_devices(Scheduled, Opts)),
+            ?assertEqual([Authority], hb_message:signers(Scheduled, Opts)),
+            ?assert(hb_message:verify(Scheduled, signers, Opts)),
+            RetrySpec =
+                case hb_maps:is_key(<<"commitment-device">>, Rejection, Opts) of
+                    true -> Rejection;
+                    false -> <<"ans104@1.0">>
+                end,
+            ?assertEqual({error, Rejection}, retry_schedule(
+                Process, Msg, RetrySpec, #{}, {error, Rejection}, Opts))
+        end,
+        [
+            #{ <<"status">> => 422 },
+            #{
+                <<"status">> => 422,
+                <<"commitment-device">> => <<"ans104@1.0">>
+            }
+        ]
+    ).
+
+test_push_scheduler_spec(Mode) ->
     Anchor = hb_util:encode(crypto:strong_rand_bytes(48)),
     {Server, Routes} = hb_mock_server:start_arweave_gateway(#{
         price =>
@@ -1054,7 +1066,7 @@ test_push_scheduler_quote(Mode) ->
     try
         Outcome =
             case Mode of
-                required_codec ->
+                rejection ->
                     schedule_result(
                         Process,
                         augment_message(Origin, Msg, Opts),
@@ -1124,10 +1136,10 @@ test_tx_codec_uses_compute_authority() ->
     Anchor = crypto:strong_rand_bytes(32),
     Spec = #{
         <<"commitment-device">> => <<"tx@1.0">>,
-        <<"tx-header">> => #{
-            <<"reward">> => Reward,
-            <<"anchor">> => hb_util:human_id(Anchor)
-        }
+        <<"field-quantity">> => 1,
+        <<"field-data_size">> => 0,
+        <<"field-reward">> => Reward,
+        <<"field-anchor">> => hb_util:encode(Anchor)
     },
     Signed =
         apply_security(
