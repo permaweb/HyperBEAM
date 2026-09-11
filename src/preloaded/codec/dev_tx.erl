@@ -22,12 +22,12 @@ commit(Msg, Req = #{ <<"type">> := ?RSA_SIGN_TYPE }, Opts) ->
     % Convert the given message to an L1 TX record, sign it, and convert
     % it back to a structured message.
     TABM = hb_private:reset(Msg),
-    TX0 =
-        case hb_util:int(hb_maps:get(<<"field-data_size">>, Req, -1, Opts)) of
-            0 when is_map(TABM) -> header(TABM, Opts);
-            _ -> hb_util:ok(to(TABM, Req, Opts))
-        end,
+    ZeroData = hb_util:int(hb_maps:get(<<"field-data_size">>, Req, -1, Opts)) =:= 0,
+    {ok, TX0} = to(TABM, Req, ZeroData, Opts),
+    % Validate before overrides can replace an unloaded payload's metadata.
+    enforce_commit_spec(TX0, ZeroData),
     TX = ar_tx:normalize(commit_fields(TX0, Req, Opts)),
+    enforce_commit_spec(TX, ZeroData),
     enforce_valid_tx(TX),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     Signed = ar_tx:sign(TX, Wallet),
@@ -134,18 +134,36 @@ to(Binary, _Req, _Opts) when is_binary(Binary) ->
     };
 to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(TABM, Req, Opts) when is_map(TABM) ->
+    to(TABM, Req, false, Opts);
+to(Other, _Req, _Opts) ->
+    throw({invalid_tx, Other}).
+
+%% @doc Encode a message, retaining intent tags for zero-data commitments.
+to(TABM, Req, ZeroData, Opts) when is_map(TABM) ->
     ?event({to, {inbound, TABM}, {req, Req}}),
+    % Ignore an inline hint only when its data key is absent.
+    ToEncode =
+        maybe
+            true ?= ZeroData,
+            {ok, DataKey} ?= hb_maps:find(<<"ao-data-key">>, TABM, Opts),
+            false ?= hb_maps:is_key(DataKey, TABM, Opts),
+            hb_maps:remove(<<"ao-data-key">>, TABM, Opts)
+        else
+            _ -> TABM
+        end,
     TX = lib_arweave_common:to(
-        <<"tx@1.0">>, TABM, Req,
+        <<"tx@1.0">>, ToEncode, Req,
         fun dev_tx_to:fields_to_tx/4,
-        fun dev_tx_to:excluded_tags/3,
+        fun(TX0, TagMsg, TagOpts) ->
+            commit_tag_exclusions(TX0, TagMsg, ZeroData, TagOpts)
+        end,
         Opts
     ),
     enforce_valid_tx(TX),
     ?event({to_result, TX}),
     {ok, TX};
-to(Other, _Req, _Opts) ->
-    throw({invalid_tx, Other}).
+to(Other, Req, _ZeroData, Opts) ->
+    to(Other, Req, Opts).
 
 %% @doc Apply explicit native fields from the signing request.
 commit_fields(TX, Req, Opts) ->
@@ -161,45 +179,32 @@ commit_fields(TX, Req, Opts) ->
     ),
     dev_tx_to:fields_to_tx(TX, ?FIELD_PREFIX, Fields, Opts).
 
-%% @doc Encode message tags when the signing request specifies zero data size.
-header(TABM, Opts) ->
-    TagMsg =
-        hb_maps:without(
-            [
-                <<"anchor">>, <<"ao-data-key">>, <<"ao-types">>,
-                <<"commitments">>, <<"data">>, <<"data_root">>,
-                <<"data_size">>, <<"format">>, <<"reward">>,
-                <<"tags">>, <<"target">>
-            ],
-            hb_private:reset(TABM),
-            Opts
-        ),
-    % Re-signing a committed header preserves its original tag list.
-    TX0 =
-        case hb_message:commitment(
-                #{ <<"commitment-device">> => <<"tx@1.0">> }, TABM, Opts) of
-            not_found ->
-                dev_tx_to:fields_to_tx(
-                    #tx{ tags = lib_arweave_common:tags(
-                        #tx{}, not_found, TagMsg, [], Opts) },
-                    <<>>,
-                    TABM,
-                    Opts
-                );
-            _ -> hb_util:ok(to(TABM, #{}, Opts))
-        end,
-    TX = TX0#tx{
-        data = <<>>,
-        data_size = 0,
-        data_root = <<>>
-    },
+%% @doc Keep intent tags on fresh data-free messages and preserve committed tags.
+commit_tag_exclusions(TX, TABM, true, Opts) ->
+    case hb_message:commitment(
+            #{ <<"commitment-device">> => <<"tx@1.0">> }, TABM, Opts) of
+        not_found ->
+            (?BASE_FIELDS -- [<<"quantity">>]) ++
+                [<<"ao-data-key">>, <<"ao-types">>, <<"data">>, <<"tags">>];
+        _ -> dev_tx_to:excluded_tags(TX, TABM, Opts)
+    end;
+commit_tag_exclusions(TX, TABM, false, Opts) ->
+    dev_tx_to:excluded_tags(TX, TABM, Opts).
+
+%% @doc Enforce the requested zero-data constraint without discarding content.
+enforce_commit_spec(_TX, false) -> ok;
+enforce_commit_spec(TX, true) ->
+    case TX#tx.data =:= <<>> andalso TX#tx.data_size =:= 0 andalso
+            TX#tx.data_root =:= <<>> of
+        true -> ok;
+        false -> throw(tx_data_not_allowed)
+    end,
     % L1 tags have a 2048-byte budget and must fit the codec's tag count limit.
     case length(TX#tx.tags) =< ?MAX_TAG_COUNT andalso
             iolist_size([[Key, Value] || {Key, Value} <- TX#tx.tags]) =< 2048 of
         true -> ok;
         false -> throw({tx_header_too_large, TX#tx.tags})
-    end,
-    TX.
+    end.
 
 %% @doc Verifies that the given transaction is a minimally valid signed or
 %% unsigned transaction.
@@ -1517,7 +1522,7 @@ do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req) ->
     FinalTABM = hb_util:ok(from(SignedTX, Req, #{})),
     ?assertEqual(SignedTABM, FinalTABM, signed_tabm_roundtrip).
 
-header_commitment_test() ->
+zero_data_commitment_test() ->
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"store">> => [hb_test_utils:test_store()]
@@ -1526,6 +1531,7 @@ header_commitment_test() ->
     Anchor = hb_util:encode(crypto:strong_rand_bytes(48)),
     Msg = #{
         <<"target">> => Target,
+        <<"ao-data-key">> => <<"body">>,
         <<"quantity">> => 42,
         <<"action">> => <<"Test">>
     },
@@ -1538,9 +1544,14 @@ header_commitment_test() ->
         <<"field-anchor">> => Anchor
     },
     lists:foreach(
-        fun(QuoteAnchor) ->
+        fun({Quantity, QuoteAnchor}) ->
+            Message =
+                case Quantity of
+                    not_found -> maps:remove(<<"quantity">>, Msg);
+                    _ -> Msg#{ <<"quantity">> => Quantity }
+                end,
             Signed = hb_message:commit(
-                Msg, Opts, Spec#{ <<"field-anchor">> => QuoteAnchor }),
+                Message, Opts, Spec#{ <<"field-anchor">> => QuoteAnchor }),
             TX = hb_message:convert(Signed, <<"tx@1.0">>, Opts),
             ?assertEqual(hb_util:decode(Target), TX#tx.target),
             ?assertEqual(1, TX#tx.quantity),
@@ -1548,22 +1559,114 @@ header_commitment_test() ->
             ?assertEqual(hb_util:decode(Anchor), TX#tx.anchor),
             ?assertEqual(<<>>, TX#tx.data),
             ?assertEqual(0, TX#tx.data_size),
+            ?assertEqual(<<>>, TX#tx.data_root),
+            QuantityTags =
+                case Quantity of
+                    not_found -> [];
+                    _ -> [{<<"quantity">>, hb_util:bin(Quantity)}]
+                end,
             ?assertEqual(
-                [{<<"action">>, <<"Test">>}, {<<"quantity">>, <<"42">>}],
+                [{<<"action">>, <<"Test">>} | QuantityTags],
                 TX#tx.tags
             ),
             Decoded = hb_message:convert(
                 TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
             ?assert(hb_message:verify(Decoded, signers, Opts)),
-            ?assertEqual(TX, hb_message:convert(Decoded, <<"tx@1.0">>, Opts))
+            ?assertEqual(TX, hb_message:convert(Decoded, <<"tx@1.0">>, Opts)),
+            ?assertEqual(Target, hb_ao:get(<<"target">>, Decoded, Opts)),
+            ?assertEqual(Anchor, hb_ao:get(<<"anchor">>, Decoded, Opts)),
+            ?assertEqual(1, hb_util:int(hb_ao:get(<<"quantity">>, Decoded, Opts))),
+            ?assertEqual(7, hb_util:int(hb_ao:get(<<"reward">>, Decoded, Opts))),
+            Resigned = hb_message:commit(Decoded, Opts, Spec#{
+                <<"field-reward">> => <<"8">>,
+                <<"field-data_size">> => <<"0">>
+            }),
+            ResignedTX = hb_message:convert(Resigned, <<"tx@1.0">>, Opts),
+            ?assertEqual(TX#tx.tags, ResignedTX#tx.tags),
+            ?assertEqual(8, ResignedTX#tx.reward),
+            ?assert(hb_message:verify(Resigned, signers, Opts))
         end,
-        [Anchor, {link, AnchorID, #{}}]
+        [{not_found, Anchor}, {1, Anchor}, {42, Anchor},
+            {42, {link, AnchorID, #{}}}]
     ),
+    % A native-only quantity must not become a tag when re-signing.
+    Native = hb_message:commit(Msg, Opts, <<"tx@1.0">>),
+    OriginalTX = hb_message:convert(Native, <<"tx@1.0">>, Opts),
+    ResignedNative = hb_message:commit(Native, Opts, Spec),
+    NativeTX = hb_message:convert(ResignedNative, <<"tx@1.0">>, Opts),
+    ?assertEqual(1, NativeTX#tx.quantity),
+    ?assertEqual(OriginalTX#tx.tags, NativeTX#tx.tags),
+    ?assertNot(lists:keymember(<<"quantity">>, 1, NativeTX#tx.tags)),
+    ?assert(hb_message:verify(ResignedNative, signers, Opts)),
+    % The L1 tag budget is aggregate, even when individual tags fit.
+    BudgetMsg = #{
+        <<"target">> => Target,
+        <<"a">> => binary:copy(<<"x">>, 1023),
+        <<"b">> => binary:copy(<<"x">>, 1023)
+    },
+    BudgetSigned = hb_message:commit(BudgetMsg, Opts, Spec),
+    ?assert(hb_message:verify(BudgetSigned, signers, Opts)),
     ?assertThrow(
         {tx_header_too_large, _},
         hb_message:commit(
-            Msg#{ <<"action">> => binary:copy(<<"x">>, 2048) }, Opts, Spec)
+            BudgetMsg#{ <<"b">> => binary:copy(<<"x">>, 1024) }, Opts, Spec)
     ).
+
+zero_data_rejects_payload_test() ->
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"store">> => [hb_test_utils:test_store()]
+    },
+    Msg = #{ <<"target">> => hb_util:encode(crypto:strong_rand_bytes(32)) },
+    Root = ar_tx:data_root(arweavejs, <<"Hello">>),
+    Spec = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"field-quantity">> => 1,
+        <<"field-data_size">> => 0,
+        <<"field-data_root">> => <<>>
+    },
+    Detached = hb_message:commit(Msg#{
+        <<"data_size">> => 5,
+        <<"data_root">> => hb_util:encode(Root)
+    }, Opts, <<"tx@1.0">>),
+    lists:foreach(
+        fun(Payload) ->
+            ?assertThrow(tx_data_not_allowed,
+                hb_message:commit(Payload, Opts, Spec))
+        end,
+        [
+            Msg#{ <<"data">> => <<"Hello">> },
+            Msg#{ <<"body">> => <<"Hello">> },
+            Msg#{ <<"ao-data-key">> => <<"content">>, <<"content">> => <<"Hello">> },
+            Msg#{ <<"data_size">> => 5, <<"data_root">> => hb_util:encode(Root) },
+            Msg#{ <<"data_root">> => hb_util:encode(Root) },
+            Detached
+        ]
+    ),
+    % Bundled content must also satisfy the zero-data requirement.
+    lists:foreach(
+        fun(Payload) ->
+            ?assertThrow(tx_data_not_allowed,
+                hb_message:commit(Payload, Opts, Spec#{ <<"bundle">> => true }))
+        end,
+        [
+            Msg#{ <<"nested">> => #{ <<"value">> => <<"Hello">> } },
+            Msg#{ <<"large">> => binary:copy(<<"x">>, ?MAX_TAG_VALUE_SIZE + 1) }
+        ]
+    ),
+    ?assertThrow(tx_data_not_allowed, hb_message:commit(Msg, Opts,
+        Spec#{ <<"field-data_root">> => hb_util:encode(Root) })),
+    ?assertThrow(tx_data_not_allowed, hb_message:commit(
+        Msg#{ <<"body">> => <<"Hello">> },
+        Opts#{ <<"priv-wallet">> => no_viable_wallet },
+        Spec
+    )),
+    ?assertThrow(tx_data_not_allowed, hb_ao:raw(
+        <<"tx@1.0">>, <<"commit">>,
+        #tx{ format = 2, data_size = 5, data_root = Root },
+        Spec#{ <<"type">> => <<"signed">> },
+        Opts
+    )).
 
 commit_fields_test() ->
     Opts = #{ <<"priv-wallet">> => ar_wallet:new() },
