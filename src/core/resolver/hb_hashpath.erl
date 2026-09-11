@@ -349,7 +349,7 @@ verify_all(State, [Part | Rest], Opts) ->
     case verify_context(Ctx, Opts) of
         {true, ComputedState} ->
             verify_all(attach(ComputedState, format(Ctx, Opts), Opts), Rest, Opts);
-        false -> false
+        _ -> false
     end.
 
 %% @doc Verify a single hashpath execution contained inside a larger hashpath
@@ -364,7 +364,7 @@ verify_part(Parts, PartNum, Opts)
             {ok, Base} ->
                 case verify_context(Part#{ <<"base">> => Base }, Opts) of
                     {true, _} -> true;
-                    false -> false
+                    _ -> false
                 end;
             _ -> false
         end
@@ -379,7 +379,8 @@ verify_part(_Parts, _PartNum, _Opts) -> false.
 %% successful computation, we then verify the `VariedBase` and `VariedRequest`
 %% fields against the parsed context, the `DependenciesID` if given, the
 %% `Normalizer` type, and finally the `Result` message itself. If all of these
-%% verify, the context is considered valid.
+%% verify, the context is considered valid. Execution errors are preserved for
+%% loading; public verification treats them as failed verification.
 verify_context(#{ <<"base">> := Base } = Ctx, Opts)
         when not is_map_key(<<"request">>, Ctx),
              not is_map_key(<<"request-id">>, Ctx) ->
@@ -406,7 +407,10 @@ verify_context(Ctx, Opts) ->
                 {hashpath_verify_context_failed, {error, _Error}, {ctx, Ctx}},
                 Opts
             ),
-            false
+            case _Error of
+                {error, _} -> _Error;
+                _ -> false
+            end
     end.
 
 %% @doc If varied `Req` and `Base` statements were present in the hashpath,
@@ -670,6 +674,7 @@ load_result(Parts, PartNum, Ctx, Opts) ->
                     true ->
                         case verify_context(Ctx#{ <<"base">> => Base }, Opts) of
                             {true, Result} -> {ok, Result};
+                            {error, _} = Error -> Error;
                             false -> {error, <<"Hashpath claim does not verify.">>}
                         end
                 end

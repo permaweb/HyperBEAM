@@ -55,6 +55,8 @@
 %% the result as links. If the value has an associated `type' key in the extra
 %% options, we apply it to the read value, 'lazily' recreating a `structured@1.0'
 %% form.
+%% Failed reads other than absence throw `{message_load_failed, Reason}', which
+%% the resolver preserves as an error when loading its inputs.
 ensure_loaded(Msg) ->
     ensure_loaded(Msg, #{}).
 ensure_loaded(Msg, Opts) ->
@@ -110,7 +112,9 @@ ensure_loaded(Ref,
                     Next
             end;
         {error, not_found} ->
-            report_ensure_loaded_not_found(Ref, Lk, Opts)
+            report_ensure_loaded_not_found(Ref, Lk, Opts);
+        {error, Reason} ->
+            throw({message_load_failed, Reason})
     end;
 ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
     % If the user provided their own options, we merge them and _overwrite_
@@ -138,7 +142,9 @@ ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpt
                 Type -> hb_util:decode(Type, LoadedMsg)
             end;
         {error, not_found} ->
-            report_ensure_loaded_not_found(Ref, Link, Opts)
+            report_ensure_loaded_not_found(Ref, Link, Opts);
+        {error, Reason} ->
+            throw({message_load_failed, Reason})
     end;
 ensure_loaded(Ref, {link, ID, LinkOpts}, Opts) ->
 	ensure_loaded(Ref, {link, ID, LinkOpts#{ <<"lazy">> => true}}, Opts);
