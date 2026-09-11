@@ -112,24 +112,32 @@ find_or_register(ungrouped_exec, _Base, _Req, _Opts) ->
 find_or_register(GroupName, _Base, _Req, Opts) ->
     case hb_opts:get(await_inprogress, false, Opts) of
         false -> {leader, GroupName};
-        _ ->
+        _ -> elect_leader(GroupName, Opts)
+    end.
+
+%% @doc Atomically register as leader or return the process that won election.
+elect_leader(GroupName, Opts) ->
+    case register_groupname(GroupName, Opts) of
+        ok ->
+            ?event({register_resolver, {group, GroupName}}),
+            {leader, GroupName};
+        error ->
             Self = self(),
             case find_execution(GroupName, Opts) of
                 {ok, Leader} when Leader =/= Self ->
                     ?event({found_leader, GroupName, {leader, Leader}}),
                     {wait, Leader};
-                {ok, Leader} when Leader =:= Self ->
+                {ok, Self} ->
                     {infinite_recursion, GroupName};
-                _ ->
-                    ?event({register_resolver, {group, GroupName}}),
-                    register_groupname(GroupName, Opts),
-                    {leader, GroupName}
+                not_found ->
+                    elect_leader(GroupName, Opts)
             end
     end.
 
 %% @doc Unregister as the leader for an execution and notify waiting processes.
 unregister_notify(ungrouped_exec, _Req, _Res, _Opts) -> ok;
 unregister_notify(GroupName, Req, Res, Opts) ->
+    % Close enrollment before draining requests already queued for this leader.
     unregister_groupname(GroupName, Opts),
     notify(GroupName, Req, Res, Opts).
 
@@ -167,7 +175,7 @@ unregister(Base, Req, Opts) ->
     unregister_groupname(group(Base, Req, Opts), Opts).
 unregister_groupname(Groupname, _Opts) ->
     ?event({unregister_resolver, {explicit, Groupname}}),
-    hb_name:unregister(Groupname).
+    hb_name:unregister(Groupname, self()).
 
 %% @doc If there was already an Erlang process handling this execution,
 %% we should register with them and wait for them to notify us of
@@ -184,16 +192,27 @@ await(Worker, Base, Req, Opts) ->
     % Calculate the compute path that we will wait upon resolution of.
     % Register with the process.
     GroupName = group(Base, Req, Opts),
-    % set monitor to a worker, so we know if it exits
-    _Ref = erlang:monitor(process, Worker),
+    % Monitor before enrolling so that a leader exit cannot be missed.
+    MonitorRef = erlang:monitor(process, Worker),
     Worker ! {resolve, self(), GroupName, Req, Opts},
-    AwaitFun(Worker, GroupName, Base, Req, Opts).
+    % The leader unregisters before draining its enrolled waiters. If it no
+    % longer owns the group, this request may have missed that drain and must
+    % retry election instead of waiting indefinitely.
+    case find_execution(GroupName, Opts) of
+        {ok, Worker} ->
+            try AwaitFun(Worker, GroupName, Base, Req, Opts)
+            after erlang:demonitor(MonitorRef, [flush])
+            end;
+        _ ->
+            erlang:demonitor(MonitorRef, [flush]),
+            {error, leader_died}
+    end.
 
 %% @doc Default await function that waits for a resolution from a worker.
 default_await(Worker, GroupName, Base, Req, Opts) ->
     % Wait for the result.
     receive
-        {resolved, _, GroupName, Req, Res} ->
+        {resolved, Worker, GroupName, Req, Res} ->
             worker_event(GroupName, {resolved_await, Res}, Base, Req, Opts),
             Res;
         {'DOWN', _R, process, Worker, Reason} ->
@@ -367,30 +386,24 @@ default_worker(GroupName, Base, Opts) ->
         unregister(Base, undefined, Opts)
     end.
 
-%% @doc Create a group name from a Base and Req pair as a tuple.
+%% @doc Create a group name from the AO-Core identity of a Base and Req pair.
 default_grouper(Base, Req, Opts) ->
     %?event({calculating_default_group_name, {base, Base}, {req, Req}}),
-    % Use Erlang's `phash2' to hash the result of the Grouper function.
-    % `phash2' is relatively fast and ensures that the group name is short for
-    % storage in `pg'. In production we should only use a hash with a larger
-    % output range to avoid collisions.
-    ?no_prod("Using a hash for group names is not secure."),
     case hb_opts:get(await_inprogress, true, Opts) of
         true ->
-            erlang:phash2(
-                {
-                    hb_maps:without([<<"priv">>], Base, Opts),
-                    hb_maps:without([<<"priv">>], Req, Opts)
-                }
-            );
+            {?MODULE, execution_id(Base, Req, Opts)};
         _ -> ungrouped_exec
     end.
+
+%% @doc Return the AO-Core identity for an execution or persistent worker.
+execution_id(Base, undefined, Opts) -> hb_path:hashpath(Base, Opts);
+execution_id(Base, Req, Opts) -> hb_path:hashpath(Base, Req, Opts).
 
 %% @doc Log an event with the worker process. If we used the default grouper
 %% function, we should also include the Base and Req in the event. If we did not,
 %% we assume that the group name expresses enough information to identify the
 %% request.
-worker_event(Group, Data, Base, Req, Opts) when is_integer(Group) ->
+worker_event(Group = {?MODULE, _}, Data, Base, Req, Opts) ->
     ?event(worker, {worker_event, Group, Data, {base, Base}, {req, Req}}, Opts);
 worker_event(Group, Data, _, _, Opts) ->
     ?event(worker, {worker_event, Group, Data}, Opts).
@@ -449,25 +462,162 @@ spawn_test_client(Base, Req, Opts) ->
     end),
     Ref.
 
+%% @doc Spawn a test resolver that waits for a shared start signal.
+spawn_gated_test_client(Base, Req, Opts, Gate) ->
+    Ref = make_ref(),
+    TestParent = self(),
+    Pid = spawn_link(fun() ->
+        TestParent ! {ready, Ref},
+        receive {go, Gate} -> ok end,
+        Res = hb_ao:resolve(Base, Req, Opts),
+        TestParent ! {result, Ref, Res}
+    end),
+    {Pid, Ref}.
+
 wait_for_test_result(Ref) ->
     receive {result, Ref, Res} -> Res end.
 
-%% @doc Test merging and returning a value with a persistent worker.
+%% @doc Concurrent elections produce one leader and direct all losers to it.
+atomic_leader_election_test() ->
+    start(),
+    GroupName = {?MODULE, atomic_election, make_ref()},
+    Opts = #{ <<"await-inprogress">> => true },
+    Parent = self(),
+    Workers =
+        [
+            spawn_link(fun() ->
+                Parent ! {ready, self()},
+                receive start -> ok end,
+                Election =
+                    find_or_register(GroupName, undefined, undefined, Opts),
+                Parent ! {elected, self(), Election},
+                receive stop -> ok end
+            end)
+        || _ <- lists:seq(1, 50)
+        ],
+    [receive {ready, Worker} -> ok end || Worker <- Workers],
+    lists:foreach(fun(Worker) -> Worker ! start end, Workers),
+    Elections =
+        [
+            receive {elected, Worker, Election} -> {Worker, Election} end
+        || Worker <- Workers
+        ],
+    Leaders =
+        [{Worker, Name} || {Worker, {leader, Name}} <- Elections],
+    [{Leader, GroupName}] = Leaders,
+    Waiters = [Pid || {_, {wait, Pid}} <- Elections],
+    hb_name:unregister(GroupName),
+    lists:foreach(fun(Worker) -> Worker ! stop end, Workers),
+    ?assertEqual(length(Workers) - 1, length(Waiters)),
+    ?assert(lists:all(fun(Pid) -> Pid =:= Leader end, Waiters)).
+
+%% @doc A stale leader cannot unregister the current group owner.
+unregister_respects_owner_test() ->
+    GroupName = {?MODULE, unregister_respects_owner, make_ref()},
+    Owner = spawn_link(fun() -> receive stop -> ok end end),
+    ?assertEqual(ok, hb_name:register(GroupName, Owner)),
+    ?assertEqual(ok, unregister_groupname(GroupName, #{})),
+    ?assertEqual(Owner, hb_name:lookup(GroupName)),
+    hb_name:unregister(GroupName),
+    Owner ! stop.
+
+%% @doc A waiter retries rather than blocking after enrollment has closed.
+closed_waiter_enrollment_test() ->
+    Base = #{
+        <<"device">> => test_device(),
+        <<"test">> => crypto:strong_rand_bytes(8)
+    },
+    Req = #{ <<"path">> => <<"slow_key">>, <<"wait">> => 1 },
+    Opts = #{ <<"await-inprogress">> => true },
+    Worker = spawn_link(fun() -> receive stop -> ok end end),
+    ?assertEqual({error, leader_died}, await(Worker, Base, Req, Opts)),
+    Worker ! stop,
+    receive
+        {'DOWN', _, process, Worker, _} -> ?assert(false)
+    after 10 -> ok
+    end.
+
+%% @doc A waiter only accepts completion from its elected leader.
+completion_sender_test() ->
+    GroupName = {?MODULE, completion_sender, make_ref()},
+    Req = #{ <<"path">> => <<"test">> },
+    Worker = self(),
+    Other = spawn_link(fun() -> receive stop -> ok end end),
+    self() ! {resolved, Other, GroupName, Req, stale},
+    self() ! {resolved, Worker, GroupName, Req, expected},
+    ?assertEqual(
+        expected,
+        default_await(Worker, GroupName, #{}, Req, #{})
+    ),
+    receive {resolved, Other, GroupName, Req, stale} -> ok end,
+    Other ! stop.
+
+%% @doc The default group uses collision-resistant AO-Core execution identity.
+default_group_identity_test() ->
+    Base = #{ <<"device">> => <<"message@1.0">>, <<"value">> => <<"base">> },
+    Req = #{ <<"path">> => <<"value">> },
+    Opts = #{ <<"await-inprogress">> => true },
+    Group = default_grouper(Base, Req, Opts),
+    ?assertEqual(
+        {?MODULE, hb_path:hashpath(Base, Req, Opts)},
+        Group
+    ),
+    ?assertEqual(Group, default_grouper(Base, Req, Opts)),
+    ?assertNotEqual(
+        Group,
+        default_grouper(Base, Req#{ <<"path">> => <<"device">> }, Opts)
+    ),
+    ?assertEqual(
+        ungrouped_exec,
+        default_grouper(Base, Req, Opts#{ <<"await-inprogress">> => named })
+    ).
+
+%% @doc Persistent workers use the collision-resistant identity of their base.
+default_worker_group_identity_test() ->
+    Base = #{ <<"device">> => <<"message@1.0">>, <<"value">> => <<"base">> },
+    Opts = #{ <<"await-inprogress">> => true },
+    ?assertEqual(
+        {?MODULE, hb_path:hashpath(Base, Opts)},
+        default_grouper(Base, undefined, Opts)
+    ).
+
+%% @doc Concurrent resolutions share one execution, then release the group.
 deduplicated_execution_test() ->
     TestTime = 200,
-    Base = #{ <<"device">> => test_device() },
+    Executions = atomics:new(1, []),
+    SlowKey =
+        fun(_, #{ <<"wait">> := Wait }) ->
+            _ = atomics:add_get(Executions, 1, 1),
+            receive after Wait ->
+                {ok,
+                    #{
+                        waited => Wait,
+                        pid => self(),
+                        random_bytes =>
+                            hb_util:encode(crypto:strong_rand_bytes(4))
+                    }
+                }
+            end
+        end,
+    Device = (test_device())#{ slow_key := SlowKey },
+    Base = #{ <<"device">> => Device },
     Req = #{ <<"path">> => <<"slow_key">>, <<"wait">> => TestTime },
-    T0 = hb:now(),
-    Ref1 = spawn_test_client(Base, Req),
-    receive after 100 -> ok end,
-    Ref2 = spawn_test_client(Base, Req),
-    Res1 = wait_for_test_result(Ref1),
-    Res2 = wait_for_test_result(Ref2),
-    T1 = hb:now(),
-    % Check the result is the same.
-    ?assertEqual(Res1, Res2),
-    % Check the time it took is less than the sum of the two test times.
-    ?assert(T1 - T0 < (2*TestTime)).
+    Opts = #{
+        <<"await-inprogress">> => true,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    Gate = make_ref(),
+    Clients =
+        [spawn_gated_test_client(Base, Req, Opts, Gate)
+        || _ <- lists:seq(1, 20)],
+    [receive {ready, Ref} -> ok end || {_, Ref} <- Clients],
+    lists:foreach(fun({Pid, _}) -> Pid ! {go, Gate} end, Clients),
+    [First | Rest] =
+        [wait_for_test_result(Ref) || {_, Ref} <- Clients],
+    ?assert(lists:all(fun(Res) -> Res =:= First end, Rest)),
+    ?assertEqual(1, atomics:get(Executions, 1)),
+    ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, Opts)),
+    ?assertEqual(2, atomics:get(Executions, 1)).
 
 %% @doc Test spawning a default persistent worker.
 persistent_worker_test() ->

@@ -128,14 +128,14 @@ await(Worker, GroupName, Base, Req, Opts) ->
                 {target_slot, TargetSlot}
             }),
             receive
-                {resolved, _, GroupName, {slot, RecvdSlot}, Res}
+                {resolved, Worker, GroupName, {slot, RecvdSlot}, Res}
                         when RecvdSlot == TargetSlot orelse TargetSlot == any ->
                     ?event(debug_compute, {notified_of_resolution,
                         {target, TargetSlot},
                         {group, GroupName}
                     }),
                     Res;
-                {resolved, _, GroupName, {slot, RecvdSlot}, _Res} ->
+                {resolved, Worker, GroupName, {slot, RecvdSlot}, _Res} ->
                     ?event(debug_compute, {waiting_again,
                         {target, TargetSlot},
                         {recvd, RecvdSlot},
