@@ -555,7 +555,7 @@ write_hashpath(Msg = #{ <<"priv">> := #{ <<"hashpath">> := HP } }, Opts) ->
 write_hashpath(MsgWithoutHP, Opts) ->
     write(MsgWithoutHP, Opts).
 write_hashpath(HP, Msg, Opts) when is_binary(HP) or is_list(HP) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
+    Store = hb_opts:get(attested_store, [], Opts),
     ?event_debug({writing_hashpath, {hashpath, HP}, {msg, Msg}, {store, Store}}),
     {ok, Path} = write(Msg, Opts),
     hb_store:link(Store, #{ hb_path:to_binary(HP) => Path }, Opts),
@@ -567,7 +567,8 @@ write_binary(Hashpath, Bin, Opts) ->
 write_binary(Hashpath, Bin, Store, Opts) ->
     ?event_debug({writing_binary, {hashpath, Hashpath}, {bin, Bin}, {store, Store}}),
     {ok, Path} = do_write_message(Bin, Store, Opts),
-    hb_store:link(Store, #{ hb_path:to_binary(Hashpath) => Path }, Opts),
+    LinkStore = hb_opts:get(attested_store, [], Opts),
+    hb_store:link(LinkStore, #{ hb_path:to_binary(Hashpath) => Path }, Opts),
     {ok, Path}.
 
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either
@@ -986,9 +987,8 @@ read_resolved(Base, Req, Opts) ->
 
 %% @doc Return a key from an in-memory message, returning the same form as
 %% a store read (`{Status, Value}').
-read_in_memory_key(BaseMsg, NormKey, _Opts) ->
-    % For now, just wrap maps:find.
-    case maps:find(NormKey, BaseMsg) of
+read_in_memory_key(BaseMsg, NormKey, Opts) ->
+    case hb_maps:find(NormKey, BaseMsg, Opts) of
         error ->
             ?event_debug(read_cached, {key_not_found, {key, NormKey}}),
             {error, not_found};
@@ -1005,7 +1005,16 @@ read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
     ReqID = hb_message:id(Req, all, Opts),
     hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
 read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
-    hashpath_read_result(read(hb_path:hashpath(BaseMsg, Req, Opts), Opts));
+    HP = hb_path:hashpath(BaseMsg, Req, Opts),
+    case hb_store:resolve(hb_opts:get(attested_store, [], Opts), HP, Opts) of
+        {ok, Path} when Path =/= HP ->
+            case read(Path, Opts) of
+                {ok, Res} when is_map(Res) ->
+                    {hit, {ok, hb_private:set(Res, <<"hashpath">>, HP, Opts)}};
+                Other -> hashpath_read_result(Other)
+            end;
+        _ -> miss
+    end;
 read_hashpath(_, _, _) -> miss.
 
 hashpath_read_result({ok, Msg}) -> {hit, {ok, Msg}};

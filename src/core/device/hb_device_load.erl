@@ -23,7 +23,7 @@
 %%%       signature.</li>
 %%% </ol>
 -module(hb_device_load).
--export([reference/2]).
+-export([reference/2, schema/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -297,12 +297,63 @@ load_archive(ID, Opts) ->
     end.
 
 load_archive_message(Msg, Opts) ->
-    hb_device_archive:load(
-        hb_maps:get(<<"module-name">>, Msg, undefined, Opts),
-        hb_maps:get(<<"body">>, Msg, undefined, Opts),
-        Msg,
+    Archive = hb_maps:get(<<"body">>, Msg, undefined, Opts),
+    maybe
+        {ok, Module} ?=
+            hb_device_archive:load(
+                hb_maps:get(<<"module-name">>, Msg, undefined, Opts),
+                Archive,
+                Msg,
+                Opts
+            ),
+        put_schemas(Archive, Opts),
+        {ok, Module}
+    end.
+
+%% @doc The function schemas of a loaded module (see `hb_types'): the
+%% process dictionary first, then the shared `loaded-device-store', then
+%% the module's own object code. A generated module name carries the hash
+%% of the source that built it, so the atom alone identifies its schemas.
+schema(Module, Opts) ->
+    case erlang:get({?MODULE, schema, Module}) of
+        undefined ->
+            Schemas =
+                maybe
+                    {error, not_found} ?=
+                        hb_store:read(
+                            loaded_device_store(Opts),
+                            schema_key(Module),
+                            Opts
+                        ),
+                    hb_types:extract(Module)
+                end,
+            erlang:put({?MODULE, schema, Module}, Schemas),
+            Schemas;
+        Schemas ->
+            Schemas
+    end.
+
+%% @doc Memoise the function schemas of every module in a loaded archive in
+%% the shared `loaded-device-store'. Archive modules are loaded from memory
+%% rather than the code path, so their BEAMs are in hand here alone. The
+%% schemas are Erlang terms: the store must be an `hb_store_volatile'.
+put_schemas(Archive, Opts) ->
+    {ok, Modules, _Resources} = hb_device_archive:contents(Archive),
+    hb_store:write(
+        loaded_device_store(Opts),
+        maps:from_list(
+            [
+                {schema_key(Module), Schemas}
+            ||
+                {Module, _Path, Beam} <- Modules,
+                {ok, Schemas} <- [hb_types:extract(Beam)]
+            ]
+        ),
         Opts
     ).
+
+schema_key(Module) ->
+    <<"~meta@1.0/devices/schemas/", (hb_util:bin(Module))/binary>>.
 
 implementation_query(SpecID) ->
     #{
@@ -430,6 +481,24 @@ compatible(Msg, Opts) ->
     case Failed of
         [] -> ok;
         _ -> {error, {failed_requirements, Failed}}
+    end.
+
+%% @doc Loading a device memoises its modules' schemas in the shared store,
+%% where a process that never loaded the archive finds them.
+schema_memoised_test() ->
+    erlang:erase({?MODULE, <<"test-device@1.0">>}),
+    Opts =
+        #{
+            <<"loaded-device-store">> =>
+                [hb_test_utils:test_store(hb_store_volatile)]
+        },
+    {ok, Module} = reference(<<"test-device@1.0">>, Opts),
+    Parent = self(),
+    Ref = make_ref(),
+    spawn(fun() -> Parent ! {Ref, schema(Module, Opts)} end),
+    receive
+        {Ref, Schemas} ->
+            ?assertMatch({ok, #{ <<"snapshot">> := #{ 3 := _ } }}, Schemas)
     end.
 
 %% @doc Resolution against a preloaded store holding no devices must fail

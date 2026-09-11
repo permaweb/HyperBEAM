@@ -46,6 +46,19 @@
 
 %% @doc Generate or extract a new secret and commit to the message with the
 %% `~httpsig@1.0/commit?type=hmac-sha256&scheme=secret' commitment mechanism.
+-spec commit(#{ _ => _ },
+    #{
+        secret => binary(),
+        authorization => binary(),
+        raw => boolean(),
+        alg => atom(),
+        salt => binary(),
+        iterations => integer(),
+        'key-length' => integer(),
+        _ => _
+    },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _}.
 commit(Base, Req, Opts) ->
     case generate(Base, Req, Opts) of
         {ok, Key} ->
@@ -68,6 +81,19 @@ commit(Base, Req, Opts) ->
 
 %% @doc Verify a given `Base' message with a derived `Key' using the
 %% `~httpsig@1.0' secret key HMAC commitment scheme.
+-spec verify(#{ _ => _ },
+    #{
+        secret => binary(),
+        authorization => binary(),
+        raw => boolean(),
+        alg => atom(),
+        salt => binary(),
+        iterations => integer(),
+        'key-length' => integer(),
+        _ => _
+    },
+    #{ _ => _ }
+) -> {ok, boolean()}.
 verify(Base, RawReq, Opts) ->
     ?event({verify_invoked, {priv_base, Base}, {priv_req, RawReq}}),
     {ok, Key} = generate(Base, RawReq, Opts),
@@ -88,6 +114,19 @@ verify(Base, RawReq, Opts) ->
 %% @doc Collect authentication information from the client. If the `raw' flag
 %% is set to `true', return the raw authentication information. Otherwise,
 %% derive a key from the authentication information and return it.
+-spec generate(#{ _ => _ },
+    #{
+        secret => binary(),
+        authorization => binary(),
+        raw => boolean(),
+        alg => atom(),
+        salt => binary(),
+        iterations => integer(),
+        'key-length' => integer(),
+        _ => _
+    },
+    #{ _ => _ }
+) -> {ok, binary()} | {error, #{ status := integer(), _ => _ }}.
 generate(_Msg, ReqLink, Opts) when ?IS_LINK(ReqLink) ->
     generate(_Msg, hb_cache:ensure_loaded(ReqLink, Opts), Opts);
 generate(_Msg, #{ <<"secret">> := Secret }, _Opts) ->

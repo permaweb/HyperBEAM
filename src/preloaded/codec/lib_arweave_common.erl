@@ -118,6 +118,13 @@ tags(Item, Opts) ->
     ),
     ao_types(Tags, Opts).
 
+%% @doc Normalize tag keys while preserving IDs and their link forms.
+normalize_key(Key) ->
+    case hb_link:remove_link_specifier(Key) of
+        ID when ?IS_ID(ID) -> Key;
+        _ -> hb_util:to_lower(hb_ao:normalize_key(Key))
+    end.
+
 %% @doc Ensure the encoded keys in the `ao-types' field are lowercased and
 %% normalized like the other keys in the tags field.
 ao_types(#{ <<"ao-types">> := AoTypes } = Tags, Opts) ->
@@ -135,7 +142,7 @@ ao_types(#{ <<"ao-types">> := AoTypes } = Tags, Opts) ->
     NormAOTypes =
         maps:fold(
             fun(Key, Val, Acc) ->
-                NormKey = hb_util:to_lower(hb_ao:normalize_key(Key)),
+                NormKey = normalize_key(Key),
                 Acc#{ NormKey => Val }
             end,
             #{},
@@ -225,7 +232,7 @@ tag_keys(Item, _Opts) ->
     ],
     lists:filtermap(
         fun({Tag, _}) ->
-            NormalizedTag = hb_util:to_lower(hb_ao:normalize_key(Tag)),
+            NormalizedTag = normalize_key(Tag),
             case lists:member(NormalizedTag, MetaTags) of
                 true -> false;
                 false -> {true, NormalizedTag}
@@ -419,7 +426,7 @@ deduplicating_from_list(Tags, Opts) ->
     Aggregated =
         lists:foldl(
             fun({Key, Value}, Acc) ->
-                NormKey = hb_util:to_lower(hb_ao:normalize_key(Key)),
+                NormKey = normalize_key(Key),
                 case hb_maps:get(NormKey, Acc, undefined, Opts) of
                     undefined -> hb_maps:put(NormKey, Value, Acc, Opts);
                     Existing when is_list(Existing) ->
@@ -686,7 +693,8 @@ committed_tag_keys_to_tags(TABM, Committed, Opts) ->
                 {ok, Value} -> {Key, Value}
             end
         end,
-        hb_util:list_without([DataKey], Committed)
+        [Key || Key <- Committed,
+            Key =/= DataKey orelse hb_maps:get(Key, TABM, none, Opts) == <<>>]
     ).
 
 bundle_tags_to_tags({ok, _, Commitment}) ->

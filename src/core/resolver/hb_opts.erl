@@ -261,10 +261,12 @@ raw_default_message() ->
                 <<"capacity">> => 1024 * 1024 * 1024,
                 <<"read-only">> => true
             },
-        % Store for resolved device reference -> loaded module atom,
-        % shared across processes so the first caller to resolve a
-        % device spares the rest the index read and archive
-        % extraction. Defaults to a `hb_store_volatile`.
+        % Store for resolved device reference -> loaded module atom and
+        % module -> function schemas, shared across processes so the first
+        % caller to resolve a device spares the rest the index read, archive
+        % extraction and schema extraction. The schemes are extremely hot, and
+        % so are written as fully loaded messages as a single Erlang term. As a
+        % consequence, the store must be a `hb_store_volatile`.
         <<"loaded-device-store">> =>
             [
                 #{
@@ -273,7 +275,7 @@ raw_default_message() ->
                 }
             ],
         % Default execution cache control options
-        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"cache-control">> => [],
         <<"cache-lookup-hueristics">> => false,
         % Should we await in-progress executions, rather than re-running?
         % Has three settings: false, only `named' executions, or all executions.
@@ -511,6 +513,11 @@ raw_default_message() ->
                 }
             ],
         <<"match-index">> => [?DEFAULT_PRIMARY_STORE],
+        <<"attested-store">> =>
+            #{
+                <<"store-module">> => hb_store_lmdb,
+                <<"name">> => <<"cache-attested">>
+            },
         <<"priv-store">> =>
             [
                 #{
@@ -530,7 +537,7 @@ raw_default_message() ->
         <<"http-extra-opts">> =>
             #{
                 <<"force-message">> => true,
-                <<"cache-control">> => [<<"always">>]
+                <<"cache-control">> => []
             },
         % Should the node store all signed messages?
         <<"store-all-signed">> => true,

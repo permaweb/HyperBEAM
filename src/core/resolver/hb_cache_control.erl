@@ -140,7 +140,7 @@ perform_cache_write(Base, Req, Res, Opts) ->
                 Opts
             );
         Map when is_map(Map) ->
-            hb_cache:write(Res, Opts);
+            hb_cache:write_hashpath(Res, Opts);
         _ ->
             ?event({cannot_write_result, Res}),
             skip_caching
@@ -387,9 +387,9 @@ message_source_cache_control_test() ->
 %%% Basic cached AO-Core resolution tests
 
 cache_binary_result_test() ->
-    CachedMsg = <<"test-message">>,
-    Base = #{ <<"test-key">> => CachedMsg },
-    Req = <<"test-key">>,
+    CachedMsg = <<"GOOD FUNCTION">>,
+    Base = #{ <<"device">> => <<"test-device@1.0">>, <<"test-func">> => <<"literal">> },
+    Req = <<"test-func">>,
     {ok, Res} = hb_ao:resolve(Base, Req, #{ <<"cache-control">> => [<<"always">>] }),
     ?assertEqual(CachedMsg, Res),
     {ok, Res2} = hb_ao:resolve(Base, Req, #{ <<"cache-control">> => [<<"only-if-cached">>] }),

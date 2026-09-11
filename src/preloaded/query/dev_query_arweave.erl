@@ -444,7 +444,7 @@ read_block(Height, Opts) ->
 
 %% @doc Read a block from the Arweave pseudo-path cache.
 read_cached_block(Height, Opts) ->
-    hb_ao:resolve(
+    hb_ao:raw(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"block">>,
