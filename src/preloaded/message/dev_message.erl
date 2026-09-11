@@ -1,9 +1,9 @@
 %%% @doc The identity device: For non-reserved keys, it simply returns a key 
 %%% from the message as it is found in the message's underlying Erlang map. 
 %%% Private keys (`priv[.*]') are not included.
-%%% Reserved keys are: `id', `commitments', `committers', `keys', `path', 
-%%% `set', `remove', `get', and `verify'. Their function comments describe the 
-%%% behaviour of the device when these keys are set.
+%%% Reserved keys are: `id', `commitments', `committers', `keys', `path',
+%%% `set', `remove', `get', `commit', `committed', and `verify'. Their function
+%%% comments describe the behaviour of the device when these keys are set.
 -module(dev_message).
 %%% Base AO-Core reserved keys:
 -export([info/0, keys/1, keys/2]).
@@ -18,7 +18,7 @@
 -define(DEFAULT_ID_DEVICE, <<"httpsig@1.0">>).
 -define(DEFAULT_ATT_DEVICE, <<"httpsig@1.0">>).
 
-%% The list of keys that are exported by this device.
+%% The list of keys that `set/3' filters before writing message data.
 -define(DEVICE_KEYS, [
     <<"id">>,
     <<"commitments">>,
@@ -30,10 +30,18 @@
     <<"verify">>
 ]).
 
+%% The list of keys that the message device reserves at protocol level.
+-define(RESERVED_KEYS, ?DEVICE_KEYS ++ [
+    <<"get">>,
+    <<"commit">>,
+    <<"committed">>
+]).
+
 %% @doc Return the info for the identity device.
 info() ->
     #{
-        default => fun dev_message:get/4
+        default => fun dev_message:get/4,
+        reserved => ?RESERVED_KEYS
     }.
 
 %% @doc Generate an index page for a message, in the event that the `body' and
