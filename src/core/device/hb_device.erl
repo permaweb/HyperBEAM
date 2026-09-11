@@ -147,13 +147,15 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 		{ok, Exclude} ->
 			case lists:member(Key, Exclude) of
 				true ->
-					MsgWithoutDevice =
-						hb_maps:without([<<"device">>], Msg, Opts),
-					message_to_fun(
-						MsgWithoutDevice#{ <<"device">> => ?DEFAULT_DEVICE },
-						Key,
-						Opts
-					);
+					MsgWithDefaultDevice =
+						hb_maps:put(<<"device">>, ?DEFAULT_DEVICE, Msg, Opts),
+                    {Status, _Dev, Func} =
+                        message_to_fun(
+                            MsgWithDefaultDevice,
+                            Key,
+                            Opts
+                        ),
+                    {Status, Func};
 				false -> {add_key, hb_maps:get(func, HandlerMap, undefined, Opts)}
 			end;
 		error -> {add_key, hb_maps:get(func, HandlerMap, undefined, Opts)}
@@ -249,9 +251,10 @@ is_reserved_key(Info, Key, Opts) ->
 
 %% @doc Check if a key is claimed by the device's direct function dispatch.
 is_device_key(Dev, Base, Key, Opts) ->
-    case message_to_fun(Dev, Base, Key, Opts) of
+    try message_to_fun(Dev, Base, Key, Opts) of
         {ok, _, _} -> true;
         {add_key, _, _} -> false
+    catch _:_:_ -> false
     end.
 
 %% @doc Normalize an exported key to its canonical atomized form. By default
