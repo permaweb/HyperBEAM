@@ -56,6 +56,22 @@ hackney_post_test_() ->
         ?assertMatch({ok, _, _, _}, Result)
     end}.
 
+gun_final_frame_limit_test() ->
+    {ok, Peer, Server} = hb_mock_server:start([
+        {"/body", body, {200, <<"four">>}}
+    ]),
+    try
+        ?assertEqual(
+            {error, too_much_data},
+            hb_http_client:request(#{
+                peer => Peer, path => <<"/body">>, method => <<"GET">>,
+                headers => #{}, body => <<>>, limit => 3
+            }, #{ <<"http-client">> => gun, <<"protocol">> => http1 })
+        )
+    after
+        hb_mock_server:stop(Server)
+    end.
+
 summarize({caught, C, R}) when is_tuple(R) ->
     {caught, C, element(1, R)};
 summarize({caught, C, R}) ->
