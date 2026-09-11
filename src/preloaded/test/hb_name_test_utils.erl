@@ -49,9 +49,13 @@ manifest_opts() ->
         ]
     ),
     BaseOpts#{
+        <<"name-resolvers">> => [#{ <<"device">> => <<"b32-name@1.0">> }],
         <<"on">> =>
             #{
                 <<"request">> =>
-                    [#{<<"device">> => <<"manifest@1.0">>}]
+                    [
+                        #{<<"device">> => <<"name@1.0">>},
+                        #{<<"device">> => <<"manifest@1.0">>}
+                    ]
             }
     }.
