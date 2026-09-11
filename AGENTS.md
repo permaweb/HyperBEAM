@@ -32,9 +32,10 @@ following:
    be lazy-loaded (linkified), giving them different semantics.
 4. Before submitting any code as 'complete', you **must** validate that your
    new changes do not break any existing tests across the full suite using
-   `rebar3 eunit-all`. Note that `rebar3 eunit` does not invoke the preloaded
-   device tests, which can often highlight subtle errors. Remember, you are 
-   never being asked to write a 'toy' implementation of features or changed. Your
-   code must actually work in-production.
+   `ulimit -n 65536 && rebar3 eunit-all`. Raising the file descriptor limit
+   avoids `emfile` errors during the full suite. Note that `rebar3 eunit` does
+   not invoke the preloaded device tests, which can often highlight subtle
+   errors. Remember, you are never being asked to write a 'toy' implementation 
+   of features or changed. Your code must actually work in-production.
 5. Always attempt to leave the codebase in a better state than you found it. More
    precise, clear, and minimal -- while maintaining the existing featureset.
