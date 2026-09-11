@@ -1,6 +1,7 @@
 %%% @doc A reverse index for finding all message IDs with a given key-value pair.
 -module(dev_match).
--export([info/0, all/3]).
+-export([info/0, all/3, index/3]).
+-include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 -define(CACHE_PREFIX, <<"~match@1.0">>).
@@ -78,6 +79,46 @@ value_path(List, Opts) when is_list(List) ->
 value_path(Other, Opts) ->
     value_path(hb_path:to_binary(Other), Opts).
 
+%% @doc Write the message in the request's `body' to the index: each of its
+%% key-value pairs, but its commitments and private keys, under each of the
+%% IDs the request gives. Only the kernel's `cache-write' hook is served: it
+%% marks its request in a private key, which a request over HTTP cannot carry.
+index(_Base, Req, Opts) ->
+    case hb_private:get(<<"hook-caller">>, Req, Opts) of
+        <<"kernel">> -> index(Req, Opts);
+        _ ->
+            {error,
+                #{
+                    <<"status">> => 401,
+                    <<"body">> => <<"Unauthorized caller.">>
+                }
+            }
+    end.
+index(Req, Opts) ->
+    Store = store(Opts),
+    IDs = hb_maps:get(<<"ids">>, Req, [], Opts),
+    Body = hb_maps:get(<<"body">>, Req, #{}, Opts),
+    Msg = hb_message:uncommitted(hb_private:reset(Body)),
+    Writes =
+        hb_maps:fold(
+            fun(Key, Value, Acc) ->
+                Address =
+                    address(hb_ao:normalize_key(Key), value_path(Value, Opts)),
+                hb_store:group(Store, Address, Opts),
+                maps:merge(
+                    Acc,
+                    maps:from_keys(
+                        [ <<Address/binary, "/", ID/binary>> || ID <- IDs ],
+                        <<>>
+                    )
+                )
+            end,
+            #{},
+            Msg
+        ),
+    hb_store:write(Store, Writes, Opts),
+    {ok, Req}.
+
 %% @doc Match a single key-value pair in the index, returning all message IDs that
 %% contain the key-value pair.
 match(Key, Base, _Req, Opts) -> match(Key, Base, Opts).
@@ -127,3 +168,24 @@ all(Base, _Req, Opts) ->
                     {error, not_found}
             end
     end.
+
+%%% Tests
+
+%% @doc A request over HTTP loses its private keys, so it is not the kernel.
+unauthorized_index_test() ->
+    Node =
+        hb_http_server:start_node(
+            #{ <<"store">> => hb_test_utils:test_store() }
+        ),
+    Res =
+        hb_http:post(
+            Node,
+            #{
+                <<"path">> => <<"/~match@1.0/index">>,
+                <<"body">> => #{ <<"a">> => <<"b">> },
+                <<"ids">> => [<<"id">>],
+                <<"priv">> => #{ <<"hook-caller">> => <<"kernel">> }
+            },
+            #{}
+        ),
+    ?assertMatch({error, #{ <<"status">> := 401 }}, Res).

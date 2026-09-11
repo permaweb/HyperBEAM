@@ -85,6 +85,9 @@ find(HookName, Opts = #{ <<"on">> := On }) when is_map(On) ->
             % list.
             []
     end;
+find(HookName, Opts) when not is_map_key(<<"on">>, Opts) ->
+    % A message without `on' has the node's hooks.
+    find(HookName, Opts#{ <<"on">> => hb_opts:get(on, #{}, Opts) });
 find(_HookName, _Opts) ->
     [].
 find(_Base, Req, Opts) ->

@@ -541,6 +541,8 @@ raw_default_message() ->
             <<"routes">> => []
         },
         <<"on">> => #{
+            <<"cache-write">> =>
+                #{ <<"device">> => <<"match@1.0">>, <<"path">> => <<"index">> },
             <<"request">> =>
                 [
                     #{
