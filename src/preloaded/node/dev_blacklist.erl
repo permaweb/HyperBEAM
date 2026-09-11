@@ -381,7 +381,7 @@ setup_test_env() ->
 
 %% @doc Test the blacklist device with a static blacklist that is in the local
 %% store.
-basic_test() ->
+basic_test_parallel() ->
     {ok, #{
         opts := Opts0,
         signed1 := SignedID1,
@@ -405,7 +405,7 @@ basic_test() ->
     ok.
 
 %% @doc Ensure that the default provider does not block any requests.
-first_request_always_return_503_test() ->
+first_request_always_return_503_test_parallel() ->
     {ok, #{
         opts := Opts0,
         unsigned3 := UnsignedID3
@@ -423,7 +423,7 @@ first_request_always_return_503_test() ->
     ).
 
 %% @doc Ensure that the default provider does not block any requests.
-default_provider_test() ->
+default_provider_test_parallel() ->
     {ok, #{
         opts := Opts0,
         signed1 := SignedID1,
@@ -442,7 +442,7 @@ default_provider_test() ->
     ok.
 
 %% @doc Test the blacklist device with a blacklist that is provided via HTTP.
-blacklist_from_external_http_test() ->
+blacklist_from_external_http_test_parallel() ->
     {ok, #{
         opts := RemoteOpts = #{ <<"store">> := RootStore },
         signed1 := SignedID1,
@@ -479,7 +479,7 @@ blacklist_from_external_http_test() ->
     ).
 
 %% @doc Test that multiple providers merge their blacklists.
-multiple_providers_test() ->
+multiple_providers_test_parallel() ->
     {ok, #{
         opts := Opts0,
         signed1 := SignedID1,
@@ -518,7 +518,7 @@ multiple_providers_test() ->
 
 %% @doc Test that a failing provider does not prevent other providers from
 %% contributing entries.
-provider_failure_resilience_test() ->
+provider_failure_resilience_test_parallel() ->
     {ok, #{
         opts := Opts0,
         signed1 := SignedID1,
@@ -539,7 +539,7 @@ provider_failure_resilience_test() ->
     ok.
 
 %% @doc Test that the blacklist cache is refreshed periodically.
-refresh_periodically_test() ->
+refresh_periodically_test_parallel() ->
     {ok, #{
         opts := Opts0 = #{ <<"store">> := Store },
         signed1 := SignedID1,
@@ -587,7 +587,7 @@ refresh_periodically_test() ->
     ok.
 
 %% @doc Test that parse_blacklist/2 can handle 1 million IDs within 2000ms.
-parse_blacklist_performance_test() ->
+parse_blacklist_performance_test_parallel() ->
     GenID = fun() ->
         B64 = base64:encode(crypto:strong_rand_bytes(32)),
         %% base64:encode of 32 bytes = 44 chars (with 1 '=' padding).
