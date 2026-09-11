@@ -169,16 +169,21 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         }
     } else if (strcmp(command, "write") == 0) {
         DRV_DEBUG("Write received");
-        long ptr, size;
-        int type;
+        long ptr;
+        int type, size;
         ei_decode_tuple_header(buff, &index, &arity);
         ei_decode_long(buff, &index, &ptr);
         ei_get_type(buff, &index, &type, &size);
-        long size_l = (long)size;
-        char* wasm_binary;
+        size_t size_l = 0;
+        const char* wasm_binary;
         int res = ei_decode_bitstring(buff, &index, &wasm_binary, NULL, &size_l);
-        DRV_DEBUG("Decoded binary. Res: %d. Size (bits): %ld", res, size_l);
-        long size_bytes = size_l / 8;
+        DRV_DEBUG("Decoded binary. Res: %d. Size (bits): %zu", res, size_l);
+        if(res != 0 || size_l % 8 != 0) {
+            DRV_DEBUG("Failed to decode byte-aligned binary.");
+            send_error(proc, "Failed to decode byte-aligned binary");
+            return;
+        }
+        long size_bytes = (long)(size_l / 8);
         DRV_DEBUG("Write received. Ptr: %ld. Bytes: %ld", ptr, size_bytes);
         long memory_size = get_memory_size(proc);
         if(ptr + size_bytes > memory_size) {
