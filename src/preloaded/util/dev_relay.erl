@@ -19,6 +19,7 @@
 %%% to the node's routing table.
 -export([request/3]).
 -include("include/hb.hrl").
+-include("include/hb_opts.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Execute a `call' request using a node's routes.
@@ -29,6 +30,11 @@
 %% - `method': The method to use for the request. Defaults to the original method.
 %% - `commit-request': Whether the request should be committed before dispatching.
 %% Defaults to `false'.
+-spec call(
+    #{ _ => _ },
+    #{ target => binary(), 'relay-path' => binary(), method => binary(), peer => binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _}.
 call(M1, RawM2, Opts) ->
     ?event({relay_call, {m1, M1}, {raw_m2, RawM2}}),
     {ok, BaseTarget} = hb_message:find_target(M1, RawM2, Opts),
@@ -136,7 +142,11 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
     ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
     true = hb_message:verify(TargetMod5),
     ?event(debug_relay, {relay_call, {verified, true}}),
-    Client = hb_opts:get(relay_http_client, Opts),
+    Client = hb_opts:get(
+        relay_http_client,
+        hb_opts:get(http_client, ?DEFAULT_HTTP_CLIENT, Opts),
+        Opts
+    ),
     % Let `hb_http:request/2' handle finding the peer and dispatching the
     % request, unless the peer is explicitly given.
     HTTPOpts = Opts#{ <<"http-client">> => Client, <<"http-only-result">> => false },
@@ -212,11 +222,14 @@ host_matches(Host, Entry) ->
 
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
+-spec cast(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, binary()}.
 cast(M1, M2, Opts) ->
     spawn(fun() -> call(M1, M2, Opts) end),
     {ok, <<"OK">>}.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
+-spec request(#{ _ => _ }, #{ request := #{ _ => _ }, _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body := [#{ _ => _ }], _ => _ }}.
 request(_Base, Req, Opts) ->
     {ok,
         #{

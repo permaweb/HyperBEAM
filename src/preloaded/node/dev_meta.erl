@@ -56,6 +56,7 @@ is_operator(_Base, Req, NodeMsg) ->
 %% Subsequently, rather than embedding the `git-short-hash-length', for the
 %% avoidance of doubt, we include the short hash separately, as well as its long
 %% hash.
+-spec build(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
 build(_, _, _NodeMsg) ->
     BuildInfo = build_info(),
     {ok,
@@ -125,6 +126,7 @@ handle_initialize([], _NodeMsg) ->
 %% @doc Get/set the node message. If the request is a `POST', we check that the
 %% request is signed by the owner of the node. If not, we return the node message
 %% as-is, aside all keys that are private (according to `hb_private').
+-spec info(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 info(_, Request, NodeMsg) ->
     case hb_ao:get(<<"method">>, Request, NodeMsg) of
         <<"POST">> ->
@@ -444,6 +446,8 @@ maybe_sign(Res, NodeMsg) ->
 %% The `role' can be one of `operator' or `initiator'.
 is(Request, NodeMsg) ->
     is(operator, Request, NodeMsg).
+-spec is(atom(), #{ _ => _ }, #{ _ => _ }) ->
+    boolean() | {ok, boolean()} | {error, #{ status := integer(), _ => _ }}.
 is(admin, Request, NodeMsg) ->
     % Does the caller have the right to change the node message?
     RequestSigners = hb_message:signers(Request, NodeMsg),
