@@ -599,8 +599,11 @@ decode_avro_tag_section(TagsBinary) ->
         {_Tags, _Residue} -> throw({invalid_ans104_tags, residue_in_tag_section})
     end.
 
-decode_avro_tag_array(<<>>, _Acc) ->
-    throw({invalid_ans104_tags, missing_avro_array_terminator});
+decode_avro_tag_array(<<>>, Acc) ->
+    %% `TagSize' already bounds the tag section. Reaching the end after
+    %% complete items is equivalent to an explicit Avro zero-block terminator;
+    %% `decode_tags/1' still enforces the declared `TagCount'.
+    {lists:reverse(Acc), <<>>};
 decode_avro_tag_array(Binary, Acc) ->
     {Count, Rest} = decode_zigzag(Binary),
     decode_avro_tag_array_block(Count, Rest, Acc).
@@ -728,7 +731,9 @@ tag_size_boundary_test() ->
         >>,
     ?assertEqual({Tags, Body}, decode_tags(Wrapped)).
 
-missing_avro_tag_terminator_test() ->
+implicit_tag_terminator_test() ->
+    %% Accept a complete tag section whose `TagSize' ends at the final item;
+    %% the declared `TagCount' still proves the section is complete.
     Tags = [{<<"Content-Type">>, <<"application/json">>}],
     EncodedTags = encode_tags(Tags),
     TagsWithoutTerminator = binary:part(EncodedTags, 0, byte_size(EncodedTags) - 1),
@@ -740,10 +745,7 @@ missing_avro_tag_terminator_test() ->
             TagsWithoutTerminator/binary,
             Body/binary
         >>,
-    ?assertThrow(
-        {invalid_ans104_tags, missing_avro_array_terminator},
-        decode_tags(Wrapped)
-    ).
+    ?assertEqual({Tags, Body}, decode_tags(Wrapped)).
 
 tag_count_mismatch_test() ->
     Tags = [{<<"Content-Type">>, <<"application/json">>}],
