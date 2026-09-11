@@ -318,9 +318,16 @@ parse_equivalence(_Delim, _Part, _Ctx, _Opts) ->
 %% @doc Utility to split at the next syntax delimiter (e.g. `=`, `.`, `>`, `@`).
 %% Returns the syntax element matched, and the rest of the string. Notably, this
 %% utility does not break apart `VBase+VReq` pairs. They are treated as a single
-%% unit and parsed internally in `parse_varied/4`.
+%% unit and parsed internally in `parse_varied/4`. Quotes and parentheses are
+%% literal key characters, not grouping syntax.
 next(S) -> next([$=, $., $>, $@], S).
-next(Symbols, S) -> hb_util:split_depth_string_aware_single(Symbols, S).
+next(Symbols, S) ->
+    case binary:match(S, [<<Symbol>> || Symbol <- Symbols]) of
+        nomatch -> {no_match, S, <<>>};
+        {Position, 1} ->
+            <<Part:Position/binary, Delimiter, Rest/binary>> = S,
+            {Delimiter, Part, Rest}
+    end.
 
 %% @doc Challenge a complete hashpath, verifying each part's claims.
 verify_all(Bin, Opts) when is_binary(Bin) ->
