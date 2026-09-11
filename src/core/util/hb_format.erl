@@ -572,10 +572,11 @@ trace({Func, ArityOrTerm, Extras}, Prefixes) ->
     trace({no_module, Func, ArityOrTerm, Extras}, Prefixes);
 trace({Mod, Func, ArityOrTerm, Extras}, _Prefixes) ->
     ExtraMap = hb_maps:from_list(Extras),
+    FilteredArityOrTerm = purge_priv_keys(ArityOrTerm),
     indent(
         "~p:~p/~p [~s]~n",
         [
-            Mod, Func, ArityOrTerm,
+            Mod, Func, FilteredArityOrTerm,
             case hb_maps:get(line, ExtraMap, undefined) of
                 undefined -> "No details";
                 Line ->
@@ -586,6 +587,24 @@ trace({Mod, Func, ArityOrTerm, Extras}, _Prefixes) ->
         #{},
         1
     ).
+
+purge_priv_keys(ArityOrTerm) when is_list(ArityOrTerm) ->
+    lists:map(
+        fun purge_priv_keys/1,
+        ArityOrTerm
+    );
+purge_priv_keys(Map) when is_map(Map) ->
+    maps:filtermap(
+        fun
+            (Key, Value) ->
+                case hb_private:is_private(Key) of
+                    true -> false;
+                    false -> {true, purge_priv_keys(Value)}
+                end
+        end,
+        Map
+    );
+purge_priv_keys(ArityOrTerm) -> ArityOrTerm.
 
 %% @doc Print a trace to the standard error stream.
 print_trace_short(Trace, Mod, Func, Line) ->
@@ -1130,3 +1149,55 @@ truncate_with_truncation_test() ->
 
 truncate_empty_test() ->
     ?assertEqual(<<>>, truncate(<<>>, 5)).
+
+purge_priv_keys_test() ->
+    ?assertEqual(
+        #{ <<"public">> => 1 },
+        purge_priv_keys(#{
+            <<"priv-wallet">> => wallet,
+            <<"priv-token">> => token,
+            priv_secret => secret,
+            <<"public">> => 1
+        })
+    ),
+    ?assertEqual(
+        #{
+            <<"public">> => #{
+                <<"nested">> => #{
+                    <<"public">> => 2
+                }
+            }
+        },
+        purge_priv_keys(#{
+            <<"public">> => #{
+                <<"priv-nested">> => nested,
+                <<"nested">> => #{
+                    <<"priv-deep">> => deep,
+                    <<"public">> => 2
+                }
+            }
+        })
+    ),
+    ?assertEqual(
+        [
+            #{
+                <<"public">> => #{
+                    <<"list">> => [#{ <<"public">> => 1 }]
+                }
+            },
+            ok
+        ],
+        purge_priv_keys([
+            #{
+                <<"priv-wallet">> => wallet,
+                <<"priv-token">> => token,
+                <<"public">> => #{
+                    <<"priv-nested">> => nested,
+                    <<"list">> => [
+                        #{ <<"priv-list">> => list, <<"public">> => 1 }
+                    ]
+                }
+            },
+            ok
+        ])
+    ).
