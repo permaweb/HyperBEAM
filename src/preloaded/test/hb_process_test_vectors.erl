@@ -98,13 +98,21 @@ test_process() ->
     test_process(#{}).
 test_process(Opts) ->
     Wallet = hb:wallet(),
+    % Strip the base commitment before merging in the execution stack. A
+    % re-commit over a message that still carries a prior commitment will
+    % replicate that commitment's `committed' key list verbatim (see the
+    % "stacked commitments" branch of `keys_to_commit/3' in
+    % `dev_codec_httpsig'), leaving the newly-added `execution-device'
+    % and `device-stack' keys out of the signed set — and therefore out
+    % of the `with_only_committed' view used in compute. The
+    % `wasm_process'/`aos_process' helpers already follow this pattern.
     hb_message:commit(
         hb_maps:merge(
-            base_process(Opts),
+            hb_message:uncommitted(base_process(Opts), Opts),
             #{
                 <<"execution-device">> => <<"stack@1.0">>,
                 <<"device-stack">> => [<<"test-device@1.0">>, <<"test-device@1.0">>]
-            }, 
+            },
             Opts
         ),
         Opts#{ <<"priv-wallet">> => Wallet }
