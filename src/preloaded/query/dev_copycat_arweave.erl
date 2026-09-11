@@ -432,6 +432,12 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, IndexMode, Opts) ->
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
     TXStartOffset = TXEndOffset - TX#tx.data_size,
+    ?event(debug_copycat_tx,
+        {indexed_tx,
+            {type, tx},
+            {pending, false},
+            {txid, {string, TXID}}
+        }),
     ?event(debug_copycat, {writing_index,
         {id, {explicit, TXID}},
         {offset, TXStartOffset},
@@ -628,6 +634,12 @@ process_pending_tx(TXID, IndexMode, Opts) ->
             case hb_store_arweave:write_offset(
                 Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size) of
                 ok ->
+                    ?event(debug_copycat_tx,
+                        {indexed_tx,
+                            {type, tx},
+                            {pending, true},
+                            {txid, {string, TXID}}
+                        }),
                     index_pending_children(TXID, TX, IndexMode, Store, Opts);
                 WriteError ->
                     ?event(
@@ -725,6 +737,12 @@ index_full_bundle_items(
                 catch _:_ -> error
                 end
         end,
+    ?event(debug_copycat_tx,
+        {indexed_tx,
+            {type, ans104},
+            {pending, not is_integer(ItemStartOffset)},
+            {txid, {string, EncodedItemID}}
+        }),
     case hb_store_arweave:write_offset(
         Store,
         EncodedItemID,
