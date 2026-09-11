@@ -161,3 +161,32 @@ function inc(base, req, opts)
     base.count = base.count + 1
     return base
 end
+
+function trie_metatable_test(base, req, opts)
+    local fetched = base["toronto"]
+    base["toro"] = fetched
+    base["toronto"] = 100
+    return base
+end
+
+function map_metatable_overwrite_test(base, req, opts)
+    base["a"] = 100
+    base["d"] = 4
+    return base
+end
+
+function get_now_test(base, req, opts)
+    local now = base.now
+    base.found_now = now
+    base.executed_now = true
+    return base
+end
+
+function request_metatable_test(base, req, opts)
+    return {
+        string_get = base["connect"],
+        tuple_get = base[{ "connect" }],
+        tuple_resolve = base[{ "append", { bin = "tuple" }}].result,
+        req_resolve = base[{ path = "append", bin = "map" }].result
+    }
+end
