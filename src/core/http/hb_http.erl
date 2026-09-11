@@ -526,14 +526,10 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
 
 %% @doc Reply to the client's HTTP request with a message.
 reply(Req, TABMReq, Message, Opts) ->
-    Status =
-        case hb_maps:get(<<"status">>, Message, not_found, Opts) of
-            not_found -> 200;
-            S-> S
-        end,
+    Status = http_status(hb_maps:get(<<"status">>, Message, not_found, Opts)),
     reply(Req, TABMReq, Status, Message, Opts).
 reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
-    reply(Req, TABMReq, binary_to_integer(BinStatus), RawMessage, Opts);
+    reply(Req, TABMReq, http_status(BinStatus), RawMessage, Opts);
 reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ReplyStartTime = os:system_time(millisecond),
     KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
@@ -605,6 +601,17 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
         }
     ),
     {ok, PostStreamReq, no_state}.
+
+%% @doc Interpret a message's `status' as an HTTP status only when it is a
+%% valid status code. Devices may also use this field for application-level
+%% statuses such as `ok', which should be returned with HTTP 200.
+http_status(not_found) -> 200;
+http_status(Status) when is_integer(Status), Status >= 100, Status =< 599 -> Status;
+http_status(Status) when is_binary(Status) ->
+    try http_status(binary_to_integer(Status))
+    catch error:badarg -> 200
+    end;
+http_status(_Status) -> 200.
 
 %% @doc Determine if the stream should be finalized.
 should_finalize_stream(429, _EncodedBody) -> true;
@@ -1261,6 +1268,12 @@ simple_ao_resolve_signed_test() ->
             test_opts()
         ),
     ?assertEqual(<<"Value1">>, Res).
+
+http_status_test() ->
+    ?assertEqual(200, http_status(<<"ok">>)),
+    ?assertEqual(200, http_status(not_found)),
+    ?assertEqual(200, http_status(<<"200">>)),
+    ?assertEqual(404, http_status(404)).
 
 paranoid_http_result_test() ->
     % The `http_result' topic verifies each response at the reply boundary (in
