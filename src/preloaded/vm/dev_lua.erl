@@ -316,20 +316,18 @@ compute(Key, RawBase, RawReq, Opts) ->
             Opts#{ <<"hashpath">> => ignore }
         ),
     ?event(debug_lua, parameters_found),
-    % Resolve all hyperstate links
-    ResolvedParams = hb_cache:ensure_all_loaded(Params, Opts),
     % Call the VM function with the given arguments.
     ?event(lua,
         {calling_lua_func,
             {function, Function},
-            {args, ResolvedParams},
+            {args, Params},
             {req, Req}
         }
     ),
     process_response(
         try luerl:call_function_dec(
             [Function],
-            encode(ResolvedParams, Opts),
+            encode(Params, Opts),
             State
         )
         catch
@@ -426,7 +424,11 @@ normalize(Base, _Req, RawOpts) ->
 
 %% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message.
 decode(EncMsg, Opts) ->
-    hb_message:normalize_commitments(do_decode(EncMsg, Opts), Opts, verify).
+    hb_message:normalize_commitments(
+        normalize_decoded_commitments(do_decode(EncMsg, Opts)),
+        Opts,
+        verify
+    ).
 do_decode(EncMsg, _Opts) when is_list(EncMsg) andalso length(EncMsg) == 0 ->
     % The value is an empty table, so we assume it is a message rather than
     % a list.
@@ -453,22 +455,52 @@ do_decode(Msg, Opts) when is_map(Msg) ->
 do_decode(Other, _Opts) ->
     Other.
 
+%% @doc Restore the list type of commitment key sets after crossing the Lua
+%% boundary. Lua has only one table type, so an empty list is decoded as an
+%% empty message by `do_decode/2'. HTTPSig commitments define `committed' as a
+%% list; leaving an empty value as `#{}` makes it share the empty-message cache
+%% ID and can create a self-referential cache entry.
+normalize_decoded_commitments(Msg) when is_map(Msg) ->
+    maps:map(
+        fun(<<"commitments">>, Commitments) when is_map(Commitments) ->
+                maps:map(
+                    fun(_ID, Commitment) ->
+                        normalize_decoded_commitment(Commitment)
+                    end,
+                    Commitments
+                );
+           (_Key, Value) ->
+                normalize_decoded_commitments(Value)
+        end,
+        Msg
+    );
+normalize_decoded_commitments(List) when is_list(List) ->
+    lists:map(fun normalize_decoded_commitments/1, List);
+normalize_decoded_commitments(Value) ->
+    Value.
+
+normalize_decoded_commitment(Commitment) when is_map(Commitment) ->
+    case maps:get(<<"committed">>, Commitment, not_found) of
+        Committed when is_map(Committed), ?IS_EMPTY_MESSAGE(Committed) ->
+            Commitment#{ <<"committed">> => [] };
+        _ ->
+            Commitment
+    end;
+normalize_decoded_commitment(Commitment) ->
+    Commitment.
+
 %% @doc Encode a HyperBEAM `structured@1.0' message into a Lua term.
 encode(Map, Opts) ->
-    hb_message:normalize_commitments(do_encode(Map, Opts), Opts).
+    do_encode(Map, Opts).
 do_encode(Map, Opts) when is_map(Map) ->
-    hb_cache:ensure_all_loaded(
-        case hb_util:is_ordered_list(Map, Opts) of
-            true -> do_encode(hb_util:message_to_ordered_list(Map), Opts);
-            false -> maps:to_list(maps:map(fun(_, V) -> do_encode(V, Opts) end, Map))
-        end,
-        Opts
-    );
+    case hb_util:is_ordered_list(Map, Opts) of
+        true -> do_encode(hb_util:message_to_ordered_list(Map), Opts);
+        false -> maps:to_list(maps:map(fun(_, V) -> do_encode(V, Opts) end, Map))
+    end;
 do_encode(List, Opts) when is_list(List) ->
-    hb_cache:ensure_all_loaded(
-        lists:map(fun(V) -> do_encode(V, Opts) end, List),
-        Opts
-    );
+    lists:map(fun(V) -> do_encode(V, Opts) end, List);
+do_encode(Link, Opts) when ?IS_LINK(Link) ->
+    do_encode(hb_cache:ensure_all_loaded(Link, Opts), Opts);
 do_encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
     hb_util:bin(Atom);
 do_encode(Other, _Opts) ->
@@ -532,6 +564,22 @@ simple_invocation_test() ->
         <<"parameters">> => []
     },
     ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, InlineBase, #{})).
+
+empty_commitment_key_list_decode_test() ->
+    CommitmentID = <<"test-commitment">>,
+    Decoded = normalize_decoded_commitments(#{
+        <<"commitments">> => #{
+            CommitmentID => #{ <<"committed">> => #{} }
+        }
+    }),
+    ?assertEqual(
+        [],
+        hb_ao:get(
+            <<"commitments/test-commitment/committed">>,
+            Decoded,
+            #{}
+        )
+    ).
 
 post_invocation_message_validation_test() ->
     {ok, Script} = file:read_file("test/test.lua"),
