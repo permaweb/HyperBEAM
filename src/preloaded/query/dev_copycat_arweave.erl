@@ -1413,6 +1413,48 @@ latest_height_failure_test_parallel() ->
         hb_mock_server:stop(MockHandle)
     end.
 
+latest_height_uses_highest_mockserver_height_test_parallel() ->
+    {ok, MockURL1, MockHandle1} = hb_mock_server:start([
+        {"/block/current", block_current, {200, <<"{\"height\": 5}">>}}
+    ]),
+    {ok, MockURL2, MockHandle2} = hb_mock_server:start([
+        {"/block/current", block_current, {200, <<"{\"height\": 8}">>}}
+    ]),
+    TestStore = hb_test_utils:test_store(),
+    Opts = #{
+        <<"store">> => [TestStore],
+        <<"arweave-index-blocks">> => false,
+        <<"routes">> => [
+            #{
+                <<"template">> => <<"^/arweave">>,
+                <<"nodes">> => [
+                    #{
+                        <<"match">> => <<"^/arweave">>,
+                        <<"with">> => MockURL1,
+                        <<"opts">> => #{ <<"http-client">> => httpc }
+                    },
+                    #{
+                        <<"match">> => <<"^/arweave">>,
+                        <<"with">> => MockURL2,
+                        <<"opts">> => #{ <<"http-client">> => httpc }
+                    }
+                ],
+                <<"parallel">> => false,
+                <<"responses">> => 2,
+                <<"stop-after">> => false,
+                <<"admissible-status">> => 200
+            }
+        ]
+    },
+    try
+        ?assertEqual({ok, 8}, latest_height(Opts)),
+        [_] = hb_mock_server:get_requests(block_current, 1, MockHandle1),
+        [_] = hb_mock_server:get_requests(block_current, 1, MockHandle2)
+    after
+        hb_mock_server:stop(MockHandle1),
+        hb_mock_server:stop(MockHandle2)
+    end.
+
 negative_resolved_height_test_parallel() ->
     {ok, MockURL, MockHandle} = hb_mock_server:start([
         {"/block/current", block_current,
