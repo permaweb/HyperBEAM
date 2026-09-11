@@ -2,25 +2,47 @@
 %% Spawns up to MaxWorkers workers and refills the pool as workers complete.
 -module(hb_pmap).
 
--export([parallel_map/3]).
+-export([parallel_map/3, parallel_map_until_error/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 parallel_map(Items, Fun, MaxWorkers) when is_list(Items), is_function(Fun, 1) ->
+    {ItemsWithRefs, ActiveRefs, Remaining, Parent, CallRef} =
+        start_workers(Items, Fun, MaxWorkers),
+    ResultsMap = collect(ActiveRefs, Remaining, Fun, Parent, CallRef, #{}),
+    [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs].
+
+%% @doc Map over items in parallel, stopping before queued work is started if
+%% any worker returns an `error' tuple.
+parallel_map_until_error(Items, Fun, MaxWorkers)
+        when is_list(Items), is_function(Fun, 1) ->
+    {ItemsWithRefs, ActiveRefs, Remaining, Parent, CallRef} =
+        start_workers(Items, Fun, MaxWorkers),
+    case collect_until_error(
+        ActiveRefs, Remaining, Fun, Parent, CallRef, #{}
+    ) of
+        {ok, ResultsMap} ->
+            {ok, [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs]};
+        Error ->
+            Error
+    end.
+
+%% @doc Assign references to items and start the initial worker pool.
+start_workers(Items, Fun, MaxWorkers) ->
     Workers = max(1, MaxWorkers),
     Parent = self(),
+    CallRef = make_ref(),
     ItemsWithRefs = [{Item, make_ref()} || Item <- Items],
     {ToSpawn, Remaining} =
         lists:split(min(length(ItemsWithRefs), Workers), ItemsWithRefs),
-    ActiveRefs = [spawn_worker(IWR, Fun, Parent) || IWR <- ToSpawn],
-    ResultsMap = collect(ActiveRefs, Remaining, Fun, Parent, #{}),
-    [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs].
+    ActiveRefs = [spawn_worker(IWR, Fun, Parent, CallRef) || IWR <- ToSpawn],
+    {ItemsWithRefs, ActiveRefs, Remaining, Parent, CallRef}.
 
-spawn_worker({Item, Ref}, Fun, Parent) ->
+spawn_worker({Item, Ref}, Fun, Parent, CallRef) ->
     spawn(
         fun() ->
             try
-                Parent ! {hb_pmap_result, Ref, Fun(Item)}
+                Parent ! {hb_pmap_result, CallRef, Ref, Fun(Item)}
             catch
                 Class:Reason:Stacktrace ->
                     ?event(pmap_error, {pmap_worker_crashed,
@@ -29,6 +51,7 @@ spawn_worker({Item, Ref}, Fun, Parent) ->
                         {stacktrace, {trace, Stacktrace}}}),
                     Parent ! {
                         hb_pmap_worker_crash,
+                        CallRef,
                         Ref,
                         Class,
                         Reason,
@@ -39,28 +62,70 @@ spawn_worker({Item, Ref}, Fun, Parent) ->
     ),
     Ref.
 
-collect([], [], _Fun, _Parent, Results) ->
+collect([], [], _Fun, _Parent, _CallRef, Results) ->
     Results;
-collect(Active, Remaining, Fun, Parent, Results) ->
+collect(Active, Remaining, Fun, Parent, CallRef, Results) ->
     receive
-        {hb_pmap_result, Ref, Result} ->
+        {hb_pmap_result, CallRef, Ref, Result} ->
             NewResults = Results#{Ref => Result},
             NewActive = lists:delete(Ref, Active),
             case Remaining of
                 [] ->
-                    collect(NewActive, [], Fun, Parent, NewResults);
+                    collect(
+                        NewActive, [], Fun, Parent, CallRef, NewResults
+                    );
                 [Next | Rest] ->
-                    NextRef = spawn_worker(Next, Fun, Parent),
+                    NextRef = spawn_worker(Next, Fun, Parent, CallRef),
                     collect(
                         [NextRef | NewActive],
                         Rest,
                         Fun,
                         Parent,
+                        CallRef,
                         NewResults
                     )
             end;
-        {hb_pmap_worker_crash, _Ref, Class, Reason, Stacktrace} ->
+        {hb_pmap_worker_crash,
+                CallRef, _Ref, Class, Reason, Stacktrace} ->
             throw({pmap_worker_crashed, Class, Reason, Stacktrace})
+    end.
+
+collect_until_error([], [], _Fun, _Parent, _CallRef, Results) ->
+    {ok, Results};
+collect_until_error(Active, Remaining, Fun, Parent, CallRef, Results) ->
+    receive
+        {hb_pmap_result, CallRef, Ref, {error, _} = Error} ->
+            drain_workers(CallRef, lists:delete(Ref, Active)),
+            Error;
+        {hb_pmap_result, CallRef, Ref, Result} ->
+            NewResults = Results#{Ref => Result},
+            NewActive = lists:delete(Ref, Active),
+            case Remaining of
+                [] ->
+                    collect_until_error(
+                        NewActive, [], Fun, Parent, CallRef, NewResults
+                    );
+                [Next | Rest] ->
+                    NextRef = spawn_worker(Next, Fun, Parent, CallRef),
+                    collect_until_error(
+                        [NextRef | NewActive], Rest, Fun, Parent,
+                        CallRef, NewResults
+                    )
+            end;
+        {hb_pmap_worker_crash,
+                CallRef, _Ref, Class, Reason, Stacktrace} ->
+            throw({pmap_worker_crashed, Class, Reason, Stacktrace})
+    end.
+
+%% @doc Await workers that were already active when fail-fast was triggered.
+drain_workers(_CallRef, []) -> ok;
+drain_workers(CallRef, Active) ->
+    receive
+        {hb_pmap_result, CallRef, Ref, _Result} ->
+            drain_workers(CallRef, lists:delete(Ref, Active));
+        {hb_pmap_worker_crash,
+                CallRef, Ref, _Class, _Reason, _Stacktrace} ->
+            drain_workers(CallRef, lists:delete(Ref, Active))
     end.
 
 %%% Tests
@@ -108,6 +173,25 @@ worker_crash_fails_fast_test() ->
             2
         )
     ).
+
+%% @doc Verifies errors prevent queued work from being started.
+error_result_stops_queued_work_test() ->
+    Started = atomics:new(1, []),
+    ?assertEqual(
+        {error, not_found},
+        parallel_map_until_error(
+            lists:seq(1, 10),
+            fun(Item) ->
+                _ = atomics:add_get(Started, 1, 1),
+                case Item of
+                    1 -> {error, not_found};
+                    _ -> {ok, Item}
+                end
+            end,
+            1
+        )
+    ),
+    ?assertEqual(1, atomics:get(Started, 1)).
 
 %% @doc Runs a single instrumented parallel_map/3 case and returns
 %% aggregated execution stats and final ordered results.
