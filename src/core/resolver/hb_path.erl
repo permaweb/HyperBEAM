@@ -80,6 +80,8 @@ hashpath(Bin, _Opts) when is_binary(Bin) ->
 hashpath(RawBase, Opts) ->
     Base = hb_ao:normalize_keys(RawBase, Opts),
     case hb_private:from_message(Base) of
+        #{ <<"hashpath-status">> := <<"unavailable">> } ->
+            {error, hashpath_unavailable};
         #{ <<"hashpath">> := HP } -> HP;
         _ ->
             try

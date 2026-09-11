@@ -40,6 +40,8 @@
 %% -- the `Base` ID or existing hashpath. We then recurse with this value and the
 %% remaining context.
 format([], _Opts) -> <<>>;
+format(#{ <<"hashpath-status">> := <<"unavailable">> }, _Opts) ->
+    {error, hashpath_unavailable};
 format([First | Rest], Opts) ->
     lists:foldl(
         fun(Ctx, Prior) -> format(Ctx#{ <<"base-id">> => Prior }, Opts) end,
@@ -80,8 +82,9 @@ format(Ctx, Opts) ->
 %% falling back to the `BaseID` if known, and recomputing it only if necessary.
 format_base(#{ <<"base-id">> := ID }, _) -> {ok, ID};
 format_base(Ctx = #{ <<"base">> := Base }, Opts) ->
-    case hb_private:from_message(Base) of
-        #{ <<"hashpath">> := HP, <<"hashpath-result">> := ID } ->
+    case {reuse_base_hashpath(Ctx), hb_private:from_message(Base)} of
+        {#{ <<"base-id">> := ID }, _} -> {ok, ID};
+        {_, #{ <<"hashpath">> := HP, <<"hashpath-result">> := ID }} ->
             case hb_message:id(Base, all, Opts) of
                 ID -> {ok, HP};
                 _ -> find_id(<<"base">>, Ctx, Opts)
@@ -466,7 +469,13 @@ dependencies(Ctx, Opts) ->
         lists:map(
             fun(Name) ->
                 Original = maps:get(Name, Ctx),
-                Origin = format(#{ <<"base">> => Original }, Opts),
+                OriginCtx =
+                    case maps:find(<<Name/binary, "-id">>, Ctx) of
+                        {ok, ID} when ?IS_ID(ID); ?IS_HASHPATH(ID) ->
+                            #{ <<"base-id">> => ID };
+                        _ -> #{ <<"base">> => Original }
+                    end,
+                Origin = format(OriginCtx, Opts),
                 {Name, dependency_paths(
                     maps:get(<<"varied-", Name/binary>>, Ctx),
                     Origin
@@ -594,11 +603,20 @@ execute(Ctx, Opts) ->
         {ok, Req} ?= load_request(Ctx, Opts),
         true ?= verify_commitments(Base, Opts),
         true ?= verify_commitments(Req, Opts),
-        hb_ao:resolve(
+        {ok, ExecutedCtx} ?= hb_ao:resolve(
             Base,
             Req,
             (internal_opts(Opts))#{ <<"return-context">> => true }
-        )
+        ),
+        % A verified claim supplies origin addresses even when fresh receipt
+        % generation cannot derive them without reading omitted values.
+        case maps:is_key(<<"dependencies">>, ExecutedCtx) of
+            true -> {ok, ExecutedCtx};
+            false ->
+                Origins = maps:merge(ExecutedCtx,
+                    maps:with([<<"base-id">>, <<"request-id">>], Ctx)),
+                {ok, ExecutedCtx#{ <<"dependencies">> => dependencies(Origins, Opts) }}
+        end
     end.
 
 %% @doc Load the minimal executable base for a hashpath or a given part number
@@ -793,10 +811,93 @@ generate(Base, Req, Res, VariedBase, VariedReq, VariedRes, Overlay, Opts) ->
         <<"varied-result">> => VariedRes,
         <<"normalizer">> => Normalizer
     },
-    Completed = Ctx#{ <<"dependencies">> => dependencies(Ctx, Opts) },
-    HP = format(Completed, Opts),
-    store(HP, Completed, Opts),
-    {HP, Completed}.
+    try
+        OriginCtx = reuse_base_hashpath(Ctx),
+        Protected = OriginCtx#{
+            <<"base">> => without_loading(Base, VariedBase),
+            <<"request">> => without_loading(Req, VariedReq),
+            <<"result">> => without_loading(Res, VariedRes)
+        },
+        Dependencies = dependencies(Protected, Opts),
+        Completed = OriginCtx#{ <<"dependencies">> => Dependencies },
+        ProtectedCompleted = Protected#{ <<"dependencies">> => Dependencies },
+        HP = format(ProtectedCompleted, Opts),
+        Unstored = store(HP, ProtectedCompleted, Opts),
+        {HP,
+            case Unstored of
+                [] -> Completed;
+                _ -> Completed#{
+                    <<"hashpath-status">> => <<"witnesses-not-stored">>,
+                    <<"hashpath-reason">> => <<"unresolved-witness">>,
+                    <<"hashpath-unstored">> => Unstored
+                }
+            end}
+    catch
+        throw:{link_loading_disabled, _} ->
+            unavailable(Ctx, <<"unresolved-original-input">>)
+    end.
+
+%% @doc An unchanged in-memory state retains its prior receipt without hashing
+%% omitted values. Capture the match before adding receipt-local link guards.
+reuse_base_hashpath(Ctx = #{ <<"base">> := Base }) ->
+    case hb_private:from_message(Base) of
+        #{ <<"hashpath">> := HP, <<"hashpath-state">> := State } ->
+            case state_hash(Base) of
+                State -> Ctx#{ <<"base-id">> => HP };
+                _ -> Ctx
+            end;
+        _ -> Ctx
+    end.
+
+%% @doc Fingerprint the in-memory representation, without dereferencing links.
+%% This private association is not an AO-Core message ID or a receipt witness.
+state_hash(Result) ->
+    hb_crypto:sha256(term_to_binary(hb_private:reset(Result), [deterministic])).
+
+%% @doc Retained fields may still be needed by the receipt's canonical encoding.
+%% Protect only fields omitted by Vary, including omitted nested members.
+without_loading(Original, Varied) when is_map(Original), is_map(Varied) ->
+    maps:map(
+        fun(Key, Value) when Key == <<"priv">>; Key == <<"commitments">> -> Value;
+           (Key, Value) ->
+                case maps:find(Key, Varied) of
+                    {ok, Selected} -> without_loading(Value, Selected);
+                    error -> without_loading(Value)
+                end
+        end,
+        Original
+    );
+without_loading(Original, Varied) when is_list(Original), is_list(Varied),
+        length(Original) == length(Varied) ->
+    lists:zipwith(fun without_loading/2, Original, Varied);
+without_loading(Original, Varied) when is_map(Varied); is_list(Varied) ->
+    % A linked compound may contain omitted descendants beyond the loaded shape.
+    without_loading(Original);
+without_loading(Original, _Varied) when is_map(Original); is_list(Original) ->
+    without_loading(Original);
+without_loading(Original, _Varied) -> Original.
+
+%% @doc Protect value links on a receipt-local copy. Commitment metadata may
+%% still be read to recover a known ID; the caller's links are left unchanged.
+without_loading({link, ID, LinkOpts}) ->
+    {link, ID, LinkOpts#{ <<"load">> => false }};
+without_loading(Map) when is_map(Map) ->
+    maps:map(
+        fun(Key, Value) when Key == <<"priv">>; Key == <<"commitments">> -> Value;
+           (_Key, Value) -> without_loading(Value)
+        end,
+        Map
+    );
+without_loading(List) when is_list(List) ->
+    lists:map(fun without_loading/1, List);
+without_loading(Value) -> Value.
+
+%% @doc Report omitted bookkeeping without changing the device's public result.
+unavailable(Ctx, Reason) ->
+    {undefined, Ctx#{
+        <<"hashpath-status">> => <<"unavailable">>,
+        <<"hashpath-reason">> => Reason
+    }}.
 
 %% @doc Preserve the witnesses required to port a receipt under the same cache
 %% policy as its reusable execution result.
@@ -806,21 +907,27 @@ store(HP, Ctx, Opts) ->
             maps:get(<<"varied-request">>, Ctx)
         ], Opts) of
         #{ <<"store">> := true } ->
-            lists:foreach(
-                fun(Name) -> hb_cache:write(maps:get(Name, Ctx), Opts) end,
-                [<<"base">>, <<"request">>, <<"dependencies">>]
+            Names = [<<"base">>, <<"request">>, <<"dependencies">>,
+                <<"varied-result">>] ++
+                case maps:get(<<"normalizer">>, Ctx) of
+                    request -> [<<"result">>];
+                    _ -> []
+                end,
+            Unstored = lists:filter(
+                fun(Name) ->
+                    case maps:get(Name, Ctx) of
+                        Value when is_map(Value); is_binary(Value); is_list(Value) ->
+                            try hb_cache:write(Value, Opts), false
+                            catch throw:{link_loading_disabled, _} -> true
+                            end;
+                        _ -> false
+                    end
+                end,
+                Names
             ),
-            case maps:get(<<"varied-result">>, Ctx) of
-                Patch when is_map(Patch); is_binary(Patch); is_list(Patch) ->
-                    hb_cache:write(Patch, Opts);
-                _ -> ok
-            end,
-            case maps:get(<<"normalizer">>, Ctx) of
-                request -> hb_cache:write(maps:get(<<"result">>, Ctx), Opts);
-                _ -> ok
-            end,
-            hb_cache:write(HP, Opts);
-        _ -> not_caching
+            hb_cache:write(HP, Opts),
+            Unstored;
+        _ -> []
     end.
 
 %% @doc Reset both the receipt and its association with the result value.
@@ -828,19 +935,32 @@ reset(Result) when is_map(Result) ->
     Result#{
         <<"priv">> =>
         maps:without(
-            [<<"hashpath">>, <<"hashpath-result">>],
+            [<<"hashpath">>, <<"hashpath-result">>, <<"hashpath-state">>,
+                <<"hashpath-status">>,
+                <<"hashpath-reason">>, <<"hashpath-unstored">>],
             hb_private:from_message(Result)
         )
     };
 reset(Result) -> Result.
 
 %% @doc Keep a receipt only while it still names the returned state.
+attach(Result, {HP, Ctx}, _Opts) when is_map(Result) ->
+    Clean = reset(Result),
+    Status = maps:with([<<"hashpath-status">>, <<"hashpath-reason">>,
+        <<"hashpath-unstored">>], Ctx),
+    Receipt = case HP of
+        undefined -> Status;
+        _ -> Status#{ <<"hashpath">> => HP,
+            <<"hashpath-state">> => state_hash(Result) }
+    end,
+    Clean#{ <<"priv">> => maps:merge(hb_private:from_message(Clean), Receipt) };
 attach(Result, HP, Opts) when is_map(Result) ->
-    Priv = hb_private:from_message(Result),
+    Priv = hb_private:from_message(reset(Result)),
     Result#{
         <<"priv">> => Priv#{
             <<"hashpath">> => HP,
-            <<"hashpath-result">> => hb_message:id(Result, all, Opts)
+            <<"hashpath-result">> => hb_message:id(Result, all, Opts),
+            <<"hashpath-state">> => state_hash(Result)
         }
     };
 attach(Result, _HP, _Opts) -> Result.

@@ -37,6 +37,8 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                         NormKey = hb_util:bin(Key),
                         UnderlyingID =
                             case maps:get(<<"lazy">>, LinkOpts, false) of
+                                true when map_get(<<"load">>, LinkOpts) == false ->
+                                    throw({link_loading_disabled, ID});
                                 true ->
                                     case hb_cache:read(ID, Opts) of
                                         {ok, Underlying} when ?IS_ID(Underlying) orelse ?IS_HASHPATH(Underlying) ->

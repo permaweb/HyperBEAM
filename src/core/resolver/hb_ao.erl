@@ -694,13 +694,13 @@ resolve_stage(10, VariedBase, VariedReq, {ok, RawRes}, {Base, Req, Overlay}, Exe
             {false, ignore} -> {ok, Res};
             {false, reset} -> {ok, hb_hashpath:reset(Res)};
             _ ->
-                {HP, Context} =
+                {_HP, Context} = Receipt =
                     hb_hashpath:generate(
                         Base, Req, Res, VariedBase, VariedReq, VariedRes, Overlay, Opts
                     ),
                 case ReturnContext of
                     true -> {ok, Context};
-                    false -> {ok, hb_hashpath:attach(Res, HP, Opts)}
+                    false -> {ok, hb_hashpath:attach(Res, Receipt, Opts)}
                 end
         end,
         {Base, Req, Overlay},
