@@ -41,6 +41,7 @@
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
+-export([write_hashpath/3]).
 -export([match/2, list/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
@@ -109,7 +110,8 @@ ensure_loaded(Ref,
                     Next
             end;
         {error, not_found} ->
-            report_ensure_loaded_not_found(Ref, Lk, Opts)
+            report_ensure_loaded_not_found(Ref, Lk, Opts);
+        {error, Reason} -> erlang:error(Reason)
     end;
 ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
     % If the user provided their own options, we merge them and _overwrite_
@@ -137,7 +139,8 @@ ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpt
                 Type -> hb_util:decode(Type, LoadedMsg)
             end;
         {error, not_found} ->
-            report_ensure_loaded_not_found(Ref, Link, Opts)
+            report_ensure_loaded_not_found(Ref, Link, Opts);
+        {error, Reason} -> erlang:error(Reason)
     end;
 ensure_loaded(Ref, {link, ID, LinkOpts}, Opts) ->
 	ensure_loaded(Ref, {link, ID, LinkOpts#{ <<"lazy">> => true}}, Opts);
@@ -670,6 +673,8 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either
 %% a richly typed map or a direct binary. If `cache-read-mode' is `raw',
 %% composite reads return lazy links without decoding `ao-types'.
+read(Path, Opts) when ?IS_HASHPATH(Path) ->
+    hb_hashpath:load(Path, Opts);
 read(Path, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     case {
@@ -1104,11 +1109,7 @@ read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
     HP = hb_path:hashpath(BaseMsg, Req, Opts),
     case hb_store:resolve(hb_opts:get(attested_store, [], Opts), HP, Opts) of
         {ok, Path} when Path =/= HP ->
-            case read(Path, Opts) of
-                {ok, Res} when is_map(Res) ->
-                    {hit, {ok, hb_private:set(Res, <<"hashpath">>, HP, Opts)}};
-                Other -> hashpath_read_result(Other)
-            end;
+            hashpath_read_result(read(Path, Opts));
         _ -> miss
     end;
 read_hashpath(_, _, _) -> miss.
