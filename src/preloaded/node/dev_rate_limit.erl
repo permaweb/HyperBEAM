@@ -17,6 +17,15 @@
 %%%                          Default: -1000.
 %%%     rate_limit_exempt: A list of peer IDs that are exempt from the limit.
 %%%                          Default: [].
+%%%     rate_limit_block_cleanup_interval:
+%%%                        The interval between expired block cleanup passes.
+%%%                        Default: 60 (unit: seconds).
+%%%     block-paths:       A list of request paths which block the caller's IP.
+%%%                        This option is set on the `on/request' handler
+%%%                        message. Default: [].
+%%%     retry-after:       The number of seconds that a caller remains blocked
+%%%                        after requesting a blocked path. This option is set
+%%%                        on the `on/request' handler message. Default: 86400.
 %%% ```
 %%%
 %%% Notably, the `balance` of a user -- in terms of their available limit -- may
@@ -35,15 +44,41 @@
 -define(DEFAULT_MIN, -1_000).
 -define(DEFAULT_REQS, 1000).
 -define(DEFAULT_PERIOD, 60).
+-define(DEFAULT_RETRY_AFTER, 24 * 60 * 60).
+-define(DEFAULT_BLOCK_CLEANUP_INTERVAL, 60).
 
 %% @doc `on/request' handler that triggers rate limit counting and returns a
 %% 429 status code and response if the limit is exceeded. The response includes
 %% a `retry-after' header that indicates the number of seconds the client should
 %% wait before making the next request.
-request(_, Msg, Opts) ->
+request(Handler, Msg, Opts) ->
     ?event(rate_limit, {request, {msg, Msg}}),
-    Reference = request_reference(hb_maps:get(<<"request">>, Msg, #{}, Opts), Opts),
-    case is_limited(Reference, Opts) of
+    Request = hb_maps:get(<<"request">>, Msg, #{}, Opts),
+    Reference = request_reference(Request, Opts),
+    ShouldBlockPath = should_block_path(Request, Handler, Opts),
+    BlockPeriod = max(
+        1,
+        hb_util:int(
+            hb_maps:get(
+                <<"retry-after">>, Handler, ?DEFAULT_RETRY_AFTER, Opts
+            )
+        )
+    ),
+    case is_limited(Reference, ShouldBlockPath, BlockPeriod, Opts) of
+        {blocked, RetryAfter} ->
+            RetryAfterBin = hb_util:bin(RetryAfter),
+            ?event(
+                rate_limit,
+                {blocked_path, {caller, Reference}, {retry_after, RetryAfterBin}}
+            ),
+            {error,
+                #{
+                    <<"status">> => 429,
+                    <<"reason">> => <<"rate-limited">>,
+                    <<"body">> => <<"Rate limit exceeded.">>,
+                    <<"retry-after">> => RetryAfterBin
+                }
+            };
         {true, Balance} ->
             ?event(
                 rate_limit,
@@ -96,18 +131,35 @@ server_id(Opts) ->
 %% may be used to identify the caller.
 request_reference(Msg, Opts) -> hb_private:get(<<"ip">>, Msg, Opts).
 
+%% @doc Return whether the request path is configured to block the caller.
+should_block_path(Request, Handler, Opts) ->
+    Paths = hb_maps:get(<<"block-paths">>, Handler, [], Opts),
+    RequestPath = hb_maps:get(<<"path">>, Request, <<>>, Opts),
+    NormalizedPaths = [normalize_path(Path) || Path <- Paths],
+    lists:member(normalize_path(RequestPath), NormalizedPaths).
+
+%% @doc Normalize a configured or requested path for exact matching.
+normalize_path(Path) ->
+    case catch hb_singleton:from_path(Path) of
+        {ok, Parts, _Query} ->
+            Joined = iolist_to_binary(lists:join(<<"/">>, Parts)),
+            <<"/", Joined/binary>>;
+        _ -> Path
+    end.
+
 %% @doc Check if the caller is limited according to the current state of the
 %% rate limiter server.
-is_limited(Reference, Opts) ->
+is_limited(Reference, ShouldBlockPath, RetryAfter, Opts) ->
     PID = ensure_rate_limiter_started(Opts),
-    PID ! {request, self(), Reference},
+    PID ! {request, self(), Reference, ShouldBlockPath, RetryAfter},
     receive
+        {blocked, Remaining} -> {blocked, Remaining};
         {incremented, Balance} when Balance > 0 -> false;
         {incremented, Balance} when Balance =< 0 -> {true, Balance}
     after ?LOOKUP_TIMEOUT ->
         ?event(warning, {rate_limit_timeout, restarting}),
         hb_name:unregister(server_id(Opts)),
-        is_limited(Reference, Opts)
+        is_limited(Reference, ShouldBlockPath, RetryAfter, Opts)
     end.
 
 %% @doc Ensure that the rate limiter server is started and return the PID of
@@ -121,6 +173,19 @@ ensure_rate_limiter_started(Opts) ->
         fun() -> start_server(ServerID, Opts) end
     ).
 
+%% @doc Return the configured block cleanup interval in milliseconds.
+block_cleanup_interval(Opts) ->
+    max(
+        1,
+        hb_util:int(
+            hb_opts:get(
+                rate_limit_block_cleanup_interval,
+                ?DEFAULT_BLOCK_CLEANUP_INTERVAL,
+                Opts
+            )
+        )
+    ) * 1000.
+
 start_server(ServerID, Opts) ->
     % Exit the process if we cannot register the server ID.
     Reqs = hb_opts:get(rate_limit_requests, ?DEFAULT_REQS, Opts),
@@ -128,6 +193,7 @@ start_server(ServerID, Opts) ->
     Max = hb_opts:get(rate_limit_max, ?DEFAULT_MAX, Opts),
     Min = hb_opts:get(rate_limit_min, ?DEFAULT_MIN, Opts),
     Exempt = hb_opts:get(rate_limit_exempt, [], Opts),
+    BlockCleanupInterval = block_cleanup_interval(Opts),
     ?event(
         rate_limit,
         {started_rate_limiter,
@@ -139,34 +205,76 @@ start_server(ServerID, Opts) ->
             {exempt, Exempt}
         }
     ),
+    erlang:send_after(BlockCleanupInterval, self(), cleanup_blocks),
     server_loop(
         #{
             reqs => Reqs,
             period => Period,
             max => Max,
             min => Min,
+            block_cleanup_interval => BlockCleanupInterval,
+            blocked => #{},
             peers => #{ Ref => infinity || Ref <- Exempt }
         }
     ).
 
-%% @doc The main loop of the rate limiter server. Only responds to two messages:
-%% - `{request, Self, Reference}': Debit the account of the given reference by 1.
+%% @doc The main loop of the rate limiter server. Responds to three messages:
+%% - `{request, Self, Reference, Block, RetryAfter}': Block or debit a reference.
 %% - `{balance, PID, Reference}': Return the current balance of the given reference.
+%% - `cleanup_blocks': Remove expired caller blocks.
 %% The `balance` call is not presently used, but seems sensible to have.
 server_loop(State) ->
     receive
-        {request, PID, Reference} ->
-            NewState = debit(Reference, 1, State, Now = erlang:system_time(millisecond)),
-            Balance = account_balance(Reference, NewState, Now),
-            ?event(
-                rate_limit_short,
-                {rate_limit_debited, {target, Reference}, {balance, Balance}}
-            ),
-            PID ! {incremented, Balance},
+        {request, PID, Reference, ShouldBlockPath, RetryAfter} ->
+            Now = erlang:system_time(millisecond),
+            {Reply, NewState} =
+                update(Reference, ShouldBlockPath, RetryAfter, State, Now),
+            PID ! Reply,
             server_loop(NewState);
         {balance, PID, Reference} ->
             PID ! {balance, account_balance(Reference, State)},
-            server_loop(State)
+            server_loop(State);
+        cleanup_blocks ->
+            Now = erlang:system_time(millisecond),
+            BlockCleanupInterval = maps:get(block_cleanup_interval, State),
+            erlang:send_after(BlockCleanupInterval, self(), cleanup_blocks),
+            Blocked = maps:get(blocked, State),
+            ActiveBlocks = remove_expired_blocks(Blocked, Now),
+            server_loop(State#{ blocked => ActiveBlocks })
+    end.
+
+%% @doc Remove blocks whose expiry is at or before the given time.
+remove_expired_blocks(Blocked, Now) ->
+    maps:filter(
+        fun(_Reference, Until) -> Until > Now end,
+        Blocked
+    ).
+
+%% @doc Apply path blocking and ordinary rate limiting to a request.
+update(Reference, ShouldBlockPath, RetryAfter, State = #{ blocked := Blocked }, Now) ->
+    case account_balance(Reference, State, Now) of
+        infinity ->
+            {{incremented, infinity}, State};
+        _ ->
+            case maps:get(Reference, Blocked, 0) of
+                Until when Until > Now ->
+                    Remaining = (Until - Now + 999) div 1000,
+                    {{blocked, Remaining}, State};
+                _ when ShouldBlockPath ->
+                    Until = Now + (RetryAfter * 1000),
+                    {{blocked, RetryAfter},
+                        State#{ blocked => Blocked#{ Reference => Until } }};
+                _ ->
+                    DebitedState = debit(Reference, 1, State, Now),
+                    Balance = account_balance(Reference, DebitedState, Now),
+                    ?event(
+                        rate_limit_short,
+                        {rate_limit_debited,
+                            {target, Reference}, {balance, Balance}}
+                    ),
+                    {{incremented, Balance},
+                        DebitedState#{ blocked => maps:remove(Reference, Blocked) }}
+            end
     end.
 
 %% @doc Debit the account of the given reference by the given quantity.
@@ -259,3 +367,72 @@ rate_limit_reset_test() ->
     ),
     timer:sleep(1_000),
     ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})).
+
+block_path_test() ->
+    ServerOpts = #{
+        <<"on">> =>
+            #{
+                <<"request">> =>
+                    #{
+                        <<"device">> => <<"rate-limit@1.0">>,
+                        <<"retry-after">> => 1,
+                        <<"block-paths">> =>
+                            [
+                                <<"/src/.git/config">>,
+                                <<".env">>,
+                                <<"/api/.git/config">>
+                            ]
+                    }
+            }
+    },
+    ServerNode = hb_http_server:start_node(ServerOpts),
+    ?assertMatch(
+        {error,
+            #{
+                <<"status">> := 429,
+                <<"retry-after">> := <<"1">>
+            }},
+        hb_http:get(ServerNode, <<"/src/.git/config?probe=true">>, #{})
+    ),
+    ?assertMatch(
+        {error, #{ <<"status">> := 429 }},
+        hb_http:get(ServerNode, <<"id">>, #{})
+    ),
+    timer:sleep(1_100),
+    ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})).
+
+block_path_disabled_test() ->
+    ServerOpts = #{
+        <<"on">> =>
+            #{
+                <<"request">> =>
+                    #{ <<"device">> => <<"rate-limit@1.0">> }
+            }
+    },
+    ServerNode = hb_http_server:start_node(ServerOpts),
+    _ = hb_http:get(ServerNode, <<"/src/.git/config">>, #{}),
+    ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})).
+
+remove_expired_blocks_test() ->
+    ?assertEqual(
+        #{ active => 1_001 },
+        remove_expired_blocks(
+            #{ expired => 999, boundary => 1_000, active => 1_001 },
+            1_000
+        )
+    ).
+
+block_cleanup_interval_test() ->
+    ?assertEqual(60_000, block_cleanup_interval(#{})),
+    ?assertEqual(
+        2_000,
+        block_cleanup_interval(
+            #{ <<"rate-limit-block-cleanup-interval">> => <<"2">> }
+        )
+    ),
+    ?assertEqual(
+        1_000,
+        block_cleanup_interval(
+            #{ <<"rate-limit-block-cleanup-interval">> => 0 }
+        )
+    ).
