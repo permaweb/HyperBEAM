@@ -94,7 +94,7 @@ base(Base, Req, Opts) ->
 %% for semantics.
 -spec only(
     #{ _ => _ },
-    #{ only => binary() | [binary()] | #{ _ => _ }, exclude => [binary()], return => binary(), _ => _ },
+    #{ only => [binary()] | binary() | #{ _ => _ }, exclude => [binary()], return => binary(), _ => _ },
     #{ _ => _ }
 ) -> {ok, _} | {error, _}.
 only(Base, Req, Opts) ->

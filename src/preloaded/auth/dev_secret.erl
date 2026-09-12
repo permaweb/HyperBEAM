@@ -201,7 +201,7 @@ generate(Base, Request, Opts) ->
 %% @doc Import a wallet for hosting on the node. Expects the keys to be either
 %% provided as a list of keys, or a single key in the `key' field. If neither
 %% are provided, the keys are extracted from the cookie.
--spec import(#{ _ => _ }, #{ key => binary() | [binary()], _ => _ }, #{ _ => _ }) ->
+-spec import(#{ _ => _ }, #{ key => [binary()] | binary(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ _ => _ }} | {error, _}.
 import(Base, Request, Opts) ->
     Wallets =
@@ -585,7 +585,7 @@ commit_message(Message, #{ <<"wallet">> := Key }, Opts) ->
 %% @doc Export wallets from a request. The request should contain a source of
 %% wallets (cookies, keys, or wallet names), or a specific list/name of a
 %% wallet to authenticate and export.
--spec export(#{ _ => _ }, #{ keyids => binary() | [binary()], _ => _ }, #{ _ => _ }) ->
+-spec export(#{ _ => _ }, #{ keyids => [binary()] | binary(), _ => _ }, #{ _ => _ }) ->
     {ok, [_]} | {error, binary()}.
 export(Base, Request, Opts) ->
     PrivOpts = priv_store_opts(Opts),
@@ -614,7 +614,7 @@ export(Base, Request, Opts) ->
     end.    
 
 %% @doc Sync wallets from a remote node
--spec sync(#{ _ => _ }, #{ node => binary(), as => binary(), keyids => binary() | [binary()], _ => _ }, #{ _ => _ }) ->
+-spec sync(#{ _ => _ }, #{ node => binary(), as => binary(), keyids => [binary()] | binary(), _ => _ }, #{ _ => _ }) ->
     {ok, [_]} | {error, _}.
 sync(_Base, Request, Opts) ->
     case hb_ao:get(<<"node">>, Request, undefined, Opts) of

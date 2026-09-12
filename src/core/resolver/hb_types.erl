@@ -9,10 +9,16 @@
 %%% differ. A function without a spec executes upon its inputs as given.
 %%%
 %%% Specs are read from a module's BEAM by `extract/1' and compiled into a
-%%% <em>schema</em>: a map from each spec'd function's normalized name and
-%%% arity to the schemas of its arguments and result. `hb_device_load:schema/2'
-%%% memoises them. The type syntax means, for a message argument:
+%%% <em>schema</em>: a map from each normalized key to its accepted argument
+%%% and result schemas, in declaration order. `hb_device_load:schema/2'
+%%% memoises them.
+%%% Clauses and union members are tried in declaration order, including
+%%% coercion. A clause selects the base, request and result schemas together.
+%%% Functions sharing a normalized name describe the same AO-Core key; helper
+%%% functions with different argument meanings need distinct names.
+%%% Lists keep their sequence structure; their elements are coerced in order.
 %%%
+%%% The type syntax means, for a message argument:
 %%% <ul>
 %%%   <li>`#{ key := type() }': `key' must be present; it is loaded if it is
 %%%       a link and coerced to the type. `#{ key => type() }': as above,
@@ -66,45 +72,55 @@
 %% varied messages and the overlay the result spec declares, or `no_spec'.
 vary(Key, Func, AddKey, Base, Req, Opts) ->
     case function_schema(Func, Key, Opts) of
-        {ok, Schema} ->
-            {BaseSchema, ReqSchema, ReturnSchema} =
-                execution_schemas(Schema, AddKey),
-            {VariedBase, _} = apply_schema(implicit_base(BaseSchema), Base, Opts),
-            {VariedReq, _} =
-                apply_schema(
-                    implicit_request(ReqSchema),
-                    request_with_key(Req, AddKey),
-                    Opts
-                ),
-            {ok, VariedBase, VariedReq, overlay(ReturnSchema)};
+        {ok, Schemas} ->
+            vary(Schemas, AddKey, Base, Req, Opts);
         {error, _} ->
             no_spec
     end.
 
+%% @doc Try complete schemas in order, retaining the selected result's overlay.
+vary([Schema | Rest], AddKey, Base, Req, Opts) ->
+    try
+        {BaseSchema, ReqSchema, ReturnSchema} =
+            execution_schemas(Schema, AddKey),
+        {VariedBase, _} = apply_schema(implicit_base(BaseSchema), Base, Opts),
+        {VariedReq, _} =
+            apply_schema(
+                implicit_request(ReqSchema),
+                request_with_key(Req, AddKey),
+                Opts
+            ),
+        {ok, VariedBase, VariedReq, overlay(ReturnSchema)}
+    catch
+        throw:{invalid_type, _, _} when Rest =/= [] ->
+            vary(Rest, AddKey, Base, Req, Opts);
+        throw:{required_key_missing, _} when Rest =/= [] ->
+            vary(Rest, AddKey, Base, Req, Opts)
+    end.
+
 %% @doc The schema of the function that will execute `Key': its spec, found
-%% in its own module by its name and arity, or -- for a `handler' or
+%% in its own module by its name, or -- for a `handler' or
 %% `default' that serves many keys -- by the key.
 function_schema(Func, Key, Opts) ->
     maybe
         true ?= is_function(Func) orelse {error, not_found},
         {module, Module} = erlang:fun_info(Func, module),
         {name, Name} = erlang:fun_info(Func, name),
-        {arity, Arity} = erlang:fun_info(Func, arity),
         {ok, Schemas} ?= hb_device_load:schema(Module, Opts),
-        {error, not_found} ?= named_schema(normalize_name(Name), Arity, Schemas),
-        named_schema(Key, Arity, Schemas)
+        {error, not_found} ?= named_schema(normalize_name(Name), Schemas),
+        named_schema(Key, Schemas)
     end.
 
-%% @doc The schema of the function of the given normalized name and arity.
-named_schema(Name, Arity, Schemas) ->
+%% @doc The accepted schemas of a normalized key.
+named_schema(Name, Schemas) ->
     case Schemas of
-        #{ Name := #{ Arity := Schema } } -> {ok, Schema};
+        #{ Name := Accepted } -> {ok, Accepted};
         _ -> {error, not_found}
     end.
 
 %% @doc The base, request and result schemas of an execution. A function that
 %% takes the key as its first argument reads the base and request from its
-%% second and third; an argument the spec does not cover is not varied.
+%% second and third; an omitted argument is treated as `_'.
 execution_schemas(#{ <<"args">> := Args, <<"return">> := Return }, AddKey) ->
     Offset =
         case AddKey of
@@ -112,8 +128,8 @@ execution_schemas(#{ <<"args">> := Args, <<"return">> := Return }, AddKey) ->
             _ -> 1
         end,
     {
-        maybe_nth(1 + Offset, Args, any_type()),
-        maybe_nth(2 + Offset, Args, any_type()),
+        maybe_nth(1 + Offset, Args, wildcard_type()),
+        maybe_nth(2 + Offset, Args, wildcard_type()),
         Return
     }.
 
@@ -196,6 +212,8 @@ overlay_marker(#{ <<"kind">> := <<"literal">>, <<"value">> := Marker }) ->
     overlay_marker(Marker);
 overlay_marker(#{ <<"kind">> := <<"alias">>, <<"name">> := Marker }) ->
     overlay_marker(Marker);
+overlay_marker(base) -> base;
+overlay_marker(request) -> request;
 overlay_marker(<<"base">>) -> base;
 overlay_marker(<<"request">>) -> request;
 overlay_marker(_Type) -> none.
@@ -243,18 +261,13 @@ build_type_env(Forms) ->
 var_name({var, _, Name}) -> Name;
 var_name(Name) -> Name.
 
-%% @doc Add a spec to the module schema under its function's normalized name
-%% and arity. A spec with several clauses describes no single shape of input
-%% and is not varied.
-put_spec({attribute, _, spec, {{Name, Arity}, [Clause]}}, TypeEnv, Schemas) ->
-    {Args, Return} = parse_fun_spec(Clause, TypeEnv),
+%% @doc Append a key's accepted schemas in the order the author declares them.
+put_spec({attribute, _, spec, {{Name, _}, Clauses}}, TypeEnv, Schemas) ->
     NormName = normalize_name(Name),
-    Arities = maps:get(NormName, Schemas, #{}),
     Schemas#{
         NormName =>
-            Arities#{
-                Arity => #{ <<"args">> => Args, <<"return">> => Return }
-            }
+            maps:get(NormName, Schemas, []) ++
+                [parse_fun_spec(Clause, TypeEnv) || Clause <- Clauses]
     };
 put_spec(_Spec, _TypeEnv, Schemas) ->
     Schemas.
@@ -264,12 +277,12 @@ put_spec(_Spec, _TypeEnv, Schemas) ->
 parse_fun_spec({type, _, bounded_fun, [FunSpec, _Constraints]}, TypeEnv) ->
     parse_fun_spec(FunSpec, TypeEnv);
 parse_fun_spec({type, _, 'fun', [{type, _, product, Args}, Return]}, TypeEnv) ->
-    {
-        [ parse_type(Arg, TypeEnv, #{}, []) || Arg <- Args ],
-        parse_type(Return, TypeEnv, #{}, [])
+    #{
+        <<"args">> => [ parse_type(Arg, TypeEnv, #{}, []) || Arg <- Args ],
+        <<"return">> => parse_type(Return, TypeEnv, #{}, [])
     };
 parse_fun_spec(Other, _TypeEnv) ->
-    {[unknown_type(Other)], any_type()}.
+    #{ <<"args">> => [unknown_type(Other)], <<"return">> => any_type() }.
 
 %% @doc Compile an abstract type into a schema. `TypeEnv' holds the module's
 %% own types, `VarEnv' the schemas bound to the type variables of the one being
@@ -363,7 +376,7 @@ parse_type({type, _, boolean, []}, _, _, _) -> boolean_type();
 parse_type({type, _, any, []}, _, _, _) -> any_type();
 parse_type({type, _, Scalar, _}, _, _, _) when is_map_key(Scalar, ?SCALARS) ->
     scalar_type(normalize_name(Scalar));
-parse_type({atom, _, Atom}, _, _, _) -> literal_type(hb_util:bin(Atom));
+parse_type({atom, _, Atom}, _, _, _) -> literal_type(Atom);
 parse_type({integer, _, Int}, _, _, _) -> literal_type(Int);
 parse_type({char, _, Char}, _, _, _) -> literal_type(<<Char/utf8>>);
 parse_type({string, _, String}, _, _, _) -> literal_type(hb_util:bin(String));
@@ -405,6 +418,15 @@ apply_schema(#{ <<"kind">> := <<"any">> }, Value, _Opts) ->
     {Value, false};
 apply_schema(#{ <<"kind">> := <<"wildcard">> }, Value, _Opts) ->
     {Value, false};
+apply_schema(
+    Schema = #{ <<"kind">> := <<"union">>, <<"members">> := Members },
+    Value,
+    Opts
+) ->
+    case apply_union(Members, Value, Opts) of
+        {ok, Result} -> Result;
+        error -> throw({invalid_type, Schema, Value})
+    end;
 apply_schema(#{ <<"kind">> := Kind }, Value, _Opts)
         when Kind =:= <<"remote">>;
              Kind =:= <<"alias">>;
@@ -445,14 +467,14 @@ apply_schema(
     Value,
     Opts
 ) ->
-    case try_coerce(fun hb_util:list/1, Value) of
+    case Value of
         List when is_list(List) ->
             lists:mapfoldl(
                 fun(Item, Changed) ->
                     {Varied, ItemChanged} = apply_schema(ItemType, Item, Opts),
                     {Varied, Changed orelse ItemChanged}
                 end,
-                List =/= Value,
+                false,
                 List
             );
         _ ->
@@ -483,15 +505,6 @@ apply_schema(
             {list_to_tuple(Varied), Changed};
         false ->
             throw({invalid_type, Schema, Value})
-    end;
-apply_schema(
-    Schema = #{ <<"kind">> := <<"union">>, <<"members">> := Members },
-    Value,
-    Opts
-) ->
-    case apply_union(Members, Value, Opts) of
-        {ok, Result} -> Result;
-        error -> throw({invalid_type, Schema, Value})
     end;
 apply_schema(Type, Value, Opts) ->
     % A scalar, literal or range: keep a value of the type, else coerce it.
@@ -525,72 +538,24 @@ apply_wildcard(Field, Keys, Message, Opts) ->
 apply_key(Key, Field, Message, {Acc, Changed} = State, Opts) ->
     #{ <<"presence">> := Presence, <<"type">> := Type } = Field,
     case maps:find(Key, Message) of
-        {ok, RawValue} ->
-            Value =
-                case is_passthrough_schema(Type) of
-                    true -> RawValue;
-                    false -> hb_cache:ensure_loaded(RawValue, Opts)
-                end,
+        {ok, Value} ->
             {Coerced, ChildChanged} = apply_schema(Type, Value, Opts),
             {Acc#{ Key => Coerced }, Changed orelse ChildChanged};
         error when Presence =:= required -> throw({required_key_missing, Key});
         error -> State
     end.
 
-%% @doc Vary a value by the first member of a union that admits it as it is,
-%% else by the first that it can be coerced to.
-apply_union(Members, Value, Opts) ->
-    case matching_union_member(Members, Value) of
-        {ok, Member} ->
-            try {ok, apply_schema(Member, Value, Opts)}
-            catch
-                throw:{invalid_type, _, _} ->
-                    apply_coerced_union(Members, Value, Opts);
-                throw:{required_key_missing, _} ->
-                    apply_coerced_union(Members, Value, Opts)
-            end;
-        error -> apply_coerced_union(Members, Value, Opts)
-    end.
-
-%% @doc The first constraining member of a union that a value already
-%% satisfies. Members that pass every value through never match, so that
-%% they cannot shadow a constraining member.
-matching_union_member([], _Value) ->
-    error;
-matching_union_member([Member | Rest], Value) ->
-    case not is_passthrough_schema(Member) andalso check_type(Member, Value) of
-        true -> {ok, Member};
-        false -> matching_union_member(Rest, Value)
-    end.
-
-%% @doc Vary a value by the first member of a union it can be coerced to,
-%% trying the constraining members before those that pass it through.
-apply_coerced_union(Members, Value, Opts) ->
-    {PassThrough, Constrained} =
-        lists:partition(fun is_passthrough_schema/1, Members),
-    apply_coerced_union_ordered(Constrained ++ PassThrough, Value, Opts).
-
 %% @doc Vary a value by the first of the members it can be coerced to.
-apply_coerced_union_ordered([], _Value, _Opts) ->
+apply_union([], _Value, _Opts) ->
     error;
-apply_coerced_union_ordered([Member | Rest], Value, Opts) ->
+apply_union([Member | Rest], Value, Opts) ->
     try {ok, apply_schema(Member, Value, Opts)}
     catch
         throw:{invalid_type, _, _} ->
-            apply_coerced_union_ordered(Rest, Value, Opts);
+            apply_union(Rest, Value, Opts);
         throw:{required_key_missing, _} ->
-            apply_coerced_union_ordered(Rest, Value, Opts)
+            apply_union(Rest, Value, Opts)
     end.
-
-%% @doc Whether a schema passes every value through unvaried.
-is_passthrough_schema(#{ <<"kind">> := Kind }) ->
-    lists:member(
-        Kind,
-        [<<"any">>, <<"wildcard">>, <<"remote">>, <<"alias">>,
-            <<"variable">>, <<"unknown">>]
-    );
-is_passthrough_schema(_Schema) ->
-    false.
 
 %%% --------------------------------------------------------------------
 %%% Coercing and checking values
@@ -631,7 +596,7 @@ coerce_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }, Value, Opts)
         Coerced -> list_to_tuple(Coerced)
     end;
 coerce_type(#{ <<"kind">> := <<"list">>, <<"item">> := ItemType }, Value, Opts) ->
-    case try_coerce(fun hb_util:list/1, Value) of
+    case Value of
         List when is_list(List) ->
             coerce_sequence([ {ItemType, Item} || Item <- List ], Opts);
         _ ->
@@ -1030,7 +995,9 @@ explicit_wildcard_preserves_lazy_links_test_() ->
         {atom_to_list(Presence) ++ " " ++ binary_to_list(maps:get(<<"kind">>, Type)), fun() ->
             explicit_wildcard_preserves_lazy_links(Presence, Type)
         end}
-    || Presence <- [required, optional], Type <- [wildcard_type(), any_type()]
+    || Presence <- [required, optional], Type <- [wildcard_type(), any_type(),
+        #{ <<"kind">> => <<"union">>,
+            <<"members">> => [wildcard_type(), scalar_type(<<"integer">>)] }]
     ].
 
 %% @doc Unconstrained fields must not attempt to load even a missing link.
@@ -1076,7 +1043,7 @@ optional_wildcard_preserves_links_and_sequences_materialize_test() ->
         apply_schema(#{ <<"kind">> => <<"tuple">>, <<"items">> => [Integer] }, {Link}, Opts),
     ?assertEqual({8}, VariedTuple).
 
-union_preserves_an_existing_member_type_test() ->
+union_uses_declared_order_test() ->
     Binary = scalar_type(<<"binary">>),
     List = #{ <<"kind">> => <<"list">>, <<"item">> => Binary },
     Value = [<<"one">>, <<"two">>],
@@ -1086,9 +1053,9 @@ union_preserves_an_existing_member_type_test() ->
             Value,
             #{}
         ),
-    ?assertEqual(Value, Varied).
+    ?assertEqual(<<"onetwo">>, Varied).
 
-union_passthrough_members_do_not_swallow_constrained_members_test() ->
+union_passthrough_and_fallback_test() ->
     Store = hb_test_utils:test_store(),
     Opts = #{ <<"store">> => Store },
     hb_store:reset(Store),
@@ -1105,7 +1072,7 @@ union_passthrough_members_do_not_swallow_constrained_members_test() ->
             #{ <<"slot">> => {link, SlotPath, #{}} },
             Opts
         ),
-    ?assertEqual(#{ <<"slot">> => 9 }, VariedMessage),
+    ?assertEqual(#{ <<"slot">> => {link, SlotPath, #{}} }, VariedMessage),
     {VariedBinary, _} =
         apply_schema(Union([any_type(), wildcard_type(), Binary]), <<"value">>, #{}),
     ?assertEqual(<<"value">>, VariedBinary),

@@ -6,6 +6,7 @@
 -export([index/3, postprocess/3, load/3]).
 -export([vary_projection/3, vary_wildcard/3, vary_unspecified/3]).
 -export([vary_overlay/3, vary_request_overlay/3]).
+-export([vary_alternatives/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -281,7 +282,35 @@ vary_overlay(Base = #{ <<"counter">> := Counter }, _Req, _Opts) ->
 vary_request_overlay(_Base, Req = #{ <<"counter">> := Counter }, _Opts) ->
     {ok, Req#{ <<"counter">> => Counter + 1 }}.
 
+%% @doc Select the result's overlay together with its accepted input types.
+-spec vary_alternatives(#{ value := integer() }, #{ value := integer() }, _) ->
+    {ok, #{ '...' := base, _ => _ }};
+    (#{ value := binary() }, #{ value := binary() }, _) ->
+    {ok, #{ '...' := request, _ => _ }}.
+vary_alternatives(Base, Req, Opts) ->
+    vary_projection(Base, Req, Opts).
+
 %%% Tests
+
+vary_alternatives_test_() ->
+    [
+        ?_test(begin
+            Opts = (vary_opts())#{ <<"cache-control">> => [<<"always">>] },
+            {ok, Ctx} =
+                hb_ao:resolve(
+                    #{ <<"device">> => <<"test-device@1.0">>, <<"value">> => <<"7">> },
+                    #{ <<"path">> => <<"vary-alternatives">>, <<"value">> => Input },
+                    Opts#{ <<"return-context">> => true }
+                ),
+            ?assertMatch(#{ <<"value">> := B }, maps:get(<<"varied-base">>, Ctx)),
+            ?assertMatch(#{ <<"value">> := R }, maps:get(<<"varied-request">>, Ctx)),
+            ?assertEqual(Overlay, maps:get(<<"normalizer">>, Ctx)),
+            ?assert(hb_hashpath:verify_all(hb_hashpath:format(Ctx, Opts), Opts))
+        end)
+    ||
+        {Input, B, R, Overlay} <-
+            [{<<"8">>, 7, 8, base}, {<<"text">>, <<"7">>, <<"text">>, request}]
+    ].
 
 %% @doc Tests the resolution of a default function.
 device_with_function_key_module_test() ->

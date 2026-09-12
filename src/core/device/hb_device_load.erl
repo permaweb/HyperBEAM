@@ -501,7 +501,7 @@ schema_memoised_test() ->
     spawn(fun() -> Parent ! {Ref, schema(Module, Opts)} end),
     receive
         {Ref, Schemas} ->
-            ?assertMatch({ok, #{ <<"snapshot">> := #{ 3 := _ } }}, Schemas)
+            ?assertMatch({ok, #{ <<"snapshot">> := [_] }}, Schemas)
     end.
 
 %% @doc Resolution against a preloaded store holding no devices must fail

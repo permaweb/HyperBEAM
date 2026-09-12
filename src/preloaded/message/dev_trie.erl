@@ -14,7 +14,7 @@
 %%% `{00, 11, 01, 10}`, which is why each node in a radix-4 trie can have at-most
 %%% 4 children!)
 -module(dev_trie).
--export([info/0, keys/2, set/3, get/3, get/4]).
+-export([info/0, keys/2, set/3, get/3, get_key/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -35,7 +35,7 @@
 
 info() ->
     #{
-        default => fun get/4,
+        default => fun get_key/4,
         reserved => ?RESERVED_KEYS
      }.
 
@@ -75,9 +75,9 @@ collect_keys(TrieNode, Prefix, Opts, Acc) ->
 
 %% @doc Get the value associated with a key from a trie represented in a base
 %% message.
--spec get(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+-spec get_key(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
     {ok, _} | {error, binary()}.
-get(Key, Trie, Req, Opts) ->
+get_key(Key, Trie, Req, Opts) ->
     get(Trie, Req#{<<"key">> => Key}, Opts).
 -spec get(#{ _ => _ }, #{ key := binary(), _ => _ }, #{ _ => _ }) ->
     {ok, _} | {error, binary()}.
