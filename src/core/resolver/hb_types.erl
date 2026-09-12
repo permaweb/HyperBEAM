@@ -33,8 +33,13 @@
 %%%       is projected to the implicit keys below.</li>
 %%%   <li>`map()', `any()', `term()': the argument is passed through
 %%%       untouched -- as is every value of a type the varier does not
-%%%       understand (remote types, records, type variables).</li>
+%%%       understand (remote types, records, unbound type variables).</li>
 %%% </ul>
+%%%
+%%% `when T :: integer() | binary()' chooses one member for every use of `T'
+%%% in the clause. Bounds may refer to other variables and appear in nested
+%%% types or local aliases. Each combination is an ordinary accepted schema,
+%%% ordered by the bounds and their members as declared.
 %%%
 %%% `device' is always kept in the base and `path' in the request, so a
 %%% projection cannot detach an execution from its device or key. Scalar
@@ -267,22 +272,53 @@ put_spec({attribute, _, spec, {{Name, _}, Clauses}}, TypeEnv, Schemas) ->
     Schemas#{
         NormName =>
             maps:get(NormName, Schemas, []) ++
-                [parse_fun_spec(Clause, TypeEnv) || Clause <- Clauses]
+                [Schema || Clause <- Clauses,
+                    Schema <- parse_fun_spec(Clause, TypeEnv)]
     };
 put_spec(_Spec, _TypeEnv, Schemas) ->
     Schemas.
 
-%% @doc The argument and result schemas of a spec clause, with any `when'
-%% constraints dropped.
-parse_fun_spec({type, _, bounded_fun, [FunSpec, _Constraints]}, TypeEnv) ->
-    parse_fun_spec(FunSpec, TypeEnv);
+%% @doc The accepted argument and result schemas of a spec clause.
+parse_fun_spec({type, _, bounded_fun, [FunSpec, Constraints]}, TypeEnv) ->
+    Bounds =
+        [
+            {normalize_name(Name), parse_type(Type, TypeEnv, #{}, [])}
+        ||
+            {type, _, constraint, [{atom, _, is_subtype},
+                [{var, _, Name}, Type]]} <- Constraints
+        ],
+    [substitute(Schema, Env) || Schema <- parse_fun_spec(FunSpec, TypeEnv),
+        Env <- bindings(Bounds, #{})];
 parse_fun_spec({type, _, 'fun', [{type, _, product, Args}, Return]}, TypeEnv) ->
-    #{
+    [#{
         <<"args">> => [ parse_type(Arg, TypeEnv, #{}, []) || Arg <- Args ],
         <<"return">> => parse_type(Return, TypeEnv, #{}, [])
-    };
+    }];
 parse_fun_spec(Other, _TypeEnv) ->
-    #{ <<"args">> => [unknown_type(Other)], <<"return">> => any_type() }.
+    [#{ <<"args">> => [unknown_type(Other)], <<"return">> => any_type() }].
+
+%% @doc Choose each bound once for the whole clause, preserving member order.
+bindings([], Env) -> [Env];
+bindings(
+    [{Name, #{ <<"kind">> := <<"union">>, <<"members">> := Members }} | Rest],
+    Env
+) ->
+    lists:append([bindings(Rest, Env#{ Name => Member }) || Member <- Members]);
+bindings([{Name, Type} | Rest], Env) ->
+    bindings(Rest, Env#{ Name => Type }).
+
+%% @doc Substitute after all bounds are chosen, so forward references agree.
+%% Recursive references remain unbound, as do variables without a constraint.
+substitute(#{ <<"kind">> := <<"variable">>, <<"name">> := Name } = Schema, Env) ->
+    case maps:take(Name, Env) of
+        {Type, Rest} -> substitute(Type, Rest);
+        error -> Schema
+    end;
+substitute(Map, Env) when is_map(Map) ->
+    maps:map(fun(_, Value) -> substitute(Value, Env) end, Map);
+substitute(List, Env) when is_list(List) ->
+    [substitute(Item, Env) || Item <- List];
+substitute(Value, _Env) -> Value.
 
 %% @doc Compile an abstract type into a schema. `TypeEnv' holds the module's
 %% own types, `VarEnv' the schemas bound to the type variables of the one being

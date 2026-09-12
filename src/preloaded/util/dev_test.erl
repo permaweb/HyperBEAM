@@ -6,7 +6,7 @@
 -export([index/3, postprocess/3, load/3]).
 -export([vary_projection/3, vary_wildcard/3, vary_unspecified/3]).
 -export([vary_overlay/3, vary_request_overlay/3]).
--export([vary_alternatives/3]).
+-export([vary_alternatives/3, vary_dependent/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -290,6 +290,13 @@ vary_request_overlay(_Base, Req = #{ <<"counter">> := Counter }, _Opts) ->
 vary_alternatives(Base, Req, Opts) ->
     vary_projection(Base, Req, Opts).
 
+%% @doc Constrain both inputs through a shared type, including a forward bound.
+-type vary_input(T) :: #{ value := T }.
+-spec vary_dependent(vary_input(U), vary_input(T), _) ->
+    {ok, #{ '...' := base, _ => _ }} when U :: T, T :: integer() | binary().
+vary_dependent(Base, Req, Opts) ->
+    vary_projection(Base, Req, Opts).
+
 %%% Tests
 
 vary_alternatives_test_() ->
@@ -299,7 +306,7 @@ vary_alternatives_test_() ->
             {ok, Ctx} =
                 hb_ao:resolve(
                     #{ <<"device">> => <<"test-device@1.0">>, <<"value">> => <<"7">> },
-                    #{ <<"path">> => <<"vary-alternatives">>, <<"value">> => Input },
+                    #{ <<"path">> => Key, <<"value">> => Input },
                     Opts#{ <<"return-context">> => true }
                 ),
             ?assertMatch(#{ <<"value">> := B }, maps:get(<<"varied-base">>, Ctx)),
@@ -308,8 +315,13 @@ vary_alternatives_test_() ->
             ?assert(hb_hashpath:verify_all(hb_hashpath:format(Ctx, Opts), Opts))
         end)
     ||
-        {Input, B, R, Overlay} <-
-            [{<<"8">>, 7, 8, base}, {<<"text">>, <<"7">>, <<"text">>, request}]
+        {Key, Input, B, R, Overlay} <-
+            [
+                {<<"vary-alternatives">>, <<"8">>, 7, 8, base},
+                {<<"vary-alternatives">>, <<"text">>, <<"7">>, <<"text">>, request},
+                {<<"vary-dependent">>, <<"8">>, 7, 8, base},
+                {<<"vary-dependent">>, <<"text">>, <<"7">>, <<"text">>, base}
+            ]
     ].
 
 %% @doc Tests the resolution of a default function.
