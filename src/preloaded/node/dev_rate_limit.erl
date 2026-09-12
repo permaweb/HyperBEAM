@@ -17,6 +17,9 @@
 %%%                          Default: -1000.
 %%%     rate_limit_exempt: A list of peer IDs that are exempt from the limit.
 %%%                          Default: [].
+%%%     rate_limit_block_cleanup_interval:
+%%%                        The interval between expired block cleanup passes.
+%%%                        Default: 60 (unit: seconds).
 %%%     block-paths:       A list of request paths which block the caller's IP.
 %%%                        This option is set on the `on/request' handler
 %%%                        message. Default: [].
@@ -42,6 +45,7 @@
 -define(DEFAULT_REQS, 1000).
 -define(DEFAULT_PERIOD, 60).
 -define(DEFAULT_RETRY_AFTER, 24 * 60 * 60).
+-define(DEFAULT_BLOCK_CLEANUP_INTERVAL, 60).
 
 %% @doc `on/request' handler that triggers rate limit counting and returns a
 %% 429 status code and response if the limit is exceeded. The response includes
@@ -169,6 +173,19 @@ ensure_rate_limiter_started(Opts) ->
         fun() -> start_server(ServerID, Opts) end
     ).
 
+%% @doc Return the configured block cleanup interval in milliseconds.
+block_cleanup_interval(Opts) ->
+    max(
+        1,
+        hb_util:int(
+            hb_opts:get(
+                rate_limit_block_cleanup_interval,
+                ?DEFAULT_BLOCK_CLEANUP_INTERVAL,
+                Opts
+            )
+        )
+    ) * 1000.
+
 start_server(ServerID, Opts) ->
     % Exit the process if we cannot register the server ID.
     Reqs = hb_opts:get(rate_limit_requests, ?DEFAULT_REQS, Opts),
@@ -176,6 +193,7 @@ start_server(ServerID, Opts) ->
     Max = hb_opts:get(rate_limit_max, ?DEFAULT_MAX, Opts),
     Min = hb_opts:get(rate_limit_min, ?DEFAULT_MIN, Opts),
     Exempt = hb_opts:get(rate_limit_exempt, [], Opts),
+    BlockCleanupInterval = block_cleanup_interval(Opts),
     ?event(
         rate_limit,
         {started_rate_limiter,
@@ -187,20 +205,23 @@ start_server(ServerID, Opts) ->
             {exempt, Exempt}
         }
     ),
+    erlang:send_after(BlockCleanupInterval, self(), cleanup_blocks),
     server_loop(
         #{
             reqs => Reqs,
             period => Period,
             max => Max,
             min => Min,
+            block_cleanup_interval => BlockCleanupInterval,
             blocked => #{},
             peers => #{ Ref => infinity || Ref <- Exempt }
         }
     ).
 
-%% @doc The main loop of the rate limiter server. Only responds to two messages:
+%% @doc The main loop of the rate limiter server. Responds to three messages:
 %% - `{request, Self, Reference, Block, RetryAfter}': Block or debit a reference.
 %% - `{balance, PID, Reference}': Return the current balance of the given reference.
+%% - `cleanup_blocks': Remove expired caller blocks.
 %% The `balance` call is not presently used, but seems sensible to have.
 server_loop(State) ->
     receive
@@ -212,8 +233,22 @@ server_loop(State) ->
             server_loop(NewState);
         {balance, PID, Reference} ->
             PID ! {balance, account_balance(Reference, State)},
-            server_loop(State)
+            server_loop(State);
+        cleanup_blocks ->
+            Now = erlang:system_time(millisecond),
+            BlockCleanupInterval = maps:get(block_cleanup_interval, State),
+            erlang:send_after(BlockCleanupInterval, self(), cleanup_blocks),
+            Blocked = maps:get(blocked, State),
+            ActiveBlocks = remove_expired_blocks(Blocked, Now),
+            server_loop(State#{ blocked => ActiveBlocks })
     end.
+
+%% @doc Remove blocks whose expiry is at or before the given time.
+remove_expired_blocks(Blocked, Now) ->
+    maps:filter(
+        fun(_Reference, Until) -> Until > Now end,
+        Blocked
+    ).
 
 %% @doc Apply path blocking and ordinary rate limiting to a request.
 update(Reference, ShouldBlockPath, RetryAfter, State = #{ blocked := Blocked }, Now) ->
@@ -377,3 +412,27 @@ block_path_disabled_test() ->
     ServerNode = hb_http_server:start_node(ServerOpts),
     _ = hb_http:get(ServerNode, <<"/src/.git/config">>, #{}),
     ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})).
+
+remove_expired_blocks_test() ->
+    ?assertEqual(
+        #{ active => 1_001 },
+        remove_expired_blocks(
+            #{ expired => 999, boundary => 1_000, active => 1_001 },
+            1_000
+        )
+    ).
+
+block_cleanup_interval_test() ->
+    ?assertEqual(60_000, block_cleanup_interval(#{})),
+    ?assertEqual(
+        2_000,
+        block_cleanup_interval(
+            #{ <<"rate-limit-block-cleanup-interval">> => <<"2">> }
+        )
+    ),
+    ?assertEqual(
+        1_000,
+        block_cleanup_interval(
+            #{ <<"rate-limit-block-cleanup-interval">> => 0 }
+        )
+    ).
