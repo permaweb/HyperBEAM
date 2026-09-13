@@ -348,9 +348,13 @@ head_alternatives(Clauses) ->
                 erl_eval:new_bindings()
             ),
         {Select, [
-            head_schema([head_type(Arg, Env, false) || Arg <- Args], Index)
+            head_schema([
+                head_dependencies(head_type(Arg, Env, false), N, Previous)
+            || {N, Arg} <- lists:enumerate(Args)
+            ], Index)
         ||
             {Index, {_, Args, _, Tests}} <- Indexed,
+            Previous <- [lists:sublist(Indexed, Index - 1)],
             Hints <- [lists:append([guard_hints(Test) || Test <- Tests])],
             Env <- bindings([
                 {Name, #{ <<"kind">> => <<"union">>,
@@ -360,6 +364,36 @@ head_alternatives(Clauses) ->
         ] ++ [Identity]}
     catch error:_ -> {none, [Identity]}
     end.
+
+%% @doc Keep preceding heads' named fields without requiring or coercing them.
+%% The selector still checks dependencies that cannot be inferred here.
+head_dependencies(Schema, N, Previous) ->
+    lists:foldl(
+        fun(Key, Acc) -> implicit_key(Acc, Key, optional) end,
+        top_level_schema(Schema),
+        [Key || {_, {_, Args, Guards, _}} <- Previous,
+            Key <- head_keys(lists:nth(N, Args), Guards)]
+    ).
+
+%% @doc Fields named by a pattern or read through its whole-message binding.
+head_keys({map, _, Fields}, _Guards) ->
+    [erl_parse:normalise(Key) || {map_field_exact, _, Key, _} <- Fields];
+head_keys({match, _, Left, Right}, Guards) ->
+    head_keys(Left, Guards) ++ head_keys(Right, Guards);
+head_keys({var, _, Name}, Guards) -> guard_keys(Guards, Name);
+head_keys(_, _) -> [].
+
+%% @doc Literal guard reads retain the named field's value, including submessages.
+guard_keys({call, A, {remote, _, {atom, _, erlang}, F}, Args}, Name) ->
+    guard_keys({call, A, F, Args}, Name);
+guard_keys({call, _, {atom, _, F}, [Key, {var, _, Name}]}, Name)
+        when F =:= map_get; F =:= is_map_key ->
+    try [erl_parse:normalise(Key)] catch error:_ -> [] end;
+guard_keys(Term, Name) when is_tuple(Term) ->
+    guard_keys(tuple_to_list(Term), Name);
+guard_keys(Terms, Name) when is_list(Terms) ->
+    lists:append([guard_keys(Term, Name) || Term <- Terms]);
+guard_keys(_, _) -> [].
 
 %% @doc An inferred clause describes inputs; result overlays require a spec.
 head_schema(Args, Index) ->
