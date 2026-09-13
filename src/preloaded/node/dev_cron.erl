@@ -7,7 +7,7 @@
 
 %% @doc Exported function for getting device info.
 info(_) -> 
-	#{ default => fun handler/4 }.
+	#{ default => fun handler/4, excludes => [<<"committers">>] }.
 
 info(_Base, _Req, _Opts) ->
 	InfoBody = #{

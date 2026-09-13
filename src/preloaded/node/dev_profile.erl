@@ -13,7 +13,7 @@
 %% @doc Default to the `eval' function.
 info(_) ->
     #{
-        excludes => [<<"keys">>, <<"set">>],
+        excludes => [<<"committers">>, <<"keys">>, <<"set">>],
         default => fun eval/4
     }.
 
