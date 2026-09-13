@@ -1,4 +1,4 @@
-%%% @doc Vary the inputs of a device function by its `-spec'.
+%%% @doc Vary the inputs of a device function by its spec or heads.
 %%%
 %%% A device function's Dialyzer spec describes the base and request messages
 %%% it reads and the result it returns. AO-Core uses the spec to <em>vary</em>
@@ -6,7 +6,7 @@
 %%% loaded and coerced to their declared types, and the execution's hashpath is
 %%% derived from the varied messages alone. Every execution the spec deems
 %%% equivalent thereby shares one cache entry, however its messages otherwise
-%%% differ. A function without a spec executes upon its inputs as given.
+%%% differ.
 %%%
 %%% Specs are read from a module's BEAM by `extract/1' and compiled into a
 %%% <em>schema</em>: a map from each normalized key to its accepted argument
@@ -17,6 +17,15 @@
 %%% Functions sharing a normalized name describe the same AO-Core key; helper
 %%% functions with different argument meanings need distinct names.
 %%% Lists keep their sequence structure; their elements are coerced in order.
+%%%
+%%% Where no spec applies, a uniquely named function's heads provide input
+%%% schemas. Map, tuple and list patterns, literals and positive type guards
+%%% describe the values to load and coerce. Bound whole messages keep their
+%%% other fields; an anonymous `_' reads nothing. Each alternative must still
+%%% select its own head and guard after Vary. Erlang checks the original guards,
+%%% including their errors and short-circuit behavior; no body is evaluated.
+%%% Unsupported forms conservatively retain the inputs. Heads imply no result
+%%% overlay: use a spec to declare one.
 %%%
 %%% The type syntax means, for a message argument:
 %%% <ul>
@@ -84,6 +93,14 @@ vary(Key, Func, AddKey, Base, Req, Opts) ->
     end.
 
 %% @doc Try complete schemas in order, retaining the selected result's overlay.
+vary({Select, Schemas}, AddKey, Base, Req, Opts) ->
+    vary(
+        [
+            Schema#{ <<"head">> => {maps:get(<<"head">>, Schema), Select} }
+        || Schema <- Schemas
+        ],
+        AddKey, Base, Req, Opts
+    );
 vary([Schema | Rest], AddKey, Base, Req, Opts) ->
     try
         {BaseSchema, ReqSchema, ReturnSchema} =
@@ -95,7 +112,10 @@ vary([Schema | Rest], AddKey, Base, Req, Opts) ->
                 request_with_key(Req, AddKey),
                 Opts
             ),
-        {ok, VariedBase, VariedReq, overlay(ReturnSchema)}
+        case matches_head(Schema, AddKey, VariedBase, VariedReq, Opts) of
+            true -> {ok, VariedBase, VariedReq, overlay(ReturnSchema)};
+            false -> vary(Rest, AddKey, Base, Req, Opts)
+        end
     catch
         throw:{invalid_type, _, _} when Rest =/= [] ->
             vary(Rest, AddKey, Base, Req, Opts);
@@ -103,17 +123,36 @@ vary([Schema | Rest], AddKey, Base, Req, Opts) ->
             vary(Rest, AddKey, Base, Req, Opts)
     end.
 
-%% @doc The schema of the function that will execute `Key': its spec, found
-%% in its own module by its name, or -- for a `handler' or
-%% `default' that serves many keys -- by the key.
+%% @doc Projection and coercion must leave the selected head and guards matching.
+matches_head(#{ <<"head">> := {Index, Select} }, AddKey, Base, Req, Opts)
+        when is_integer(Index) ->
+    Args =
+        case AddKey of
+            false -> [Base, Req, Opts];
+            _ -> [AddKey, Base, Req, Opts]
+        end,
+    Select(Args) =:= Index;
+matches_head(_Schema, _AddKey, _Base, _Req, _Opts) -> true.
+
+%% @doc Specs take precedence, by function name then key. Inferred heads
+%% describe only their own function, not another handler of the same key.
 function_schema(Func, Key, Opts) ->
     maybe
         true ?= is_function(Func) orelse {error, not_found},
         {module, Module} = erlang:fun_info(Func, module),
         {name, Name} = erlang:fun_info(Func, name),
         {ok, Schemas} ?= hb_device_load:schema(Module, Opts),
-        {error, not_found} ?= named_schema(normalize_name(Name), Schemas),
-        named_schema(Key, Schemas)
+        NormName = normalize_name(Name),
+        {error, not_found} ?= specified_schema(NormName, Schemas),
+        {error, not_found} ?= specified_schema(Key, Schemas),
+        named_schema(NormName, Schemas)
+    end.
+
+%% @doc Only an explicit spec can describe a key served by another function.
+specified_schema(Name, Schemas) ->
+    case named_schema(Name, Schemas) of
+        {ok, {_, _}} -> {error, not_found};
+        Result -> Result
     end.
 
 %% @doc The accepted schemas of a normalized key.
@@ -234,11 +273,26 @@ extract(Beam) when is_binary(Beam) ->
     case beam_lib:chunks(Beam, [abstract_code]) of
         {ok, {_Module, [{abstract_code, {_Version, Forms}}]}} ->
             TypeEnv = build_type_env(Forms),
-            {ok,
+            Specs =
                 lists:foldl(
                     fun(Spec, Acc) -> put_spec(Spec, TypeEnv, Acc) end,
                     #{},
                     [ Attr || Attr = {attribute, _, spec, _} <- Forms ]
+                ),
+            Heads =
+                maps:groups_from_list(
+                    fun({function, _, Name, _, _}) -> normalize_name(Name) end,
+                    [Form || Form = {function, _, _, _, _} <- Forms]
+                ),
+            {ok,
+                maps:merge(
+                    maps:from_list([
+                        {Name, head_schemas(Clauses)}
+                    ||
+                        {Name, [{function, _, _, _, Clauses}]} <- maps:to_list(Heads),
+                        not maps:is_key(Name, Specs)
+                    ]),
+                    Specs
                 )};
         Other ->
             {error, {abstract_code_unavailable, Other}}
@@ -247,6 +301,135 @@ extract(Module) when is_atom(Module) ->
     case code:get_object_code(Module) of
         {Module, Beam, _Path} -> extract(Beam);
         error -> {error, {object_code_unavailable, Module}}
+    end.
+
+%% @doc A single unguarded head of distinct variables needs no dispatch check.
+head_schemas([{clause, _, Args, [], _}] = Clauses) ->
+    Names = [Name || {var, _, Name} <- Args, Name =/= '_'],
+    case
+        lists:all(fun({var, _, _}) -> true; (_) -> false end, Args)
+            andalso length(Names) =:= length(lists:usort(Names))
+    of
+        true ->
+            {none, [
+                head_schema([head_type(Arg, #{}, false) || Arg <- Args], none),
+                head_schema([any_type(), any_type(), any_type()], none)
+            ]};
+        false -> head_alternatives(Clauses)
+    end;
+head_schemas(Clauses) -> head_alternatives(Clauses).
+
+%% @doc Infer inputs with a shared selector; unsupported syntax uses identity.
+%% Store it once per function so ETS does not duplicate the clause AST.
+head_alternatives(Clauses) ->
+    Identity = head_schema([any_type(), any_type(), any_type()], none),
+    try
+        Indexed =
+            lists:enumerate([
+                {A, Args, [lists:uniq(G ++ Tests) || G <- Guards], Tests}
+            ||
+                {clause, A, Args, RawGuards, _} <- Clauses,
+                Guards <- [case RawGuards of [] -> [[]]; _ -> RawGuards end],
+                Tests <- lists:append([guard_branches(G) || G <- Guards])
+            ]),
+        Selectors =
+            [
+                {clause, A, [lists:foldr(
+                    fun(P, Tail) -> {cons, A, P, Tail} end,
+                    {var, A, '_'},
+                    Args
+                )], Guards, [{integer, A, Index}]}
+            || {Index, {A, Args, Guards, _}} <- Indexed
+            ],
+        {value, Select, _} =
+            erl_eval:expr(
+                {'fun', 0, {clauses, Selectors ++
+                    [{clause, 0, [{var, 0, '_'}], [], [{integer, 0, 0}]}]}},
+                erl_eval:new_bindings()
+            ),
+        {Select, [
+            head_schema([head_type(Arg, Env, false) || Arg <- Args], Index)
+        ||
+            {Index, {_, Args, _, Tests}} <- Indexed,
+            Hints <- [lists:append([guard_hints(Test) || Test <- Tests])],
+            Env <- bindings([
+                {Name, #{ <<"kind">> => <<"union">>,
+                    <<"members">> => [Type || {N, Type} <- Hints, N =:= Name] }}
+            || Name <- lists:uniq([N || {N, _} <- Hints])
+            ], #{})
+        ] ++ [Identity]}
+    catch error:_ -> {none, [Identity]}
+    end.
+
+%% @doc An inferred clause describes inputs; result overlays require a spec.
+head_schema(Args, Index) ->
+    #{ <<"args">> => Args, <<"return">> => any_type(), <<"head">> => Index }.
+
+%% @doc Ordered guard alternatives. Each also checks the original guard, whose
+%% short-circuit errors cannot be replaced by ordinary boolean distribution.
+guard_branches([]) -> [[]];
+guard_branches([Test | Rest]) ->
+    [A ++ B || A <- guard_branches(Test), B <- guard_branches(Rest)];
+guard_branches({op, _, Op, A, B}) when Op =:= 'andalso'; Op =:= 'and' ->
+    guard_branches([A, B]);
+guard_branches({op, _, Op, A, B}) when Op =:= 'orelse'; Op =:= 'or' ->
+    guard_branches(A) ++ guard_branches(B);
+guard_branches(Test) -> [[Test]].
+
+%% @doc Positive type tests provide coercion choices; the selector checks all guards.
+guard_hints({op, _, '=:=', {var, _, Name}, Value}) ->
+    try [{Name, literal_type(erl_parse:normalise(Value))}]
+    catch error:_ -> []
+    end;
+guard_hints({op, A, '=:=', Value, Var = {var, _, _}}) ->
+    guard_hints({op, A, '=:=', Var, Value});
+guard_hints({call, A, {remote, _, {atom, _, erlang}, F}, Args}) ->
+    guard_hints({call, A, F, Args});
+guard_hints({call, _, {atom, _, Test}, [{var, _, Name}]}) ->
+    case atom_to_binary(Test) of
+        <<"is_", Type/binary>> ->
+            Schema =
+                case Type of
+                    <<"map">> -> message_type(#{}, #{ <<"presence">> => optional });
+                    <<"tuple">> -> #{ <<"kind">> => <<"tuple">> };
+                    _ -> parse_type({type, 0, binary_to_atom(Type), []}, #{}, #{}, [])
+                end,
+            [{Name, Schema}];
+        _ -> []
+    end;
+guard_hints(_) -> [].
+
+%% @doc A bound whole value keeps its fields, including those inside nested patterns.
+head_type({var, _, '_'}, _Env, _Keep) -> wildcard_type();
+head_type({var, _, Name}, Env, _Keep) -> maps:get(Name, Env, any_type());
+head_type({match, _, {var, _, Name}, {var, _, Other}}, Env, _Keep) ->
+    maps:get(Name, Env, maps:get(Other, Env, any_type()));
+head_type({match, _, {var, _, Name}, Pattern}, Env, Keep) ->
+    head_type(Pattern, Env, Keep orelse Name =/= '_');
+head_type({match, _, Pattern, {var, _, Name}}, Env, Keep) ->
+    head_type(Pattern, Env, Keep orelse Name =/= '_');
+head_type({map, _, Fields}, Env, Keep) ->
+    Keys =
+        maps:from_list([
+            {erl_parse:normalise(Key), #{ <<"presence">> => required,
+                <<"type">> => head_type(Value, Env, Keep) }}
+        || {map_field_exact, _, Key, Value} <- Fields
+        ]),
+    message_type(Keys,
+        case Keep of true -> #{ <<"presence">> => optional }; false -> none end);
+head_type({tuple, _, Items}, Env, Keep) ->
+    #{ <<"kind">> => <<"tuple">>,
+        <<"items">> => [head_type(Item, Env, Keep) || Item <- Items] };
+head_type({cons, _, Head, Tail}, Env, Keep) ->
+    #{ <<"kind">> => <<"list">>, <<"head">> => head_type(Head, Env, Keep),
+        <<"tail">> => head_type(Tail, Env, Keep) };
+head_type(Pattern, _Env, _Keep) ->
+    try literal_type(erl_parse:normalise(Pattern))
+    catch error:_ ->
+        case Pattern of
+            {bin, _, _} -> scalar_type(<<"bitstring">>);
+            _ -> any_type()
+        end
     end.
 
 %% @doc The module's own type declarations, by name and arity, for expansion when a
@@ -497,6 +680,18 @@ apply_schema(
     case Changed orelse map_size(Varied) =/= map_size(Message) of
         true -> {hb_message:uncommitted(Varied, Opts), true};
         false -> {Varied, false}
+    end;
+apply_schema(
+    Schema = #{ <<"kind">> := <<"list">>, <<"head">> := Head, <<"tail">> := Tail },
+    Value,
+    Opts
+) ->
+    case Value of
+        [H | T] ->
+            {VH, CH} = apply_schema(Head, H, Opts),
+            {VT, CT} = apply_schema(Tail, T, Opts),
+            {[VH | VT], CH orelse CT};
+        _ -> throw({invalid_type, Schema, Value})
     end;
 apply_schema(
     Schema = #{ <<"kind">> := <<"list">>, <<"item">> := ItemType },
