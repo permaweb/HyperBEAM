@@ -912,7 +912,7 @@ vary_loaded(Base, Req, Opts) ->
             _ -> false
         end,
     Resolver = case AddKey of false -> Func; _ -> {AddKey, Func} end,
-    case hb_types:vary(Key, Func, AddKey, Base, Req, UserOpts) of
+    case hb_types:vary(Key, Func, AddKey, Base, Req, execution_opts(Opts)) of
         {ok, VariedBase, VariedReq, none} ->
             {Resolver, VariedBase, VariedReq, no_overlay};
         {ok, VariedBase, VariedReq, Overlay} ->

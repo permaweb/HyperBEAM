@@ -6,7 +6,7 @@
 -export([index/3, postprocess/3, load/3]).
 -export([vary_projection/3, vary_wildcard/3, vary_unspecified/3]).
 -export([vary_overlay/3, vary_request_overlay/3]).
--export([vary_alternatives/3, vary_dependent/3]).
+-export([vary_alternatives/3, vary_dependent/3, vary_heads/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -297,12 +297,22 @@ vary_alternatives(Base, Req, Opts) ->
 vary_dependent(Base, Req, Opts) ->
     vary_projection(Base, Req, Opts).
 
+%% @doc Infer matching inputs using execution options and each guard's own types.
+vary_heads(#{ <<"value">> := X }, #{ <<"value">> := X }, Opts)
+        when is_integer(X), not is_map_key(<<"trace">>, Opts) ->
+    {ok, #{ <<"base">> => X, <<"request">> => X }};
+vary_heads(#{ <<"value">> := A }, #{ <<"value">> := B }, _)
+        when (is_integer(A) andalso A < 3) orelse is_binary(B) ->
+    {ok, #{ <<"base">> => A, <<"request">> => B }}.
+
 %%% Tests
 
 vary_alternatives_test_() ->
     [
         ?_test(begin
-            Opts = (vary_opts())#{ <<"cache-control">> => [<<"always">>] },
+            Opts = (vary_opts())#{
+                <<"cache-control">> => [<<"always">>], <<"trace">> => true
+            },
             {ok, Ctx} =
                 hb_ao:resolve(
                     #{ <<"device">> => <<"test-device@1.0">>, <<"value">> => <<"7">> },
@@ -320,7 +330,10 @@ vary_alternatives_test_() ->
                 {<<"vary-alternatives">>, <<"8">>, 7, 8, base},
                 {<<"vary-alternatives">>, <<"text">>, <<"7">>, <<"text">>, request},
                 {<<"vary-dependent">>, <<"8">>, 7, 8, base},
-                {<<"vary-dependent">>, <<"text">>, <<"7">>, <<"text">>, base}
+                {<<"vary-dependent">>, <<"text">>, <<"7">>, <<"text">>, base},
+                {<<"vary-heads">>, <<"7">>, 7, 7, replace},
+                {<<"vary-heads">>, <<"8">>, <<"7">>, <<"8">>, replace},
+                {<<"vary-heads">>, <<"text">>, <<"7">>, <<"text">>, replace}
             ]
     ].
 

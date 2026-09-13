@@ -1,4 +1,4 @@
-%%% @doc Vary the inputs of a device function by its `-spec'.
+%%% @doc Vary the inputs of a device function by its spec or heads.
 %%%
 %%% A device function's Dialyzer spec describes the base and request messages
 %%% it reads and the result it returns. AO-Core uses the spec to <em>vary</em>
@@ -6,7 +6,7 @@
 %%% loaded and coerced to their declared types, and the execution's hashpath is
 %%% derived from the varied messages alone. Every execution the spec deems
 %%% equivalent thereby shares one cache entry, however its messages otherwise
-%%% differ. A function without a spec executes upon its inputs as given.
+%%% differ.
 %%%
 %%% Specs are read from a module's BEAM by `extract/1' and compiled into a
 %%% <em>schema</em>: a map from each normalized key to its accepted argument
@@ -17,6 +17,17 @@
 %%% Functions sharing a normalized name describe the same AO-Core key; helper
 %%% functions with different argument meanings need distinct names.
 %%% Lists keep their sequence structure; their elements are coerced in order.
+%%% Materialized links are carried through the alternatives of one variation.
+%%% Only their source values are reused, never rejected coercions or projections.
+%%%
+%%% Where no spec applies, a uniquely named function's heads provide input
+%%% schemas. Map, tuple and list patterns, literals and positive type guards
+%%% describe the values to load and coerce. Bound whole messages keep their
+%%% other fields; an anonymous `_' reads nothing. Each alternative must still
+%%% select its own head and guard after Vary. Erlang checks the original guards,
+%%% including their errors and short-circuit behavior; no body is evaluated.
+%%% Unsupported forms conservatively retain the inputs. Heads imply no result
+%%% overlay: use a spec to declare one.
 %%%
 %%% The type syntax means, for a message argument:
 %%% <ul>
@@ -78,49 +89,81 @@
 vary(Key, Func, AddKey, Base, Req, Opts) ->
     case function_schema(Func, Key, Opts) of
         {ok, Schemas} ->
-            vary(Schemas, AddKey, Base, Req, Opts);
+            vary_schemas(Schemas, AddKey, Base, Req, #{}, Opts);
         {error, _} ->
             no_spec
     end.
 
 %% @doc Try complete schemas in order, retaining the selected result's overlay.
-vary([Schema | Rest], AddKey, Base, Req, Opts) ->
+vary_schemas(Schemas, AddKey, Base, Req, Loaded, Opts) when is_list(Schemas) ->
+    vary_schemas({none, Schemas}, AddKey, Base, Req, Loaded, Opts);
+vary_schemas({Select, [Schema | Rest]}, AddKey, Base, Req, Loaded, Opts) ->
     try
         {BaseSchema, ReqSchema, ReturnSchema} =
             execution_schemas(Schema, AddKey),
-        {VariedBase, _} = apply_schema(implicit_base(BaseSchema), Base, Opts),
-        {VariedReq, _} =
+        {VB, {_, Loaded1}} = apply_schema(implicit_base(BaseSchema), Base, Loaded, Opts),
+        {VR, {_, Loaded2}} =
             apply_schema(
                 implicit_request(ReqSchema),
                 request_with_key(Req, AddKey),
+                Loaded1,
                 Opts
             ),
-        {ok, VariedBase, VariedReq, overlay(ReturnSchema)}
+        VariedBase = reuse_loaded(VB, Loaded2),
+        VariedReq = reuse_loaded(VR, Loaded2),
+        case matches_head({Select, maps:get(<<"head">>, Schema, none)},
+                AddKey, VariedBase, VariedReq, Opts) of
+            true -> {ok, VariedBase, VariedReq, overlay(ReturnSchema)};
+            false -> vary_schemas({Select, Rest}, AddKey, Base, Req, Loaded2, Opts)
+        end
     catch
-        throw:{invalid_type, _, _} when Rest =/= [] ->
-            vary(Rest, AddKey, Base, Req, Opts);
-        throw:{required_key_missing, _} when Rest =/= [] ->
-            vary(Rest, AddKey, Base, Req, Opts)
+        throw:{'schema-mismatch', Reason, FailedLoads} ->
+            case Rest of
+                [] -> throw(Reason);
+                _ -> vary_schemas({Select, Rest}, AddKey, Base, Req, FailedLoads, Opts)
+            end
     end.
 
-%% @doc The schema of the function that will execute `Key': its spec, found
-%% in its own module by its name, or -- for a `handler' or
-%% `default' that serves many keys -- by the key.
+%% @doc Reuse materialized values without reading any other links.
+reuse_loaded(Value, Loaded) when map_size(Loaded) =:= 0 -> Value;
+reuse_loaded(Link, Loaded) when ?IS_LINK(Link) ->
+    case maps:find(Link, Loaded) of
+        {ok, Value} -> reuse_loaded(Value, Loaded);
+        error -> Link
+    end;
+reuse_loaded(Value, Loaded) when is_map(Value) ->
+    maps:map(fun(_, V) -> reuse_loaded(V, Loaded) end, Value);
+reuse_loaded([H | T], Loaded) -> [reuse_loaded(H, Loaded) | reuse_loaded(T, Loaded)];
+reuse_loaded(Value, Loaded) when is_tuple(Value) ->
+    list_to_tuple(reuse_loaded(tuple_to_list(Value), Loaded));
+reuse_loaded(Value, _) -> Value.
+
+%% @doc Projection and coercion must leave the selected head and guards matching.
+matches_head({Select, Index}, AddKey, Base, Req, Opts)
+        when is_integer(Index) ->
+    Args =
+        case AddKey of
+            false -> [Base, Req, Opts];
+            _ -> [AddKey, Base, Req, Opts]
+        end,
+    Select(Args) =:= Index;
+matches_head(_Schema, _AddKey, _Base, _Req, _Opts) -> true.
+
+%% @doc Specs take precedence, by function name then key. Inferred heads
+%% describe only their own function, not another handler of the same key.
 function_schema(Func, Key, Opts) ->
     maybe
         true ?= is_function(Func) orelse {error, not_found},
         {module, Module} = erlang:fun_info(Func, module),
         {name, Name} = erlang:fun_info(Func, name),
         {ok, Schemas} ?= hb_device_load:schema(Module, Opts),
-        {error, not_found} ?= named_schema(normalize_name(Name), Schemas),
-        named_schema(Key, Schemas)
-    end.
-
-%% @doc The accepted schemas of a normalized key.
-named_schema(Name, Schemas) ->
-    case Schemas of
-        #{ Name := Accepted } -> {ok, Accepted};
-        _ -> {error, not_found}
+        NormName = normalize_name(Name),
+        case Schemas of
+            #{ NormName := Accepted } when is_list(Accepted) -> {ok, Accepted};
+            #{ Key := Accepted } when is_list(Accepted) -> {ok, Accepted};
+            #{ NormName := Accepted } -> {ok, Accepted};
+            _ -> {error, not_found}
+        end
     end.
 
 %% @doc The base, request and result schemas of an execution. A function that
@@ -234,11 +277,27 @@ extract(Beam) when is_binary(Beam) ->
     case beam_lib:chunks(Beam, [abstract_code]) of
         {ok, {_Module, [{abstract_code, {_Version, Forms}}]}} ->
             TypeEnv = build_type_env(Forms),
-            {ok,
+            Specs =
                 lists:foldl(
                     fun(Spec, Acc) -> put_spec(Spec, TypeEnv, Acc) end,
                     #{},
                     [ Attr || Attr = {attribute, _, spec, _} <- Forms ]
+                ),
+            Heads =
+                maps:groups_from_list(
+                    fun({function, _, Name, _, _}) -> normalize_name(Name) end,
+                    [Form || Form = {function, _, _, _, _} <- Forms]
+                ),
+            {ok,
+                maps:fold(
+                    fun
+                        (Name, [{function, _, _, _, Clauses}], Acc)
+                                when not is_map_key(Name, Acc) ->
+                            Acc#{ Name => head_schemas(Clauses) };
+                        (_, _, Acc) -> Acc
+                    end,
+                    Specs,
+                    Heads
                 )};
         Other ->
             {error, {abstract_code_unavailable, Other}}
@@ -247,6 +306,167 @@ extract(Module) when is_atom(Module) ->
     case code:get_object_code(Module) of
         {Module, Beam, _Path} -> extract(Beam);
         error -> {error, {object_code_unavailable, Module}}
+    end.
+
+%% @doc A single unguarded head of distinct variables needs no dispatch check.
+head_schemas([{clause, _, Args, [], _}] = Clauses) ->
+    Names = [Name || {var, _, Name} <- Args, Name =/= '_'],
+    case
+        lists:all(fun({var, _, _}) -> true; (_) -> false end, Args)
+            andalso length(Names) =:= length(lists:usort(Names))
+    of
+        true ->
+            {none, [
+                head_schema([head_type(Arg, #{}, false) || Arg <- Args], none),
+                head_schema([any_type(), any_type(), any_type()], none)
+            ]};
+        false -> head_alternatives(Clauses)
+    end;
+head_schemas(Clauses) -> head_alternatives(Clauses).
+
+%% @doc Infer inputs with a shared selector; unsupported syntax uses identity.
+%% Store it once per function so ETS does not duplicate the clause AST.
+head_alternatives(Clauses) ->
+    Identity = head_schema([any_type(), any_type(), any_type()], none),
+    try
+        Indexed =
+            lists:enumerate([
+                {A, Args, [lists:uniq(G ++ Tests) || G <- Guards], Tests}
+            ||
+                {clause, A, Args, RawGuards, _} <- Clauses,
+                Guards <- [case RawGuards of [] -> [[]]; _ -> RawGuards end],
+                Tests <- lists:append([guard_branches(G) || G <- Guards])
+            ]),
+        Selectors =
+            [
+                {clause, A, [lists:foldr(
+                    fun(P, Tail) -> {cons, A, P, Tail} end, {var, A, '_'}, Args
+                )], Guards, [{integer, A, Index}]}
+            || {Index, {A, Args, Guards, _}} <- Indexed
+            ],
+        {value, Select, _} =
+            erl_eval:expr(
+                {'fun', 0, {clauses, Selectors ++
+                    [{clause, 0, [{var, 0, '_'}], [], [{integer, 0, 0}]}]}},
+                erl_eval:new_bindings()
+            ),
+        {Select, [
+            head_schema([
+                head_dependencies(head_type(Arg, Env, false), N, Previous)
+            || {N, Arg} <- lists:enumerate(Args)
+            ], Index)
+        ||
+            {Index, {_, Args, _, Tests}} <- Indexed,
+            Previous <- [lists:sublist(Indexed, Index - 1)],
+            Hints <- [lists:append([guard_hints(Test) || Test <- Tests])],
+            Env <- bindings([
+                {Name, #{ <<"kind">> => <<"union">>,
+                    <<"members">> => [Type || {N, Type} <- Hints, N =:= Name] }}
+            || Name <- lists:uniq([N || {N, _} <- Hints])
+            ], #{})
+        ] ++ [Identity]}
+    catch error:_ -> {none, [Identity]}
+    end.
+
+%% @doc Keep preceding heads' named fields without requiring or coercing them.
+%% The selector still checks dependencies that cannot be inferred here.
+head_dependencies(Schema, N, Previous) ->
+    lists:foldl(
+        fun(Key, Acc) -> implicit_key(Acc, Key, optional) end,
+        top_level_schema(Schema),
+        [Key || {_, {_, Args, Guards, _}} <- Previous,
+            Key <- head_keys(lists:nth(N, Args), Guards)]
+    ).
+
+%% @doc Fields named by a pattern or read through its whole-message binding.
+head_keys({map, _, Fields}, _Guards) ->
+    [erl_parse:normalise(Key) || {map_field_exact, _, Key, _} <- Fields];
+head_keys({match, _, Left, Right}, Guards) ->
+    head_keys(Left, Guards) ++ head_keys(Right, Guards);
+head_keys({var, _, Name}, Guards) -> guard_keys(Guards, Name);
+head_keys(_, _) -> [].
+
+%% @doc Literal guard reads retain the named field's value, including submessages.
+guard_keys({call, A, {remote, _, {atom, _, erlang}, F}, Args}, Name) ->
+    guard_keys({call, A, F, Args}, Name);
+guard_keys({call, _, {atom, _, F}, [Key, {var, _, Name}]}, Name)
+        when F =:= map_get; F =:= is_map_key ->
+    try [erl_parse:normalise(Key)] catch error:_ -> [] end;
+guard_keys(Term, Name) when is_tuple(Term) ->
+    guard_keys(tuple_to_list(Term), Name);
+guard_keys(Terms, Name) when is_list(Terms) ->
+    lists:append([guard_keys(Term, Name) || Term <- Terms]);
+guard_keys(_, _) -> [].
+
+%% @doc An inferred clause describes inputs; result overlays require a spec.
+head_schema(Args, Index) ->
+    #{ <<"args">> => Args, <<"return">> => any_type(), <<"head">> => Index }.
+
+%% @doc Ordered guard alternatives. Each also checks the original guard, whose
+%% short-circuit errors cannot be replaced by ordinary boolean distribution.
+guard_branches([]) -> [[]];
+guard_branches([Test | Rest]) ->
+    [A ++ B || A <- guard_branches(Test), B <- guard_branches(Rest)];
+guard_branches({op, _, Op, A, B}) when Op =:= 'andalso'; Op =:= 'and' ->
+    guard_branches([A, B]);
+guard_branches({op, _, Op, A, B}) when Op =:= 'orelse'; Op =:= 'or' ->
+    guard_branches(A) ++ guard_branches(B);
+guard_branches(Test) -> [[Test]].
+
+%% @doc Positive type tests provide coercion choices; the selector checks all guards.
+guard_hints({op, _, '=:=', {var, _, Name}, Value}) ->
+    try [{Name, literal_type(erl_parse:normalise(Value))}]
+    catch error:_ -> []
+    end;
+guard_hints({op, A, '=:=', Value, Var = {var, _, _}}) ->
+    guard_hints({op, A, '=:=', Var, Value});
+guard_hints({call, A, {remote, _, {atom, _, erlang}, F}, Args}) ->
+    guard_hints({call, A, F, Args});
+guard_hints({call, _, {atom, _, Test}, [{var, _, Name}]}) ->
+    case atom_to_binary(Test) of
+        <<"is_", Type/binary>> ->
+            Schema =
+                case Type of
+                    <<"map">> -> message_type(#{}, #{ <<"presence">> => optional });
+                    <<"tuple">> -> #{ <<"kind">> => <<"tuple">> };
+                    _ -> parse_type({type, 0, binary_to_atom(Type), []}, #{}, #{}, [])
+                end,
+            [{Name, Schema}];
+        _ -> []
+    end;
+guard_hints(_) -> [].
+
+%% @doc A bound whole value keeps its fields, including those inside nested patterns.
+head_type({var, _, '_'}, _Env, _Keep) -> wildcard_type();
+head_type({var, _, Name}, Env, _Keep) -> maps:get(Name, Env, any_type());
+head_type({match, _, {var, _, Name}, {var, _, Other}}, Env, _Keep) ->
+    maps:get(Name, Env, maps:get(Other, Env, any_type()));
+head_type({match, _, {var, _, Name}, Pattern}, Env, Keep) ->
+    head_type(Pattern, Env, Keep orelse Name =/= '_');
+head_type({match, _, Pattern, {var, _, Name}}, Env, Keep) ->
+    head_type(Pattern, Env, Keep orelse Name =/= '_');
+head_type({map, _, Fields}, Env, Keep) ->
+    Keys =
+        maps:from_list([
+            {erl_parse:normalise(Key), #{ <<"presence">> => required,
+                <<"type">> => head_type(Value, Env, Keep) }}
+        || {map_field_exact, _, Key, Value} <- Fields
+        ]),
+    message_type(Keys,
+        case Keep of true -> #{ <<"presence">> => optional }; false -> none end);
+head_type({tuple, _, Items}, Env, Keep) ->
+    #{ <<"kind">> => <<"tuple">>,
+        <<"items">> => [head_type(Item, Env, Keep) || Item <- Items] };
+head_type({cons, _, Head, Tail}, Env, Keep) ->
+    #{ <<"kind">> => <<"list">>, <<"head">> => head_type(Head, Env, Keep),
+        <<"tail">> => head_type(Tail, Env, Keep) };
+head_type(Pattern, _Env, _Keep) ->
+    try literal_type(erl_parse:normalise(Pattern))
+    catch error:_ ->
+        case Pattern of
+            {bin, _, _} -> scalar_type(<<"bitstring">>);
+            _ -> any_type()
+        end
     end.
 
 %% @doc The module's own type declarations, by name and arity, for expansion when a
@@ -449,76 +669,90 @@ key_name(Other, TypeEnv, VarEnv, Seen) ->
 %% @doc Vary a value by its schema: pass it through if the schema does not
 %% constrain it, else load it if it is a link, then project, coerce or
 %% check it as the schema's kind requires. Return the value and whether its
-%% content changed, excluding link loading alone.
-apply_schema(#{ <<"kind">> := <<"any">> }, Value, _Opts) ->
-    {Value, false};
-apply_schema(#{ <<"kind">> := <<"wildcard">> }, Value, _Opts) ->
-    {Value, false};
+%% content changed, excluding link loading alone, with the materialized links.
+%% Schema failures carry those same links to the next alternative.
 apply_schema(
     Schema = #{ <<"kind">> := <<"union">>, <<"members">> := Members },
     Value,
+    Loaded,
     Opts
 ) ->
-    case apply_union(Members, Value, Opts) of
+    case apply_union(Members, Value, Loaded, Opts) of
         {ok, Result} -> Result;
-        error -> throw({invalid_type, Schema, Value})
+        {error, FailedLoads} -> schema_error({invalid_type, Schema, Value}, FailedLoads)
     end;
-apply_schema(#{ <<"kind">> := Kind }, Value, _Opts)
-        when Kind =:= <<"remote">>;
+apply_schema(#{ <<"kind">> := Kind }, Value, Loaded, _Opts)
+        when Kind =:= <<"any">>;
+             Kind =:= <<"wildcard">>;
+             Kind =:= <<"remote">>;
              Kind =:= <<"alias">>;
              Kind =:= <<"variable">>;
              Kind =:= <<"unknown">> ->
-    {Value, false};
-apply_schema(Schema, Link, Opts) when ?IS_LINK(Link) ->
-    apply_schema(Schema, hb_cache:ensure_loaded(Link, Opts), Opts);
-apply_schema(Schema = #{ <<"kind">> := <<"message">> }, Value, Opts)
+    {Value, {false, Loaded}};
+apply_schema(Schema, Link, Loaded, Opts) when ?IS_LINK(Link) ->
+    Value =
+        case maps:find(Link, Loaded) of
+            {ok, V} -> V;
+            error -> hb_cache:ensure_loaded(Link, Opts)
+        end,
+    apply_schema(Schema, Value, Loaded#{ Link => Value }, Opts);
+apply_schema(Schema = #{ <<"kind">> := <<"message">> }, Value, Loaded, Opts)
         when not is_map(Value) ->
     case coerce_type(Schema, Value, Opts) of
-        error -> throw({invalid_type, Schema, Value});
-        Value -> throw({invalid_type, Schema, Value});
+        error -> schema_error({invalid_type, Schema, Value}, Loaded);
+        Value -> schema_error({invalid_type, Schema, Value}, Loaded);
         Coerced ->
-            {Varied, _Changed} = apply_schema(Schema, Coerced, Opts),
-            {Varied, true}
+            {Varied, {_, NextLoaded}} = apply_schema(Schema, Coerced, Loaded, Opts),
+            {Varied, {true, NextLoaded}}
     end;
 apply_schema(
     #{ <<"kind">> := <<"message">>, <<"keys">> := Keys, <<"wildcard">> := Wildcard },
     Message,
+    Loaded,
     Opts
 ) ->
     % The declared keys are varied onto the undeclared ones the wildcard
     % admits. A key kept as given is put back unchanged, so a message the
     % schema does not alter stays the same term.
-    {Varied, Changed} =
+    {Varied, {Changed, NextLoaded}} =
         maps:fold(
             fun(Key, Field, Acc) -> apply_key(Key, Field, Message, Acc, Opts) end,
-            apply_wildcard(Wildcard, Keys, Message, Opts),
+            apply_wildcard(Wildcard, Keys, Message, Loaded, Opts),
             Keys
         ),
     case Changed orelse map_size(Varied) =/= map_size(Message) of
-        true -> {hb_message:uncommitted(Varied, Opts), true};
-        false -> {Varied, false}
+        true -> {hb_message:uncommitted(Varied, Opts), {true, NextLoaded}};
+        false -> {Varied, {false, NextLoaded}}
+    end;
+apply_schema(
+    Schema = #{ <<"kind">> := <<"list">>, <<"head">> := Head, <<"tail">> := Tail },
+    Value,
+    Loaded,
+    Opts
+) ->
+    case Value of
+        [H | T] ->
+            {VH, {CH, LH}} = apply_schema(Head, H, Loaded, Opts),
+            {VT, {CT, LT}} = apply_schema(Tail, T, LH, Opts),
+            {[VH | VT], {CH orelse CT, LT}};
+        _ -> schema_error({invalid_type, Schema, Value}, Loaded)
     end;
 apply_schema(
     Schema = #{ <<"kind">> := <<"list">>, <<"item">> := ItemType },
     Value,
+    Loaded,
     Opts
 ) ->
     case Value of
         List when is_list(List) ->
-            lists:mapfoldl(
-                fun(Item, Changed) ->
-                    {Varied, ItemChanged} = apply_schema(ItemType, Item, Opts),
-                    {Varied, Changed orelse ItemChanged}
-                end,
-                false,
-                List
-            );
+            apply_items(lists:duplicate(length(List), ItemType), List, Loaded, Opts);
         _ ->
-            throw({invalid_type, Schema, Value})
+            schema_error({invalid_type, Schema, Value}, Loaded)
     end;
 apply_schema(
     Schema = #{ <<"kind">> := <<"tuple">>, <<"items">> := Items },
     Value,
+    Loaded,
     Opts
 ) ->
     Values =
@@ -529,69 +763,73 @@ apply_schema(
         end,
     case is_list(Values) andalso length(Values) =:= length(Items) of
         true ->
-            {Varied, Changed} =
-                lists:mapfoldl(
-                    fun({Type, Item}, Acc) ->
-                        {VariedItem, ItemChanged} = apply_schema(Type, Item, Opts),
-                        {VariedItem, Acc orelse ItemChanged}
-                    end,
-                    not is_tuple(Value),
-                    lists:zip(Items, Values)
-                ),
-            {list_to_tuple(Varied), Changed};
+            {Varied, {Changed, NextLoaded}} = apply_items(Items, Values, Loaded, Opts),
+            {list_to_tuple(Varied), {Changed orelse not is_tuple(Value), NextLoaded}};
         false ->
-            throw({invalid_type, Schema, Value})
+            schema_error({invalid_type, Schema, Value}, Loaded)
     end;
-apply_schema(Type, Value, Opts) ->
+apply_schema(Type, Value, Loaded, Opts) ->
     % A scalar, literal or range: keep a value of the type, else coerce it.
     case check_type(Type, Value) of
         true ->
-            {Value, false};
+            {Value, {false, Loaded}};
         false ->
             Coerced = coerce_type(Type, Value, Opts),
             case Coerced =/= error andalso check_type(Type, Coerced) of
-                true -> {Coerced, true};
-                false -> throw({invalid_type, Type, Value})
+                true -> {Coerced, {true, Loaded}};
+                false -> schema_error({invalid_type, Type, Value}, Loaded)
             end
     end.
+
+%% @doc Vary a sequence, carrying materializations from one item to the next.
+apply_items(Types, Values, Loaded, Opts) ->
+    lists:mapfoldl(
+        fun({Type, Item}, {Changed, Acc}) ->
+            {Varied, {ItemChanged, Next}} = apply_schema(Type, Item, Acc, Opts),
+            {Varied, {Changed orelse ItemChanged, Next}}
+        end,
+        {false, Loaded},
+        lists:zip(Types, Values)
+    ).
 
 %% @doc The undeclared keys of a message, as its schema's wildcard admits
 %% them: none for a projection, all of them as given for `_ => _', or each
 %% coerced to the wildcard's type for `_ := type()'. Track coercions separately
 %% from link loads.
-apply_wildcard(none, _Keys, _Message, _Opts) ->
-    {#{}, false};
-apply_wildcard(#{ <<"presence">> := optional }, _Keys, Message, _Opts) ->
-    {Message, false};
-apply_wildcard(Field, Keys, Message, Opts) ->
+apply_wildcard(none, _Keys, _Message, Loaded, _Opts) ->
+    {#{}, {false, Loaded}};
+apply_wildcard(#{ <<"presence">> := optional }, _Keys, Message, Loaded, _Opts) ->
+    {Message, {false, Loaded}};
+apply_wildcard(Field, Keys, Message, Loaded, Opts) ->
     maps:fold(
         fun(Key, _Value, Acc) -> apply_key(Key, Field, Message, Acc, Opts) end,
-        {#{}, false},
+        {#{}, {false, Loaded}},
         maps:without(maps:keys(Keys), Message)
     ).
 
 %% @doc Vary one declared key of a message onto the accumulated result.
-apply_key(Key, Field, Message, {Acc, Changed} = State, Opts) ->
+apply_key(Key, Field, Message, {Acc, {Changed, Loaded}} = State, Opts) ->
     #{ <<"presence">> := Presence, <<"type">> := Type } = Field,
     case maps:find(Key, Message) of
         {ok, Value} ->
-            {Coerced, ChildChanged} = apply_schema(Type, Value, Opts),
-            {Acc#{ Key => Coerced }, Changed orelse ChildChanged};
-        error when Presence =:= required -> throw({required_key_missing, Key});
+            {Coerced, {ChildChanged, NextLoaded}} = apply_schema(Type, Value, Loaded, Opts),
+            {Acc#{ Key => Coerced }, {Changed orelse ChildChanged, NextLoaded}};
+        error when Presence =:= required -> schema_error({required_key_missing, Key}, Loaded);
         error -> State
     end.
 
 %% @doc Vary a value by the first of the members it can be coerced to.
-apply_union([], _Value, _Opts) ->
-    error;
-apply_union([Member | Rest], Value, Opts) ->
-    try {ok, apply_schema(Member, Value, Opts)}
+apply_union([], _Value, Loaded, _Opts) ->
+    {error, Loaded};
+apply_union([Member | Rest], Value, Loaded, Opts) ->
+    try {ok, apply_schema(Member, Value, Loaded, Opts)}
     catch
-        throw:{invalid_type, _, _} ->
-            apply_union(Rest, Value, Opts);
-        throw:{required_key_missing, _} ->
-            apply_union(Rest, Value, Opts)
+        throw:{'schema-mismatch', _Reason, FailedLoads} ->
+            apply_union(Rest, Value, FailedLoads, Opts)
     end.
+
+%% @doc A rejected schema retains only its materialized source values.
+schema_error(Reason, Loaded) -> throw({'schema-mismatch', Reason, Loaded}).
 
 %%% --------------------------------------------------------------------
 %%% Coercing and checking values
@@ -789,6 +1027,13 @@ boolean_type() ->
     }.
 
 %%% Tests
+
+%% @doc Apply one schema with a fresh materialization scope.
+apply_schema(Schema, Value, Opts) ->
+    try apply_schema(Schema, Value, #{}, Opts) of
+        {Varied, {Changed, _Loaded}} -> {Varied, Changed}
+    catch throw:{'schema-mismatch', Reason, _Loaded} -> throw(Reason)
+    end.
 
 %% @doc A message schema requiring one key of a type, and nothing else.
 required(Key, Type) ->
