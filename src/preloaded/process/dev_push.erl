@@ -39,7 +39,13 @@
 %%                                 Unwinds at most `N' levels deep.
 -spec push(
     #{ _ => _ },
-    #{ slot => integer(), body => #{ _ => _ }, async => boolean(), 'max-depth' => integer(), _ => _ },
+    #{
+        slot => integer(),
+        body => #{ _ => _ },
+        async => boolean(),
+        'max-depth' => integer(),
+        _ => _
+    },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {error, _} | pid().
 push(Base, Req, Opts) ->

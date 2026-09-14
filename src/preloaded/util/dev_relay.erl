@@ -32,7 +32,13 @@
 %% Defaults to `false'.
 -spec call(
     #{ _ => _ },
-    #{ target => binary(), 'relay-path' => binary(), method => binary(), peer => binary(), _ => _ },
+    #{
+        target => binary(),
+        'relay-path' => binary(),
+        method => binary(),
+        peer => binary(),
+        _ => _
+    },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {error, _}.
 call(M1, RawM2, Opts) ->

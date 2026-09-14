@@ -351,7 +351,14 @@ check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
 
 %% @doc Returns information about the entire scheduler.
 -spec status(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, #{ address := binary(), processes := [binary()], 'cache-control' := binary(), _ => _ }}.
+    {ok,
+        #{
+            address := binary(),
+            processes := [binary()],
+            'cache-control' := binary(),
+            _ => _
+        }
+    }.
 status(_M1, _M2, _Opts) ->
     ?event(getting_scheduler_status),
     Wallet = dev_scheduler_registry:get_wallet(),
@@ -371,7 +378,13 @@ status(_M1, _M2, _Opts) ->
 %% scheduling a new message.
 -spec schedule(
     #{ _ => _ },
-    #{ method => binary(), from => integer(), to => integer(), accept => binary(), _ => _ },
+    #{
+        method => binary(),
+        from => integer(),
+        to => integer(),
+        accept => binary(),
+        _ => _
+    },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ } | binary()} | {error, _}.
 schedule(Base, Req, Opts) ->
@@ -726,7 +739,8 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
     end.
 
 %% @doc Returns information about the current slot for a process.
--spec slot(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _}.
+-spec slot(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _}.
 slot(M1, M2, Opts) ->
     ?event({getting_current_slot, {msg, M1}}),
     ProcID = find_target_id(M1, M2, Opts),

@@ -536,7 +536,9 @@ resolve_stage(4, Func, Base, Req, Original, Opts) ->
             case hb_opts:get(allow_infinite, false, Opts) of
                 true ->
                     % We are OK with infinite loops, so we just continue.
-                    resolve_stage(5, Func, Base, Req, Original, GroupName, Opts);
+                    resolve_stage(
+                        5, Func, Base, Req, Original, GroupName, Opts
+                    );
                 false ->
                     % We are not OK with infinite loops, so we raise an error.
                     error_infinite(Base, Req, Opts)
@@ -546,11 +548,11 @@ resolve_stage(5, Resolver, Base, Req, Original, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 5, ExecName, execution}, Opts),
 	% Execution.
     ExecOpts = execution_opts(Opts),
-	{Func, Args} =
-		case Resolver of
-			{Key, F} -> {F, [Key, Base, Req, ExecOpts]};
-			F -> {F, [Base, Req, ExecOpts]}
-		end,
+    {Func, Args} =
+        case Resolver of
+            {Key, F} -> {F, [Key, Base, Req, ExecOpts]};
+            F -> {F, [Base, Req, ExecOpts]}
+        end,
     % Try to execute the function.
     Res = 
         try
@@ -633,7 +635,9 @@ resolve_stage(
     },
     case hb_hook:on(<<"step">>, HookReq, Opts) of
         {ok, #{ <<"status">> := NewStatus, <<"body">> := NewRes }} ->
-            resolve_stage(7, Base, Req, {NewStatus, NewRes}, Original, ExecName, Opts);
+            resolve_stage(
+                7, Base, Req, {NewStatus, NewRes}, Original, ExecName, Opts
+            );
         Error ->
             ?event(
                 ao_core,
@@ -653,7 +657,9 @@ resolve_stage(7, Base, Req, {ok, {resolve, Sublist}}, Original, ExecName, Opts) 
     % If the result is a `{resolve, Sublist}' tuple, we need to execute it
     % as a sub-resolution.
     SubOpts = maps:remove(<<"return-context">>, Opts),
-    resolve_stage(8, Base, Req, resolve_many(Sublist, SubOpts), Original, ExecName, Opts);
+    resolve_stage(
+        8, Base, Req, resolve_many(Sublist, SubOpts), Original, ExecName, Opts
+    );
 resolve_stage(7, Base, Req, Res, Original, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 7, ExecName, no_subresolution_necessary}, Opts),
     resolve_stage(8, Base, Req, Res, Original, ExecName, Opts);
@@ -672,7 +678,15 @@ resolve_stage(9, Base, Req, Res, Original, ExecName, Opts) ->
     % unregister ourselves from the group.
     hb_persistent:unregister_notify(ExecName, Req, Res, Opts),
     resolve_stage(10, Base, Req, Res, Original, ExecName, Opts);
-resolve_stage(10, VariedBase, VariedReq, {ok, RawRes}, {Base, Req, Overlay}, ExecName, Opts) ->
+resolve_stage(
+    10,
+    VariedBase,
+    VariedReq,
+    {ok, RawRes},
+    {Base, Req, Overlay},
+    ExecName,
+    Opts
+) ->
     ?event_debug(debug_ao_core, {stage, 10, ExecName, generate_hashpath}, Opts),
     % Materialize this caller's result and cryptographically link it to its
     % original inputs. Cached and awaited patches enter at this same stage.
@@ -693,7 +707,9 @@ resolve_stage(10, VariedBase, VariedReq, {ok, RawRes}, {Base, Req, Overlay}, Exe
             _ ->
                 {HP, Context} =
                     hb_hashpath:generate(
-                        Base, Req, Res, VariedBase, VariedReq, VariedRes, Overlay, Opts
+                        Base, Req, Res,
+                        VariedBase, VariedReq, VariedRes,
+                        Overlay, Opts
                     ),
                 case ReturnContext of
                     true -> {ok, Context};
@@ -704,10 +720,14 @@ resolve_stage(10, VariedBase, VariedReq, {ok, RawRes}, {Base, Req, Overlay}, Exe
         ExecName,
         Opts
     );
-resolve_stage(10, Base, Req, {Status, Res}, Original, ExecName, Opts) when is_map(Res) ->
+resolve_stage(10, Base, Req, {Status, Res}, Original, ExecName, Opts)
+        when is_map(Res) ->
     ?event_debug(debug_ao_core, {stage, 10, ExecName, abnormal_status_reset_hashpath}, Opts),
     % Abnormal results cannot retain a successful transition's receipt.
-    resolve_stage(11, Base, Req, {Status, hb_hashpath:reset(Res)}, Original, ExecName, Opts);
+    resolve_stage(
+        11, Base, Req, {Status, hb_hashpath:reset(Res)}, Original,
+        ExecName, Opts
+    );
 resolve_stage(10, Base, Req, Res, Original, ExecName, Opts) ->
     resolve_stage(11, Base, Req, Res, Original, ExecName, Opts);
 resolve_stage(11, _Base, _Req, Res, _Original, undefined, _Opts) ->

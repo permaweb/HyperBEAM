@@ -117,20 +117,29 @@ info(Msg, Opts) ->
     ).
 
 %% @doc Return the default prefix for the stack.
--spec prefix(#{ 'output-prefix' => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    binary().
+-spec prefix(
+    #{ 'output-prefix' => binary(), _ => _ },
+    #{ _ => _ },
+    #{ _ => _ }
+) -> binary().
 prefix(Base, _Req, Opts) ->
     hb_ao:get(<<"output-prefix">>, {as, <<"message@1.0">>, Base}, <<"">>, Opts).
 
 %% @doc Return the input prefix for the stack.
--spec input_prefix(#{ 'input-prefix' => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    binary().
+-spec input_prefix(
+    #{ 'input-prefix' => binary(), _ => _ },
+    #{ _ => _ },
+    #{ _ => _ }
+) -> binary().
 input_prefix(Base, _Req, Opts) ->
     hb_ao:get(<<"input-prefix">>, {as, <<"message@1.0">>, Base}, <<"">>, Opts).
 
 %% @doc Return the output prefix for the stack.
--spec output_prefix(#{ 'output-prefix' => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    binary().
+-spec output_prefix(
+    #{ 'output-prefix' => binary(), _ => _ },
+    #{ _ => _ },
+    #{ _ => _ }
+) -> binary().
 output_prefix(Base, _Req, Opts) ->
     hb_ao:get(<<"output-prefix">>, {as, <<"message@1.0">>, Base}, <<"">>, Opts).
 

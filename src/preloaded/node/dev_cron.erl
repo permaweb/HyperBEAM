@@ -35,8 +35,11 @@ handler(Interval, Base, Req, Opts) ->
     every(Base, Req#{ <<"interval">> => Interval }, Opts).
 
 %% @doc Exported function for scheduling a one-time message.
--spec once(#{ _ => _ }, #{ 'cron-path' => binary(), once => binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, #{ status := integer(), body := binary(), _ => _ }} | {error, _}.
+-spec once(
+    #{ _ => _ },
+    #{ 'cron-path' => binary(), once => binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ status := integer(), body := binary(), _ => _ }} | {error, _}.
 once(_Base, Req, Opts) ->
 	case extract_path(<<"once">>, Req, Opts) of
 		not_found ->
@@ -157,11 +160,14 @@ stop(_Base, Req, Opts) ->
 					?event({cron_stopping_task, {task_id, TaskID}, {pid, Pid}}),
 					exit(Pid, kill),
 					hb_name:unregister(Name),
-					{ok, #{<<"status">> => 200,
-                        <<"cache-control">> => [<<"no-store">>], <<"body">> => #{
-						<<"message">> => <<"Task stopped successfully">>,
-						<<"task_id">> => TaskID
-					}}};
+					{ok, #{
+						<<"status">> => 200,
+						<<"cache-control">> => [<<"no-store">>],
+						<<"body">> => #{
+							<<"message">> => <<"Task stopped successfully">>,
+							<<"task_id">> => TaskID
+						}
+					}};
 				undefined ->
 					{error, <<"Task not found.">>};
 				Error ->

@@ -36,7 +36,8 @@ info(_) ->
 %% output from the engine formatted as an AO-Core message.
 eval(Fun) -> eval(Fun, #{}).
 eval(Fun, Opts) -> eval(Fun, #{}, Opts).
--spec eval(function() | #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _} | {_, _}.
+-spec eval(function() | #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _} | {_, _}.
 eval(Fun, Req, Opts) when is_function(Fun) ->
     do_eval(
         Fun,
@@ -48,7 +49,8 @@ eval(Fun, Req, Opts) when is_function(Fun) ->
     );
 eval(Base, Request, Opts) ->
     eval_key(<<"eval">>, Base, Request, Opts).
--spec eval_key(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _} | {_, _}.
+-spec eval_key(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _} | {_, _}.
 eval_key(PathKey, Base, Req, Opts) when not is_function(Base) ->
     case hb_ao:get(PathKey, Req, undefined, Opts) of
         undefined ->

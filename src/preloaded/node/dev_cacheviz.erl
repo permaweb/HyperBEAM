@@ -6,8 +6,11 @@
 
 %% @doc Output the dot representation of the cache, or a specific path within
 %% the cache set by the `target' key in the request.
--spec dot(#{ _ => _ }, #{ target => all | binary(), 'render-data' => boolean(), _ => _ }, #{ _ => _ }) ->
-    {ok, #{ 'content-type' := binary(), body := binary() }}.
+-spec dot(
+    #{ _ => _ },
+    #{ target => all | binary(), 'render-data' => boolean(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ 'content-type' := binary(), body := binary() }}.
 dot(_, Req, Opts) ->
     Target = maps:get(<<"target">>, Req, all),
     Dot =
@@ -22,8 +25,11 @@ dot(_, Req, Opts) ->
 
 %% @doc Output the SVG representation of the cache, or a specific path within
 %% the cache set by the `target' key in the request.
--spec svg(#{ _ => _ }, #{ target => all | binary(), 'render-data' => boolean(), _ => _ }, #{ _ => _ }) ->
-    {ok, #{ 'content-type' := binary(), body := binary() }}.
+-spec svg(
+    #{ _ => _ },
+    #{ target => all | binary(), 'render-data' => boolean(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ 'content-type' := binary(), body := binary() }}.
 svg(Base, Req, Opts) ->
     {ok, #{ <<"body">> := Dot }} = dot(Base, Req, Opts),
     ?event(cacheviz, {dot, Dot}),
@@ -34,8 +40,11 @@ svg(Base, Req, Opts) ->
 %% the `graph.js' library. If the request specifies a `target' key, we use that
 %% target. Otherwise, we generate a new target by writing the message to the
 %% cache and using the ID of the written message.
--spec json(#{ _ => _ }, #{ target => all | binary(), 'max-size' => integer(), _ => _ }, #{ _ => _ }) ->
-    {ok, #{ _ => _ }} | #{ _ => _ }.
+-spec json(
+    #{ _ => _ },
+    #{ target => all | binary(), 'max-size' => integer(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | #{ _ => _ }.
 json(Base, Req, Opts) ->
     ?event({json, {base, Base}, {req, Req}}),
     Target =

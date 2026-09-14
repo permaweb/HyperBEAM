@@ -48,7 +48,8 @@ verify(Msg, Req, Opts) ->
     }.
 
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
--spec from(binary() | [_] | #{ _ => _ },
+-spec from(
+    binary() | [_] | #{ _ => _ },
     #{ 'encode-types' => [binary()], bundle => boolean(), _ => _ },
     #{ _ => _ }
 ) -> {ok, binary() | [_] | #{ _ => _ }}.

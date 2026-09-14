@@ -104,7 +104,12 @@
 %% </pre>
 %% 
 -spec request(
-    #{ 'secret-provider' => _, 'generate-path' => binary(), 'finalize-path' => binary(), _ => _ },
+    #{
+        'secret-provider' => _,
+        'generate-path' => binary(),
+        'finalize-path' => binary(),
+        _ => _
+    },
     #{ request := #{ _ => _ }, body := _, _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {error, _} | {skip, _, _} | error.
