@@ -548,11 +548,11 @@ resolve_stage(5, Resolver, Base, Req, Original, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 5, ExecName, execution}, Opts),
 	% Execution.
     ExecOpts = execution_opts(Opts),
-	{Func, Args} =
-		case Resolver of
-			{Key, F} -> {F, [Key, Base, Req, ExecOpts]};
-			F -> {F, [Base, Req, ExecOpts]}
-		end,
+    {Func, Args} =
+        case Resolver of
+            {Key, F} -> {F, [Key, Base, Req, ExecOpts]};
+            F -> {F, [Base, Req, ExecOpts]}
+        end,
     % Try to execute the function.
     Res = 
         try
