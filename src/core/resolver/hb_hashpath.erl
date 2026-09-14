@@ -423,14 +423,14 @@ verify_context(Ctx, Opts) ->
             end
         }
     else
-        _Error ->
+        Error ->
             ?event_debug(
                 hashpath_debug,
-                {hashpath_verify_context_failed, {error, _Error}, {ctx, Ctx}},
+                {hashpath_verify_context_failed, {error, Error}, {ctx, Ctx}},
                 Opts
             ),
-            case _Error of
-                {error, _} -> _Error;
+            case Error of
+                {error, _} -> Error;
                 _ -> false
             end
     end.
