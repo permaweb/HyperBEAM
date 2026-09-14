@@ -445,7 +445,7 @@ resolve_stage(2, Base, Req, Opts) ->
     try vary_loaded(ensure_message_loaded(Base, Opts), Req, Opts) of
         {Func, VariedBase, VariedReq, Overlay} ->
             Original = {Base, Req, Overlay},
-            case hb_cache_control:maybe_lookup(VariedBase, VariedReq, Opts) of
+            case hb_cache_control:maybe_lookup(VariedBase, VariedReq, Base, Req, Opts) of
                 {ok, Res} ->
                     ?event_debug(
                         debug_ao_core,
@@ -657,10 +657,10 @@ resolve_stage(7, Base, Req, {ok, {resolve, Sublist}}, Original, ExecName, Opts) 
 resolve_stage(7, Base, Req, Res, Original, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 7, ExecName, no_subresolution_necessary}, Opts),
     resolve_stage(8, Base, Req, Res, Original, ExecName, Opts);
-resolve_stage(8, Base, Req, {ok, Res}, Original, ExecName, Opts) ->
+resolve_stage(8, Base, Req, {ok, Res}, Original = {_, OriginalReq, _}, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 8, ExecName, result_caching}, Opts),
     % Cache the generic result before applying the caller's overlay.
-    hb_cache_control:maybe_store(Base, Req, Res, Opts),
+    hb_cache_control:maybe_store(Base, Req, Res, OriginalReq, Opts),
     resolve_stage(9, Base, Req, {ok, Res}, Original, ExecName, Opts);
 resolve_stage(8, Base, Req, Res, Original, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 8, ExecName, abnormal_status_skip_caching}, Opts),
