@@ -803,7 +803,7 @@ generate(Base, Req, Res, VariedBase, VariedReq, VariedRes, Overlay, Opts) ->
 store(HP, Ctx, Opts) ->
     case hb_cache_control:derive_cache_settings([
             maps:get(<<"varied-result">>, Ctx),
-            maps:get(<<"varied-request">>, Ctx)
+            maps:get(<<"request">>, Ctx)
         ], Opts) of
         #{ <<"store">> := true } ->
             lists:foreach(

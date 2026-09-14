@@ -673,7 +673,6 @@ vary_projection_uses_projected_cache_key_test() ->
         #{
             <<"store">> => Store,
             <<"attested-store">> => hb_test_utils:test_store(),
-            <<"cache-control">> => [<<"always">>],
             <<"spawn-worker">> => false
         },
     Base =
@@ -688,12 +687,19 @@ vary_projection_uses_projected_cache_key_test() ->
             <<"path">> => <<"vary-projection">>,
             <<"deep-request">> => #{ <<"slot">> => <<"9">> }
         },
-    {ok, First} = hb_ao:resolve(Base, Req, Opts),
+    CachedReq = Req#{ <<"cache-control">> => [<<"only-if-cached">>] },
+    ?assertMatch(
+        {error, #{ <<"status">> := 504 }},
+        hb_ao:resolve(Base, CachedReq, Opts)
+    ),
+    {ok, First} =
+        hb_ao:resolve(Base, Req#{ <<"cache-control">> => [<<"store">>] }, Opts),
+    ?assert(hb_hashpath:verify_all(hb_path:hashpath(First, Opts), Opts)),
     {ok, Second} =
         hb_ao:resolve(
             Base#{ <<"noise">> => <<"second">> },
-            Req,
-            Opts#{ <<"cache-control">> => [<<"only-if-cached">>] }
+            CachedReq,
+            Opts
         ),
     ?assertEqual(7, hb_ao:get(<<"base/required">>, Second, Opts)),
     FirstCtx = hb_hashpath:context(hb_path:hashpath(First, Opts), Opts),
