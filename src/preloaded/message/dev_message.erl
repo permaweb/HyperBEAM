@@ -1024,7 +1024,8 @@ set_new_key_drops_commitments_test() ->
         <<"store">> => hb_test_utils:test_store(),
         <<"priv-wallet">> => hb:wallet()
     },
-    Signed = hb_message:commit(#{ <<"a">> => <<"1">> }, Opts, <<"httpsig@1.0">>),
+    Signed =
+        hb_message:commit(#{ <<"a">> => <<"1">> }, Opts, <<"httpsig@1.0">>),
     {ok, Updated} = hb_ao:resolve(
         Signed,
         #{ <<"path">> => <<"set">>, <<"b">> => <<"2">> },

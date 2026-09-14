@@ -334,12 +334,21 @@ vary_alternatives_test_() ->
             Opts = (vary_opts())#{ <<"cache-control">> => [<<"always">>] },
             {ok, Ctx} =
                 hb_ao:resolve(
-                    #{ <<"device">> => <<"test-device@1.0">>, <<"value">> => <<"7">> },
+                    #{
+                        <<"device">> => <<"test-device@1.0">>,
+                        <<"value">> => <<"7">>
+                    },
                     #{ <<"path">> => Key, <<"value">> => Input },
                     Opts#{ <<"return-context">> => true }
                 ),
-            ?assertMatch(#{ <<"value">> := B }, maps:get(<<"varied-base">>, Ctx)),
-            ?assertMatch(#{ <<"value">> := R }, maps:get(<<"varied-request">>, Ctx)),
+            ?assertMatch(
+                #{ <<"value">> := B },
+                maps:get(<<"varied-base">>, Ctx)
+            ),
+            ?assertMatch(
+                #{ <<"value">> := R },
+                maps:get(<<"varied-request">>, Ctx)
+            ),
             ?assertEqual(Overlay, maps:get(<<"normalizer">>, Ctx)),
             ?assert(hb_hashpath:verify_all(hb_hashpath:format(Ctx, Opts), Opts))
         end)
@@ -572,7 +581,11 @@ vary_child_commitments(Required, Slot, Mode, {KeepChild, KeepParent}) ->
     ?assertMatch({link, _, _}, maps:get(<<"slot">>, LazyChild)),
     ?assert(hb_message:verify(Lazy, [Signer], Opts)),
     % Keep the parent's scalar inline so only its child needs loading.
-    Input = case Mode of inline -> Parent; lazy -> Lazy#{ <<"required">> => Required } end,
+    Input =
+        case Mode of
+            inline -> Parent;
+            lazy -> Lazy#{ <<"required">> => Required }
+        end,
     {ok, Res} = hb_ao:resolve(Input, <<"vary-wildcard">>, Opts),
     Varied = hb_maps:get(<<"base">>, Res, not_found, Opts),
     VariedChild = maps:get(<<"child">>, Varied),
@@ -585,7 +598,8 @@ vary_child_commitments(Required, Slot, Mode, {KeepChild, KeepParent}) ->
         hb_maps:get(<<"required">>, CachedParent, not_found, Opts)),
     ?assertEqual(Slot, hb_maps:get(<<"slot">>, CachedChild, not_found, Opts)),
     ?assertEqual(Slot, hb_maps:get(<<"slot">>,
-        hb_maps:get(<<"child">>, CachedParent, not_found, Opts), not_found, Opts)),
+        hb_maps:get(<<"child">>, CachedParent, not_found, Opts),
+        not_found, Opts)),
     ?assert(hb_message:verify(CachedChild, [Signer], Opts)),
     ?assert(hb_message:verify(CachedParent, [Signer], Opts)),
     ?assertEqual(
@@ -601,7 +615,8 @@ vary_child_commitments(Required, Slot, Mode, {KeepChild, KeepParent}) ->
                 true ->
                     ?assertEqual(ID, hb_message:id(Message, [Signer], Opts)),
                     ?assert(hb_message:verify(Message, [Signer], Opts));
-                false -> ?assertNot(hb_maps:is_key(<<"commitments">>, Message, Opts))
+                false ->
+                    ?assertNot(hb_maps:is_key(<<"commitments">>, Message, Opts))
             end
         end,
         [{VariedChild, ChildID, KeepChild}, {Varied, ParentID, KeepParent}]
@@ -664,7 +679,13 @@ vary_signed_input(Which, Input, Function, Opts) ->
         case Which of
             <<"base">> -> {Input, Function};
             <<"request">> ->
-                {#{ <<"device">> => <<"test-device@1.0">>, <<"required">> => 7 }, Input}
+                {
+                    #{
+                        <<"device">> => <<"test-device@1.0">>,
+                        <<"required">> => 7
+                    },
+                    Input
+                }
         end,
     {ok, Res} = hb_ao:resolve(Base, Request, Opts),
     hb_maps:get(Which, Res, not_found, Opts).
