@@ -23,12 +23,13 @@
 %%%   <li>`#{ key := type() }': `key' must be present; it is loaded if it is
 %%%       a link and coerced to the type. `#{ key => type() }': as above,
 %%%       but the key may be absent.</li>
-%%%   <li>`#{ key := _ }' / `#{ key => _ }': `key' is kept exactly as given,
-%%%       a link staying a link.</li>
+%%%   <li>`#{ key := _ }' / `#{ key => _ }': `key' is loaded without
+%%%       coercing its value.</li>
 %%%   <li>`#{ _ => _ }': every undeclared key is kept as given. Without it,
 %%%       the message is <em>projected</em>: undeclared keys are removed
 %%%       before execution and take no part in the hashpath.</li>
-%%%   <li>`#{ _ := type() }': every undeclared key is coerced to the type.</li>
+%%%   <li>`#{ _ := type() }': every undeclared key is loaded and coerced to
+%%%       the type; `_ := _' loads each value without coercion.</li>
 %%%   <li>`_' or `#{}': the function reads nothing from the argument, which
 %%%       is projected to the implicit keys below.</li>
 %%%   <li>`map()', `any()', `term()': the argument is passed through
@@ -452,8 +453,6 @@ key_name(Other, TypeEnv, VarEnv, Seen) ->
 %% content changed, excluding link loading alone.
 apply_schema(#{ <<"kind">> := <<"any">> }, Value, _Opts) ->
     {Value, false};
-apply_schema(#{ <<"kind">> := <<"wildcard">> }, Value, _Opts) ->
-    {Value, false};
 apply_schema(
     Schema = #{ <<"kind">> := <<"union">>, <<"members">> := Members },
     Value,
@@ -471,6 +470,8 @@ apply_schema(#{ <<"kind">> := Kind }, Value, _Opts)
     {Value, false};
 apply_schema(Schema, Link, Opts) when ?IS_LINK(Link) ->
     apply_schema(Schema, hb_cache:ensure_loaded(Link, Opts), Opts);
+apply_schema(#{ <<"kind">> := <<"wildcard">> }, Value, _Opts) ->
+    {Value, false};
 apply_schema(Schema = #{ <<"kind">> := <<"message">> }, Value, Opts)
         when not is_map(Value) ->
     case coerce_type(Schema, Value, Opts) of
@@ -900,7 +901,7 @@ nested_projection_drops_commitments_test() ->
 wildcard_commitments_test_() ->
     [
         {atom_to_list(Operation), fun() -> wildcard_commitments(Operation) end}
-    || Operation <- [unchanged, loaded, coerced, projected, optional_absent]
+    || Operation <- [unchanged, loaded, wildcard_loaded, coerced, projected, optional_absent]
     ].
 
 %% @doc Keep signatures only when the admitted message's content is unchanged.
@@ -928,6 +929,10 @@ wildcard_commitments(Operation) ->
                 {Projection#{ <<"wildcard">> => Integer }, Signed, Payload, true};
             loaded ->
                 {Projection#{ <<"wildcard">> => Integer }, Lazy, Payload, true};
+            wildcard_loaded ->
+                {Projection#{ <<"wildcard">> => Integer#{
+                    <<"type">> => wildcard_type()
+                } }, Lazy, Payload, true};
             coerced ->
                 {Projection#{ <<"wildcard">> => Integer#{
                     <<"type">> => scalar_type(<<"binary">>)
@@ -1026,18 +1031,21 @@ selected_links_are_materialized_without_loading_omitted_keys_test() ->
         ),
     ?assertEqual(#{ <<"deep">> => #{ <<"slot">> => 7 } }, Varied).
 
-explicit_wildcard_preserves_lazy_links_test_() ->
+explicit_wildcard_loading_test_() ->
     [
         {atom_to_list(Presence) ++ " " ++ binary_to_list(maps:get(<<"kind">>, Type)), fun() ->
-            explicit_wildcard_preserves_lazy_links(Presence, Type)
+            explicit_wildcard_loading(Presence, Type)
         end}
     || Presence <- [required, optional], Type <- [wildcard_type(), any_type(),
         #{ <<"kind">> => <<"union">>,
             <<"members">> => [wildcard_type(), scalar_type(<<"integer">>)] }]
     ].
 
-%% @doc Unconstrained fields must not attempt to load even a missing link.
-explicit_wildcard_preserves_lazy_links(Presence, Type) ->
+%% @doc A named wildcard loads its value without coercion; `any()' passes it through.
+explicit_wildcard_loading(Presence, Type) ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
+    {ok, ID} = hb_cache:write(<<"007">>, Opts),
+    Link = {link, ID, #{}},
     Missing = {link, <<"data/not-present">>, #{}},
     Schema =
         message_type(
@@ -1050,8 +1058,26 @@ explicit_wildcard_preserves_lazy_links(Presence, Type) ->
             },
             none
         ),
-    {Varied, _} = apply_schema(Schema, #{ <<"scheduler">> => Missing }, #{}),
-    ?assertEqual(#{ <<"scheduler">> => Missing }, Varied).
+    {Varied, false} = apply_schema(Schema, #{ <<"scheduler">> => Link }, Opts),
+    case Type of
+        #{ <<"kind">> := <<"any">> } ->
+            ?assertEqual(#{ <<"scheduler">> => Link }, Varied),
+            ?assertEqual(
+                {#{ <<"scheduler">> => Missing }, false},
+                apply_schema(Schema, #{ <<"scheduler">> => Missing }, Opts)
+            );
+        _ ->
+            ?assertEqual(#{ <<"scheduler">> => <<"007">> }, Varied),
+            ?assertThrow(
+                {necessary_message_not_found, _, _},
+                apply_schema(Schema, #{ <<"scheduler">> => Missing }, Opts)
+            )
+    end,
+    case Presence of
+        optional -> ?assertEqual({#{}, false}, apply_schema(Schema, #{}, Opts));
+        required ->
+            ?assertThrow({required_key_missing, _}, apply_schema(Schema, #{}, Opts))
+    end.
 
 optional_wildcard_preserves_links_and_sequences_materialize_test() ->
     Store = hb_test_utils:test_store(),
@@ -1071,6 +1097,12 @@ optional_wildcard_preserves_links_and_sequences_materialize_test() ->
             Opts
         ),
     ?assertEqual(#{ <<"extra">> => Link }, Varied),
+    RequiredWildcard = WildcardSchema#{ <<"wildcard">> =>
+        #{ <<"presence">> => required, <<"type">> => wildcard_type() } },
+    ?assertEqual(
+        {#{ <<"extra">> => <<"8">> }, false},
+        apply_schema(RequiredWildcard, #{ <<"extra">> => Link }, Opts)
+    ),
     Integer = scalar_type(<<"integer">>),
     {VariedList, _} =
         apply_schema(#{ <<"kind">> => <<"list">>, <<"item">> => Integer }, [Link], Opts),
