@@ -35,8 +35,11 @@ handler(Interval, Base, Req, Opts) ->
     every(Base, Req#{ <<"interval">> => Interval }, Opts).
 
 %% @doc Exported function for scheduling a one-time message.
--spec once(#{ _ => _ }, #{ 'cron-path' => binary(), once => binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, #{ status := integer(), body := binary(), _ => _ }} | {error, _}.
+-spec once(
+    #{ _ => _ },
+    #{ 'cron-path' => binary(), once => binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ status := integer(), body := binary(), _ => _ }} | {error, _}.
 once(_Base, Req, Opts) ->
 	case extract_path(<<"once">>, Req, Opts) of
 		not_found ->

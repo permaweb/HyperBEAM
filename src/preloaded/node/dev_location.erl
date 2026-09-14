@@ -51,7 +51,8 @@ all(_Base, _Req, Opts) ->
 %% specific scheduler. Otherwise, we return the location record for the current
 %% node's scheduler, if it has been established.
 -spec read(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, #{ _ => _ }} | {error, #{ status := integer(), body := binary(), _ => _ }}.
+    {ok, #{ _ => _ }}
+    | {error, #{ status := integer(), body := binary(), _ => _ }}.
 read(Address, _Base, _Req, Opts) ->
     read(Address, Opts).
 read(Address, Opts) ->
@@ -105,7 +106,8 @@ find_target(Base, RawReq, Opts) ->
 
 %% @doc Generate a new scheduler location record and register it. We both send 
 %% the new scheduler-location to the given registry, and return it to the caller.
--spec node(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _}.
+-spec node(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _}.
 node(Base, RawReq, RawOpts) ->
     Opts =
         case hb_ao:resolve(

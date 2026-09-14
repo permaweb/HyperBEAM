@@ -53,7 +53,13 @@ info(Base) ->
 %% @doc Initialize the device state, loading the script into memory if it is 
 %% a reference.
 -spec init(
-    #{ module => _ , 'content-type' => binary(), body => _, sandbox => _, _ => _ },
+    #{
+        module => _,
+        'content-type' => binary(),
+        body => _,
+        sandbox => _,
+        _ => _
+    },
     #{ _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {error, _}.
@@ -241,7 +247,8 @@ initialize(Base, Modules, Opts) ->
     {ok, hb_private:set(Base, <<"state">>, State3, Opts)}.
 
 %%% @doc Return a list of all functions in the Lua environment.
--spec functions(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, [_]} | {error, not_found}.
+-spec functions(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, [_]} | {error, not_found}.
 functions(Base, _Req, Opts) ->
     case hb_private:get(<<"state">>, Base, Opts) of
         not_found ->
@@ -405,8 +412,11 @@ snapshot(Base, _Req, Opts) ->
     end.
 
 %% @doc Restore the Lua state from a snapshot, if it exists.
--spec normalize(#{ snapshot => #{ body => binary(), _ => _ }, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, #{ _ => _ }}.
+-spec normalize(
+    #{ snapshot => #{ body => binary(), _ => _ }, _ => _ },
+    #{ _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }}.
 normalize(Base, _Req, RawOpts) ->
     Opts = RawOpts#{ <<"hashpath">> => ignore },
     case hb_private:get(<<"state">>, Base, Opts) of

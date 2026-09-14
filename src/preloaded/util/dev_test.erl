@@ -77,8 +77,18 @@ test_func(_) ->
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
 %% slot number in the results key.
--spec compute(#{ 'already-seen' => [integer()], _ => _ }, #{ slot := integer() }, #{ _ => _ }) ->
-    {ok, #{ 'already-seen' := [integer()], results := #{ 'assignment-slot' := integer() }, _ => _ }}.
+-spec compute(
+    #{ 'already-seen' => [integer()], _ => _ },
+    #{ slot := integer() },
+    #{ _ => _ }
+) ->
+    {ok,
+        #{
+            'already-seen' := [integer()],
+            results := #{ 'assignment-slot' := integer() },
+            _ => _
+        }
+    }.
 compute(Base, Req, Opts) ->
     AssignmentSlot = hb_ao:get(<<"slot">>, Req, Opts),
     Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
@@ -105,8 +115,11 @@ init(Msg, _Req, Opts) ->
 
 %% @doc Example `restore/3' handler. Sets the hidden key `Test/Started' to the
 %% value of `Current-Slot' and checks whether the `Already-Seen' key is valid.
--spec restore(#{ 'already-seen' => list(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, #{ _ => _ }} | {error, binary()}.
+-spec restore(
+    #{ 'already-seen' => list(), _ => _ },
+    #{ _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, binary()}.
 restore(Msg, _Req, Opts) ->
     ?event({restore_called_on_dev_test, Msg}),
     case hb_ao:get(<<"already-seen">>, Msg, Opts) of
@@ -175,8 +188,11 @@ update_state(_Msg, Req, _Opts) ->
     end.
 
 %% @doc Find a test worker's PID and send it an increment message.
--spec increment_counter(#{ _ => _ }, #{ 'test-id' => _, _ => _ }, #{ _ => _ }) ->
-    {ok, ok} | {error, binary()}.
+-spec increment_counter(
+    #{ _ => _ },
+    #{ 'test-id' => _, _ => _ },
+    #{ _ => _ }
+) -> {ok, ok} | {error, binary()}.
 increment_counter(_Base, Req, _Opts) ->
     case hb_ao:get(<<"test-id">>, Req) of
         not_found ->
@@ -196,8 +212,11 @@ increment_counter(_Base, Req, _Opts) ->
 
 %% @doc Does nothing, just sleeps `Req/duration or 750' ms and returns the 
 %% appropriate form in order to be used as a hook.
--spec delay(#{ _ => _ }, #{ duration => integer(), result => _, body => _, _ => _ }, #{ _ => _ }) ->
-    {ok, _}.
+-spec delay(
+    #{ _ => _ },
+    #{ duration => integer(), result => _, body => _, _ => _ },
+    #{ _ => _ }
+) -> {ok, _}.
 delay(Base, Req, Opts) ->
     Duration =
         hb_ao:get_first(
@@ -227,8 +246,11 @@ delay(Base, Req, Opts) ->
 %% 
 %% Caution: This function is not safe to use in production, as it may cause
 %% state inconsistencies.
--spec mangle(#{ commitments => #{ _ => _ }, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, #{ _ => _ }} | {error, binary()}.
+-spec mangle(
+    #{ commitments => #{ _ => _ }, _ => _ },
+    #{ _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, binary()}.
 mangle(Base, _Req, Opts) ->
     case hb_opts:get(mode, prod, Opts) of
         prod -> {error, <<"`mangle' unavailable in `prod` mode.">>};
@@ -248,7 +270,11 @@ mangle(Base, _Req, Opts) ->
 
 %% @doc Return the inputs selected by the function's schema.
 -spec vary_projection(
-    #{ required := integer(), optional => binary(), deep := #{ slot := integer() } },
+    #{
+        required := integer(),
+        optional => binary(),
+        deep := #{ slot := integer() }
+    },
     #{ path := binary(), deep_request := #{ slot := integer() } },
     #{ _ => _ }
 ) -> {ok, #{ base := #{ _ => _ }, request := #{ _ => _ } }}.
@@ -277,8 +303,11 @@ vary_overlay(Base = #{ <<"counter">> := Counter }, _Req, _Opts) ->
 
 %% @doc Increment a counter in a projection of the request, returning a patch
 %% that the resolver lays over the whole request.
--spec vary_request_overlay(#{ _ => _ }, #{ counter := integer() }, #{ _ => _ }) ->
-    {ok, #{ '...' := request, counter := integer() }}.
+-spec vary_request_overlay(
+    #{ _ => _ },
+    #{ counter := integer() },
+    #{ _ => _ }
+) -> {ok, #{ '...' := request, counter := integer() }}.
 vary_request_overlay(_Base, Req = #{ <<"counter">> := Counter }, _Opts) ->
     {ok, Req#{ <<"counter">> => Counter + 1 }}.
 
@@ -290,8 +319,8 @@ vary_request_overlay(_Base, Req = #{ <<"counter">> := Counter }, _Opts) ->
 vary_alternatives(Base, Req, Opts) ->
     vary_projection(Base, Req, Opts).
 
-%% @doc Constrain both inputs through a shared type, including a forward bound.
 -type vary_input(T) :: #{ value := T }.
+%% @doc Constrain both inputs through a shared type, including a forward bound.
 -spec vary_dependent(vary_input(U), vary_input(T), _) ->
     {ok, #{ '...' := base, _ => _ }} when U :: T, T :: integer() | binary().
 vary_dependent(Base, Req, Opts) ->

@@ -86,8 +86,10 @@ index(Msg, Req, Opts) ->
 %% if/when non-map message structures are created.
 id(Base) -> id(Base, #{}).
 id(Base, Req) -> id(Base, Req, #{}).
--spec id(binary() | [#{ _ => _ }] | #{ commitments => #{ _ => _ }, _ => _ },
-    #{ committers => _,
+-spec id(
+    binary() | [#{ _ => _ }] | #{ commitments => #{ _ => _ }, _ => _ },
+    #{
+        committers => _,
         'commitment-ids' => _,
         'id-device' => binary(),
         _ => _
@@ -237,8 +239,11 @@ id_device(_, _) ->
 %% @doc Return the committers of a message that are present in the given request.
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
--spec committers(#{ commitments => #{ _ => _ }, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, [_]}.
+-spec committers(
+    #{ commitments => #{ _ => _ }, _ => _ },
+    #{ _ => _ },
+    #{ _ => _ }
+) -> {ok, [_]}.
 committers(#{ <<"commitments">> := Commitments }, _, NodeOpts) ->
     {ok,
         hb_maps:values(
@@ -261,7 +266,8 @@ committers(_, _, _) ->
 %% @doc Commit to a message, using the `commitment-device' key to specify the
 %% device that should be used to commit to the message. If the key is not set,
 %% the default device (`httpsig@1.0') is used.
--spec commit(#{ _ => _ },
+-spec commit(
+    #{ _ => _ },
     #{ 'commitment-device' => binary(), type => binary(), _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ commitments := #{ _ => _ }, _ => _ }}.
@@ -313,7 +319,8 @@ commit(Self, Req, Opts) ->
 %% `committers' key in the request can be used to specify that only the 
 %% commitments from specific committers should be verified. Similarly, specific
 %% commitments can be specified using the `commitments' key.
--spec verify(#{ _ => _ },
+-spec verify(
+    #{ _ => _ },
     #{ committers => _, 'commitment-ids' => _, commitments => _, _ => _ },
     #{ _ => _ }
 ) -> {ok, boolean()}.
@@ -406,7 +413,8 @@ verify_commitment(Base, Commitment, Opts) ->
     hb_ao:raw(AttDev, <<"verify">>, Base, Commitment, Opts).
 
 %% @doc Return the list of committed keys from a message.
--spec committed(#{ _ => _ },
+-spec committed(
+    #{ _ => _ },
     #{ raw => boolean(), committers => _, 'commitment-ids' => _, _ => _ },
     #{ _ => _ }
 ) -> {ok, [binary()]}.

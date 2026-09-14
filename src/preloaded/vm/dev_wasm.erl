@@ -50,7 +50,12 @@ info(_Base, _Opts) ->
 %% @doc Boot a WASM image on the image stated in the `process/image' field of
 %% the message.
 -spec init(
-    #{ body => _, image => binary() | #{ _ => _ }, 'input-prefix' => binary(), _ => _ },
+    #{
+        body => _,
+        image => binary() | #{ _ => _ },
+        'input-prefix' => binary(),
+        _ => _
+    },
     #{ _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
@@ -274,7 +279,12 @@ compute(RawM1, M2, Opts) ->
 %% @doc Normalize the message to have an open WASM instance, but no literal
 %% `State' key. Ensure that we do not change the hashpath during this process.
 -spec normalize(
-    #{ body => binary(), snapshot => #{ body => binary(), _ => _ }, 'device-key' => binary(), _ => _ },
+    #{
+        body => binary(),
+        snapshot => #{ body => binary(), _ => _ },
+        'device-key' => binary(),
+        _ => _
+    },
     #{ _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
@@ -371,7 +381,13 @@ instance(M1, _M2, Opts) ->
 %% 5. If it fails with `not_found', call the stub handler.
 -spec import(
     #{ _ => _ },
-    #{ module := binary(), func := binary(), args => [_], 'func-sig' => binary(), _ => _ },
+    #{
+        module := binary(),
+        func := binary(),
+        args => [_],
+        'func-sig' => binary(),
+        _ => _
+    },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
 import(Base, Req, Opts) ->

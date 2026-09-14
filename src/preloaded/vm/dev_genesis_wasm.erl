@@ -16,10 +16,13 @@
 init(Msg, _Req, _Opts) -> {ok, Msg}.
 
 %% @doc Normalize the device.
--spec normalize(#{ snapshot => #{ type => binary(), data => _, _ => _ }, _ => _ },
+-spec normalize(
+    #{ snapshot => #{ type => binary(), data => _, _ => _ }, _ => _ },
     #{ _ => _ },
     #{ _ => _ }
-) -> {ok, #{ _ => _ }} | {error, #{ status := integer(), message := binary(), _ => _ }}.
+) ->
+    {ok, #{ _ => _ }}
+    | {error, #{ status := integer(), message := binary(), _ => _ }}.
 normalize(Msg, Req, Opts) ->
     case ensure_started(Opts) of
         true ->

@@ -19,7 +19,11 @@ to_hint(Msg, Req, Opts) ->
     end.
 
 %% @doc Encode a message to a JSON string, using JSON-native typing.
--spec to(binary() | #{ _ => _ }, #{ bundle => boolean(), _ => _ }, #{ _ => _ }) -> {ok, binary()}.
+-spec to(
+    binary() | #{ _ => _ },
+    #{ bundle => boolean(), _ => _ },
+    #{ _ => _ }
+) -> {ok, binary()}.
 to(Msg, _Req, _Opts) when is_binary(Msg) ->
     {ok, hb_util:bin(json:encode(Msg))};
 to(Msg, Req, Opts) ->
@@ -57,8 +61,11 @@ to(Msg, Req, Opts) ->
     {ok, hb_json:encode(JSONStructured)}.
 
 %% @doc Decode a JSON string to a message.
--spec from(binary() | #{ _ => _ }, #{ 'accept-codec' => binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, #{ _ => _ }}.
+-spec from(
+    binary() | #{ _ => _ },
+    #{ 'accept-codec' => binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }}.
 from(Map, _Req, _Opts) when is_map(Map) -> {ok, Map};
 from(JSON, Req, Opts) ->
     ConvOpts = Opts#{ <<"hashpath">> => ignore },
@@ -121,7 +128,8 @@ committed(Msg, _Req, Opts) ->
 
 %% @doc Deserialize the JSON string found at the given path.
 -spec deserialize(#{ _ => _ }, #{ target => binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, #{ _ => _ }} | {error, #{ status := integer(), body := binary(), _ => _ }}.
+    {ok, #{ _ => _ }}
+    | {error, #{ status := integer(), body := binary(), _ => _ }}.
 deserialize(Base, Req, Opts) ->
     Payload = 
         hb_ao:get(

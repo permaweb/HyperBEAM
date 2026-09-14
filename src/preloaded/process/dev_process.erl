@@ -79,9 +79,11 @@ info(_Base) ->
 
 %% @doc Return the process state with the device swapped out for the device
 %% of the given key.
--spec as(#{ 'input-prefix' => binary(), _ => _ },
+-spec as(
+    #{ 'input-prefix' => binary(), _ => _ },
     #{ as => binary(), 'as-device' => binary(), _ => _ },
-    #{ _ => _ }) -> {ok, #{ device := binary(), _ => _ }}.
+    #{ _ => _ }
+) -> {ok, #{ device := binary(), _ => _ }}.
 as(RawBase, Req, Opts) ->
     {ok, Base} = ensure_loaded(RawBase, Req, Opts),
     Key = 
@@ -129,8 +131,11 @@ as(RawBase, Req, Opts) ->
 %% _must_ be set in all processes aside those marked with `ao.TN.1' variant.
 %% This is in order to ensure that post-mainnet processes do not default to
 %% using infrastructure that should not be present on nodes in the future.
--spec default_device(#{ 'process/variant' => binary(), _ => _ }, binary(), #{ _ => _ }) ->
-    binary().
+-spec default_device(
+    #{ 'process/variant' => binary(), _ => _ },
+    binary(),
+    #{ _ => _ }
+) -> binary().
 default_device(Base, Key, Opts) ->
     lib_process:default_device(Base, Key, Opts).
 

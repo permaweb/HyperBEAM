@@ -21,8 +21,11 @@
 %% @returns {ok, Data} on success,
 %%          {error, not_found} if the key does not exist,
 %%          {error, Reason} or {failure, Reason} on failure.
--spec read(#{ _ => _ }, #{ read := binary(), accept => binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, _} | {error, _} | {failure, _}.
+-spec read(
+    #{ _ => _ },
+    #{ read := binary(), accept => binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, _} | {error, _} | {failure, _}.
 read(_M1, M2, Opts) ->
     Location = hb_ao:get(<<"read">>, M2, Opts),
     ?event({read, {key_extracted, Location}}),
@@ -82,8 +85,11 @@ read(_M1, M2, Opts) ->
 %% @param Opts A map of configuration options.
 %% @returns {ok, Path} on success, where Path indicates where the data was
 %%          stored, {error, Reason} or {failure, Reason} on failure.
--spec write(#{ _ => _ }, #{ body => binary() | #{ _ => _ }, type => binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, binary() | #{ _ => _ }} | {error, _} | {failure, _} | #{ _ => _ }.
+-spec write(
+    #{ _ => _ },
+    #{ body => binary() | #{ _ => _ }, type => binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, binary() | #{ _ => _ }} | {error, _} | {failure, _} | #{ _ => _ }.
 write(_M1, M2, Opts) ->
     case is_trusted_writer(M2, Opts) of
         true ->
@@ -139,8 +145,11 @@ write(_M1, M2, Opts) ->
     end.
 
 %% @doc Link a source to a destination in the cache.
--spec link(#{ _ => _ }, #{ destination := binary(), source := binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, _} | {error, _}.
+-spec link(
+    #{ _ => _ },
+    #{ destination := binary(), source := binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, _} | {error, _}.
 link(_Base, Req, Opts) ->
     case is_trusted_writer(Req, Opts) of
         true ->

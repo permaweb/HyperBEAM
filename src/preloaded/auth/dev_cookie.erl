@@ -58,14 +58,21 @@ verify(Base, Req, RawOpts) -> dev_cookie_auth:verify(Base, Req, RawOpts).
 %% @doc Preprocessor keys that utilize cookies and the `~secret@1.0' device to
 %% sign inbound HTTP requests from users if they are not already signed. We use
 %% the hook authentication framework to implement this.
--spec generate(#{ _ => _ }, #{ committer => binary(), generator => _, _ => _ }, map()) -> term().
+-spec generate(
+    #{ _ => _ },
+    #{ committer => binary(), generator => _, _ => _ },
+    map()
+) -> term().
 generate(Base, Req, Opts) ->
     dev_cookie_auth:generate(Base, Req, Opts).
 
 %% @doc Finalize an `on-request' hook by adding the `set-cookie' header to the
 %% end of the message sequence.
--spec finalize(#{ _ => _ }, #{ request := #{ _ => _ }, body := _, _ => _ }, #{ _ => _ }) ->
-    {ok, [_]} | {error, no_request}.
+-spec finalize(
+    #{ _ => _ },
+    #{ request := #{ _ => _ }, body := _, _ => _ },
+    #{ _ => _ }
+) -> {ok, [_]} | {error, no_request}.
 finalize(Base, Request, Opts) ->
     dev_cookie_auth:finalize(Base, Request, Opts).
 
@@ -81,8 +88,11 @@ finalize(Base, Request, Opts) ->
 %% 
 %% The `format' may be specified in the request message as the `req:format' key.
 %% If no `format' is specified, the default is `default'.
--spec get_cookie(#{ _ => _ }, #{ key := binary(), format => binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, _} | {error, not_found}.
+-spec get_cookie(
+    #{ _ => _ },
+    #{ key := binary(), format => binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, _} | {error, not_found}.
 get_cookie(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     {ok, Cookies} = extract(Base, Req, Opts),

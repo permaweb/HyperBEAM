@@ -31,7 +31,8 @@ verify(Msg, Req, Opts) ->
     }.
 
 %% @doc Convert a flat map to a TABM.
--spec from(binary() | #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, binary() | #{ _ => _ }}.
+-spec from(binary() | #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, binary() | #{ _ => _ }}.
 from(Bin, _, _Opts) when is_binary(Bin) -> {ok, Bin};
 from(Map, Req, Opts) when is_map(Map) ->
     {ok,

@@ -36,8 +36,14 @@ default_lookup(Key, _, Req, Opts) ->
 
 %% @doc Takes a `key' and `value' argument and registers the name. The caller
 %% must be the node operator in order to register a name.
--spec register(#{ _ => _ }, #{ key := binary(), value := _, _ => _ }, #{ _ => _ }) ->
-    {ok, binary()} | {error, #{ status := integer(), message := binary() }} | not_found.
+-spec register(
+    #{ _ => _ },
+    #{ key := binary(), value := _, _ => _ },
+    #{ _ => _ }
+) ->
+    {ok, binary()}
+    | {error, #{ status := integer(), message := binary() }}
+    | not_found.
 register(_, Req, Opts) ->
     case hb_ao:resolve(
         #{ <<"device">> => <<"meta@1.0">> },

@@ -34,7 +34,8 @@ info(Opts) ->
     }.
 
 %% @doc The main HTML page for the REPL device.
--spec metrics(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ body := binary(), _ => _ }}.
+-spec metrics(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body := binary(), _ => _ }}.
 metrics(_, Req, Opts) ->
     case hb_opts:get(prometheus, not hb_features:test(), Opts) of
         true ->
@@ -159,7 +160,8 @@ format(Base, Req, Opts) ->
     }.
 
 %% @doc Test key for validating the behavior of the `500` HTTP response.
--spec throw(#{ _ => _ }, #{ _ => _ }, #{ mode => atom(), _ => _ }) -> {error, binary()}.
+-spec throw(#{ _ => _ }, #{ _ => _ }, #{ mode => atom(), _ => _ }) ->
+    {error, binary()}.
 throw(_Msg, _Req, Opts) ->
     case hb_opts:get(mode, prod, Opts) of
         prod -> {error, <<"Forced-throw unavailable in `prod` mode.">>};
