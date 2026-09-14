@@ -18,15 +18,15 @@
 %%%     rate_limit_exempt: A list of peer IDs that are exempt from the limit.
 %%%                          Default: [].
 %%%     rate_limit_block_cleanup_interval:
-%%%                        The interval between expired block cleanup passes.
-%%%                        Default: 60 (unit: seconds).
-%%%     block-paths:       A list of request paths which block the caller's IP.
-%%%                        This option is set on the `on/request' handler
-%%%                        message. Default: [].
-%%%     retry-after:       The number of seconds that a caller remains blocked
-%%%                        after requesting a blocked path. This option is set
-%%%                        on the `on/request' handler message. Accessing a
-%%%                        blocked path resets this period. Default: 86400.
+%%%                          The interval between expired block cleanup passes.
+%%%                          Default: 60 (unit: seconds).
+%%%     block-paths:         A list of request paths which block the caller's IP.
+%%%                          This option is set on the `on/request' handler
+%%%                          message. Default: [].
+%%%     retry-after:         The number of seconds that a caller remains blocked
+%%%                          after requesting a blocked path. This option is set
+%%%                          on the `on/request' handler message. Accessing a
+%%%                          blocked path resets this period. Default: 86400.
 %%% ```
 %%%
 %%% Notably, the `balance` of a user -- in terms of their available limit -- may
@@ -57,14 +57,15 @@ request(Handler, Msg, Opts) ->
     Request = hb_maps:get(<<"request">>, Msg, #{}, Opts),
     Reference = request_reference(Request, Opts),
     ShouldBlockPath = should_block_path(Request, Handler, Opts),
-    BlockPeriod = max(
-        1,
-        hb_util:int(
-            hb_maps:get(
-                <<"retry-after">>, Handler, ?DEFAULT_RETRY_AFTER, Opts
+    BlockPeriod =
+        max(
+            1,
+            hb_util:int(
+                hb_maps:get(
+                    <<"retry-after">>, Handler, ?DEFAULT_RETRY_AFTER, Opts
+                )
             )
-        )
-    ),
+        ),
     case is_limited(Reference, ShouldBlockPath, BlockPeriod, Opts) of
         {blocked, RetryAfter} ->
             RetryAfterBin = hb_util:bin(RetryAfter),
@@ -220,7 +221,8 @@ start_server(ServerID, Opts) ->
     ).
 
 %% @doc The main loop of the rate limiter server. Responds to three messages:
-%% - `{request, Self, Reference, Block, RetryAfter}': Block or debit a reference.
+%% - `{request, PID, Reference, ShouldBlockPath, RetryAfter}': Block or debit a
+%%   reference.
 %% - `{balance, PID, Reference}': Return the current balance of the given reference.
 %% - `cleanup_blocks': Remove expired caller blocks.
 %% The `balance` call is not presently used, but seems sensible to have.
@@ -252,7 +254,13 @@ remove_expired_blocks(Blocked, Now) ->
     ).
 
 %% @doc Apply path blocking and ordinary rate limiting to a request.
-update(Reference, ShouldBlockPath, RetryAfter, State = #{ blocked := Blocked }, Now) ->
+update(
+        Reference,
+        ShouldBlockPath,
+        RetryAfter,
+        State = #{ blocked := Blocked },
+        Now
+    ) ->
     case account_balance(Reference, State, Now) of
         infinity ->
             {{incremented, infinity}, State};
@@ -370,22 +378,23 @@ rate_limit_reset_test() ->
     ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})).
 
 block_path_test() ->
-    ServerOpts = #{
-        <<"on">> =>
-            #{
-                <<"request">> =>
-                    #{
-                        <<"device">> => <<"rate-limit@1.0">>,
-                        <<"retry-after">> => 1,
-                        <<"block-paths">> =>
-                            [
-                                <<"/src/.git/config">>,
-                                <<".env">>,
-                                <<"/api/.git/config">>
-                            ]
-                    }
-            }
-    },
+    ServerOpts =
+        #{
+            <<"on">> =>
+                #{
+                    <<"request">> =>
+                        #{
+                            <<"device">> => <<"rate-limit@1.0">>,
+                            <<"retry-after">> => 1,
+                            <<"block-paths">> =>
+                                [
+                                    <<"/src/.git/config">>,
+                                    <<".env">>,
+                                    <<"/api/.git/config">>
+                                ]
+                        }
+                }
+        },
     ServerNode = hb_http_server:start_node(ServerOpts),
     ?assertMatch(
         {error,
@@ -403,13 +412,14 @@ block_path_test() ->
     ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})).
 
 block_path_disabled_test() ->
-    ServerOpts = #{
-        <<"on">> =>
-            #{
-                <<"request">> =>
-                    #{ <<"device">> => <<"rate-limit@1.0">> }
-            }
-    },
+    ServerOpts =
+        #{
+            <<"on">> =>
+                #{
+                    <<"request">> =>
+                        #{ <<"device">> => <<"rate-limit@1.0">> }
+                }
+        },
     ServerNode = hb_http_server:start_node(ServerOpts),
     _ = hb_http:get(ServerNode, <<"/src/.git/config">>, #{}),
     ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})).
@@ -424,14 +434,15 @@ remove_expired_blocks_test() ->
     ).
 
 block_path_resets_expiry_test() ->
-    State = #{
-        reqs => 10,
-        period => 1,
-        max => 10,
-        min => 0,
-        blocked => #{ caller => 2_000 },
-        peers => #{}
-    },
+    State =
+        #{
+            reqs => 10,
+            period => 1,
+            max => 10,
+            min => 0,
+            blocked => #{ caller => 2_000 },
+            peers => #{}
+        },
     {{blocked, 3}, ResetState} = update(caller, true, 3, State, 1_000),
     ?assertEqual(4_000, maps:get(caller, maps:get(blocked, ResetState))),
     {{blocked, 2}, UnchangedState} =
