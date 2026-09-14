@@ -61,6 +61,9 @@ ensure_loaded(Msg, Opts) ->
     ensure_loaded([], Msg, Opts).
 ensure_loaded(Ref, {Status, Msg}, Opts) when Status == ok; Status == error ->
     {Status, ensure_loaded(Ref, Msg, Opts)};
+ensure_loaded(_Ref, {link, ID, #{ <<"load">> := false }}, _Opts) ->
+    % Receipt-local guards stop before consulting the link's store.
+    throw({link_loading_disabled, ID});
 ensure_loaded(Ref,
         Lk = {link, ID, LkOpts = #{ <<"type">> := <<"link">>, <<"lazy">> := Lazy }},
         RawOpts) ->
