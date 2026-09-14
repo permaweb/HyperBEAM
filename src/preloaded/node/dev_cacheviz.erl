@@ -9,15 +9,12 @@
 -spec dot(#{ _ => _ }, #{ target => all | binary(), 'render-data' => boolean(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ 'content-type' := binary(), body := binary() }}.
 dot(_, Req, Opts) ->
-    Target = hb_ao:get(<<"target">>, Req, all, Opts),
+    Target = maps:get(<<"target">>, Req, all),
     Dot =
         hb_cache_render:cache_path_to_dot(
             Target,
             #{
-                render_data =>
-                    hb_util:atom(
-                        hb_ao:get(<<"render-data">>, Req, false, Opts)
-                    )
+                render_data => maps:get(<<"render-data">>, Req, false)
             },
             Opts
         ),
@@ -42,7 +39,7 @@ svg(Base, Req, Opts) ->
 json(Base, Req, Opts) ->
     ?event({json, {base, Base}, {req, Req}}),
     Target =
-        case hb_ao:get(<<"target">>, Req, Opts) of
+        case maps:get(<<"target">>, Req, not_found) of
             not_found -> 
                 case map_size(maps:without([<<"device">>], hb_private:reset(Base))) of
                     0 ->
@@ -58,7 +55,7 @@ json(Base, Req, Opts) ->
             <<".">> -> all;
             ReqTarget -> ReqTarget
         end,
-    MaxSize = hb_util:int(hb_ao:get(<<"max-size">>, Req, 250, Opts)),
+    MaxSize = maps:get(<<"max-size">>, Req, 250),
     ?event({max_size, MaxSize}),
     ?event({generating_json_for, {target, Target}}),
     Res = hb_cache_render:get_graph_data(Target, MaxSize, Opts),

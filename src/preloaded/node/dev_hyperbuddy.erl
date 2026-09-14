@@ -100,20 +100,22 @@ events(_, _Req, _Opts) ->
 %% `debug-resolve-links' option; `true' resolves all levels.
 -spec format(
     #{ _ => _ },
-    #{ format => [binary()] | binary(), 'truncate-keys' => integer() | infinity, _ => _ },
+    #{
+        format => [binary()] | binary(),
+        'truncate-keys' => integer() | infinity,
+        'resolve-links' => integer() | boolean(),
+        _ => _
+    },
     #{ _ => _ }
 ) -> {ok, #{ body := binary(), _ => _ }}.
 format(Base, Req, Opts) ->
     % Find the scope of the environment that should be printed.
     Scope =
-        lists:map(
-            fun hb_util:bin/1,
-            case hb_maps:get(<<"format">>, Req, <<"base">>, Opts) of
-                <<"all">> -> [<<"base">>, <<"request">>, <<"node">>];
-                Messages when is_list(Messages) -> Messages;
-                SingleScope -> [SingleScope]
-            end
-        ),
+        case maps:get(<<"format">>, Req, <<"base">>) of
+            <<"all">> -> [<<"base">>, <<"request">>, <<"node">>];
+            Messages when is_list(Messages) -> Messages;
+            SingleScope -> [SingleScope]
+        end,
     ?event(debug_format, {using_scope, Scope}),
     CombinedMsg =
         hb_maps:with(
@@ -131,18 +133,12 @@ format(Base, Req, Opts) ->
         true ->
             CombinedMsg
         end,
-    ResolveLinksValue =
-        hb_maps:get(
+    ResolveLinks =
+        maps:get(
             <<"resolve-links">>,
             Req,
-            hb_opts:get(debug_resolve_links, false, Opts),
-            Opts
+            hb_opts:get(debug_resolve_links, false, Opts)
         ),
-    ResolveLinks =
-        case hb_util:safe_int(ResolveLinksValue) of
-            {ok, Depth} -> Depth;
-            {error, invalid} -> hb_util:bool(ResolveLinksValue)
-        end,
     TruncateKeys = maps:get(<<"truncate-keys">>, Req, infinity),
     ?event(debug_format, {using_truncation, TruncateKeys}),
     {ok,
