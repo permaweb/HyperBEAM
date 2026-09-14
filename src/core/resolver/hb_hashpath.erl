@@ -51,8 +51,13 @@ format(Ctx = #{ <<"varied-result">> := Result }, Opts)
              not ?IS_LINK(Result) ->
     % A native scalar has no standalone message ID. Its executable compact
     % address names the value without mistaking it for a pre-result context.
-    format(maps:with(
-        [<<"base">>, <<"base-id">>, <<"request">>, <<"request-id">>], Ctx), Opts);
+    format(
+        maps:with(
+            [<<"base">>, <<"base-id">>, <<"request">>, <<"request-id">>],
+            Ctx
+        ),
+        Opts
+    );
 format(Ctx, Opts) ->
     maybe
         {ok, Base} ?= format_base(Ctx, Opts),
@@ -197,11 +202,14 @@ parse(_Hashpath, _Opts) -> {error, <<"Invalid hashpath scheme.">>}.
 %% @doc Addresses in explicit receipt fields use the base64URL alphabet.
 valid_ids(Ctx) ->
     lists:all(
-        fun({<<"request-id">>, Key}) ->
-                byte_size(Key) > 0 andalso
-                    binary:match(Key, [<<"/">>, <<">">>, <<"+">>,
-                        <<"@">>, <<"=">>, <<".">>]) =:= nomatch;
-           ({_Name, ID}) -> valid_id(ID)
+        fun
+            ({<<"request-id">>, Key}) ->
+                byte_size(Key) > 0
+                    andalso binary:match(
+                        Key,
+                        [<<"/">>, <<">">>, <<"+">>, <<"@">>, <<"=">>, <<".">>]
+                    ) =:= nomatch;
+            ({_Name, ID}) -> valid_id(ID)
         end,
         maps:to_list(maps:without([<<"normalizer">>], Ctx))
     ).
@@ -676,8 +684,10 @@ load_result(Parts, PartNum, Ctx, Opts) ->
         {base, {ok, Patch}} ->
             maybe
                 {ok, Base} ?= load_base(Parts, PartNum, Opts),
-                result_from_context(Ctx#{ <<"base">> => Base,
-                    <<"varied-result">> => Patch }, Opts)
+                result_from_context(
+                    Ctx#{ <<"base">> => Base, <<"varied-result">> => Patch },
+                    Opts
+                )
             end;
         {_, _} ->
             maybe
@@ -811,10 +821,15 @@ generate(Base, Req, Res, VariedBase, VariedReq, VariedRes, Overlay, Opts) ->
 %% @doc Preserve the witnesses required to port a receipt under the same cache
 %% policy as its reusable execution result.
 store(HP, Ctx, Opts) ->
-    case hb_cache_control:derive_cache_settings([
-            maps:get(<<"varied-result">>, Ctx),
-            maps:get(<<"varied-request">>, Ctx)
-        ], Opts) of
+    case
+        hb_cache_control:derive_cache_settings(
+            [
+                maps:get(<<"varied-result">>, Ctx),
+                maps:get(<<"varied-request">>, Ctx)
+            ],
+            Opts
+        )
+    of
         #{ <<"store">> := true } ->
             lists:foreach(
                 fun(Name) -> hb_cache:write(maps:get(Name, Ctx), Opts) end,
@@ -925,9 +940,11 @@ literal_key_receipt_test() ->
 %% @doc Reads preserve errors; forcing a failed load raises its reason.
 failed_load_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
-    {ok, ID} = hb_cache:write(#{
-        <<"device">> => <<"test-device@1.0">>, <<"value">> => 7
-    }, Opts),
+    {ok, ID} =
+        hb_cache:write(
+            #{ <<"device">> => <<"test-device@1.0">>, <<"value">> => 7 },
+            Opts
+        ),
     WrongID = hb_message:id(#{ <<"wrong-result">> => 42 }, all, Opts),
     lists:foreach(
         fun({Part, Reason}) ->
@@ -953,9 +970,14 @@ failed_load_test() ->
                 [#{}, #{ <<"type">> => <<"link">>, <<"lazy">> => false }]
             )
         end,
-        [{<<"missing">>, not_found},
+        [
+            {<<"missing">>, not_found},
             {<<"restore">>, <<"No viable state to restore.">>},
-            {<<"value.", WrongID/binary>>, <<"Hashpath claim does not verify.">>}]
+            {
+                <<"value.", WrongID/binary>>,
+                <<"Hashpath claim does not verify.">>
+            }
+        ]
     ).
 
 %% @doc Reject incomplete fields, ambiguous separators, and invalid IDs.
@@ -992,23 +1014,45 @@ malformed_receipt_test() ->
 supplied_context_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     Base = #{ <<"a">> => 1, <<"b">> => 2 },
-    ?assertEqual({ok, 1}, load([#{
-        <<"base">> => Base, <<"request">> => #{ <<"path">> => <<"a">> }
-    }], Opts)),
-    ?assertEqual({ok, #{ <<"path">> => <<"a">>, <<"value">> => 7 }},
-        result_from_context(#{
-            <<"request-id">> => <<"a">>, <<"normalizer">> => request,
-            <<"varied-result">> => #{ <<"value">> => 7 }
-        }, Opts)),
+    ?assertEqual(
+        {ok, 1},
+        load(
+            [
+                #{
+                    <<"base">> => Base,
+                    <<"request">> => #{ <<"path">> => <<"a">> }
+                }
+            ],
+            Opts
+        )
+    ),
+    ?assertEqual(
+        {ok, #{ <<"path">> => <<"a">>, <<"value">> => 7 }},
+        result_from_context(
+            #{
+                <<"request-id">> => <<"a">>,
+                <<"normalizer">> => request,
+                <<"varied-result">> => #{ <<"value">> => 7 }
+            },
+            Opts
+        )
+    ),
     {ok, ID} = hb_cache:write(Base, Opts),
     WrongBase = [#{ <<"base-id">> => ID, <<"base">> => #{ <<"a">> => 3 } }],
     ?assertNot(verify_all(WrongBase, Opts)),
     ?assertMatch({error, _}, load(WrongBase, Opts)),
-    ?assertNot(verify_all([#{
-        <<"base-id">> => ID,
-        <<"request-id">> => <<"a">>,
-        <<"request">> => #{ <<"path">> => <<"b">> }
-    }], Opts)).
+    ?assertNot(
+        verify_all(
+            [
+                #{
+                    <<"base-id">> => ID,
+                    <<"request-id">> => <<"a">>,
+                    <<"request">> => #{ <<"path">> => <<"b">> }
+                }
+            ],
+            Opts
+        )
+    ).
 
 %% @doc Shared patches have caller-specific receipts and can reconstruct
 %% the complete state from independently stored inputs and results.
@@ -1067,8 +1111,18 @@ overlay_receipt_test() ->
     ?assertNot(
         verify_all(format(Ctx2#{ <<"normalizer">> => replace }, Opts), Opts)
     ),
-    ?assertNot(verify_all(format(Ctx2#{ <<"varied-result-id">> =>
-        maps:get(<<"varied-base-id">>, Ctx2) }, Opts), Opts)),
+    ?assertNot(
+        verify_all(
+            format(
+                Ctx2#{
+                    <<"varied-result-id">> =>
+                        maps:get(<<"varied-base-id">>, Ctx2)
+                },
+                Opts
+            ),
+            Opts
+        )
+    ),
     % Port just this transition's witnesses to an independent store.
     PortableOpts = #{ <<"store">> => hb_test_utils:test_store() },
     {ok, Portable} = hb_ao:resolve(OtherBase, Req,
@@ -1294,8 +1348,11 @@ pre_result_context_test() ->
     Base = #{ <<"device">> => <<"test-device@1.0">>, <<"counter">> => 1 },
     {ok, Result} = hb_ao:resolve(Base, <<"vary-overlay">>, Opts),
     Ctx = context(hb_path:hashpath(Result, Opts), Opts),
-    BeforePatch = format(maps:without(
-        [<<"varied-result-id">>, <<"normalizer">>], Ctx), Opts),
+    BeforePatch =
+        format(
+            maps:without([<<"varied-result-id">>, <<"normalizer">>], Ctx),
+            Opts
+        ),
     {ok, Prior} = load(BeforePatch, Opts),
     ?assertEqual(1, hb_maps:get(<<"counter">>, Prior, undefined, Opts)),
     ?assertEqual(BeforePatch, hb_path:hashpath(Prior, Opts)),
@@ -1311,15 +1368,28 @@ literal_result_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     Value = <<"literal replacement">>,
     hb_cache:write(Value, Opts),
-    HP = format(#{
-        <<"base-id">> => hb_message:id(#{}, all, Opts),
-        <<"request">> => #{ <<"path">> => <<"value">> },
-        <<"varied-result">> => Value
-    }, Opts),
+    HP =
+        format(
+            #{
+                <<"base-id">> => hb_message:id(#{}, all, Opts),
+                <<"request">> => #{ <<"path">> => <<"value">> },
+                <<"varied-result">> => Value
+            },
+            Opts
+        ),
     ?assertEqual({ok, Value}, load(HP, Opts)),
     {ok, Serialized} = hb_cache:write(HP, Opts),
-    ?assertEqual({ok, Value}, load({link, Serialized,
-        #{ <<"type">> => <<"link">>, <<"lazy">> => true }}, Opts)),
+    ?assertEqual(
+        {ok, Value},
+        load(
+            {
+                link,
+                Serialized,
+                #{ <<"type">> => <<"link">>, <<"lazy">> => true }
+            },
+            Opts
+        )
+    ),
     {ok, BaseID} = hb_cache:write(#{ <<"value">> => 7 }, Opts),
     ?assertEqual({ok, 7}, load(<<"ao://", BaseID/binary, "/value">>, Opts)),
     ?assertEqual(
@@ -1368,11 +1438,15 @@ scoped_link_test() ->
     Opts = #{ <<"store">> => [hb_test_utils:test_store(), Remote] },
     Value = <<"remote replacement">>,
     hb_cache:write(Value, Opts#{ <<"store">> => [Remote] }),
-    HP = format(#{
-        <<"base-id">> => hb_message:id(#{}, all, Opts),
-        <<"request">> => #{ <<"path">> => <<"value">> },
-        <<"varied-result">> => Value
-    }, Opts),
+    HP =
+        format(
+            #{
+                <<"base-id">> => hb_message:id(#{}, all, Opts),
+                <<"request">> => #{ <<"path">> => <<"value">> },
+                <<"varied-result">> => Value
+            },
+            Opts
+        ),
     LinkOpts = #{ <<"type">> => <<"link">>, <<"lazy">> => false },
     ?assertMatch({error, _}, load({link, HP, LinkOpts}, Opts)),
     ?assertThrow({necessary_message_not_found, _, _},
@@ -1395,12 +1469,16 @@ http_receipt_test() ->
         <<"http-extra-opts">> => #{ <<"cache-control">> => [<<"always">>] },
         <<"priv-wallet">> => Wallet
     },
-    Signed = hb_message:commit(#{
-        <<"device">> => <<"test-device@1.0">>,
-        <<"status">> => 200,
-        <<"counter">> => 1,
-        <<"value">> => <<"signed child">>
-    }, Opts#{ <<"priv-wallet">> => ar_wallet:new() }),
+    Signed =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"status">> => 200,
+                <<"counter">> => 1,
+                <<"value">> => <<"signed child">>
+            },
+            Opts#{ <<"priv-wallet">> => ar_wallet:new() }
+        ),
     {ok, BaseID} = hb_cache:write(#{ <<"child">> => Signed }, Opts),
     Node = hb_http_server:start_node(Opts),
     try
@@ -1412,9 +1490,20 @@ http_receipt_test() ->
         HP = hb_maps:get(<<"hashpath">>, Reply, undefined, Opts),
         ?assert(?IS_HASHPATH(HP)),
         ?assert(verify_all(HP, Opts)),
-        {ok, LinkedReply} = hb_http:post(Node, <<"/~message@1.0/value">>,
-            #{ <<"value">> => {link, HP,
-                #{ <<"type">> => <<"link">>, <<"lazy">> => false }} }, Opts),
+        {ok, LinkedReply} =
+            hb_http:post(
+                Node,
+                <<"/~message@1.0/value">>,
+                #{
+                    <<"value">> =>
+                        {
+                            link,
+                            HP,
+                            #{ <<"type">> => <<"link">>, <<"lazy">> => false }
+                        }
+                },
+                Opts
+            ),
         ?assertEqual(hb_message:id(Signed, all, Opts),
             hb_message:id(LinkedReply, hb_message:signers(Signed, Opts), Opts)),
         ?assert(hb_message:verify(LinkedReply, all, Opts)),

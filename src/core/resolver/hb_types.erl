@@ -986,22 +986,53 @@ wildcard_commitments(Operation) ->
             loaded ->
                 {Projection#{ <<"wildcard">> => Integer }, Lazy, Payload, true};
             wildcard_loaded ->
-                {Projection#{ <<"wildcard">> => Integer#{
-                    <<"type">> => wildcard_type()
-                } }, Lazy, Payload, true};
+                {
+                    Projection#{
+                        <<"wildcard">> =>
+                            Integer#{ <<"type">> => wildcard_type() }
+                    },
+                    Lazy,
+                    Payload,
+                    true
+                };
             coerced ->
-                {Projection#{ <<"wildcard">> => Integer#{
-                    <<"type">> => scalar_type(<<"binary">>)
-                } }, Lazy, #{ <<"slot">> => <<"7">>, <<"extra">> => <<"8">> }, false};
+                {
+                    Projection#{
+                        <<"wildcard">> =>
+                            Integer#{ <<"type">> => scalar_type(<<"binary">>) }
+                    },
+                    Lazy,
+                    #{ <<"slot">> => <<"7">>, <<"extra">> => <<"8">> },
+                    false
+                };
             projected ->
-                {Projection#{ <<"keys">> =>
-                    (maps:get(<<"keys">>, Projection))#{ <<"slot">> => Integer }
-                }, Signed, #{ <<"slot">> => 7 }, false};
+                {
+                    Projection#{
+                        <<"keys">> =>
+                            (maps:get(<<"keys">>, Projection))#{
+                                <<"slot">> => Integer
+                            }
+                    },
+                    Signed,
+                    #{ <<"slot">> => 7 },
+                    false
+                };
             optional_absent ->
-                {message_type(
-                    #{ <<"absent">> => Integer#{ <<"presence">> => optional } },
-                    #{ <<"presence">> => optional, <<"type">> => wildcard_type() }
-                ), Signed, Payload, true}
+                {
+                    message_type(
+                        #{
+                            <<"absent">> =>
+                                Integer#{ <<"presence">> => optional }
+                        },
+                        #{
+                            <<"presence">> => optional,
+                            <<"type">> => wildcard_type()
+                        }
+                    ),
+                    Signed,
+                    Payload,
+                    true
+                }
         end,
     {Varied, _} = apply_schema(Schema, Input, Opts),
     ?assertEqual(Expected, hb_message:uncommitted(Varied, Opts)),
@@ -1052,18 +1083,24 @@ list_commitments(Value, Nested, Preserve) ->
                     #{ <<"slot">> => 7 }};
             false -> {Integer, 7}
         end,
-    Schema = (required(<<"items">>, #{
-        <<"kind">> => <<"list">>, <<"item">> => ItemType
-    }))#{ <<"wildcard">> => Keep },
+    Schema =
+        (required(
+            <<"items">>,
+            #{ <<"kind">> => <<"list">>, <<"item">> => ItemType }
+        ))#{ <<"wildcard">> => Keep },
     {Varied, _} = apply_schema(Schema, Lazy, Opts),
     ?assertEqual([Expected], maps:get(<<"items">>, Varied)),
     case Preserve of
         true ->
             % Prove that materializing the list did not change its signed
             % content.
-            ?assert(hb_message:verify(
-                Signed#{ <<"items">> => maps:get(<<"items">>, Varied) }, [Signer], Opts
-            )),
+            ?assert(
+                hb_message:verify(
+                    Signed#{ <<"items">> => maps:get(<<"items">>, Varied) },
+                    [Signer],
+                    Opts
+                )
+            ),
             ?assert(lists:member(Signer, hb_message:signers(Varied, Opts))),
             ?assertEqual(SignedID, hb_message:id(Varied, [Signer], Opts)),
             ?assert(hb_message:verify(Varied, [Signer], Opts));
@@ -1095,12 +1132,21 @@ selected_links_are_materialized_without_loading_omitted_keys_test() ->
 
 explicit_wildcard_loading_test_() ->
     [
-        {atom_to_list(Presence) ++ " " ++ binary_to_list(maps:get(<<"kind">>, Type)), fun() ->
-            explicit_wildcard_loading(Presence, Type)
-        end}
-    || Presence <- [required, optional], Type <- [wildcard_type(), any_type(),
-        #{ <<"kind">> => <<"union">>,
-            <<"members">> => [wildcard_type(), scalar_type(<<"integer">>)] }]
+        {
+            atom_to_list(Presence) ++ " "
+                ++ binary_to_list(maps:get(<<"kind">>, Type)),
+            fun() -> explicit_wildcard_loading(Presence, Type) end
+        }
+    ||
+        Presence <- [required, optional],
+        Type <- [
+            wildcard_type(),
+            any_type(),
+            #{
+                <<"kind">> => <<"union">>,
+                <<"members">> => [wildcard_type(), scalar_type(<<"integer">>)]
+            }
+        ]
     ].
 
 %% @doc A named wildcard loads its value without coercion; `any()' passes it
