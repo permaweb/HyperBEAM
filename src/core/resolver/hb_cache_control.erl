@@ -431,3 +431,39 @@ cache_message_result_test() ->
     ?event({res2, Res2}),
     ?event({res3, Res3}),
     ?assertEqual(Res2, Res3).
+
+%% @doc A device that changes a committed key directly upon its base returns
+%% a result without the base's commitments. The cache holds the base under
+%% the base's ID and the result under its own.
+mangled_result_does_not_poison_cache_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"always">>],
+        <<"priv-wallet">> => ar_wallet:new()
+    },
+    Base = #{ <<"device">> => <<"test-device@1.0">>, <<"counter">> => <<"1">> },
+    lists:foreach(
+        fun(Input) ->
+            ID = hb_message:id(Input, all, Opts),
+            {ok, Res} = hb_ao:resolve(Input, <<"mangle">>, Opts),
+            Content = hb_message:uncommitted(hb_private:reset(Res), Opts),
+            ?assertNotEqual(Base, Content),
+            ?assertEqual([], hb_message:signers(Res, Opts)),
+            ?assertEqual(not_found, hb_message:commitment(ID, Res, Opts)),
+            ResID = hb_message:id(Res, all, Opts),
+            ?assertNotEqual(ID, ResID),
+            ?assertEqual(Base, read_content(ID, Opts)),
+            ?assertEqual(Content, read_content(ResID, Opts))
+        end,
+        [
+            hb_message:commit(Base, Opts),
+            hb_message:normalize_commitments(Base, Opts)
+        ]
+    ).
+
+read_content(ID, Opts) ->
+    {ok, Msg} = hb_cache:read(ID, Opts),
+    hb_message:uncommitted(
+        hb_private:reset(hb_cache:ensure_all_loaded(Msg, Opts)),
+        Opts
+    ).

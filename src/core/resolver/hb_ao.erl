@@ -663,9 +663,19 @@ resolve_stage(7, Base, Req, {ok, {resolve, Sublist}}, Original, ExecName, Opts) 
 resolve_stage(7, Base, Req, Res, Original, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 7, ExecName, no_subresolution_necessary}, Opts),
     resolve_stage(8, Base, Req, Res, Original, ExecName, Opts);
-resolve_stage(8, Base, Req, {ok, Res}, Original = {_, OriginalReq, _}, ExecName, Opts) ->
+resolve_stage(
+    8,
+    Base,
+    Req,
+    {ok, RawRes},
+    Original = {_, OriginalReq, _},
+    ExecName,
+    Opts
+) ->
     ?event_debug(debug_ao_core, {stage, 8, ExecName, result_caching}, Opts),
-    % Cache the generic result before applying the caller's overlay.
+    % Normalize the commitments of the generic result, then cache it before
+    % applying the caller's overlay.
+    Res = maybe_normalize_result(RawRes, [Base, Req], Opts),
     hb_cache_control:maybe_store(Base, Req, Res, OriginalReq, Opts),
     resolve_stage(9, Base, Req, {ok, Res}, Original, ExecName, Opts);
 resolve_stage(8, Base, Req, Res, Original, ExecName, Opts) ->
@@ -694,9 +704,17 @@ resolve_stage(
     Res =
         case Overlay of
             base when is_map(VariedRes) ->
-                set(Base, VariedRes, internal_opts(Opts));
+                maybe_normalize_result(
+                    set(Base, VariedRes, internal_opts(Opts)),
+                    [Base],
+                    Opts
+                );
             request when is_map(VariedRes) ->
-                set(Req, VariedRes, internal_opts(Opts));
+                maybe_normalize_result(
+                    set(Req, VariedRes, internal_opts(Opts)),
+                    [Req],
+                    Opts
+                );
             _ -> VariedRes
         end,
     ReturnContext = hb_opts:get(<<"return-context">>, false, Opts),
@@ -704,6 +722,9 @@ resolve_stage(
         case {ReturnContext, hb_opts:get(hashpath, update, Opts)} of
             {false, ignore} -> {ok, Res};
             {false, reset} -> {ok, hb_hashpath:reset(Res)};
+            {false, _} when not is_map(Res) ->
+                % A value that is not a message cannot carry a receipt.
+                {ok, Res};
             _ ->
                 {HP, Context} =
                     hb_hashpath:generate(
@@ -899,6 +920,76 @@ ensure_message_loaded(MsgLink, Opts) when ?IS_LINK(MsgLink) ->
     hb_cache:ensure_loaded(MsgLink, Opts);
 ensure_message_loaded(Msg, _Opts) ->
     Msg.
+
+%% @doc Normalize the commitments of a result unless the execution generates
+%% no receipts: such internal resolutions store nothing, and their results
+%% are named only if a later execution returns them.
+maybe_normalize_result(Res, Inputs, Opts) ->
+    case hb_opts:get(hashpath, update, Opts) of
+        ignore -> Res;
+        _ -> normalize_result(Res, Inputs, Opts)
+    end.
+
+%% @doc Normalize the commitments of a result before it is cached, returned,
+%% or named by a receipt. Commitments that the result retains from an input
+%% follow the rule of `dev_message:set/3': they are dropped if the result adds
+%% a key or changes a committed key, such that a key set directly upon an
+%% input cannot carry the input's commitments to the cache. The unsigned
+%% commitment is then verified, or created, unless the result is unchanged
+%% since it was last normalized.
+normalize_result(Res, Inputs, Opts) when is_map(Res) ->
+    Stale =
+        lists:any(
+            fun(Input) -> retains_stale_commitments(Res, Input, Opts) end,
+            Inputs
+        ),
+    hb_message:normalize_commitments(
+        case Stale of
+            true -> hb_message:uncommitted(Res, Opts);
+            false -> Res
+        end,
+        Opts,
+        fast,
+        shallow
+    );
+normalize_result(Res, _Inputs, _Opts) ->
+    Res.
+
+%% @doc Whether a result retains commitments of an input that no longer
+%% describe it. A result that is the input itself retains nothing stale.
+retains_stale_commitments(Res, Res, _Opts) ->
+    false;
+retains_stale_commitments(Res, Input, Opts) when is_map(Input) ->
+    Commitments = hb_maps:get(<<"commitments">>, Res, #{}, Opts),
+    Retained =
+        [
+            ID
+        ||
+            ID <- hb_maps:keys(Commitments, Opts),
+            hb_message:commitment(ID, Input, Opts) =/= not_found
+        ],
+    Retained =/= [] andalso
+        (
+            public_keys(Res, Opts) -- public_keys(Input, Opts) =/= [] orelse
+                changed_committed_keys(Res, Input, Retained, Opts)
+        );
+retains_stale_commitments(_Res, _Input, _Opts) ->
+    false.
+
+%% @doc The keys of a message that its commitments can describe.
+public_keys(Msg, Opts) ->
+    hb_maps:keys(hb_message:uncommitted(hb_private:reset(Msg), Opts), Opts).
+
+%% @doc Whether the keys committed to by the given commitments differ between
+%% a result and the input it retained them from.
+changed_committed_keys(Res, Input, CommitmentIDs, Opts) ->
+    Committed = hb_message:committed(Res, CommitmentIDs, Opts),
+    hb_message:match(
+        hb_maps:with(Committed, Res, Opts),
+        hb_maps:with(Committed, Input, Opts),
+        strict,
+        Opts
+    ) =/= true.
 
 %% @doc Resolve the device function for a loaded base and vary the inputs
 %% by its schema. Return the function, optionally paired with its handler key,

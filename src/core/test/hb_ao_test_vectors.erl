@@ -961,11 +961,19 @@ denormalized_device_name_test(Opts) ->
     Msg = #{ <<"device">> => Dev },
     ?assertEqual(
         Dev,
-        hb_maps:without([<<"priv">>], hb_ao:get(device, Msg, Opts), Opts)
+        hb_maps:without(
+            [<<"commitments">>, <<"priv">>],
+            hb_ao:get(device, Msg, Opts),
+            Opts
+        )
     ),
     ?assertEqual(
         Dev,
-        hb_maps:without([<<"priv">>], hb_ao:get(<<"device">>, Msg, Opts), Opts)
+        hb_maps:without(
+            [<<"commitments">>, <<"priv">>],
+            hb_ao:get(<<"device">>, Msg, Opts),
+            Opts
+        )
     ),
     ?assertEqual(
         {ok, Dev, maps:get(test_func, Dev)},

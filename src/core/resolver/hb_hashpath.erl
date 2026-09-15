@@ -13,11 +13,11 @@
 %%%     Normalizer   :: "." | "="
 %%% </pre>
 %%%
-%%% A compact form may omit fields when they are derivable: the vary pair is
-%%% omitted when it is the identity vary, `Dependencies' when there are none,
-%%% and the terminal before a result exists. Segments without explicit vary
-%%% syntax are not special: `HP/*=FinalResultID' is an ordinary claim that
-%%% resolving `*' at `HP' yields `FinalResultID'.
+%%% A compact form may omit fields when they are derivable: the vary pair and
+%%% `Dependencies' are omitted when a replacement is reached by the identity
+%%% vary, and the terminal before a result exists. Segments without explicit
+%%% vary syntax are not special: `HP/*=FinalResultID' is an ordinary claim
+%%% that resolving `*' at `HP' yields `FinalResultID'.
 %%%
 %%% Every separator of the syntax (`/', `>', `+', `@', `=', `.') is outside
 %%% the base64url alphabet, so the grammar is unambiguous without escaping.
@@ -462,7 +462,11 @@ verify_dependencies(HPCtx, ExecutedCtx, Opts) ->
                     fun(Name) ->
                         verify_origins(
                             maps:get(Name, Deps),
-                            maps:get(<<"varied-", Name/binary>>, ExecutedCtx),
+                            maps:get(
+                                <<"varied-", Name/binary>>,
+                                ExecutedCtx,
+                                maps:get(Name, ExecutedCtx)
+                            ),
                             maps:get(Name, ExecutedCtx),
                             [],
                             Opts
@@ -603,12 +607,14 @@ verify_id(Name, Claim, Executed, Opts) ->
     end.
 
 %% @doc Re-execute a claim through the resolver without trusting cached results.
+%% Every message layer of the addressed pair must verify: the identity vary
+%% names no dependency leaves through which a forged layer would be found.
 execute(Ctx, Opts) ->
     maybe
         {ok, Base} ?= load_field(<<"base">>, Ctx, Opts),
         {ok, Req} ?= load_request(Ctx, Opts),
-        true ?= verify_commitments(Base, Opts),
-        true ?= verify_commitments(Req, Opts),
+        true ?= verify_all_commitments(Base, Opts),
+        true ?= verify_all_commitments(Req, Opts),
         hb_ao:resolve(
             Base,
             Req,
@@ -751,6 +757,16 @@ check_id(Value, ID, Opts) ->
         {ok, Value}
     end.
 
+%% @doc Check the commitments of every message layer of a value.
+verify_all_commitments(Value, Opts) ->
+    try
+        hb_message:paranoid_verify(
+            Value,
+            Opts#{ <<"paranoid-verify">> => true }
+        )
+    catch throw:{paranoid_verification_failure, _, _, _, _} -> false
+    end.
+
 %% @doc Check commitments once the value's message layer is loaded.
 verify_commitments(Value, Opts) when ?IS_LINK(Value) ->
     verify_commitments(hb_cache:ensure_loaded(Value, Opts), Opts);
@@ -787,7 +803,14 @@ result_from_context(Ctx, Opts) ->
                             base -> load_field(<<"base">>, Ctx, Opts);
                             request -> load_request(Ctx, Opts)
                         end,
-                    {ok, hb_ao:set(Original, Result, internal_opts(Opts))}
+                    {ok,
+                        hb_message:normalize_commitments(
+                            hb_ao:set(Original, Result, internal_opts(Opts)),
+                            Opts,
+                            fast,
+                            shallow
+                        )
+                    }
                 end;
             _ -> {error, <<"Unsupported hashpath normalizer.">>}
         end
@@ -808,12 +831,26 @@ generate(Base, Req, Res, VariedBase, VariedReq, VariedRes, Overlay, Opts) ->
         <<"base">> => Base,
         <<"request">> => Req,
         <<"result">> => Res,
-        <<"varied-base">> => VariedBase,
-        <<"varied-request">> => VariedReq,
         <<"varied-result">> => VariedRes,
         <<"normalizer">> => Normalizer
     },
-    Completed = Ctx#{ <<"dependencies">> => dependencies(Ctx, Opts) },
+    % A replacement reached by the identity vary has a compact receipt: its
+    % witnesses and dependencies are derivable from the addressed pair. Other
+    % receipts name their witnesses; a patch's ancestry is denoted by them.
+    Completed =
+        case Normalizer == replace andalso
+                VariedBase =:= Base andalso VariedReq =:= Req of
+            true -> Ctx;
+            false ->
+                Witnessed =
+                    Ctx#{
+                        <<"varied-base">> => VariedBase,
+                        <<"varied-request">> => VariedReq
+                    },
+                Witnessed#{
+                    <<"dependencies">> => dependencies(Witnessed, Opts)
+                }
+        end,
     HP = format(Completed, Opts),
     store(HP, Completed, Opts),
     {HP, Completed}.
@@ -831,9 +868,9 @@ store(HP, Ctx, Opts) ->
         )
     of
         #{ <<"store">> := true } ->
-            lists:foreach(
-                fun(Name) -> hb_cache:write(maps:get(Name, Ctx), Opts) end,
-                [<<"base">>, <<"request">>, <<"dependencies">>]
+            maps:foreach(
+                fun(_Name, Witness) -> hb_cache:write(Witness, Opts) end,
+                maps:with([<<"base">>, <<"request">>, <<"dependencies">>], Ctx)
             ),
             case maps:get(<<"varied-result">>, Ctx) of
                 Patch when is_map(Patch); is_binary(Patch); is_list(Patch) ->
@@ -1026,8 +1063,7 @@ supplied_context_test() ->
             Opts
         )
     ),
-    ?assertEqual(
-        {ok, #{ <<"path">> => <<"a">>, <<"value">> => 7 }},
+    {ok, Overlaid} =
         result_from_context(
             #{
                 <<"request-id">> => <<"a">>,
@@ -1035,7 +1071,10 @@ supplied_context_test() ->
                 <<"varied-result">> => #{ <<"value">> => 7 }
             },
             Opts
-        )
+        ),
+    ?assertEqual(
+        #{ <<"path">> => <<"a">>, <<"value">> => 7 },
+        hb_message:uncommitted(hb_private:reset(Overlaid), Opts)
     ),
     {ok, ID} = hb_cache:write(Base, Opts),
     WrongBase = [#{ <<"base-id">> => ID, <<"base">> => #{ <<"a">> => 3 } }],
@@ -1327,7 +1366,10 @@ request_overlay_receipt_test() ->
         <<"request-only">> => true
     },
     {ok, Result} = hb_ao:resolve(Base, Req, Opts),
-    ?assertEqual(Req#{ <<"counter">> => 2 }, hb_private:reset(Result)),
+    ?assertEqual(
+        Req#{ <<"counter">> => 2 },
+        hb_message:uncommitted(hb_private:reset(Result), Opts)
+    ),
     HP = hb_path:hashpath(Result, Opts),
     Ctx = context(HP, Opts),
     ?assertEqual(replace, maps:get(<<"normalizer">>, Ctx, replace)),
@@ -1517,6 +1559,27 @@ http_receipt_test() ->
         cowboy:stop_listener(hb_util:human_id(ar_wallet:to_address(Wallet)))
     end.
 
+%% @doc A specified function whose schema selects every key of its inputs
+%% executes the identity vary: its receipt is compact and verifies.
+identity_projection_receipt_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"always">>]
+    },
+    Req = #{ <<"path">> => <<"set">>, <<"b">> => 2 },
+    {ok, Result} = hb_ao:resolve(#{ <<"a">> => 1 }, Req, Opts),
+    HP = hb_path:hashpath(Result, Opts),
+    ?assertEqual(
+        [<<"base-id">>, <<"request-id">>, <<"varied-result-id">>],
+        lists:sort(maps:keys(context(HP, Opts)))
+    ),
+    ?assert(verify_all(HP, Opts)),
+    {ok, Loaded} = load(HP, Opts),
+    ?assertEqual(
+        hb_private:reset(Result),
+        hb_private:reset(hb_cache:ensure_all_loaded(Loaded, Opts))
+    ).
+
 %% @doc A subresolution returns its value to the outer execution, even when
 %% that execution is collecting a context for challenge.
 subresolution_context_test() ->
@@ -1543,7 +1606,7 @@ subresolution_context_test() ->
     ?assertEqual(hb_path:hashpath(Result, Opts), format(Ctx, Opts)),
     lists:foreach(
         fun(Name) -> hb_cache:write(maps:get(Name, Ctx), Opts) end,
-        [<<"base">>, <<"request">>, <<"dependencies">>, <<"varied-result">>]
+        [<<"base">>, <<"request">>, <<"varied-result">>]
     ),
     ?assert(verify_all(format(Ctx, Opts), Opts)).
 

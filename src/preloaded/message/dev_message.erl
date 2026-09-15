@@ -1031,7 +1031,7 @@ set_new_key_drops_commitments_test() ->
         #{ <<"path">> => <<"set">>, <<"b">> => <<"2">> },
         Opts
     ),
-    ?assertNot(maps:is_key(<<"commitments">>, Updated)),
+    ?assertEqual([], hb_message:signers(Updated, Opts)),
     {ok, Canonical} = hb_message:with_only_committed(Updated, Opts),
     ?assertEqual(<<"2">>, maps:get(<<"b">>, Canonical)).
 
