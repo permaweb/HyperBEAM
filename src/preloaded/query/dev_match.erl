@@ -62,7 +62,9 @@
 %% A byte above every ID, closing a cursor's offset when reading down.
 -define(LAST_ID, <<"~">>).
 %% The pairs indexed by each element of a list, unless a node names others.
--define(DEFAULT_ALL_PATHS, #{ <<"committer">> => <<"committers">> }).
+-define(DEFAULT_ALL_PATHS,
+    #{ <<"committer">> => <<"committers~message@1.0">> }
+).
 
 %% @doc Default all non-message@1.0 and device keys to match a single key in the
 %% index.
@@ -238,13 +240,20 @@ pairs(Handler, Msg, Opts) ->
 %% @doc The pairs a map of paths names, each the value its path resolves to
 %% on the message. The node's options hold the map, else the hook's handler
 %% message, else the default.
+%% A computed key may select its device with `KEY~DEVICE'. Without `~DEVICE',
+%% indexing attempts to load each message's device, subject to the node's
+%% trust settings.
 resolved(Key, Default, Handler, Msg, Opts) ->
     Paths = hb_opts:get(Key, hb_maps:get(Key, Handler, Default, Opts), Opts),
     [
         {hb_ao:normalize_key(Name), Value}
     ||
         {Name, Path} <- hb_maps:to_list(Paths, Opts),
-        {ok, Value} <- [hb_ao:raw(Msg, #{ <<"path">> => Path }, Opts)]
+        {ok, Value} <-
+            [case binary:split(Path, <<"~">>) of
+                [Part, Device] -> hb_ao:raw(Device, Msg, #{ <<"path">> => Part }, Opts);
+                [Part] -> hb_ao:raw(Msg, #{ <<"path">> => Part }, Opts)
+            end]
     ].
 
 %% @doc The elements of a list, or a value alone.
@@ -704,6 +713,7 @@ paths_test() ->
             end,
             #{
                 <<"a">> => <<"b">>,
+                <<"device">> => <<"unavailable@1.0">>,
                 <<"committer">> => <<"untrusted">>
             },
             Wallets
@@ -723,6 +733,7 @@ paths_test() ->
     ),
     Named =
         Opts#{
+            <<"match-paths">> => #{ <<"computed">> => <<"test-func">> },
             <<"match-all-paths">> => #{ signer => <<"committers">> },
             <<"on">> => #{
                 <<"cache-write">> => #{
@@ -736,10 +747,16 @@ paths_test() ->
     [Address | _] = Addresses,
     Second =
         hb_message:commit(
-            #{ <<"c">> => <<"d">>, <<"signer">> => <<"untrusted">> },
+            #{
+                <<"c">> => <<"d">>, <<"signer">> => <<"untrusted">>,
+                <<"device">> => <<"test-device@1.0">>
+            },
             Opts#{ <<"priv-wallet">> => Wallet }
         ),
     SecondIDs = [cache(Second, 2, Named) | ids(Second, Opts)],
+    ?assertMatch(
+        [{2, _}], matches(#{ <<"computed">> => <<"GOOD FUNCTION">> }, #{}, Named)
+    ),
     ?assertEqual([], matches(#{ <<"signer">> => <<"untrusted">> }, #{}, Named)),
     {ok, [Signer]} = hb_cache:match(#{ <<"signer">> => Address }, Named),
     ?assert(lists:member(Signer, SecondIDs)),
