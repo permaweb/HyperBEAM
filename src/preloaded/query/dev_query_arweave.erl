@@ -832,7 +832,7 @@ match(<<"owner">>, Owner, Opts) ->
     ?event({match_owner, Owner, Res}),
     {ok, Res};
 match(<<"recipients">>, Recipients, Opts) ->
-    {ok, matching_commitments(<<"field-target">>, Recipients, Opts)};
+    {ok, matching_commitments(<<"target">>, Recipients, Opts)};
 match(UnsupportedFilter, _, _) ->
     throw({unsupported_query_filter, UnsupportedFilter}).
 

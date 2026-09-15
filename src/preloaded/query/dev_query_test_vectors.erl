@@ -532,7 +532,7 @@ transactions_query_recipients_test_parallel() ->
             Node,
             Query,
             #{
-                <<"recipients">> => [AliceAddress]
+                <<"recipients">> => [AliceAddress, hb:address(ar_wallet:new())]
             },
             Opts
         ),
