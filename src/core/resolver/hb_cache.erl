@@ -324,8 +324,7 @@ write_message_ops(Msg, Opts) when is_map(Msg) ->
     ?event_debug(debug_cache, {writing_message, Msg}),
     UncommittedID =
         hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }),
-    AllIDs = calculate_all_ids(Msg, UncommittedID, Opts),
-    AltIDs = AllIDs -- [UncommittedID],
+    {SignedIDs, UnsignedIDs, AllID} = calculate_all_ids(Msg, UncommittedID, Opts),
     MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
     ?event_debug(debug_cache,
         {writing_message,
@@ -342,6 +341,9 @@ write_message_ops(Msg, Opts) when is_map(Msg) ->
             [{group, UncommittedID}],
             maps:without([<<"priv">>], Msg)
         ),
+    % Create an operation to link from the root ID the keys are replicated under
+    % to each of the known alternative IDs for the message (the combined 'all'
+    % ID, signed IDs, and _other_ non-root IDs).
     Ops =
         lists:foldl(
             fun(AltID, Acc) ->
@@ -353,8 +355,8 @@ write_message_ops(Msg, Opts) when is_map(Msg) ->
                 ),
                 [{link, AltID, UncommittedID} | Acc]
             end,
-            [{index_hook, AllIDs, Msg} | KeyOps],
-            AltIDs
+            [{index_hook, AllID, SignedIDs, UnsignedIDs, Msg} | KeyOps],
+            (SignedIDs ++ UnsignedIDs ++ [AllID]) -- [UncommittedID]
         ),
     {ok, UncommittedID, lists:reverse(Ops)}.
 
@@ -458,14 +460,21 @@ run_write_ops(Store, Ops, Opts) ->
     run_write_ops(Store, Ops, Opts, []).
 run_write_ops(Store, [], Opts, Pending) ->
     flush_write_ops(Store, Pending, Opts);
-run_write_ops(Store, [{index_hook, IDs, Msg} | Rest], Opts, Pending) ->
+run_write_ops(
+        Store,
+        [{index_hook, AllID, SignedIDs, UnsignedIDs, Msg} | Rest],
+        Opts,
+        Pending
+) ->
     flush_write_ops(Store, Pending, Opts),
     {ok, _} =
         hb_hook:on(
             <<"cache-write">>,
             #{
                 <<"body">> => Msg,
-                <<"ids">> => IDs,
+                <<"all-id">> => AllID,
+                <<"signed-ids">> => SignedIDs,
+                <<"unsigned-ids">> => UnsignedIDs,
                 <<"priv">> => #{ <<"hook-caller">> => <<"kernel">> }
             },
             Opts
@@ -532,21 +541,31 @@ calculate_all_ids(Bin, _UncommittedID, _Opts) when is_binary(Bin) -> [];
 calculate_all_ids(Msg, UncommittedID, Opts) ->
     CommIDs = 
         hb_maps:keys(
-            hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+            Comms = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
             Opts
+        ),
+    {SignedIDs, UnsignedIDs} =
+        lists:partition(
+            fun(ID) ->
+                Comm = hb_maps:get(ID, Comms, #{}, Opts),
+                is_map_key(<<"committer">>, Comm)
+            end,
+            CommIDs
         ),
     ?event_debug({calculating_ids, {msg, Msg}, {comm_ids, CommIDs}}),
     case length(CommIDs) of
         0 ->
             % With no commitments the `all' id is the uncommitted id we already
             % computed; skip re-serializing the message to recompute it.
-            [UncommittedID];
+            {[], [UncommittedID], UncommittedID};
         _ ->
-            All = hb_message:id(Msg, all, Opts#{ <<"linkify-mode">> => discard }),
-            case lists:member(All, CommIDs) of
-                true -> CommIDs;
-                false -> [All | CommIDs]
-            end
+            AllID =
+                hb_message:id(
+                    Msg,
+                    all,
+                    Opts#{ <<"linkify-mode">> => discard }
+                ),
+            {SignedIDs, UnsignedIDs, AllID}
     end.
 
 %% @doc Write a hashpath and its message to the store and link it.
@@ -1362,10 +1381,10 @@ test_cache_write_hook(Store) ->
     Msg = hb_private:set(Committed, <<"offset">>, 1, Opts),
     {ok, ID} = write(Msg, Opts),
     Req = receive R = #{ <<"body">> := #{ <<"a">> := _ } } -> R end,
-    #{ <<"body">> := Body, <<"ids">> := IDs } = Req,
+    #{ <<"body">> := Body, <<"signed-ids">> := IDs } = Req,
     ?assertEqual(<<"kernel">>, hb_private:get(<<"hook-caller">>, Req, Opts)),
     ?assertEqual(1, hb_private:get(<<"offset">>, Body, Opts)),
-    ?assertEqual([hb_message:id(Msg, all, Opts)], IDs),
+    ?assertEqual([hb_message:id(Msg, signed, Opts)], IDs),
     ?assertEqual({ok, IDs}, match(#{ <<"a">> => <<"b">> }, Opts)),
     {ok, Keys} = hb_store:list(Store, ID, Opts),
     ?assertNot(lists:member(<<"priv">>, Keys)).

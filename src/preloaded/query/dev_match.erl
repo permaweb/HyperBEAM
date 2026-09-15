@@ -196,7 +196,7 @@ index_message(Handler, Req, Opts) ->
                 {<<Group/binary, "/", (key({Offset, ID}))/binary>>, <<>>}
             ||
                 Group <- Groups,
-                ID <- hb_maps:get(<<"ids">>, Req, [], Opts)
+                ID <- hb_maps:get(<<"signed-ids">>, Req, [], Opts)
             ]
         ),
     case store(Opts) of
@@ -811,7 +811,7 @@ unauthorized_index_test() ->
             #{
                 <<"path">> => <<"/~match@1.0/index">>,
                 <<"body">> => #{ <<"a">> => <<"b">> },
-                <<"ids">> => [<<"id">>],
+                <<"signed-ids">> => [<<"id">>],
                 <<"priv">> => #{ <<"hook-caller">> => <<"kernel">> }
             },
             #{}
