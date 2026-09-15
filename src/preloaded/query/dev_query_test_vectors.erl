@@ -636,10 +636,11 @@ transactions_query_combined_test_parallel() ->
     ),
     Query =
         <<"""
-            query($owners: [String!], $ids: [ID!]) {
+            query($owners: [String!], $ids: [ID!], $recipients: [String!]) {
                 transactions(
                     owners: $owners,
                     ids: $ids,
+                    recipients: $recipients,
                     tags: [
                         {name: "type", values: ["Message"]}
                     ]
@@ -668,6 +669,13 @@ transactions_query_combined_test_parallel() ->
         ),
     ?event({expected_id, ExpectedID}),
     ?event({transactions_query_combined_test, Res}),
+    lists:foreach(
+        fun(Filter) ->
+            Empty = dev_query_graphql:test_query(Node, Query, #{ Filter => [] }, Opts),
+            ?assertEqual([], hb_util:deep_get(<<"data/transactions/edges">>, Empty, Opts))
+        end,
+        [<<"ids">>, <<"owners">>, <<"recipients">>]
+    ),
     ?assertMatch(
         #{
             <<"data">> := #{

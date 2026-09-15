@@ -577,6 +577,7 @@ index_template(Args, Opts) ->
                 ]
         ],
     maybe
+        true ?= Get(<<"ids">>) =/= [] orelse unservable,
         true ?= explicit_ids(Args, Opts) =:= [] orelse unservable,
         true ?=
             Get(<<"height">>) =:= null andalso Get(<<"bundledIn">>) =:= null
@@ -584,7 +585,7 @@ index_template(Args, Opts) ->
         true ?=
             lists:all(
                 fun({_Pair, Values}) ->
-                    Values =:= null orelse length(Values) =< 1
+                    Values =:= null orelse length(Values) =:= 1
                 end,
                 Fields
             ) orelse unservable,
