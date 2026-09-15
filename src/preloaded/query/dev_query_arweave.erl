@@ -682,7 +682,7 @@ locate_ranges(Template, [Range | Rest], After, Limit, Opts) ->
 %% stores of the index is `unservable'; a failing store is an error, as
 %% `cached_transactions' answers from different data.
 locate(Template, Req, Opts) ->
-    case hb_ao:raw(
+    try hb_ao:raw(
             <<"match@1.0">>,
             Template,
             Req#{ <<"path">> => <<"locate">> },
@@ -690,6 +690,8 @@ locate(Template, Req, Opts) ->
         ) of
         {error, not_found} -> unservable;
         Result -> Result
+    catch error:badarg ->
+        {error, <<"Invalid cursor.">>}
     end.
 
 %% @doc The edges of the page's matches in its order, under cursors naming
@@ -1055,7 +1057,16 @@ unmined_pages_test() ->
         end,
     Descending = Pages(<<"HEIGHT_DESC">>, null, []),
     ?assertEqual(3, length(lists:usort(Descending))),
-    ?assertEqual(lists:reverse(Descending), Pages(<<"HEIGHT_ASC">>, null, [])).
+    ?assertEqual(lists:reverse(Descending), Pages(<<"HEIGHT_ASC">>, null, [])),
+    #{ <<"errors">> := Errors } =
+        dev_query_graphql:test_query(
+            Node, Query, #{ <<"after">> => <<"member=nonsense">> }, Opts
+        ),
+    ?assertMatch(
+        [_ | _],
+        [ Error || #{ <<"message">> := Error } <- Errors,
+            binary:match(Error, <<"Invalid cursor.">>) =/= nomatch ]
+    ).
 
 %% @doc A page served from the published index on Arweave, its items
 %% read from the weave: the twenty-four items of `action=Battle.Begin'
