@@ -618,12 +618,15 @@ cache(Msg, Offset, Opts) ->
         hb_cache:write(hb_private:set(Msg, <<"offset">>, Offset, Opts), Opts),
     ID.
 
-%% @doc The committed IDs of a message: its `all' ID and each commitment's.
+%% @doc The signed commitment IDs indexed for a message.
 ids(Msg, Opts) ->
     [
-        hb_message:id(Msg, all, Opts)
-    |
-        maps:keys(hb_maps:get(<<"commitments">>, Msg, #{}, Opts))
+        ID
+    ||
+        {ID, Comm} <- hb_maps:to_list(
+            hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts
+        ),
+        hb_maps:is_key(<<"committer">>, Comm, Opts)
     ].
 
 %% @doc The matches of a template as `{Offset, ID}' pairs.
@@ -645,12 +648,19 @@ matches(Template, Req, Opts) ->
 %% offset are located in weave order in either direction, between bounds,
 %% by one pair or by two, and `all' answers their IDs.
 weave_order_test() ->
-    Opts = test_opts(),
+    Opts = (test_opts())#{ <<"priv-wallet">> => ar_wallet:new() },
+    Cache =
+        fun(Msg, Offset) ->
+            Signed = hb_message:commit(Msg, Opts),
+            cache(Signed, Offset, Opts),
+            [ID] = ids(Signed, Opts),
+            ID
+        end,
     Template = #{ <<"type">> => <<"Message">>, <<"device">> => <<"message@1.0">> },
-    Mined = cache(Template#{ <<"n">> => <<"1">> }, 5, Opts),
-    Later = cache(Template#{ <<"n">> => <<"2">> }, 7, Opts),
-    Pending = cache(Template#{ <<"n">> => <<"3">> }, infinity, Opts),
-    {ok, Unmined} = hb_cache:write(Template#{ <<"n">> => <<"4">> }, Opts),
+    Mined = Cache(Template#{ <<"n">> => <<"1">>, <<"a">> => <<"yes">> }, 5),
+    Later = Cache(Template#{ <<"n">> => <<"2">> }, 7),
+    Pending = Cache(Template#{ <<"n">> => <<"3">> }, infinity),
+    Unmined = Cache(Template#{ <<"n">> => <<"4">> }, -1),
     ?assertEqual([], matches(Template#{ <<"device">> => <<"other">> }, #{}, Opts)),
     ?assertEqual(
         [{-1, Unmined}, {5, Mined}, {7, Later}, {infinity, Pending}],
@@ -703,6 +713,30 @@ weave_order_test() ->
             #{ <<"path">> => <<"n">> },
             Opts
         )
+    ),
+    % Distinct signed IDs at one offset survive matching and both cursor orders.
+    Peer = Cache(Template#{ <<"b">> => <<"yes">> }, 5),
+    [First, Second] = Shared = lists:sort([{5, Mined}, {5, Peer}]),
+    Asc = #{ <<"from">> => 5, <<"to">> => 7 },
+    Desc = #{ <<"direction">> => desc, <<"from">> => 5, <<"to">> => -1 },
+    ?assertEqual(Shared, matches(Template, Asc, Opts)),
+    ?assertEqual(lists:reverse(Shared), matches(Template, Desc, Opts)),
+    ?assertEqual([First], matches(Template, Asc#{ <<"limit">> => 1 }, Opts)),
+    ?assertEqual(
+        [Second], matches(Template, Asc#{ <<"after">> => key(First) }, Opts)
+    ),
+    ?assertEqual(
+        [First], matches(Template, Desc#{ <<"after">> => key(Second) }, Opts)
+    ),
+    ?assertEqual(
+        [{7, Later}],
+        matches(Template, #{ <<"after">> => 5, <<"to">> => infinity }, Opts)
+    ),
+    ?assertEqual([], matches(Template, Desc#{ <<"after">> => 5 }, Opts)),
+    ?assertEqual([], matches(Template, Asc#{ <<"to">> => 5 }, Opts)),
+    ?assertEqual([], matches(Template, Desc#{ <<"to">> => 5 }, Opts)),
+    ?assertEqual(
+        [], matches(#{ <<"a">> => <<"yes">>, <<"b">> => <<"yes">> }, #{}, Opts)
     ).
 
 %% @doc A message is indexed under each of its committers, and a
@@ -724,16 +758,17 @@ paths_test() ->
             },
             Wallets
         ),
-    % At a weave offset the offset alone identifies the item, so a match
-    % carries one of the IDs the message is written under.
-    IDs = [cache(Signed, 1, Opts) | ids(Signed, Opts)],
+    % Each signed ID contributes a separate result at the same offset.
+    cache(Signed, 1, Opts),
+    IDs = lists:sort(ids(Signed, Opts)),
+    ?assertEqual(2, length(IDs)),
     cache(#{ <<"committer">> => <<"untrusted">> }, 3, Opts),
     ?assertEqual([], matches(#{ <<"committer">> => <<"untrusted">> }, #{}, Opts)),
     lists:foreach(
         fun(Address) ->
-            {ok, [Found]} =
+            {ok, Found} =
                 hb_cache:match(#{ <<"committer">> => Address }, Opts),
-            ?assert(lists:member(Found, IDs))
+            ?assertEqual(IDs, lists:sort(Found))
         end,
         Addresses
     ),
@@ -759,15 +794,16 @@ paths_test() ->
             },
             Opts#{ <<"priv-wallet">> => Wallet }
         ),
-    SecondIDs = [cache(Second, 2, Named) | ids(Second, Opts)],
+    cache(Second, 2, Named),
+    SecondIDs = ids(Second, Opts),
     ?assertMatch(
         [{2, _}], matches(#{ <<"computed">> => <<"GOOD FUNCTION">> }, #{}, Named)
     ),
     ?assertEqual([], matches(#{ <<"signer">> => <<"untrusted">> }, #{}, Named)),
     {ok, [Signer]} = hb_cache:match(#{ <<"signer">> => Address }, Named),
     ?assert(lists:member(Signer, SecondIDs)),
-    {ok, [Committer]} = hb_cache:match(#{ <<"committer">> => Address }, Named),
-    ?assert(lists:member(Committer, IDs)).
+    {ok, Committers} = hb_cache:match(#{ <<"committer">> => Address }, Named),
+    ?assertEqual(IDs, lists:sort(Committers)).
 
 %% @doc A group's path hashes to the row prefix of a published index, a key
 %% to its offset bits, and a row back to its key.
