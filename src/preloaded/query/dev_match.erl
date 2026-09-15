@@ -320,13 +320,12 @@ locate(Base, Req, Opts) ->
             end
     end.
 
-%% @doc The pairs a base message names: every key but its device,
-%% commitments and private keys, in the wire form the index is written
-%% from.
+%% @doc The pairs a base message names: every key but its commitments and
+%% private keys, in the wire form the index is written from.
 template(Base, Opts) ->
     hb_maps:to_list(
         hb_maps:without(
-            [<<"ao-types">>, <<"device">>],
+            [<<"ao-types">>],
             hb_message:convert(
                 hb_message:uncommitted(hb_private:reset(Base)),
                 tabm,
@@ -641,11 +640,12 @@ matches(Template, Req, Opts) ->
 %% by one pair or by two, and `all' answers their IDs.
 weave_order_test() ->
     Opts = test_opts(),
-    Template = #{ <<"type">> => <<"Message">> },
+    Template = #{ <<"type">> => <<"Message">>, <<"device">> => <<"message@1.0">> },
     Mined = cache(Template#{ <<"n">> => <<"1">> }, 5, Opts),
     Later = cache(Template#{ <<"n">> => <<"2">> }, 7, Opts),
     Pending = cache(Template#{ <<"n">> => <<"3">> }, infinity, Opts),
     {ok, Unmined} = hb_cache:write(Template#{ <<"n">> => <<"4">> }, Opts),
+    ?assertEqual([], matches(Template#{ <<"device">> => <<"other">> }, #{}, Opts)),
     ?assertEqual(
         [{-1, Unmined}, {5, Mined}, {7, Later}, {infinity, Pending}],
         matches(Template, #{}, Opts)
