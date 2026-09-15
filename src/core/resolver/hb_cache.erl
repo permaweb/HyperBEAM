@@ -527,7 +527,7 @@ prepare_commitments(RawCommitments, Opts) ->
 commitment_path(Base, Opts) ->
     hb_path:hashpath(<<Base/binary, "/commitments">>, Opts).
 
-%% @doc Calculate the IDs for a message.
+%% @doc Calculate the IDs for a message, with its `all' ID first.
 calculate_all_ids(Bin, _UncommittedID, _Opts) when is_binary(Bin) -> [];
 calculate_all_ids(Msg, UncommittedID, Opts) ->
     CommIDs = 
@@ -543,10 +543,7 @@ calculate_all_ids(Msg, UncommittedID, Opts) ->
             [UncommittedID];
         _ ->
             All = hb_message:id(Msg, all, Opts#{ <<"linkify-mode">> => discard }),
-            case lists:member(All, CommIDs) of
-                true -> CommIDs;
-                false -> [All | CommIDs]
-            end
+            [All | lists:delete(All, CommIDs)]
     end.
 
 %% @doc Write a hashpath and its message to the store and link it.

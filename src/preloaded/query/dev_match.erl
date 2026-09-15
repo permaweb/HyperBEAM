@@ -11,9 +11,8 @@
 %%%
 %%% The offset field sorts a group's keys by weave position, as bytes and as
 %%% terms alike: `-1' for a message with no weave position, then the offsets,
-%%% zero-padded, then `infinity' for an item awaiting its block. At an
-%%% offset the offset alone identifies the item, as a published index
-%%% carries no IDs; at `-1' and `infinity' the ID does.
+%%% zero-padded, then `infinity' for an item awaiting its block. The ID
+%%% distinguishes messages at the same offset. Published rows carry no IDs.
 %%%
 %%% The stores of the index are the node's `match-index' stores (`store/1').
 %%% A store of the node's own holds a group's keys as its children; a
@@ -33,7 +32,7 @@
 %%% ```
 %%%     index:    Write the message in the request's `body' under each of
 %%%               its pairs -- its keys, and the pairs `match-paths' and
-%%%               `match-all-paths' name -- per ID the request's `ids' name,
+%%%               `match-all-paths' name -- under the message's `all' ID,
 %%%               at the offset of its `priv/offset': a weave offset,
 %%%               `infinity', or `-1' when it carries none. Only the
 %%%               kernel's `cache-write' hook is served.
@@ -134,12 +133,8 @@ parse(<<"infinity", ID/binary>>) -> {infinity, ID};
 parse(<<Digits:?OFFSET_DIGITS/binary, ID/binary>>) -> {hb_util:int(Digits), ID};
 parse(Digits) -> {hb_util:int(Digits), <<>>}.
 
-%% @doc The position of a key in the order read: its offset alone at a
-%% weave offset, where it identifies the item; with its ID at `-1' and
-%% `infinity', where an empty ID -- a bound naming every key of the offset
-%% -- stands for the last of them in the direction read.
-position(_Direction, {Offset, _ID}) when is_integer(Offset), Offset >= 0 ->
-    {Offset, <<>>};
+%% @doc The position of a key: its offset and ID. An empty ID names an
+%% offset boundary, closing the offset when reading down.
 position(desc, {Offset, <<>>}) ->
     {Offset, ?LAST_ID};
 position(_Direction, Key) ->
@@ -156,7 +151,7 @@ result(Key = {Offset, ID}) ->
 %%% Writing the index.
 
 %% @doc Write the message in the request's `body' under each of its pairs,
-%% per ID the request names, at the offset of its `priv/offset': a weave
+%% under its `all' ID, at the offset of its `priv/offset': a weave
 %% offset, `infinity', or `-1' when it carries none. A node without stores
 %% of the index, or with none that takes the keys, writes nothing. Only the
 %% kernel's `cache-write' hook is served: it marks its request in a private
@@ -172,7 +167,7 @@ index(Handler, Req, Opts) ->
                 }
             }
     end.
-%% @doc The message written under its pairs, per ID. A commitment is not
+%% @doc The message written under its pairs. A commitment is not
 %% indexed as a message of its own: the message it commits is indexed under
 %% its committers.
 index_message(
@@ -184,6 +179,7 @@ index_message(
 index_message(Handler, Req, Opts) ->
     Msg = hb_maps:get(<<"body">>, Req, #{}, Opts),
     Offset = hb_private:get(<<"offset">>, Msg, -1, Opts),
+    [All | _] = hb_maps:get(<<"ids">>, Req, [], Opts),
     Groups =
         [
             group(Name, Value, Opts)
@@ -193,10 +189,9 @@ index_message(Handler, Req, Opts) ->
     Keys =
         maps:from_list(
             [
-                {<<Group/binary, "/", (key({Offset, ID}))/binary>>, <<>>}
+                {<<Group/binary, "/", (key({Offset, All}))/binary>>, <<>>}
             ||
-                Group <- Groups,
-                ID <- hb_maps:get(<<"ids">>, Req, [], Opts)
+                Group <- Groups
             ]
         ),
     case store(Opts) of
@@ -482,6 +477,8 @@ from_cursor(Direction, Group, Page, Cursor, Exclusive, Store, Opts) ->
 
 %% @doc Whether a key lies behind the cursor in the direction, or at it
 %% when the cursor is exclusive.
+behind(_Direction, {Offset, _ID}, {Offset, <<>>}, Exclusive) ->
+    Exclusive;
 behind(Direction, Key, Cursor, Exclusive) ->
     case {position(Direction, Key), position(Direction, Cursor)} of
         {Same, Same} -> Exclusive;
