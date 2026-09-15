@@ -1242,7 +1242,7 @@ test_match_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_l
     skip;
 test_match_message(Store) ->
     hb_store:reset(Store),
-    Opts = #{ <<"store">> => Store },
+    Opts = #{ <<"store">> => Store, <<"match-index">> => false },
     % Write two messages that match the template, and a third that does not.
     {ok, ID1} = hb_cache:write(#{ <<"x">> => <<"1">> }, Opts),
     {ok, ID2} = hb_cache:write(#{ <<"y">> => <<"2">>, <<"z">> => <<"3">> }, Opts),
@@ -1269,7 +1269,7 @@ test_match_linked_message(Store) when map_get(<<"store-module">>, Store) =/= hb_
     skip;
 test_match_linked_message(Store) ->
     hb_store:reset(Store),
-    Opts = #{ <<"store">> => Store },
+    Opts = #{ <<"store">> => Store, <<"match-index">> => false },
     Msg = #{ <<"a">> => Inner = #{ <<"b">> => <<"c">>, <<"d">> => <<"e">> } },
     {ok, _ID} = write(Msg, Opts),
     {ok, [MatchedID]} = match(#{ <<"b">> => <<"c">> }, Opts),
@@ -1289,7 +1289,7 @@ test_match_typed_message(Store) when map_get(<<"store-module">>, Store) =/= hb_s
     skip;
 test_match_typed_message(Store) ->
     hb_store:reset(Store),
-    Opts = #{ <<"store">> => Store },
+    Opts = #{ <<"store">> => Store, <<"match-index">> => false },
     % Add some messages that should not match the template, as well as the main
     % message that should match the template.
     write(#{ <<"atom-value">> => atom, <<"wrong">> => <<"wrong">> }, Opts),
@@ -1341,7 +1341,7 @@ test_raw_match_read(Store) ->
 
 test_immediate_marker_values(Store) ->
     hb_store:reset(Store),
-    Opts = #{ <<"store">> => Store },
+    Opts = #{ <<"store">> => Store, <<"match-index">> => false },
     Msg = #{
         <<"groupish">> => <<"group">>,
         <<"linkish">> => <<"link:literal">>,
