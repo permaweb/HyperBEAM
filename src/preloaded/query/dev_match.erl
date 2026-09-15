@@ -184,6 +184,15 @@ index_message(
 index_message(Handler, Req, Opts) ->
     Msg = hb_maps:get(<<"body">>, Req, #{}, Opts),
     Offset = hb_private:get(<<"offset">>, Msg, -1, Opts),
+    % An unsigned message has no IDs to index under: nothing is written, so
+    % its pairs are not computed nor its groups created.
+    case hb_maps:get(<<"signed-ids">>, Req, [], Opts) of
+        [] ->
+            {ok, Req};
+        IDs ->
+            index_message(Handler, Req, Msg, Offset, IDs, Opts)
+    end.
+index_message(Handler, Req, Msg, Offset, IDs, Opts) ->
     Groups =
         [
             group(Name, Value, Opts)
@@ -196,7 +205,7 @@ index_message(Handler, Req, Opts) ->
                 {<<Group/binary, "/", (key({Offset, ID}))/binary>>, <<>>}
             ||
                 Group <- Groups,
-                ID <- hb_maps:get(<<"signed-ids">>, Req, [], Opts)
+                ID <- IDs
             ]
         ),
     case store(Opts) of
