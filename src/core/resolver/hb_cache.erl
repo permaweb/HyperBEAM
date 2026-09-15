@@ -270,7 +270,8 @@ generate_binary_path(Bin, Opts) ->
 %% commitments on signed _inner_ messages. We may wish to revisit this.
 write(RawMsg, Opts) when is_map(RawMsg) ->
     hb_message:paranoid_verify(cache_write, RawMsg, Opts),
-    {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts),
+    {ok, Msg} =
+        hb_message:with_only_committed(verified_unsigned(RawMsg, Opts), Opts),
     TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
     ?event_debug(debug_cache, {writing_full_message, {msg, TABM}}),
     try
@@ -295,6 +296,16 @@ write(List, Opts) when is_list(List) ->
     write(hb_message:convert(List, tabm, <<"structured@1.0">>, Opts), Opts);
 write(Bin, Opts) when is_binary(Bin) ->
     do_write_message(Bin, hb_opts:get(store, no_viable_store, Opts), Opts).
+
+%% @doc Re-check the unsigned commitment that a write would trust as the
+%% address of a message, unless `priv/last-phash2' shows that the message is
+%% unchanged since it was normalized. A message without an unsigned
+%% commitment is written as it is: its ID is calculated from its content.
+verified_unsigned(Msg, Opts) ->
+    case hb_message:commitment(#{ <<"type">> => <<"unsigned">> }, Msg, Opts) of
+        not_found -> Msg;
+        _ -> hb_message:normalize_commitments(Msg, Opts, fast, shallow)
+    end.
 
 do_write_message(Bin, Store, Opts) when is_binary(Bin) ->
     % Write the binary in the store at its calculated content-hash.
@@ -1497,6 +1508,17 @@ write_with_only_read_only_store_test() ->
     Opts = #{ <<"store">> => [ReadOnlyStore] },
     ?assertMatch({ok, _}, write(<<"some-binary-payload">>, Opts)),
     ?assertMatch({ok, _}, write(#{ <<"hello">> => <<"world">> }, Opts)).
+
+%% @doc A message changed after normalization is written under the ID of its
+%% content rather than the ID its stale unsigned commitment names.
+write_changed_normalized_message_test() ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
+    Msg = hb_message:normalize_commitments(#{ <<"a">> => 1 }, Opts),
+    {ok, ID} = write(Msg, Opts),
+    {ok, ChangedID} = write(Msg#{ <<"a">> => 2 }, Opts),
+    ?assertEqual(hb_message:id(#{ <<"a">> => 2 }, all, Opts), ChangedID),
+    {ok, Read} = read(ID, Opts),
+    ?assertEqual(1, hb_maps:get(<<"a">>, Read, undefined, Opts)).
 
 %% @doc Run a specific test with a given store module.
 run_test() ->
