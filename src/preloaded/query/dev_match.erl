@@ -407,9 +407,9 @@ reached(_Direction, _Key, none) -> false;
 reached(asc, Key, To) -> position(asc, Key) >= position(asc, To);
 reached(desc, Key, To) -> position(desc, Key) =< position(desc, To).
 
-%% @doc One step from the cursor: each group's next key. Keys at one
-%% position are a `match', carrying the ID any of them knows; the last of
-%% them in the direction is otherwise the `next' cursor, as no match lies
+%% @doc One step from the cursor: each group's next key. At one offset,
+%% groups without an ID-less row must agree on ID; other groups accept any ID.
+%% The last in the direction is otherwise the `next' cursor, as no match lies
 %% before it. A group with nothing left ends the page. The groups come back
 %% with their pages as read.
 step(Direction, Groups, Cursor, Exclusive, Opts) ->
@@ -417,9 +417,24 @@ step(Direction, Groups, Cursor, Exclusive, Opts) ->
         {ok, Next} ?= next_keys(Direction, Groups, Cursor, Exclusive, Opts),
         Keys = [ Key || {_Group, Key, _Pages} <- Next ],
         Read = [ {Group, Pages} || {Group, _Key, Pages} <- Next ],
-        case lists:usort([ position(Direction, Key) || Key <- Keys ]) of
-            [_Position] -> {match, hd(identified(Keys) ++ Keys), Read};
-            _ -> {next, last_of(Direction, Keys), Read}
+        Required =
+            [
+                case lists:member({O, <<>>}, [H || {_, [H | _]} <- Pages]) of
+                    true -> {O, <<>>};
+                    false -> Key
+                end
+            ||
+                {_Group, Key = {O, _}, Pages} <- Next
+            ],
+        Known = lists:usort(identified(Required)),
+        case {lists:usort([ O || {O, _} <- Keys ]), Known, identified(Keys)} of
+            {[Offset], [], []} when Exclusive, element(1, Cursor) =:= Offset,
+                    element(2, Cursor) =/= <<>> ->
+                % A published row must not repeat an ID already returned here.
+                step(Direction, Read, {Offset, <<>>}, true, Opts);
+            {[_], Known, _} when length(Known) =< 1 ->
+                {match, hd(Known ++ [first_of(Direction, Keys)]), Read};
+            _ -> {next, last_of(Direction, Required), Read}
         end
     end.
 
@@ -485,9 +500,11 @@ from_cursor(Direction, Group, Page, Cursor, Exclusive, Store, Opts) ->
     end.
 
 %% @doc Whether a key lies behind the cursor in the direction, or at it
-%% when the cursor is exclusive.
+%% when the cursor is exclusive. An ID-less row remains for IDs at its offset.
 behind(_Direction, {Offset, _ID}, {Offset, <<>>}, Exclusive) ->
     Exclusive;
+behind(_Direction, {Offset, <<>>}, {Offset, _ID}, _Exclusive) ->
+    false;
 behind(Direction, Key, Cursor, Exclusive) ->
     case {position(Direction, Key), position(Direction, Cursor)} of
         {Same, Same} -> Exclusive;
@@ -496,17 +513,17 @@ behind(Direction, Key, Cursor, Exclusive) ->
     end.
 
 %% @doc The first of the stores' first keys in the direction, one carrying
-%% an ID ahead of one at the same position without.
+%% an ID ahead of one at the same offset without.
 first_of(asc, Heads) ->
     {_, _, Head} =
         lists:min(
-            [ {position(asc, K), ID =:= <<>>, K} || K = {_, ID} <- Heads ]
+            [ {Offset, ID =:= <<>>, K} || K = {Offset, ID} <- Heads ]
         ),
     Head;
 first_of(desc, Heads) ->
     {_, _, Head} =
         lists:max(
-            [ {position(desc, K), ID =/= <<>>, K} || K = {_, ID} <- Heads ]
+            [ {Offset, ID =/= <<>>, K} || K = {Offset, ID} <- Heads ]
         ),
     Head.
 
@@ -737,6 +754,32 @@ weave_order_test() ->
     ?assertEqual([], matches(Template, Desc#{ <<"to">> => 5 }, Opts)),
     ?assertEqual(
         [], matches(#{ <<"a">> => <<"yes">>, <<"b">> => <<"yes">> }, #{}, Opts)
+    ),
+    % Published rows carry only offsets, including pairs absent locally.
+    Published = test_opts(),
+    Stores = store(Published),
+    Mixed = Template#{ <<"published">> => <<"yes">> },
+    Asymmetric = #{ <<"a">> => <<"yes">>, <<"b">> => <<"yes">> },
+    lists:foreach(
+        fun({Name, Value}) ->
+            Group = group(Name, Value, Opts),
+            hb_store:group(Stores, Group, Opts),
+            ok = hb_store:write(
+                Stores, #{ <<Group/binary, "/", (digits(5))/binary>> => <<>> },
+                Opts
+            )
+        end,
+        maps:to_list(maps:merge(Mixed, Asymmetric))
+    ),
+    ?assertEqual([{5, <<>>}], matches(Mixed, Asc, Published)),
+    MixedOpts = Opts#{ <<"match-index">> => store(Opts) ++ Stores },
+    ?assertEqual(Shared, matches(Mixed, Asc, MixedOpts)),
+    ?assertEqual(
+        lists:reverse(Shared), matches(Mixed, Desc, MixedOpts)
+    ),
+    ?assertEqual(Shared, matches(Asymmetric, Asc, MixedOpts)),
+    ?assertEqual(
+        lists:reverse(Shared), matches(Asymmetric, Desc, MixedOpts)
     ).
 
 %% @doc A message is indexed under each of its committers, and a
