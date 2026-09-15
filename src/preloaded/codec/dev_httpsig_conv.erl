@@ -334,8 +334,14 @@ to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
             try hb_ao:resolve(Structured, Req#{ <<"path">> => <<"index">> }, Opts) of
                 {ok, IndexMsg} ->
                     % The index message has been calculated successfully. Convert
-                    % it to TABM format.
-                    IndexTABM = hb_message:convert(IndexMsg, tabm, Opts),
+                    % its public keys to TABM format: its own commitments are
+                    % not part of the message it presents.
+                    IndexTABM =
+                        hb_message:convert(
+                            hb_message:uncommitted(IndexMsg, Opts),
+                            tabm,
+                            Opts
+                        ),
                     % Merge the index message with the original, favoring the 
                     % keys of the original in the event of conflict. Remove the
                     % `priv` message, if present.
