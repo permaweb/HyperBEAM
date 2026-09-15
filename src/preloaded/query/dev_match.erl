@@ -182,27 +182,34 @@ index_message(
 ) ->
     {ok, Req};
 index_message(Handler, Req, Opts) ->
-    Msg = hb_maps:get(<<"body">>, Req, #{}, Opts),
-    Offset = hb_private:get(<<"offset">>, Msg, -1, Opts),
-    Groups =
-        [
-            group(Name, Value, Opts)
-        ||
-            {Name, Value} <- pairs(Handler, Msg, Opts)
-        ],
-    Keys =
-        maps:from_list(
-            [
-                {<<Group/binary, "/", (key({Offset, ID}))/binary>>, <<>>}
-            ||
-                Group <- Groups,
-                ID <- hb_maps:get(<<"signed-ids">>, Req, [], Opts)
-            ]
-        ),
     case store(Opts) of
         [] ->
             {ok, Req};
         Stores ->
+            Msg = hb_maps:get(<<"body">>, Req, #{}, Opts),
+            Offset = hb_private:get(<<"offset">>, Msg, -1, Opts),
+            Groups =
+                [
+                    group(Name, Value, Opts)
+                ||
+                    {Name, Value} <- pairs(Handler, Msg, Opts)
+                ],
+            Keys =
+                maps:from_list(
+                    [
+                        {
+                            <<
+                                Group/binary,
+                                "/", 
+                                (key({Offset, ID}))/binary
+                            >>, 
+                            <<>>
+                        }
+                    ||
+                        Group <- Groups,
+                        ID <- hb_maps:get(<<"signed-ids">>, Req, [], Opts)
+                    ]
+                ),
             lists:foreach(
                 fun(Group) -> hb_store:group(Stores, Group, Opts) end,
                 Groups
