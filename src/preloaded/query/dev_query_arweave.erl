@@ -1003,16 +1003,22 @@ pending_offsets_page_by_cursor_test() ->
     #{ <<"id">> := NumericID } = Page(BaseArgs#{ <<"after">> => FirstCursor }),
     ok.
 
-%% @doc The messages the weave never held page out last in either order,
+%% @doc Signed messages the weave never held page out last in either order,
 %% by cursor, from a node's own stores.
 unmined_pages_test() ->
-    Opts = #{ <<"store">> => [hb_test_utils:test_store()] },
+    Opts = #{
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"priv-wallet">> => ar_wallet:new()
+    },
     Node = hb_http_server:start_node(Opts),
     lists:foreach(
         fun(N) ->
             {ok, _} =
                 hb_cache:write(
-                    #{ <<"type">> => <<"Unmined">>, <<"n">> => hb_util:bin(N) },
+                    hb_message:commit(
+                        #{ <<"type">> => <<"Unmined">>, <<"n">> => hb_util:bin(N) },
+                        Opts
+                    ),
                     Opts
                 )
         end,
