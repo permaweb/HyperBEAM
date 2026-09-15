@@ -62,7 +62,8 @@
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
 -export([verify/1, verify/2, verify/3, paranoid_verify/2, paranoid_verify/3]).
 -export([commit/2, commit/3, signers/2, type/1, minimize/1]).
--export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
+-export([normalize_commitments/2, normalize_commitments/3]).
+-export([normalize_commitments/4, is_signed_key/3]).
 -export([commitment/2, commitment/3, commitments/3]).
 -export([with_only_committed/2, without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
@@ -247,24 +248,33 @@ id(Msg, RawCommitters, Opts) ->
 %% @doc Normalize the IDs in a message, ensuring that there is at least one
 %% unsigned ID present. By forcing this work to occur in strategically positioned
 %% places, we avoid the need to recalculate the IDs for every `hb_message:id`
-%% call.
+%% call. The mode sets how far the existing commitments are trusted: `passive'
+%% adds an unsigned commitment only where none exists; `verify' recomputes the
+%% unsigned commitment and drops every commitment if the committed keys no
+%% longer match it; `fast' verifies unless `priv/last-phash2' shows that the
+%% message is unchanged since it was last normalized. `deep' normalizes every
+%% nested message as well, `shallow' only the message itself.
 normalize_commitments(Msg, Opts) ->
     normalize_commitments(Msg, Opts, passive).
-normalize_commitments(Msg, Opts, Mode) when is_map(Msg) ->
+normalize_commitments(Msg, Opts, Mode) ->
+    normalize_commitments(Msg, Opts, Mode, deep).
+normalize_commitments(Msg, Opts, Mode, deep) when is_map(Msg) ->
     ?event_debug(debug_normalize_commitments, {normalize_commitments, {msg, Msg}}),
     NormMsg = 
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
                 Val;
-               (_Key, Val) -> normalize_commitments(Val, Opts, Mode)
+               (_Key, Val) -> normalize_commitments(Val, Opts, Mode, deep)
             end,
             Msg
         ),
     do_normalize_commitments(NormMsg, Opts, Mode);
-normalize_commitments(Msg, Opts, Mode) when is_list(Msg) ->
+normalize_commitments(Msg, Opts, Mode, deep) when is_list(Msg) ->
     ?event_debug(debug_normalize_commitments, {normalize_commitments, {list, Msg}}),
-    lists:map(fun(X) -> normalize_commitments(X, Opts, Mode) end, Msg);
-normalize_commitments(Msg, _Opts, _Mode) ->
+    lists:map(fun(X) -> normalize_commitments(X, Opts, Mode, deep) end, Msg);
+normalize_commitments(Msg, Opts, Mode, shallow) when is_map(Msg) ->
+    do_normalize_commitments(Msg, Opts, Mode);
+normalize_commitments(Msg, _Opts, _Mode, _Depth) ->
     Msg.
 
 do_normalize_commitments(Msg, _Opts, _Mode) when ?IS_EMPTY_MESSAGE(Msg) ->
@@ -320,7 +330,7 @@ do_normalize_commitments(Msg, Opts, verify) ->
     [NormID] = hb_maps:keys(NormCommitments, Opts),
     case {MaybeUnsignedID, NormID} of
         {MatchedID, MatchedID} ->
-            Msg;
+            attach_phash2(Msg, Opts);
         {undefined, _NewID} ->
             % We did not have an unsigned ID to begin with, so we need to add it.
             attach_phash2(
@@ -357,7 +367,7 @@ do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
     ),
     case hb_private:get(<<"last-phash2">>, Msg, not_found, Opts) of
         not_found ->
-            attach_phash2(Msg, ExpectedHash, Opts);
+            do_normalize_commitments(Msg, Opts, verify);
         ExpectedHash ->
             Msg;
         _DifferingHash ->
