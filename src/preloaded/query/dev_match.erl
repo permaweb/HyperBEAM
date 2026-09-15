@@ -216,20 +216,22 @@ index_message(Handler, Req, Opts) ->
 %% private keys; the value each path of `match-paths' resolves to; and each
 %% element of the list each path of `match-all-paths' resolves to.
 pairs(Handler, Msg, Opts) ->
-    Own = hb_message:uncommitted(hb_private:reset(Msg)),
-    hb_maps:to_list(Own, Opts) ++
-        resolved(<<"match-paths">>, #{}, Handler, Msg, Opts) ++
+    Single = resolved(<<"match-paths">>, #{}, Handler, Msg, Opts),
+    All =
+        resolved(
+            <<"match-all-paths">>, ?DEFAULT_ALL_PATHS, Handler, Msg, Opts
+        ),
+    Own =
+        hb_maps:without(
+            [ Name || {Name, _} <- Single ++ All ],
+            hb_message:uncommitted(hb_private:reset(Msg)),
+            Opts
+        ),
+    hb_maps:to_list(Own, Opts) ++ Single ++
         [
             {Name, Element}
         ||
-            {Name, List} <-
-                resolved(
-                    <<"match-all-paths">>,
-                    ?DEFAULT_ALL_PATHS,
-                    Handler,
-                    Msg,
-                    Opts
-                ),
+            {Name, List} <- All,
             Element <- elements(List)
         ].
 
@@ -239,7 +241,7 @@ pairs(Handler, Msg, Opts) ->
 resolved(Key, Default, Handler, Msg, Opts) ->
     Paths = hb_opts:get(Key, hb_maps:get(Key, Handler, Default, Opts), Opts),
     [
-        {Name, Value}
+        {hb_ao:normalize_key(Name), Value}
     ||
         {Name, Path} <- hb_maps:to_list(Paths, Opts),
         {ok, Value} <- [hb_ao:raw(Msg, #{ <<"path">> => Path }, Opts)]
@@ -700,12 +702,17 @@ paths_test() ->
             fun(Wallet, Msg) ->
                 hb_message:commit(Msg, Opts#{ <<"priv-wallet">> => Wallet })
             end,
-            #{ <<"a">> => <<"b">> },
+            #{
+                <<"a">> => <<"b">>,
+                <<"committer">> => <<"untrusted">>
+            },
             Wallets
         ),
     % At a weave offset the offset alone identifies the item, so a match
     % carries one of the IDs the message is written under.
     IDs = [cache(Signed, 1, Opts) | ids(Signed, Opts)],
+    cache(#{ <<"committer">> => <<"untrusted">> }, 3, Opts),
+    ?assertEqual([], matches(#{ <<"committer">> => <<"untrusted">> }, #{}, Opts)),
     lists:foreach(
         fun(Address) ->
             {ok, [Found]} =
@@ -716,7 +723,7 @@ paths_test() ->
     ),
     Named =
         Opts#{
-            <<"match-all-paths">> => #{ <<"signer">> => <<"committers">> },
+            <<"match-all-paths">> => #{ signer => <<"committers">> },
             <<"on">> => #{
                 <<"cache-write">> => #{
                     <<"device">> => <<"match@1.0">>,
@@ -729,10 +736,11 @@ paths_test() ->
     [Address | _] = Addresses,
     Second =
         hb_message:commit(
-            #{ <<"c">> => <<"d">> },
+            #{ <<"c">> => <<"d">>, <<"signer">> => <<"untrusted">> },
             Opts#{ <<"priv-wallet">> => Wallet }
         ),
     SecondIDs = [cache(Second, 2, Named) | ids(Second, Opts)],
+    ?assertEqual([], matches(#{ <<"signer">> => <<"untrusted">> }, #{}, Named)),
     {ok, [Signer]} = hb_cache:match(#{ <<"signer">> => Address }, Named),
     ?assert(lists:member(Signer, SecondIDs)),
     {ok, [Committer]} = hb_cache:match(#{ <<"committer">> => Address }, Named),
