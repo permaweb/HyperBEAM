@@ -329,7 +329,9 @@ write_message_ops(Msg, Opts) when is_map(Msg) ->
     ?event_debug(debug_cache,
         {writing_message,
             {id, UncommittedID},
-            {alt_ids, AltIDs},
+            {signed_ids, SignedIDs},
+            {unsigned_ids, UnsignedIDs},
+            {all_id, AllID},
             {original, Msg}
         }
     ),
@@ -356,7 +358,7 @@ write_message_ops(Msg, Opts) when is_map(Msg) ->
                 [{link, AltID, UncommittedID} | Acc]
             end,
             [{index_hook, AllID, SignedIDs, UnsignedIDs, Msg} | KeyOps],
-            (SignedIDs ++ UnsignedIDs ++ [AllID]) -- [UncommittedID]
+            lists:uniq((SignedIDs ++ UnsignedIDs ++ [AllID])) -- [UncommittedID]
         ),
     {ok, UncommittedID, lists:reverse(Ops)}.
 
