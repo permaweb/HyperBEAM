@@ -182,17 +182,22 @@ index_message(
 ) ->
     {ok, Req};
 index_message(Handler, Req, Opts) ->
-    Msg = hb_maps:get(<<"body">>, Req, #{}, Opts),
-    Offset = hb_private:get(<<"offset">>, Msg, -1, Opts),
-    % An unsigned message has no IDs to index under: nothing is written, so
-    % its pairs are not computed nor its groups created.
-    case hb_maps:get(<<"signed-ids">>, Req, [], Opts) of
+    case store(Opts) of
         [] ->
             {ok, Req};
-        IDs ->
-            index_message(Handler, Req, Msg, Offset, IDs, Opts)
+        Stores ->
+            index_message(
+                Handler, Req, hb_maps:get(<<"signed-ids">>, Req, [], Opts),
+                Stores, Opts
+            )
     end.
-index_message(Handler, Req, Msg, Offset, IDs, Opts) ->
+%% @doc Unsigned messages have no IDs to index; signed messages write their
+%% pairs to the configured stores.
+index_message(_Handler, Req, [], _Stores, _Opts) ->
+    {ok, Req};
+index_message(Handler, Req, IDs, Stores, Opts) ->
+    Msg = hb_maps:get(<<"body">>, Req, #{}, Opts),
+    Offset = hb_private:get(<<"offset">>, Msg, -1, Opts),
     Groups =
         [
             group(Name, Value, Opts)
@@ -208,19 +213,14 @@ index_message(Handler, Req, Msg, Offset, IDs, Opts) ->
                 ID <- IDs
             ]
         ),
-    case store(Opts) of
-        [] ->
-            {ok, Req};
-        Stores ->
-            lists:foreach(
-                fun(Group) -> hb_store:group(Stores, Group, Opts) end,
-                Groups
-            ),
-            case hb_store:write(Stores, Keys, Opts) of
-                ok -> {ok, Req};
-                {error, not_found} -> {ok, Req};
-                Error -> Error
-            end
+    lists:foreach(
+        fun(Group) -> hb_store:group(Stores, Group, Opts) end,
+        Groups
+    ),
+    case hb_store:write(Stores, Keys, Opts) of
+        ok -> {ok, Req};
+        {error, not_found} -> {ok, Req};
+        Error -> Error
     end.
 
 %% @doc The pairs a message carries: its own keys, but its commitments and
