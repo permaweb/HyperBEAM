@@ -236,7 +236,7 @@ message_query(Msg, Field, _Args, Opts) when Field =:= <<"keys">>; Field =:= <<"t
             {ok,
                 #{
                     <<"name">> => Name,
-                    <<"value">> => hb_cache:ensure_loaded(Value, Opts)
+                    <<"value">> => field_value(Value, Opts)
                 }
             }
         ||
@@ -261,6 +261,15 @@ message_query(Msg, <<"cursor">>, _Args, Opts) ->
     end;
 message_query(_Obj, _Field, _, _) ->
     {ok, <<"Not found.">>}.
+
+%% @doc Submessages as IDs, resolving lazy value or ID holders alone.
+field_value({link, _, #{ <<"lazy">> := true }} = Link, Opts) ->
+    [Value] = maps:values(hb_link:normalize(#{ <<"value">> => Link }, discard, Opts)),
+    field_value(Value, Opts);
+field_value({link, ID, _}, _Opts) -> ID;
+field_value(Value, Opts) when is_map(Value); is_list(Value) ->
+    hb_message:id(Value, all, Opts#{ <<"linkify-mode">> => discard });
+field_value(Value, _Opts) -> Value.
 
 keys_to_template(Keys) ->
     maps:from_list(lists:foldl(
@@ -315,7 +324,17 @@ test_query(Node, Query, Variables, OperationName, Opts) ->
 %%% Tests
 
 lookup_test() ->
-    {ok, Opts, _} = dev_query:test_setup(),
+    {ok, Opts, #{ <<"nested">> := NestedID }} = dev_query:test_setup(),
+    {ok, Nested} = hb_cache:read(NestedID, Opts),
+    lists:foreach(
+        fun({Value, Expected}) ->
+            ?assertEqual(
+                {ok, [{ok, #{ <<"name">> => <<"value">>, <<"value">> => Expected }}]},
+                execute(#{opts => Opts}, #{ <<"value">> => Value }, <<"keys">>, #{})
+            )
+        end,
+        [{42, 42}, {Nested, NestedID}, {{link, NestedID, #{}}, NestedID}]
+    ),
     Node = hb_http_server:start_node(Opts),
     Query =
         <<""" 
@@ -324,8 +343,8 @@ lookup_test() ->
                     keys: 
                         [
                             { 
-                                name: "basic", 
-                                value: "binary-value" 
+                                name: "test-key",
+                                value: "test-value"
                             }
                         ]
                 ) {
@@ -348,12 +367,16 @@ lookup_test() ->
                         <<"keys">> := 
                             [
                                 #{ 
-                                    <<"name">> := <<"basic">>,
-                                    <<"value">> := <<"binary-value">>
+                                    <<"name">> := <<"nested">>,
+                                    <<"value">> := NestedID
+                                },
+                                #{
+                                    <<"name">> := <<"test-key">>,
+                                    <<"value">> := <<"test-value">>
                                 },
                                 #{ 
-                                    <<"name">> := <<"basic-2">>,
-                                    <<"value">> := <<"binary-value-2">> 
+                                    <<"name">> := <<"test-key-2">>,
+                                    <<"value">> := <<"test-value-2">>
                                 }
                             ] 
                     } 
