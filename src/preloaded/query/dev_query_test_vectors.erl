@@ -474,10 +474,10 @@ transactions_query_tags_test_parallel() ->
     ),
     Query =
         <<"""
-            query {
+            query($types: [String!]!) {
                 transactions(
                     tags: [
-                        {name: "type", values: ["Message"]},
+                        {name: "type", values: $types},
                         {name: "variant", values: ["ao.N.1"]}
                     ]
                 ) {
@@ -497,7 +497,7 @@ transactions_query_tags_test_parallel() ->
         dev_query_graphql:test_query(
             Node,
             Query,
-            #{},
+            #{ <<"types">> => [<<"Message">>] },
             Opts
         ),
     ExpectedID = hb_message:id(WrittenMsg, all, Opts),
