@@ -20,7 +20,7 @@
   0},
  {<<"graphql">>,
   {git,"https://github.com/permaweb/graphql-erlang.git",
-       {ref,"c441b395014e0b3a4c4354bf01022b8fc0e7206e"}},
+       {ref,"0071dac3871de6bfb4a430585ef06777ab22fd26"}},
   0},
  {<<"gun">>,{pkg,<<"gun">>,<<"2.2.0">>},0},
  {<<"hackney">>,{pkg,<<"hackney">>,<<"1.25.0">>},0},
