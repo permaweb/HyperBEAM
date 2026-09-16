@@ -14,6 +14,8 @@
 %%% zero-padded, then `infinity' for an item awaiting its block. At an
 %%% offset the offset alone identifies the item, as a published index
 %%% carries no IDs; at `-1' and `infinity' the ID does.
+%%% Mined IDs are recorded under `~match@1.0/mined/<id>', suppressing
+%%% their obsolete `-1' and `infinity' entries when locating matches.
 %%%
 %%% The stores of the index are the node's `match-index' stores (`store/1').
 %%% A store of the node's own holds a group's keys as its children; a
@@ -188,7 +190,7 @@ index_message(Handler, Req, Opts) ->
         ||
             {Name, Value} <- pairs(Handler, Msg, Opts)
         ],
-    Keys =
+    MemberKeys =
         maps:from_list(
             [
                 {<<Group/binary, "/", (key({Offset, ID}))/binary>>, <<>>}
@@ -197,6 +199,19 @@ index_message(Handler, Req, Opts) ->
                 ID <- hb_maps:get(<<"ids">>, Req, [], Opts)
             ]
         ),
+    % Mined IDs suppress obsolete pending and unpositioned entries without
+    % discarding any of their distinct mined weave positions.
+    Keys =
+        case Offset of
+            N when is_integer(N), N >= 0 ->
+                maps:merge(MemberKeys,
+                    maps:from_list([
+                        {mined_key(ID), <<>>}
+                    || ID <- hb_maps:get(<<"ids">>, Req, [], Opts)
+                    ])
+                );
+            _ -> MemberKeys
+        end,
     case store(Opts) of
         [] ->
             {ok, Req};
@@ -232,6 +247,18 @@ pairs(Handler, Msg, Opts) ->
                 ),
             Element <- elements(List)
         ].
+
+%% @doc The index record that an ID has a mined occurrence.
+mined_key(ID) -> <<?PREFIX/binary, "mined/", ID/binary>>.
+
+%% @doc Whether an unpositioned or pending entry has a mined occurrence.
+is_superseded({Offset, ID}, Opts) when Offset =:= -1; Offset =:= infinity ->
+    case hb_store:read(hb_store:scope(store(Opts), local), mined_key(ID), Opts) of
+        {ok, _} -> {ok, true};
+        {error, not_found} -> {ok, false};
+        Error -> Error
+    end;
+is_superseded(_Key, _Opts) -> {ok, false}.
 
 %% @doc The pairs a map of paths names, each the value its path resolves to
 %% on the message. The node's options hold the map, else the hook's handler
@@ -371,10 +398,17 @@ locate(Direction, Groups, Cursor, Exclusive, To, Limit, Acc, Opts) ->
                 true ->
                     {ok, lists:reverse(Acc)};
                 false when Status =:= match ->
-                    locate(
-                        Direction, Read, Key, true, To, remaining(Limit),
-                        [Key | Acc], Opts
-                    );
+                    maybe
+                        {ok, IsSuperseded} ?= is_superseded(Key, Opts),
+                        case IsSuperseded of
+                            true ->
+                                locate(Direction, Read, Key, true, To,
+                                    Limit, Acc, Opts);
+                            false ->
+                                locate(Direction, Read, Key, true, To,
+                                    remaining(Limit), [Key | Acc], Opts)
+                        end
+                    end;
                 false ->
                     locate(Direction, Read, Key, false, To, Limit, Acc, Opts)
             end;
@@ -582,6 +616,27 @@ body(Base, Opts) ->
     end.
 
 %%% Tests
+
+%% @doc Confirmation suppresses pending and unpositioned entries across
+%% stores in either direction, retaining every distinct mined occurrence.
+confirmation_test() ->
+    Opts = test_opts(),
+    Pending = hb_test_utils:test_store(hb_store_volatile),
+    PendingOpts = Opts#{ <<"match-index">> => [Pending] },
+    Template = #{ <<"type">> => <<"Confirmation">> },
+    {ok, ID} = hb_cache:write(Template, Opts),
+    ID = cache(Template, infinity, PendingOpts),
+    ID = cache(Template, 7, Opts),
+    ID = cache(Template, 9, Opts),
+    % A later cache write lacking an offset must not resurrect the entry.
+    {ok, ID} = hb_cache:write(Template, Opts),
+    Combined = Opts#{ <<"match-index">> => [Pending | store(Opts)] },
+    ?assertEqual([{7, ID}, {9, ID}], matches(Template, #{}, Combined)),
+    ?assertEqual([{9, ID}, {7, ID}],
+        matches(Template, #{ <<"direction">> => desc }, Combined)),
+    ?assertEqual([{9, ID}],
+        matches(Template, #{ <<"direction">> => desc, <<"limit">> => 1 },
+            Combined)).
 
 %% The map size of the LMDB test store: every environment reserves its
 %% map's address space, which the suite's stores exhaust at the default.
