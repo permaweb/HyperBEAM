@@ -177,7 +177,8 @@ handle(_Base, RawReq, Opts) ->
 %% GraphQL library. We split the resolution flows into two separated functions:
 %% `message_query/4' for the HyperBEAM native API, and `dev_query_arweave:query/4'
 %% for the Arweave-compatible API.
-execute(#{object_type := <<"Bundle">>}, _Obj, <<"id">>, _Args) ->
+execute(#{object_type := Type}, _Obj, <<"id">>, _Args)
+        when Type =:= <<"Bundle">>; Type =:= <<"Parent">> ->
     {ok, <<>>};
 execute(Ctx = #{opts := Opts}, Obj, Field, Args) ->
     ?event({graphql_query, {object, Obj}, {field, Field}, {args, Args}}),
