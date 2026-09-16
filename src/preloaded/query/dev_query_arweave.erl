@@ -1,28 +1,69 @@
-%%% @doc An implementation of the Arweave GraphQL API, inside the `~query@1.0'
-%%% device.
+%%% @doc Arweave-shaped GraphQL queries over AO-Core messages, called by
+%%% `dev_query_graphql' within `query@1.0'. This is a subset of the API declared
+%%% in `scripts/schema.gql', not a separate device or a transaction codec.
 %%%
-%%% When an `hb_store_arweave' index is available, transaction results are
-%%% sorted by block height via the monotonically increasing Arweave data
-%%% offsets stored in `hb_store_arweave_offset'.  The `sort' argument on the
-%%% `transactions' query selects the order (`HEIGHT_DESC' by default,
-%%% `HEIGHT_ASC' for ascending).  A `block' range filter narrows results to
-%%% transactions whose offsets fall within the requested block heights.
+%%% `transaction(id: ...)' reads one message by ID. `transactions' returns
+%%% `edges' containing `node' and `cursor', `pageInfo.hasNextPage', and an
+%%% optional string `count'. Supported filters are `ids', `tags', `owners',
+%%% `recipients' and `block'. Tag names address message keys, each with exactly
+%%% one value; multi-value tag filters are rejected. Owners are committers and
+%%% recipients are targets. A query without a selecting filter does not
+%%% enumerate the store; a block range alone is not a selecting filter.
 %%%
-%%% A node with stores of the `~match@1.0' index -- its own, a published
-%%% index's, its mempool's, or all of them as one -- answers the
-%%% `transactions' query from them whenever the query's filters are the
-%%% index's pairs: single-valued `tags', one owner, one recipient, and no
-%%% explicit IDs. The page is then read from the index in weave order between
-%%% bounds, the mempool leading it descending and ending it ascending, and
-%%% each cursor names its match's key in the index, so paging is stateless.
-%%% A match the node's stores hold is read through `hb_cache'; one only a
-%%% published index knows is read from the weave by one read of the item's
-%%% header, carrying the header's fields alone. An item the weave holds at
-%%% two offsets is two matches, and so two edges with one ID. The page's
-%%% `count' is read on demand, up to `query_arweave_max_index_count'
-%%% matches. Every other query, and every node without the index, is
-%%% answered through `hb_cache' -- where several values for one tag are
-%%% refused, as they are here.
+%%% `first' limits the page, clamped between zero and node option
+%%% `max-page-size' (default 100). The schema defaults `first' to 10; calls
+%%% without that argument use `default-page-size' (default 10). `sort' defaults
+%%% to `HEIGHT_DESC'; `HEIGHT_ASC' reverses weave order. Pending positions lead
+%%% descending and follow confirmed positions ascending; messages with no
+%%% position come last in either direction. Pass a returned `cursor' unchanged
+%%% as `after' with the same filters and sort; cursors should be treated as
+%%% opaque. Pagination reads the current index, not a saved snapshot.
+%%%
+%%% Queries with at least one indexed pair, one value per supplied owner or
+%%% recipient filter, and no explicit IDs or bundle filter can use
+%%% `~match@1.0/locate' with a compatible cursor. Its store pipelines supply
+%%% entries with `offset', `id' and `commitment-device'. A nonempty ID is read
+%%% through `hb_cache', using the node's configured stores. An entry without
+%%% an ID is read at its weave offset and deserialized by its commitment device
+%%% with `exclude-data=true', then converted to a structured message. This
+%%% requires a byte-addressable item and a device supporting header decoding;
+%%% it cannot identify a base-layer transaction by offset alone. Header reads
+%%% may span chunks. The payload is omitted, so `data.size' is zero for these
+%%% header-only results, not the size of the original payload.
+%%%
+%%% Indexed pagination orders by offset and ID and returns `member=' cursors.
+%%% One ID at two offsets can produce two edges. Unreadable entries are omitted
+%%% from the edges, without refilling the page. `hasNextPage' reflects remaining
+%%% index matches, not their readability. `count' ignores `after' and counts
+%%% matches across the query's ranges, capped by `query-arweave-max-index-count'
+%%% (default 1000); it is neither an uncapped total nor a count of readable
+%%% edges. Other supported queries use cache matching and ID reads; their
+%%% count is the number of candidate IDs before pagination and read failures.
+%%% Without an Arweave offset store, that path cannot order or filter by weave
+%%% position.
+%%%
+%%% `block' bounds are inclusive heights translated to weave byte ranges.
+%%% Indexed matching tests entry offsets; cache matching tests each item's
+%%% start and end. Block metadata is read locally, then remotely unless
+%%% `query-arweave-remote-block-ranges=false'. A missing lower or upper bound's
+%%% block metadata falls back to zero or infinity respectively.
+%%% `query-arweave-ignore-block-ranges=true' disables this filtering.
+%%% The AO-Core request's `force-next-page=true' forces `hasNextPage=true' and
+%%% appends `&remaining=0' to the last cursor when no further match is found.
+%%%
+%%% `id' and `tags' use the message projection in `dev_query_graphql'. Signature
+%%% and owner fields come from a signed commitment; recipient and anchor come
+%%% from commitment field mappings. `fee' and `quantity' read message values,
+%%% defaulting to zero. `data.size' measures `data', falling back to `body',
+%%% then an empty binary; `data.type' reads `content-type'. These projections
+%%% do not reconstruct an Arweave transaction or its original tag list.
+%%%
+%%% `block' and `blocks' can read block IDs or cached height ranges and project
+%%% height, timestamp and previous hash. Block connection pagination is not
+%%% implemented. Bundle and ingestion-time filters, ingestion-time ordering,
+%%% AR amount conversion, parent and bundle fields are not implemented even
+%%% though the schema declares them; unsupported fields may return a placeholder
+%%% or a GraphQL type error. Schema acceptance does not imply filter support.
 -module(dev_query_arweave).
 %%% AO-Core API:
 -export([query/4]).

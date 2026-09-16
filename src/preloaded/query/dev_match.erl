@@ -1,59 +1,106 @@
-%%% @doc A reverse index from `key=value' pairs to the messages carrying
-%%% them, in weave order: every message the node caches is indexed here as
-%%% it is written, and `~query@1.0' serves Arweave GraphQL from it.
+%%% @doc `match@1.0' indexes selected message key/value pairs and resolves
+%%% templates to message references. Index entries are messages containing
+%%% `offset', `id' and `commitment-device', not the indexed messages themselves.
+%%% `offset' is a weave byte position, `-1' for an unknown position, or
+%%% `infinity' for a pending position. `id' identifies a signed commitment;
+%%% `commitment-device' names its device. Unknown IDs and devices are empty
+%%% binaries. Store pipelines supply this representation independently of
+%%% how a store encodes its entries.
 %%%
-%%% Each pair a message carries names one store group,
-%%% `~match@1.0/<name>=<value-path>', holding one key per message carrying
-%%% the pair, with no value: the message's weave offset as twenty decimal
-%%% digits, then its 43-byte signed ID and commitment device. The value's
-%%% path is the hashpath of a binary value and the ID of a nested message
-%%% -- the path `hb_cache' links the value under -- so a group's path is
-%%% bounded and path-safe.
-%%%
-%%% The offset field sorts a group's keys by weave position, as bytes and as
-%%% terms alike: `-1' for a message with no weave position, then the offsets,
-%%% zero-padded, then `infinity' for an item awaiting its block. The ID
-%%% distinguishes results at the same offset.
-%%%
-%%% The stores of the index are the node's `match-index' stores (`store/1').
-%%% Each store's `from-key' pipeline returns messages with `offset', `id',
-%%% and `commitment-device'; unknown IDs and devices are empty binaries.
-%%% The default `key' and `entry' pipelines encode and decode native keys.
-%%% Write entries carry their group's path in `path'. A published index maps
-%%% groups and keys onto its rows with `row' and decodes them with `member',
-%%% setting its commitment device in the pipeline. A page is read from
-%%% every store, their entries merged.
-%%%
-%%% The pairs of a message are its own keys, but its commitments and private
-%%% keys, and those two maps of the node's options -- else of the hook's
-%%% handler message -- name: `match-paths', each the value a path resolves
-%%% to on the message, and `match-all-paths', each element of the list a
-%%% path resolves to. By default `match-all-paths' indexes a message under
-%%% `committer' for each of its `committers'.
-%%%
-%%% Keys:
+%%% Matching keys:
 %%% ```
-%%%     index:    Write the message in the request's `body' under each of
-%%%               its pairs -- its keys, and the pairs `match-paths' and
-%%%               `match-all-paths' name -- per ID in `signed-ids',
-%%%               at the offset of its `priv/offset': a weave offset,
-%%%               `infinity', or `-1' when it carries none. Only the
-%%%               kernel's `cache-write' hook is served.
-%%%     all:      The IDs of every message carrying all of the base's pairs.
-%%%     <key>:    The IDs of every message carrying that pair of the base.
-%%%     locate:   The matches of the base's pairs in weave order, each its
-%%%               key as `member', its `offset', and its `id' when known:
-%%%               from the request's `from', inclusive, or past its `after',
-%%%               to its `to', exclusive, in its `direction' (`asc', the
-%%%               default, or `desc'), at most its `limit'. A bound is a
-%%%               key, an offset, `-1' or `infinity'.
-%%%     row:      A group's path, or a key of one, as the row bits of a
-%%%               published index, at the request's `key-hash-size',
-%%%               `value-hash-size' and `offset-size'.
-%%%     key:      An entry message as a native key, under its optional `path'.
-%%%     entry:    A native key as an offset, ID and commitment-device message.
-%%%     member:   A row as a message carrying its offset.
+%%%     locate:  Match all pairs in the base message. Return a list of entry
+%%%              messages, each with an additional `member' cursor.
+%%%     all:     Match the base's pairs in stores of local scope. Return the
+%%%              distinct nonempty IDs of the resulting entries.
+%%%     <key>:   As `all', matching only the base's value at the requested key.
+%%%              Device keys and `set', `remove', `id', `verify' are reserved.
 %%% '''
+%%% Templates exclude private keys and top-level commitments. Structured
+%%% values are converted to TABM and the top-level `ao-types' field is removed;
+%%% top-level scalar types are not distinguished by matching. Other public keys,
+%%% including `device', are predicates. An empty template returns no matches.
+%%% With a nonempty template and no index stores, `locate' returns `not_found'.
+%%%
+%%% Entries are ordered by offset, then ID. At an offset, groups with known
+%%% IDs must agree on the ID; a group containing an entry without an ID
+%%% constrains only the offset. Known IDs are retained ahead of an unidentified
+%%% entry at the same offset. The commitment device is metadata, not an
+%%% additional equality or ordering field.
+%%%
+%%% All three matching forms accept request keys `direction' (`asc' by default
+%%% or `desc'), `limit' (a nonnegative integer; omitted means all), `from'
+%%% (inclusive), `after' (exclusive, taking precedence over `from'), and `to'
+%%% (exclusive). Without bounds, traversal starts at `-1' ascending or
+%%% `infinity' descending. Bounds may be entry messages, `member' cursors, or
+%%% offsets. An offset-only bound applies to every ID at that offset. Use a
+%%% returned `member' as `after' to resume past a particular result.
+%%%
+%%% Indexing:
+%%% `index' is the node's default `cache-write' hook. Its base is the hook
+%%% handler; its request carries the cache's TABM in `body' and the commitment
+%%% IDs to index in `signed-ids'. It accepts only requests privately marked
+%%% `hook-caller=kernel', otherwise returning status 401. Each signed ID is
+%%% indexed with its commitment device and the body's private `offset'
+%%% (default `-1'). Commitments themselves and messages without signed IDs are
+%%% skipped. Success returns the hook request unchanged, including when no
+%%% configured store accepts the entries.
+%%%
+%%% Indexed pairs comprise the body's public fields without its commitments,
+%%% plus computed values. `match-paths' maps names to paths resolved on the
+%%% body; `match-all-paths' indexes each list element under its configured name
+%%% (a non-list result contributes one value). Successfully resolved names
+%%% replace the corresponding body fields. Node options take precedence over
+%%% the handler's configuration. Defaults are an empty `match-paths' and a
+%%% `match-all-paths' message mapping `committer' to `committers~message@1.0'.
+%%% Computations use raw AO-Core resolution: `KEY~DEVICE' selects a device;
+%%% without that suffix, the body's device may be loaded, subject to the
+%%% node's trust settings.
+%%%
+%%% Store interface:
+%%% A local `match-index' selects the stores. If absent or equal to the global
+%%% setting, a locally supplied `store' takes its place; with neither local
+%%% option, the global `match-index' applies. The selected value may be a store
+%%% message or list, `false' for no index, or `true' to use the node's `store'.
+%%% Each predicate names a group `~match@1.0/<normalized-name>=<value-path>'.
+%%% The value path is a binary's hashpath or a nested message's uncommitted ID.
+%%% Writes have empty values and entry keys with an additional `path' naming
+%%% the group. `hb_store' applies prefix handling and `to-key' to these keys.
+%%% The encoder also receives binary group paths and pathless entry messages
+%%% for list bounds. List results pass through `from-key' to become entries.
+%%% Reads merge all configured stores using ordered, inclusive batch listing.
+%%% While entries remain beyond a cursor, a batch must include at least one
+%%% of them; a batch containing only the cursor is treated as exhausted.
+%%%
+%%% Default pipelines are `~match@1.0/key' and `~match@1.0/entry'; explicit
+%%% store pipelines override them. These adapter keys use the base's `body',
+%%% or the base itself if it has no `body':
+%%% ```
+%%%     key:    Encode an entry as a native binary key, joined to its `path'
+%%%             when present. A binary group path passes through unchanged.
+%%%     entry:  Decode a native key, or normalize an entry message's offset
+%%%             and supply empty `id' and `commitment-device' when absent.
+%%% '''
+%%% Native keys concatenate the offset, the 43-byte base64url signed ID, and
+%%% the variable-length device name. Nonnegative offsets occupy 20 zero-padded
+%%% decimal bytes; `-1' and `infinity' use those literal strings. An entry with
+%%% no ID encodes only its offset. `member' cursors use this native format
+%%% regardless of the store's encoding.
+%%%
+%%% Packed index adapters use the base's `body' and request bit widths
+%%% `key-hash-size', `value-hash-size', `offset-size' (each defaulting to zero):
+%%% ```
+%%%     row:     Encode a prefix-stripped `name=value-path' group, an entry's
+%%%              offset, or both when an entry also carries that group in
+%%%              `path'. IDs and devices are not encoded.
+%%%     member:  Decode a complete binary row into an entry with empty ID and
+%%%              device. The row must contain exactly the configured bits.
+%%% '''
+%%% A row contains leading bits of SHA-256(`~match@1.0/<name>'), leading bits
+%%% of the base64url-decoded value path, then the unsigned offset. `row' maps
+%%% `-1' to zero and `infinity' or oversized offsets to the field's maximum;
+%%% `member' maps that maximum to `infinity'. The pipeline must supply any
+%%% known commitment device, for example with `/set&commitment-device=ans104@1.0'.
 -module(dev_match).
 -export([info/0, all/3, index/3, locate/3, row/3, member/3, entry/3, key/3]).
 -include("include/hb.hrl").
