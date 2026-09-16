@@ -30,6 +30,8 @@
 %%% to on the message, and `match-all-paths', each element of the list a
 %%% path resolves to. By default `match-all-paths' indexes a message under
 %%% `committer' for each of its `committers'.
+%%% Actual recipients are indexed as `field-target' from commitments,
+%%% independently of tags named `target'.
 %%%
 %%% Keys:
 %%% ```
@@ -232,7 +234,7 @@ index_message(Handler, Req, Opts) ->
 %% element of the list each path of `match-all-paths' resolves to.
 pairs(Handler, Msg, Opts) ->
     Own = hb_message:uncommitted(hb_private:reset(Msg)),
-    hb_maps:to_list(Own, Opts) ++
+    hb_maps:to_list(Own, Opts) ++ recipient_pairs(Msg, Opts) ++
         resolved(<<"match-paths">>, #{}, Handler, Msg, Opts) ++
         [
             {Name, Element}
@@ -247,6 +249,17 @@ pairs(Handler, Msg, Opts) ->
                 ),
             Element <- elements(List)
         ].
+
+%% @doc Index actual recipients from commitment fields, independently of
+%% tags named `target'. Commitment messages themselves are not indexed.
+recipient_pairs(Msg, Opts) ->
+    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    [
+        {<<"field-target">>, Target}
+    ||
+        {_ID, Commitment} <- hb_maps:to_list(Commitments, Opts),
+        {ok, Target} <- [hb_maps:find(<<"field-target">>, Commitment, Opts)]
+    ].
 
 %% @doc The index record that an ID has a mined occurrence.
 mined_key(ID) -> <<?PREFIX/binary, "mined/", ID/binary>>.

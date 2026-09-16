@@ -561,7 +561,7 @@ index_connection(Args, Opts) ->
     end.
 
 %% @doc The query's filters as the index's pairs: each tag's one value, and
-%% the `committer' and `target' one owner and one recipient are
+%% the `committer' and `field-target' one owner and one recipient are
 %% indexed under. Explicit IDs, a height or bundle filter, a filter given
 %% several values, and a query naming no pair are `unservable'.
 index_template(Args, Opts) ->
@@ -573,7 +573,7 @@ index_template(Args, Opts) ->
             {Pair, Filter} <-
                 [
                     {<<"committer">>, <<"owners">>},
-                    {<<"target">>, <<"recipients">>}
+                    {<<"field-target">>, <<"recipients">>}
                 ]
         ],
     maybe
@@ -1055,6 +1055,37 @@ unmined_pages_test() ->
     Descending = Pages(<<"HEIGHT_DESC">>, null, []),
     ?assertEqual(3, length(lists:usort(Descending))),
     ?assertEqual(lists:reverse(Descending), Pages(<<"HEIGHT_ASC">>, null, [])).
+
+%% @doc Recipient filters use actual commitment fields in both query paths,
+%% including when a `target' tag differs from the actual recipient.
+recipient_filters_test() ->
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()] },
+    Node = hb_http_server:start_node(Opts),
+    Target = crypto:strong_rand_bytes(32),
+    Address = hb_util:encode(Target),
+    TX = ar_tx:sign(#tx{ format = 2, target = Target,
+        tags = [{<<"type">>, <<"RecipientTest">>},
+            {<<"target">>, <<"different-tag-value">>}] }, ar_wallet:new()),
+    Msg = hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
+    {ok, _} = hb_cache:write(Msg, Opts),
+    Query = <<"""
+        query($recipients: [String!]) {
+            transactions(recipients: $recipients,
+                tags: [{name: "type", values: ["RecipientTest"]}]) {
+                edges { node { id recipient } }
+            }
+        }
+        """>>,
+    Edges = fun(Recipients) ->
+        hb_util:deep_get(<<"data/transactions/edges">>,
+            dev_query_graphql:test_query(Node, Query,
+                #{ <<"recipients">> => Recipients }, Opts), not_found, Opts)
+    end,
+    [Edge] = Edges([Address]),
+    ?assertEqual([Edge], Edges([Address, <<"other-recipient">>])),
+    ?assertEqual([], Edges([<<"different-tag-value">>])),
+    ?assertEqual(Address,
+        hb_util:deep_get(<<"node/recipient">>, Edge, not_found, Opts)).
 
 %% @doc A page served from the published index on Arweave, its items
 %% read from the weave: the twenty-four items of `action=Battle.Begin'
