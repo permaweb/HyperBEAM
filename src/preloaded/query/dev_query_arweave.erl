@@ -121,7 +121,7 @@ query(#{ <<"matches">> := Matches, <<"terminal">> := Terminal },
             false -> Edges
         end,
     {ok, [{ok, Edge} || Edge <- Marked]};
-query(#{ <<"template">> := Template, <<"ranges">> := Ranges },
+query(#{ <<"templates">> := Templates, <<"ranges">> := Ranges },
         <<"count">>, _Args, Opts) ->
     % The count of an index-served page, read over its ranges on demand,
     % up to the node's maximum.
@@ -131,7 +131,7 @@ query(#{ <<"template">> := Template, <<"ranges">> := Ranges },
             ?DEFAULT_MAX_INDEX_COUNT,
             Opts
         ),
-    case index_matches(Template, Ranges, none, Cap, Opts) of
+    case index_matches(Templates, Ranges, none, Cap, Opts) of
         {ok, Matches} -> {ok, hb_util:bin(length(Matches))};
         Error -> Error
     end;
@@ -600,7 +600,7 @@ latest_cached_block(Opts) ->
 %% `cached_transactions' answers it.
 index_connection(Args, Opts) ->
     maybe
-        {ok, Template} ?= index_template(Args, Opts),
+        {ok, Templates} ?= index_templates(Args, Opts),
         {ok, After} ?= index_cursor(Args, Opts),
         Direction =
             case hb_maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>, Opts) of
@@ -610,25 +610,25 @@ index_connection(Args, Opts) ->
         Ranges = index_ranges(Direction, Args, Opts),
         PageSize = page_size(Args, Opts),
         {ok, Matches} ?=
-            index_matches(Template, Ranges, After, PageSize + 1, Opts),
+            index_matches(Templates, Ranges, After, PageSize + 1, Opts),
         More = length(Matches) > PageSize,
         ForceNextPage = force_next_page(Args, Opts),
         {ok,
             #{
                 <<"matches">> => lists:sublist(Matches, PageSize),
                 <<"terminal">> => ForceNextPage andalso not More,
-                <<"template">> => Template,
+                <<"templates">> => Templates,
                 <<"ranges">> => Ranges,
                 <<"pageInfo">> =>
                     #{ <<"hasNextPage">> => More orelse ForceNextPage }
             }}
     end.
 
-%% @doc The query's filters as the index's pairs: each tag's one value, and
+%% @doc Separate templates retain every conjunctive filter: each tag's value, and
 %% the `committer' and `target' one owner and one recipient are
 %% indexed under. Explicit IDs, a height or bundle filter, a filter given
 %% several values, and a query naming no pair are `unservable'.
-index_template(Args, Opts) ->
+index_templates(Args, Opts) ->
     Get = fun(Filter) -> hb_maps:get(Filter, Args, null, Opts) end,
     Fields =
         [
@@ -655,16 +655,13 @@ index_template(Args, Opts) ->
             ) orelse unservable,
         Tags =
             case Get(<<"tags">>) of
-                null -> #{};
-                Filters -> dev_query_graphql:keys_to_template(Filters)
+                null -> [];
+                Filters ->
+                    [dev_query_graphql:keys_to_template([Filter]) || Filter <- Filters]
             end,
-        Template =
-            maps:merge(
-                Tags,
-                maps:from_list([ {Pair, Value} || {Pair, [Value]} <- Fields ])
-            ),
-        true ?= map_size(Template) > 0 orelse unservable,
-        {ok, Template}
+        Templates = Tags ++ [ #{ Pair => Value } || {Pair, [Value]} <- Fields ],
+        true ?= Templates =/= [] orelse unservable,
+        {ok, Templates}
     end.
 
 %% @doc The match the page resumes after, from the cursor of an
@@ -713,7 +710,7 @@ index_ranges(Direction, Args, Opts) ->
 
 %% @doc The matches of a page: the ranges read in order from the cursor,
 %% which lies in the range holding its key.
-index_matches(Template, Ranges, After, Limit, Opts) ->
+index_matches(Templates, Ranges, After, Limit, Opts) ->
     % A cursor among the messages the weave never held resumes their range
     % alone: the second of the two an open ascending page reads.
     Ahead =
@@ -721,14 +718,14 @@ index_matches(Template, Ranges, After, Limit, Opts) ->
             {<<"-1", _/binary>>, [_Weave, Unmined]} -> [Unmined];
             _ -> Ranges
         end,
-    locate_ranges(Template, Ahead, After, Limit, Opts).
+    locate_ranges(Templates, Ahead, After, Limit, Opts).
 
 %% @doc The matches of the ranges in order from the cursor, as far as the
 %% page has room.
-locate_ranges(_Template, Ranges, _After, Limit, _Opts)
+locate_ranges(_Templates, Ranges, _After, Limit, _Opts)
         when Ranges =:= []; Limit =:= 0 ->
     {ok, []};
-locate_ranges(Template, [Range | Rest], After, Limit, Opts) ->
+locate_ranges(Templates, [Range | Rest], After, Limit, Opts) ->
     Bounds =
         case After of
             none -> Range;
@@ -736,20 +733,20 @@ locate_ranges(Template, [Range | Rest], After, Limit, Opts) ->
         end,
     maybe
         {ok, Matches} ?=
-            locate(Template, Bounds#{ <<"limit">> => Limit }, Opts),
+            locate(Templates, Bounds#{ <<"limit">> => Limit }, Opts),
         {ok, More} ?=
-            locate_ranges(Template, Rest, none, Limit - length(Matches), Opts),
+            locate_ranges(Templates, Rest, none, Limit - length(Matches), Opts),
         {ok, Matches ++ More}
     end.
 
-%% @doc The matches of a template through `~match@1.0'. A node without
+%% @doc The intersection of templates through `~match@1.0'. A node without
 %% stores of the index is `unservable'; a failing store is an error, as
 %% `cached_transactions' answers from different data.
-locate(Template, Req, Opts) ->
+locate(Templates, Req, Opts) ->
     try hb_ao:raw(
             <<"match@1.0">>,
-            Template,
-            Req#{ <<"path">> => <<"locate">> },
+            #{},
+            Req#{ <<"path">> => <<"locate">>, <<"and">> => Templates },
             Opts
         ) of
         {error, not_found} -> unservable;
@@ -863,10 +860,13 @@ match_args([], Results, _Opts) ->
             tl(Results)
         )
     );
+match_args([{<<"tags">>, Tags} | Rest], Acc, Opts) when is_list(Tags) ->
+    match_args([{<<"tag">>, Tag} || Tag <- Tags] ++ Rest, Acc, Opts);
 match_args([{Field, X} | Rest], Acc, Opts) ->
     ?event({match, {field, Field}, {arg, X}}),
     case match(Field, X, Opts) of
         {ok, Result} -> match_args(Rest, [Result | Acc], Opts);
+        {error, not_found} -> match_args(Rest, [[] | Acc], Opts);
         _Error -> match_args(Rest, Acc, Opts)
     end.
 
@@ -897,8 +897,8 @@ match(<<"id">>, ID, _Opts) ->
     {ok, [ID]};
 match(<<"ids">>, IDs, _Opts) ->
     {ok, IDs};
-match(<<"tags">>, Tags, Opts) ->
-    hb_cache:match(dev_query_graphql:keys_to_template(Tags), Opts);
+match(<<"tag">>, Tag, Opts) ->
+    hb_cache:match(dev_query_graphql:keys_to_template([Tag]), Opts);
 match(<<"owners">>, Owners, Opts) ->
     {ok, matching_commitments(<<"committer">>, Owners, Opts)};
 match(<<"owner">>, Owner, Opts) ->

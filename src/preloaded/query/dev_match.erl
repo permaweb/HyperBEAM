@@ -27,6 +27,8 @@
 %%% constrains only the offset. Known IDs are retained ahead of an unidentified
 %%% entry at the same offset. The commitment device is metadata, not an
 %%% additional equality or ordering field.
+%%% The request's optional `and' list supplies additional templates whose
+%%% pairs must also match, including separate constraints on the same key.
 %%%
 %%% All three matching forms accept request keys `direction' (`asc' by default
 %%% or `desc'), `limit' (a nonnegative integer; omitted means all), `from'
@@ -389,7 +391,8 @@ locate(Base, Req, Opts) ->
         [
             {group(Name, Value, Opts), [ {Store, unread} || Store <- Stores ]}
         ||
-            {Name, Value} <- template(Base, Opts)
+            Template <- [Base | hb_maps:get(<<"and">>, Req, [], Opts)],
+            {Name, Value} <- template(Template, Opts)
         ],
     case {Groups, Stores} of
         {[], _} ->
