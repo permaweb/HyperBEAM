@@ -57,7 +57,19 @@ lookup(Base, Req, OriginalBase, OriginalReq, Opts) ->
                     Opts,
                     hb_opts:get(store_scope_resolved, local, Opts)
                 ),
-            case hb_cache:read_resolved(Base, Req, OutputScopedOpts) of
+            Read =
+                case hb_message:signers(Req, Opts) of
+                    [] ->
+                        hb_cache:read_resolved(
+                            Base,
+                            normalized(Req, Opts),
+                            OutputScopedOpts
+                        );
+                    _ ->
+                        ?event(caching, {skip_cache_check, signed_request}),
+                        miss
+                end,
+            case Read of
                 {hit, not_found} ->
                     {error, not_found};
                 {hit, {ok, Res}} ->
@@ -133,23 +145,28 @@ async_writer() ->
 perform_cache_write(Base, Req, Res, Opts) ->
     hb_cache:write(Base, Opts),
     hb_cache:write(Req, Opts),
-    case Res of
-        <<_/binary>> ->
-            hb_cache:write_binary(
-                hb_path:hashpath(Base, Req, Opts),
-                Res,
-                Opts
-            );
-        Map when is_map(Map) ->
-            hb_cache:write_hashpath(
-                hb_path:hashpath(Base, Req, Opts),
-                Res,
-                Opts
-            );
+    case hb_message:signers(Req, Opts) of
+        [] ->
+            Hashpath = hb_path:hashpath(Base, normalized(Req, Opts), Opts),
+            case Res of
+                <<_/binary>> ->
+                    hb_cache:write_binary(Hashpath, Res, Opts);
+                Map when is_map(Map) ->
+                    hb_cache:write_hashpath(Hashpath, Res, Opts);
+                _ ->
+                    ?event({cannot_write_result, Res}),
+                    skip_caching
+            end;
         _ ->
-            ?event({cannot_write_result, Res}),
+            ?event(caching, {skip_caching, signed_request}),
             skip_caching
     end.
+
+%% @doc A request carrying the commitment that covers the keys it holds. Its
+%% hashpath is taken over that commitment, so the hashpath tells apart
+%% requests that differ in the path or in any key given alongside it.
+normalized(Req, Opts) ->
+    hb_message:normalize_commitments(Req, Opts, fast, shallow).
 
 %% @doc Generate a message to return when `only_if_cached' was specified, and
 %% we don't have a cached result.
