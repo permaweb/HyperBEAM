@@ -328,6 +328,7 @@ simple_ans104_query_test_parallel() ->
                     edges {
                         node {
                             id,
+                            bundledIn { id }
                             tags {
                                 name,
                                 value
@@ -358,6 +359,7 @@ simple_ans104_query_test_parallel() ->
                             <<"node">> :=
                                 #{
                                     <<"id">> := ExpectedID,
+                                    <<"bundledIn">> := #{ <<"id">> := <<>> },
                                     <<"tags">> :=
                                         [#{ <<"name">> := _, <<"value">> := _ }|_]
                                 }

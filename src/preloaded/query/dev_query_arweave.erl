@@ -61,8 +61,8 @@
 %%% `block' and `blocks' can read block IDs or cached height ranges and project
 %%% height, timestamp and previous hash. Block connection pagination is not
 %%% implemented. Bundle and ingestion-time filters, ingestion-time ordering,
-%%% AR amount conversion, parent and bundle fields are not implemented even
-%%% though the schema declares them; unsupported fields may return a placeholder
+%%% AR amount conversion and parent fields are not implemented. `bundledIn { id }'
+%%% returns an empty ID. Other unsupported fields may return a placeholder
 %%% or a GraphQL type error. Schema acceptance does not imply filter support.
 -module(dev_query_arweave).
 %%% AO-Core API:
@@ -247,6 +247,8 @@ query(#{ <<"data">> := Data }, <<"size">>, _Args, _Opts) ->
     {ok, byte_size(Data)};
 query(#{ <<"type">> := Type }, <<"type">>, _Args, _Opts) ->
     {ok, Type};
+query(_Msg, <<"bundledIn">>, _Args, _Opts) ->
+    {ok, #{}};
 query(Obj, Field, Args, _Opts) ->
     ?event({unimplemented_transactions_query,
         {object, Obj},
