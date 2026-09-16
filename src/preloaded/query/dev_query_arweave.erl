@@ -734,7 +734,7 @@ match_message(#{ <<"offset">> := Offset }, Opts) -> header(Offset, Opts).
 %% nor the header holds its length.
 header(Offset, Opts) ->
     Tail =
-        hb_ao:resolve(
+        hb_ao:raw(
             #{ <<"device">> => <<"arweave@2.9">> },
             #{ <<"path">> => <<"chunk">>, <<"offset">> => Offset + 1 },
             Opts
