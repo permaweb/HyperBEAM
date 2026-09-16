@@ -724,7 +724,8 @@ match_edges(Matches, Opts) ->
 %% @doc A match's message: through `hb_cache' by its ID, or from the weave
 %% by its offset.
 match_message(#{ <<"id">> := ID }, Opts) -> hb_cache:read(ID, Opts);
-match_message(#{ <<"offset">> := Offset }, Opts) -> header(Offset, Opts).
+match_message(#{ <<"offset">> := Offset, <<"commitment-device">> := Device }, Opts) ->
+    header(Offset, Device, Opts).
 
 %% @doc The message of the item at a weave offset, from its header alone:
 %% parsed from the bytes between the offset and the end of its chunk -- one
@@ -732,38 +733,43 @@ match_message(#{ <<"offset">> := Offset }, Opts) -> header(Offset, Opts).
 %% as the weave's padding follows it -- or from a longer read when the
 %% header runs into the next chunk. The data is left out: neither the index
 %% nor the header holds its length.
-header(Offset, Opts) ->
+header(Offset, Device, Opts) ->
     Tail =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9">> },
             #{ <<"path">> => <<"chunk">>, <<"offset">> => Offset + 1 },
             Opts
         ),
-    case header_message(Tail, Opts) of
+    case header_message(Tail, Device, Opts) of
         {ok, Node} ->
             {ok, Node};
         {error, _} ->
             header_message(
                 hb_store_arweave:read_chunks(Offset, ?ITEM_PROBE_LENGTH, Opts),
+                Device,
                 Opts
             )
     end.
 
 %% @doc The message of the item whose header opens the read bytes.
-header_message({ok, Bytes}, Opts) ->
+header_message({ok, Bytes}, Device, Opts) ->
     try
-        {ok, _HeaderSize, TX} = ar_bundles:deserialize_header(Bytes),
+        {ok, TABM} =
+            hb_ao:raw(
+                Device, <<"deserialize">>, #{ <<"body">> => Bytes },
+                #{ <<"exclude-data">> => true }, Opts
+            ),
         {ok,
             hb_message:convert(
-                TX#tx{ data = <<>>, data_size = 0 },
+                TABM,
                 <<"structured@1.0">>,
-                <<"ans104@1.0">>,
+                tabm,
                 Opts
             )}
     catch _:Reason ->
         {error, {'invalid-item', Reason}}
     end;
-header_message(Error, _Opts) ->
+header_message(Error, _Device, _Opts) ->
     Error.
 
 %%% Match argument processing
@@ -1101,7 +1107,9 @@ published_pages() ->
                         <<"return-row">> => true,
                         <<"prefix">> => <<"~match@1.0/">>,
                         <<"to-key">> => <<"~match@1.0/row", Sizes/binary>>,
-                        <<"from-key">> => <<"~match@1.0/member", Sizes/binary>>
+                        <<"from-key">> =>
+                            <<"~match@1.0/member", Sizes/binary,
+                                "/set&commitment-device=ans104@1.0">>
                     }
                 ]
         },
