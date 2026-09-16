@@ -750,10 +750,10 @@ transactions_query_filter_by_block_test_parallel() ->
         fun(Start, End, Present, Absent) ->
             Q = 
                 <<"""
-                    query($ids: [ID!], $min: Int, $max: Int) {
+                    query($ids: [ID!], $block: BlockFilter) {
                         transactions(
                             ids: $ids,
-                            block: {min: $min, max: $max}
+                            block: $block
                         ) {
                             edges {
                                 node {
@@ -769,8 +769,7 @@ transactions_query_filter_by_block_test_parallel() ->
                     Q,
                     #{
                         <<"ids">> => Present ++ Absent,
-                        <<"min">> => Start,
-                        <<"max">> => End
+                        <<"block">> => #{ <<"min">> => Start, <<"max">> => End }
                     },
                     Opts
                 ),
