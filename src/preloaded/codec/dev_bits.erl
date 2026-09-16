@@ -8,7 +8,7 @@
 %%%     field  = name ":" size ("+" type)?
 %%%     type   = "integer" | "float" | "atom" | enum(atom ("," atom)*)
 %%%     name   = any bytes except `:' and `,'; `_' alone is padding
-%%%     size   = a positive decimal bit count
+%%%     size   = a positive decimal bit count | "_"
 %%% '''
 %%% For example, `_:77,start:49+integer,length:34+integer' names the two
 %%% trailing fields of a 160-bit row and discards its leading 77 bits, and
@@ -18,7 +18,7 @@
 %%% the empty body is the empty list -- and `repeat' does not nest.
 %%%
 %%% Fields pack contiguously in the order written, with no alignment or
-%%% padding between them, and their sizes must sum to exactly the decoded
+%%% padding between them, and their sizes must cover exactly the decoded
 %%% body's bit size. A field named `_' is anonymous padding: its bits are
 %%% consumed and omitted from the result (any other name, including ones
 %%% merely beginning with `_', is an ordinary field, and a repeated name
@@ -28,8 +28,10 @@
 %%% field, at byte-multiple sizes; `enum' fields as the member named by the
 %%% field's unsigned integer value, zero-indexed, returned as a binary;
 %%% untyped fields decode as bitstrings, byte-aligned only when their size
-%%% is a multiple of eight. The empty format, an empty field name, a
-%%% non-positive or non-decimal size, an unknown type, a float or atom size
+%%% is a multiple of eight. A final untyped field may use `_' to take
+%%% all remaining bits, including none; `repeat' requires fixed sizes.
+%%% The empty format, an empty field name, a non-positive or non-decimal
+%%% size, an unknown type, a float or atom size
 %%% outside those above, an enum value past its last member, and a body
 %%% whose bit size does not match the format are refused.
 %%%
@@ -56,8 +58,8 @@ from(Base, Req, Opts) ->
     end.
 
 %% @doc Decode a body as the single record, or the record sequence, that its
-%% parsed format describes. The body's bit size must equal the record size,
-%% or a whole multiple of it under `repeat'.
+%% parsed format describes. Fixed sizes must cover the body exactly, or a
+%% whole multiple of it under `repeat'; `_' consumes the remaining bits.
 decode({repeat, Fields}, Body) ->
     Record = record_size(Fields),
     maybe
@@ -70,14 +72,16 @@ decode(Fields, Body) ->
     Total = record_size(Fields),
     maybe
         true ?=
-            Total =:= bit_size(Body)
+            (Total =:= bit_size(Body) orelse
+                (Total < bit_size(Body) andalso
+                    lists:keymember(rest, 2, Fields)))
                 orelse {error, {'invalid-body-size', bit_size(Body), Total}},
         decode_fields(Fields, Body, #{})
     end.
 
-%% @doc The bit size of one record of the given fields.
+%% @doc The fixed bit size of one record of the given fields.
 record_size(Fields) ->
-    lists:sum([ Size || {_Name, Size, _Type} <- Fields ]).
+    lists:sum([ Size || {_Name, Size, _Type} <- Fields, is_integer(Size) ]).
 
 %% @doc Decode each record of a repeated body in order.
 decode_records(_Fields, _Record, <<>>, Records) ->
@@ -119,6 +123,9 @@ parse_format(<<"repeat(", Inner/binary>>) ->
                 {$), Format, <<>>} -> parse_format(Format);
                 _ -> {error, {'invalid-format', <<"repeat(", Inner/binary>>}}
             end,
+        true ?=
+            not lists:keymember(rest, 2, Fields)
+                orelse {error, {'invalid-format', <<"repeat(", Inner/binary>>}},
         {ok, {repeat, Fields}}
     end;
 parse_format(Format) ->
@@ -129,6 +136,9 @@ parse_fields([], Fields) -> {ok, lists:reverse(Fields)};
 parse_fields([Spec | Rest], Fields) ->
     maybe
         {ok, Field} ?= parse_field(Spec),
+        true ?=
+            (element(2, Field) =/= rest orelse Rest =:= [])
+                orelse {error, {'invalid-format-field', Spec}},
         parse_fields(Rest, [Field | Fields])
     end.
 
@@ -150,6 +160,7 @@ parse_field(Spec) ->
     end.
 
 %% @doc Attach a parsed bit size to a field.
+sized_field(Name, <<"_">>, bitstring) -> {ok, {Name, rest, bitstring}};
 sized_field(Name, Size, Type) ->
     maybe
         {ok, Bits} ?= parse_size(Size),
@@ -202,6 +213,8 @@ parse_size(Value) ->
 
 %% @doc Decode the fields from the body in order, skipping `_' padding.
 decode_fields([], <<>>, Msg) -> {ok, Msg};
+decode_fields([{Name, rest, bitstring}], Body, Msg) ->
+    decode_fields([{Name, bit_size(Body), bitstring}], Body, Msg);
 decode_fields([{Name, Size, Type} | Rest], Body, Msg) ->
     <<Value:Size/bitstring, Remaining/bitstring>> = Body,
     case Name of
@@ -238,17 +251,27 @@ typed({enum, Members}, Bits) ->
 
 %% @doc Decode a packed body, skipping padding and typing integers.
 from_test() ->
-    {ok, Decoded} =
-        hb_ao:resolve(
-            #{
-                <<"path">> => <<"~bits@1.0/from=_:3,count:13+integer,tail:16">>,
-                <<"body">> => <<2#101:3, 999:13, "ok">>
-            },
-            #{}
-        ),
-    ?assertEqual(999, hb_maps:get(<<"count">>, Decoded)),
-    ?assertEqual(<<"ok">>, hb_maps:get(<<"tail">>, Decoded)),
-    ?assertEqual(error, hb_maps:find(<<"_">>, Decoded)).
+    lists:foreach(
+        fun({Size, Tail}) ->
+            {ok, Decoded} =
+                hb_ao:raw(
+                    <<"bits@1.0">>,
+                    #{ <<"body">> => <<2#101:3, 999:13, Tail/bitstring>> },
+                    #{
+                        <<"path">> => <<"from">>,
+                        <<"from">> => <<"_:3,count:13+integer,tail:", Size/binary>>
+                    },
+                    #{}
+                ),
+            ?assertEqual(999, hb_maps:get(<<"count">>, Decoded)),
+            ?assertEqual(Tail, hb_maps:get(<<"tail">>, Decoded)),
+            ?assertEqual(error, hb_maps:find(<<"_">>, Decoded))
+        end,
+        [
+            {<<"16">>, <<"ok">>}, {<<"_">>, <<"ans104@1.0">>},
+            {<<"_">>, <<>>}, {<<"_">>, <<5:3>>}
+        ]
+    ).
 
 %% @doc Untyped fields decode as bitstrings on non-byte boundaries.
 from_bitstring_field_test() ->
@@ -265,38 +288,42 @@ from_bitstring_field_test() ->
 
 %% @doc Bodies that do not match their format's size are refused.
 from_size_mismatch_test() ->
-    ?assertMatch(
-        {error, _},
-        hb_ao:resolve(
-            #{
-                <<"path">> => <<"~bits@1.0/from=value:16+integer">>,
-                <<"body">> => <<1>>
-            },
-            #{}
-        )
+    lists:foreach(
+        fun(Format) ->
+            ?assertMatch(
+                {error, _},
+                hb_ao:resolve(
+                    #{
+                        <<"path">> => <<"~bits@1.0/from=", Format/binary>>,
+                        <<"body">> => <<1>>
+                    },
+                    #{}
+                )
+            )
+        end,
+        [<<"value:16+integer">>, <<"value:16+integer,tail:_">>]
     ).
 
 %% @doc Malformed formats are refused.
 from_malformed_format_test() ->
-    ?assertMatch(
-        {error, _},
-        hb_ao:resolve(
-            #{
-                <<"path">> => <<"~bits@1.0/from=value:banana">>,
-                <<"body">> => <<1>>
-            },
-            #{}
-        )
-    ),
-    ?assertMatch(
-        {error, _},
-        hb_ao:resolve(
-            #{
-                <<"path">> => <<"~bits@1.0/from=value:8+float">>,
-                <<"body">> => <<1>>
-            },
-            #{}
-        )
+    lists:foreach(
+        fun(Format) ->
+            ?assertMatch(
+                {error, _},
+                hb_ao:resolve(
+                    #{
+                        <<"path">> => <<"~bits@1.0/from=", Format/binary>>,
+                        <<"body">> => <<1>>
+                    },
+                    #{}
+                )
+            )
+        end,
+        [
+            <<"value:banana">>, <<"value:8+float">>,
+            <<"tail:_,value:8">>, <<"tail:_+integer">>,
+            <<"repeat(tail:_)">>
+        ]
     ).
 
 %% @doc Take leading bits across byte boundaries, refusing over-long takes.
