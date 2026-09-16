@@ -52,7 +52,8 @@
 %%% configured store accepts the entries.
 %%%
 %%% Indexed pairs comprise the body's public fields without its commitments,
-%%% plus computed values. `match-paths' maps names to paths resolved on the
+%%% plus values computed with only the indexed ID's commitment present.
+%%% `match-paths' maps names to paths resolved on the
 %%% body; `match-all-paths' indexes each list element under its configured name
 %%% (a non-list result contributes one value). Successfully resolved names
 %%% replace the corresponding body fields. Node options take precedence over
@@ -251,15 +252,7 @@ index(Handler, Req, Opts) ->
                 }
             }
     end.
-%% @doc The message written under its pairs, per ID. A commitment is not
-%% indexed as a message of its own: the message it commits is indexed under
-%% its committers.
-index_message(
-    _Handler,
-    Req = #{ <<"body">> := #{ <<"commitment-device">> := _ } },
-    _Opts
-) ->
-    {ok, Req};
+%% @doc Index the message under its signed IDs when stores are configured.
 index_message(Handler, Req, Opts) ->
     case store(Opts) of
         [] ->
@@ -277,12 +270,6 @@ index_message(_Handler, Req, [], _Stores, _Opts) ->
 index_message(Handler, Req, IDs, Stores, Opts) ->
     Msg = hb_maps:get(<<"body">>, Req, #{}, Opts),
     Offset = hb_private:get(<<"offset">>, Msg, -1, Opts),
-    Groups =
-        [
-            group(Name, Value, Opts)
-        ||
-            {Name, Value} <- pairs(Handler, Msg, Opts)
-        ],
     Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     Members =
         [
@@ -297,12 +284,18 @@ index_message(Handler, Req, IDs, Stores, Opts) ->
     Keys =
         maps:from_list(
             [
-                {Member#{ <<"path">> => Group }, <<>>}
+                {Member#{ <<"path">> => group(Name, Value, Opts) }, <<>>}
             ||
-                Group <- Groups,
-                Member <- Members
+                Member = #{ <<"id">> := ID } <- Members,
+                {Name, Value} <-
+                    pairs(
+                        Handler,
+                        hb_message:with_commitments(ID, Msg, Opts),
+                        Opts
+                    )
             ]
         ),
+    Groups = lists:uniq([Group || #{ <<"path">> := Group } <- maps:keys(Keys)]),
     lists:foreach(
         fun(Group) -> hb_store:group(Stores, Group, Opts) end,
         Groups
@@ -971,7 +964,7 @@ weave_order_test() ->
     LiteralID = Cache(Literal, 9),
     ?assertEqual([{9, LiteralID}], matches(Literal, #{}, Opts)).
 
-%% @doc A message is indexed under each of its committers, and a
+%% @doc Each signed ID is indexed under its own committer, and a
 %% `match-all-paths' map in the node's options names the pair over the
 %% hook's handler message's.
 paths_test() ->
@@ -985,6 +978,7 @@ paths_test() ->
             end,
             #{
                 <<"a">> => <<"b">>,
+                <<"commitment-device">> => <<"signed-payload-field">>,
                 <<"device">> => <<"unavailable@1.0">>,
                 <<"committer">> => <<"untrusted">>
             },
@@ -995,14 +989,20 @@ paths_test() ->
         hb_cache:write(hb_maps:get(<<"commitments">>, Signed), Opts),
     cache(Signed#{ <<"commitments">> => {link, CommitmentsPath, #{}} }, 1, Opts),
     IDs = lists:sort(ids(Signed, Opts)),
+    Commitments = hb_maps:get(<<"commitments">>, Signed, Opts),
     ?assertEqual(2, length(IDs)),
+    ?assertEqual(
+        [{1, ID} || ID <- IDs], matches(#{ <<"a">> => <<"b">> }, #{}, Opts)
+    ),
     cache(#{ <<"committer">> => <<"untrusted">> }, 3, Opts),
     ?assertEqual([], matches(#{ <<"committer">> => <<"untrusted">> }, #{}, Opts)),
     lists:foreach(
         fun(Address) ->
-            {ok, Found} =
+            {ok, [ID]} =
                 hb_cache:match(#{ <<"committer">> => Address }, Opts),
-            ?assertEqual(IDs, lists:sort(Found))
+            ?assertEqual(
+                Address, hb_util:deep_get([ID, <<"committer">>], Commitments, Opts)
+            )
         end,
         Addresses
     ),
@@ -1036,8 +1036,10 @@ paths_test() ->
     ?assertEqual([], matches(#{ <<"signer">> => <<"untrusted">> }, #{}, Named)),
     {ok, [Signer]} = hb_cache:match(#{ <<"signer">> => Address }, Named),
     ?assert(lists:member(Signer, SecondIDs)),
-    {ok, Committers} = hb_cache:match(#{ <<"committer">> => Address }, Named),
-    ?assertEqual(IDs, lists:sort(Committers)).
+    {ok, [CommitterID]} = hb_cache:match(#{ <<"committer">> => Address }, Named),
+    ?assertEqual(
+        Address, hb_util:deep_get([CommitterID, <<"committer">>], Commitments, Opts)
+    ).
 
 %% @doc A group's path hashes to the row prefix of a published index, a key
 %% to its offset bits, and a row back to its key.
