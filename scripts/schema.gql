@@ -1,6 +1,7 @@
 ### Supported GraphQL Queries. ###
 
 type Query {
+  networkInfo: NetworkInfo!
 
   # Get a message by its id or a subset of its keys.
   message(id: ID, keys: [KeyInput]): Message
@@ -125,6 +126,10 @@ type Tag {
 }
 
 # Block Schema
+type NetworkInfo {
+  height: Int!
+}
+
 type Block {
   # The block ID.
   id: ID

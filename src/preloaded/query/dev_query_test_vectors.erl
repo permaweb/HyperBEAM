@@ -216,6 +216,7 @@ simple_blocks_query_test_parallel() ->
     Query =
         <<"""
             query {
+                networkInfo { height }
                 blocks(
                     ids: ["V7yZNKPQLIQfUu8r8-lcEaz4o7idl6LTHn5AHlGIFF8TKfxIe7s_yFxjqan6OW45"]
                 ) {
@@ -233,6 +234,7 @@ simple_blocks_query_test_parallel() ->
     ?assertMatch(
         #{
             <<"data">> := #{
+                <<"networkInfo">> := #{ <<"height">> := Height },
                 <<"blocks">> := #{
                     <<"edges">> := [
                         #{
@@ -246,7 +248,7 @@ simple_blocks_query_test_parallel() ->
                     ]
                 }
             }
-        },
+        } when is_integer(Height) andalso Height >= 1745749,
         dev_query_graphql:test_query(Node, Query, #{}, Opts)
     ).
 

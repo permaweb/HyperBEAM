@@ -61,7 +61,8 @@
 %%% `block' and `blocks' can read block IDs or cached height ranges and project
 %%% height, timestamp and previous hash. Block connection pagination is not
 %%% implemented. Bundle and ingestion-time filters, ingestion-time ordering,
-%%% AR amount conversion is not implemented. `parent { id }' and `bundledIn { id }'
+%%% and AR amount conversion are not implemented. `networkInfo.height' reads
+%%% the configured Arweave node's status. `parent { id }' and `bundledIn { id }'
 %%% return empty IDs. Other unsupported fields may return a placeholder
 %%% or a GraphQL type error. Schema acceptance does not imply filter support.
 -module(dev_query_arweave).
@@ -153,6 +154,12 @@ query(Obj, <<"block">>, Args, Opts) ->
         {ok, []} -> {ok, null};
         {ok, [Msg|_]} -> {ok, Msg}
     end;
+query(_Obj, <<"networkInfo">>, _Args, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        <<"status">>,
+        Opts
+    );
 query(Obj, <<"blocks">>, Args, Opts) ->
     ?event({blocks, 
             {object, Obj}, 
