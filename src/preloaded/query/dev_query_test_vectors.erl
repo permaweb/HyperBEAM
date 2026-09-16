@@ -641,7 +641,7 @@ transactions_query_combined_test_parallel() ->
     Opts =
         #{
             <<"priv-wallet">> => Wallet = ar_wallet:new(),
-            <<"store">> => [hb_test_utils:test_store()]
+            <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -652,14 +652,13 @@ transactions_query_combined_test_parallel() ->
     ),
     Query =
         <<"""
-            query($owners: [String!], $ids: [ID!], $recipients: [String!]) {
+            query($owners: [String!], $ids: [ID!], $recipients: [String!],
+                $tags: [TagFilter!] = [{name: "type", values: ["Message", "Other"]}]) {
                 transactions(
                     owners: $owners,
                     ids: $ids,
                     recipients: $recipients,
-                    tags: [
-                        {name: "type", values: ["Message"]}
-                    ]
+                    tags: $tags
                 ) {
                     edges {
                         node {
@@ -685,6 +684,31 @@ transactions_query_combined_test_parallel() ->
         ),
     ?event({expected_id, ExpectedID}),
     ?event({transactions_query_combined_test, Res}),
+    lists:foreach(
+        fun({TestNode, MatchID}) ->
+            lists:foreach(
+                fun({Values, Expected}) ->
+                    Result = dev_query_graphql:test_query(TestNode, Query,
+                        #{ <<"ids">> => [MatchID], <<"tags">> =>
+                            [#{ <<"name">> => <<"type">>, <<"values">> => V }
+                            || V <- Values] }, Opts),
+                    ?assertNot(maps:is_key(<<"errors">>, Result)),
+                    ?assertEqual(Expected, transaction_ids(Result, Opts))
+                end,
+                [
+                    {[[<<"Other">>, <<"Message">>], [<<"Message">>]], [MatchID]},
+                    {[[<<"Other">>, <<"Absent">>]], []},
+                    {[[<<"Message">>], [<<"Other">>]], []},
+                    {[[]], []},
+                    {[], [MatchID]}
+                ]
+            )
+        end,
+        [{Node, ExpectedID},
+            {hb_http_server:start_node(Opts#{
+                <<"priv-wallet">> => ar_wallet:new(), <<"match-index">> => false
+            }), hb_message:id(WrittenMsg, none, Opts)}]
+    ),
     lists:foreach(
         fun(Filter) ->
             Empty = dev_query_graphql:test_query(Node, Query, #{ Filter => [] }, Opts),

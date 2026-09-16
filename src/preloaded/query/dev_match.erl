@@ -19,8 +19,13 @@
 %%% Templates exclude private keys and top-level commitments. Structured
 %%% values are converted to TABM and the top-level `ao-types' field is removed;
 %%% top-level scalar types are not distinguished by matching. Other public keys,
-%%% including `device', are predicates. An empty template returns no matches.
-%%% With a nonempty template and no index stores, `locate' returns `not_found'.
+%%% including `device', are predicates.
+%%% The request may add `predicates': a list of messages with `name' and
+%%% `values'. Values within each predicate are ORed; predicates and the base's
+%%% pairs are ANDed. An empty values list matches nothing. Ordinary template
+%%% values, including lists, retain their literal meaning.
+%%% With no base pairs or request predicates, there are no matches.
+%%% With predicates but no index stores, `locate' returns `not_found'.
 %%%
 %%% Entries are ordered by offset, then ID. At an offset, groups with known
 %%% IDs must agree on the ID; a group containing an entry without an ID
@@ -62,7 +67,7 @@
 %%% setting, a locally supplied `store' takes its place; with neither local
 %%% option, the global `match-index' applies. The selected value may be a store
 %%% message or list, `false' for no index, or `true' to use the node's `store'.
-%%% Each predicate names a group `~match@1.0/<normalized-name>=<value-path>'.
+%%% Each alternative names a group `~match@1.0/<normalized-name>=<value-path>'.
 %%% The value path is a binary's hashpath or a nested message's uncommitted ID.
 %%% Writes have empty values and entry keys with an additional `path' naming
 %%% the group. `hb_store' applies prefix handling and `to-key' to these keys.
@@ -364,39 +369,35 @@ match(Key, Base, Req, Opts) ->
         error -> {error, not_found}
     end.
 
-%% @doc Match the full base message against the index, returning the
-%% intersection of all matches for each key.
+%% @doc Match the base pairs and request predicates, returning their IDs.
 all(Base, Req, Opts) ->
     ids(Base, Req, Opts).
 
-%% @doc The IDs of the messages carrying every pair of a template: those of
-%% its matches -- every one, unless the request bounds the page -- that
-%% carry an ID, each once. The node's own stores hold them: those of local
-%% scope, as a published index carries no IDs.
+%% @doc Unique IDs matching the base pairs and request predicates, within the
+%% request bounds. Only local-scope index stores are read; entries without
+%% an ID are omitted.
 ids(Template, Req, Opts) ->
     Local = hb_store:scope(store(Opts), local),
     Bounded = maps:merge(#{ <<"limit">> => all }, Req),
     case locate(Template, Bounded, Opts#{ <<"match-index">> => Local }) of
         {ok, Matches} ->
             {ok, hb_util:unique([ ID || #{ <<"id">> := ID } <- identified(Matches) ])};
-        {error, _} ->
-            {error, not_found}
+        {error, _} = Error ->
+            Error
     end.
 
 %%% Reading the index.
 
-%% @doc The matches of the base message's pairs in weave order: each pair's
-%% group is read from every store, and a key every group holds at one
-%% position is a match. A base without pairs matches nothing, and a node
-%% without stores of the index is `not_found'.
+%% @doc AND the predicates in weave order, each merging its alternative groups
+%% across stores. No predicates gives no matches; no index stores is `not_found'.
 locate(Base, Req, Opts) ->
     {Direction, Cursor, Exclusive, To, Limit} = bounds(Req, Opts),
     Stores = store(Opts),
     Groups =
         [
-            {group(Name, Value, Opts), [ {Store, unread} || Store <- Stores ]}
+            {Paths, [ {{Path, Store}, unread} || Path <- Paths, Store <- Stores ]}
         ||
-            {Name, Value} <- template(Base, Opts)
+            Paths <- groups(Base, Req, Opts)
         ],
     case {Groups, Stores} of
         {[], _} ->
@@ -413,6 +414,21 @@ locate(Base, Req, Opts) ->
                 {ok, [ Match#{ <<"member">> => key(Match) } || Match <- Matches ]}
             end
     end.
+
+%% @doc Each AND predicate's alternative group paths, normalized as templates.
+groups(Base, Req, Opts) ->
+    [ [group(Name, Value, Opts)] || {Name, Value} <- template(Base, Opts) ] ++
+        [
+            lists:usort([
+                group(Key, Value, Opts)
+            ||
+                Alternative <- hb_maps:get(<<"values">>, Predicate, not_found, Opts),
+                {Key, Value} <- template(#{ Name => Alternative }, Opts)
+            ])
+        ||
+            Predicate <- hb_maps:get(<<"predicates">>, Req, [], Opts),
+            Name <- [hb_maps:get(<<"name">>, Predicate, not_found, Opts)]
+        ].
 
 %% @doc The pairs a base message names: every key but its commitments and
 %% private keys, in the wire form the index is written from.
@@ -564,15 +580,16 @@ next_key(Direction, Group, Pages, Cursor, Exclusive, Opts) ->
         end
     end.
 
-%% @doc Each store's page of a group's keys from the cursor.
+%% @doc Each alternative/store stream's page from the cursor.
 pages(_Direction, _Group, [], _Cursor, _Exclusive, _Opts) ->
     {ok, []};
-pages(Direction, Group, [{Store, Page} | Rest], Cursor, Exclusive, Opts) ->
+pages(Direction, Group, [{{Path, Store} = Source, Page} | Rest],
+        Cursor, Exclusive, Opts) ->
     maybe
         {ok, Left} ?=
-            from_cursor(Direction, Group, Page, Cursor, Exclusive, Store, Opts),
+            from_cursor(Direction, Path, Page, Cursor, Exclusive, Store, Opts),
         {ok, Others} ?= pages(Direction, Group, Rest, Cursor, Exclusive, Opts),
-        {ok, [{Store, Left} | Others]}
+        {ok, [{Source, Left} | Others]}
     end.
 
 %% @doc A store's page from the cursor: the keys behind it dropped, and a
@@ -804,6 +821,14 @@ weave_order_test() ->
         )
     ),
     Later = Cache(Template#{ <<"n">> => <<"2">> }, 7),
+    N = fun(Values) -> #{ <<"name">> => <<"n">>, <<"values">> => Values } end,
+    Choices = #{ <<"predicates">> => [N([1, <<"1">>, <<"2">>])] },
+    ?assertEqual([{5, Mined}, {7, Later}], matches(Template, Choices, Opts)),
+    ?assertEqual([], matches(Template, #{ <<"predicates">> => [N([])] }, Opts)),
+    ?assertEqual(
+        [{7, Later}],
+        matches(Template, #{ <<"predicates">> => [N([1, 2]), N([2, 3])] }, Opts)
+    ),
     Pending = Cache(Template#{ <<"n">> => <<"3">> }, infinity),
     Unmined = Cache(Template#{ <<"n">> => <<"4">> }, -1),
     ?assertEqual([], matches(Template#{ <<"device">> => <<"other">> }, #{}, Opts)),
@@ -863,7 +888,7 @@ weave_order_test() ->
         )
     ),
     % Distinct signed IDs at one offset survive matching and both cursor orders.
-    Peer = Cache(Template#{ <<"b">> => <<"yes">> }, 5),
+    Peer = Cache(Template#{ <<"b">> => <<"yes">>, <<"n">> => <<"0">> }, 5),
     [First, Second] = Shared = lists:sort([{5, Mined}, {5, Peer}]),
     [FirstCursor, SecondCursor] =
         [ #{ <<"offset">> => O, <<"id">> => ID } || {O, ID} <- Shared ],
@@ -889,6 +914,17 @@ weave_order_test() ->
     ?assertEqual([], matches(Template, Desc#{ <<"after">> => 5 }, Opts)),
     ?assertEqual([], matches(Template, Asc#{ <<"to">> => 5 }, Opts)),
     ?assertEqual([], matches(Template, Desc#{ <<"to">> => 5 }, Opts)),
+    lists:foreach(
+        fun({Bounds, Expected, After, Remaining}) ->
+            Req = Bounds#{ <<"predicates">> => [N([0, 1, 2])] },
+            ?assertEqual(Expected, matches(Template, Req, Opts)),
+            ?assertEqual(
+                Remaining, matches(Template, Req#{ <<"after">> => After }, Opts)
+            )
+        end,
+        [{Asc, Shared, FirstCursor, [Second]},
+            {Desc, lists:reverse(Shared), SecondCursor, [First]}]
+    ),
     ?assertEqual(
         [], matches(#{ <<"a">> => <<"yes">>, <<"b">> => <<"yes">> }, #{}, Opts)
     ),
@@ -910,6 +946,14 @@ weave_order_test() ->
     ),
     ?assertEqual([{5, <<>>}], matches(Mixed, Asc, Published)),
     MixedOpts = Opts#{ <<"match-index">> => store(Opts) ++ Stores },
+    PublishedChoice = #{ <<"name">> => <<"published">>,
+        <<"values">> => [<<"absent">>, <<"yes">>, <<"yes">>] },
+    ?assertEqual(
+        [{5, <<>>}], matches(#{}, Asc#{ <<"predicates">> => [PublishedChoice] }, Published)
+    ),
+    ?assertEqual(
+        Shared, matches(Template, Asc#{ <<"predicates">> => [PublishedChoice] }, MixedOpts)
+    ),
     ?assertEqual(Shared, matches(Mixed, Asc, MixedOpts)),
     ?assertEqual(
         lists:reverse(Shared), matches(Mixed, Desc, MixedOpts)
@@ -917,7 +961,15 @@ weave_order_test() ->
     ?assertEqual(Shared, matches(Asymmetric, Asc, MixedOpts)),
     ?assertEqual(
         lists:reverse(Shared), matches(Asymmetric, Desc, MixedOpts)
-    ).
+    ),
+    ?assertEqual(Shared, matches(Mixed, Asc#{ <<"predicates">> => [N([0, 1])] }, MixedOpts)),
+    ?assertEqual(
+        lists:reverse(Shared),
+        matches(Mixed, Desc#{ <<"predicates">> => [N([0, 1])] }, MixedOpts)
+    ),
+    Literal = #{ <<"literal">> => [<<"1">>, <<"2">>] },
+    LiteralID = Cache(Literal, 9),
+    ?assertEqual([{9, LiteralID}], matches(Literal, #{}, Opts)).
 
 %% @doc A message is indexed under each of its committers, and a
 %% `match-all-paths' map in the node's options names the pair over the

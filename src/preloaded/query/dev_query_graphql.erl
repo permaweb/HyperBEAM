@@ -277,16 +277,7 @@ field_value(Value, _Opts) -> Value.
 keys_to_template(Keys) ->
     maps:from_list(lists:foldl(
         fun(#{<<"name">> := Name, <<"value">> := Value}, Acc) ->
-            [{Name, Value} | Acc];
-        (#{<<"name">> := Name, <<"values">> := [Value]}, Acc) ->
-            [{Name, Value} | Acc];
-        (#{<<"name">> := Name, <<"values">> := Values}, _Acc) ->
-            throw(
-                {multivalue_tag_search_not_supported, #{
-                    <<"name">> => Name,
-                    <<"values">> => Values
-                }}
-            )
+            [{Name, Value} | Acc]
         end,
         [],
         Keys

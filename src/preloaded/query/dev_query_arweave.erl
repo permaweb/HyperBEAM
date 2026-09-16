@@ -5,10 +5,10 @@
 %%% `transaction(id: ...)' reads one message by ID. `transactions' returns
 %%% `edges' containing `node' and `cursor', `pageInfo.hasNextPage', and an
 %%% optional string `count'. Supported filters are `ids', `tags', `owners',
-%%% `recipients' and `block'. Tag names address message keys, each with exactly
-%%% one value; multi-value tag filters are rejected. Owners are committers and
-%%% recipients are targets. A query without a selecting filter does not
-%%% enumerate the store; a block range alone is not a selecting filter.
+%%% `recipients' and `block'. Tag names address message keys. Values within a
+%%% tag are ORed; separate tags and other filters are ANDed. Owners are
+%%% committers and recipients are targets. A query without a selecting filter
+%%% does not enumerate the store; a block range alone is not a selecting filter.
 %%%
 %%% `first' limits the page, clamped between zero and node option
 %%% `max-page-size' (default 100). The schema defaults `first' to 10; calls
@@ -19,10 +19,10 @@
 %%% as `after' with the same filters and sort; cursors should be treated as
 %%% opaque. Pagination reads the current index, not a saved snapshot.
 %%%
-%%% Queries with at least one indexed pair, one value per supplied owner or
-%%% recipient filter, and no explicit IDs or bundle filter can use
-%%% `~match@1.0/locate' with a compatible cursor. Its store pipelines supply
-%%% entries with `offset', `id' and `commitment-device'. A nonempty ID is read
+%%% Queries with at least one indexed predicate and no explicit IDs or bundle
+%%% filter can use `~match@1.0/locate' with a compatible cursor. Its store
+%%% pipelines supply entries with `offset', `id' and `commitment-device'.
+%%% A nonempty ID is read
 %%% through `hb_cache', using the node's configured stores. An entry without
 %%% an ID is read at its weave offset and deserialized by its commitment device
 %%% with `exclude-data=true', then converted to a structured message. This
@@ -121,7 +121,7 @@ query(#{ <<"matches">> := Matches, <<"terminal">> := Terminal },
             false -> Edges
         end,
     {ok, [{ok, Edge} || Edge <- Marked]};
-query(#{ <<"template">> := Template, <<"ranges">> := Ranges },
+query(#{ <<"predicates">> := Predicates, <<"ranges">> := Ranges },
         <<"count">>, _Args, Opts) ->
     % The count of an index-served page, read over its ranges on demand,
     % up to the node's maximum.
@@ -131,7 +131,7 @@ query(#{ <<"template">> := Template, <<"ranges">> := Ranges },
             ?DEFAULT_MAX_INDEX_COUNT,
             Opts
         ),
-    case index_matches(Template, Ranges, none, Cap, Opts) of
+    case index_matches(Predicates, Ranges, none, Cap, Opts) of
         {ok, Matches} -> {ok, hb_util:bin(length(Matches))};
         Error -> Error
     end;
@@ -600,7 +600,7 @@ latest_cached_block(Opts) ->
 %% `cached_transactions' answers it.
 index_connection(Args, Opts) ->
     maybe
-        {ok, Template} ?= index_template(Args, Opts),
+        {ok, Predicates} ?= index_predicates(Args, Opts),
         {ok, After} ?= index_cursor(Args, Opts),
         Direction =
             case hb_maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>, Opts) of
@@ -610,25 +610,24 @@ index_connection(Args, Opts) ->
         Ranges = index_ranges(Direction, Args, Opts),
         PageSize = page_size(Args, Opts),
         {ok, Matches} ?=
-            index_matches(Template, Ranges, After, PageSize + 1, Opts),
+            index_matches(Predicates, Ranges, After, PageSize + 1, Opts),
         More = length(Matches) > PageSize,
         ForceNextPage = force_next_page(Args, Opts),
         {ok,
             #{
                 <<"matches">> => lists:sublist(Matches, PageSize),
                 <<"terminal">> => ForceNextPage andalso not More,
-                <<"template">> => Template,
+                <<"predicates">> => Predicates,
                 <<"ranges">> => Ranges,
                 <<"pageInfo">> =>
                     #{ <<"hasNextPage">> => More orelse ForceNextPage }
             }}
     end.
 
-%% @doc The query's filters as the index's pairs: each tag's one value, and
-%% the `committer' and `target' one owner and one recipient are
-%% indexed under. Explicit IDs, a height or bundle filter, a filter given
-%% several values, and a query naming no pair are `unservable'.
-index_template(Args, Opts) ->
+%% @doc The query's AND predicates, each with alternative values. Owners and
+%% recipients use `committer' and `target'. Explicit IDs, a height or bundle
+%% filter, and a query naming no predicate are `unservable'.
+index_predicates(Args, Opts) ->
     Get = fun(Filter) -> hb_maps:get(Filter, Args, null, Opts) end,
     Fields =
         [
@@ -646,25 +645,16 @@ index_template(Args, Opts) ->
         true ?=
             Get(<<"height">>) =:= null andalso Get(<<"bundledIn">>) =:= null
                 orelse unservable,
-        true ?=
-            lists:all(
-                fun({_Pair, Values}) ->
-                    Values =:= null orelse length(Values) =:= 1
-                end,
-                Fields
-            ) orelse unservable,
         Tags =
             case Get(<<"tags">>) of
-                null -> #{};
-                Filters -> dev_query_graphql:keys_to_template(Filters)
+                null -> [];
+                Filters -> Filters
             end,
-        Template =
-            maps:merge(
-                Tags,
-                maps:from_list([ {Pair, Value} || {Pair, [Value]} <- Fields ])
-            ),
-        true ?= map_size(Template) > 0 orelse unservable,
-        {ok, Template}
+        Predicates = Tags ++
+            [ #{ <<"name">> => Pair, <<"values">> => Values }
+            || {Pair, Values} <- Fields, Values =/= null ],
+        true ?= Predicates =/= [] orelse unservable,
+        {ok, Predicates}
     end.
 
 %% @doc The match the page resumes after, from the cursor of an
@@ -713,7 +703,7 @@ index_ranges(Direction, Args, Opts) ->
 
 %% @doc The matches of a page: the ranges read in order from the cursor,
 %% which lies in the range holding its key.
-index_matches(Template, Ranges, After, Limit, Opts) ->
+index_matches(Predicates, Ranges, After, Limit, Opts) ->
     % A cursor among the messages the weave never held resumes their range
     % alone: the second of the two an open ascending page reads.
     Ahead =
@@ -721,14 +711,14 @@ index_matches(Template, Ranges, After, Limit, Opts) ->
             {<<"-1", _/binary>>, [_Weave, Unmined]} -> [Unmined];
             _ -> Ranges
         end,
-    locate_ranges(Template, Ahead, After, Limit, Opts).
+    locate_ranges(Predicates, Ahead, After, Limit, Opts).
 
 %% @doc The matches of the ranges in order from the cursor, as far as the
 %% page has room.
-locate_ranges(_Template, Ranges, _After, Limit, _Opts)
+locate_ranges(_Predicates, Ranges, _After, Limit, _Opts)
         when Ranges =:= []; Limit =:= 0 ->
     {ok, []};
-locate_ranges(Template, [Range | Rest], After, Limit, Opts) ->
+locate_ranges(Predicates, [Range | Rest], After, Limit, Opts) ->
     Bounds =
         case After of
             none -> Range;
@@ -736,20 +726,20 @@ locate_ranges(Template, [Range | Rest], After, Limit, Opts) ->
         end,
     maybe
         {ok, Matches} ?=
-            locate(Template, Bounds#{ <<"limit">> => Limit }, Opts),
+            locate(Predicates, Bounds#{ <<"limit">> => Limit }, Opts),
         {ok, More} ?=
-            locate_ranges(Template, Rest, none, Limit - length(Matches), Opts),
+            locate_ranges(Predicates, Rest, none, Limit - length(Matches), Opts),
         {ok, Matches ++ More}
     end.
 
-%% @doc The matches of a template through `~match@1.0'. A node without
+%% @doc The matches of the predicates through `~match@1.0'. A node without
 %% stores of the index is `unservable'; a failing store is an error, as
 %% `cached_transactions' answers from different data.
-locate(Template, Req, Opts) ->
+locate(Predicates, Req, Opts) ->
     try hb_ao:raw(
             <<"match@1.0">>,
-            Template,
-            Req#{ <<"path">> => <<"locate">> },
+            #{},
+            Req#{ <<"path">> => <<"locate">>, <<"predicates">> => Predicates },
             Opts
         ) of
         {error, not_found} -> unservable;
@@ -867,11 +857,13 @@ match_args([{Field, X} | Rest], Acc, Opts) ->
     ?event({match, {field, Field}, {arg, X}}),
     case match(Field, X, Opts) of
         {ok, Result} -> match_args(Rest, [Result | Acc], Opts);
-        _Error -> match_args(Rest, Acc, Opts)
+        ignore -> match_args(Rest, Acc, Opts);
+        {error, _} = Error -> throw(Error)
     end.
 
 %% @doc Generate a match upon `tags' in the arguments, if given.
 match(_, null, _) -> ignore;
+match(<<"tags">>, [], _) -> ignore;
 match(<<"height">>, Heights, Opts) ->
     Min = hb_maps:get(<<"min">>, Heights, 0, Opts),
     Max =
@@ -898,7 +890,16 @@ match(<<"id">>, ID, _Opts) ->
 match(<<"ids">>, IDs, _Opts) ->
     {ok, IDs};
 match(<<"tags">>, Tags, Opts) ->
-    hb_cache:match(dev_query_graphql:keys_to_template(Tags), Opts);
+    case hb_opts:get(match_index, false, Opts) =:= false orelse
+            hb_opts:get(cache_read_mode, normal, Opts) =:= raw of
+        true -> native_tags(Tags, Opts);
+        false ->
+            hb_ao:raw(
+                <<"match@1.0">>, #{},
+                #{ <<"path">> => <<"all">>, <<"predicates">> => Tags },
+                Opts
+            )
+    end;
 match(<<"owners">>, Owners, Opts) ->
     {ok, matching_commitments(<<"committer">>, Owners, Opts)};
 match(<<"owner">>, Owner, Opts) ->
@@ -909,6 +910,24 @@ match(<<"recipients">>, Recipients, Opts) ->
     {ok, matching_commitments(<<"target">>, Recipients, Opts)};
 match(UnsupportedFilter, _, _) ->
     throw({unsupported_query_filter, UnsupportedFilter}).
+
+%% @doc OR each tag's native cache matches, then AND the tags. Used when the
+%% node disables indexed matching or requests raw cache matching.
+native_tags(Tags, Opts) ->
+    Results =
+        [
+            lists:append([
+                case hb_cache:match(#{ Name => Value }, Opts) of
+                    {ok, IDs} -> IDs;
+                    {error, not_found} -> [];
+                    {error, _} = Error -> throw(Error)
+                end
+            || Value <- hb_maps:get(<<"values">>, Tag, not_found, Opts) ])
+        ||
+            Tag <- Tags,
+            Name <- [hb_maps:get(<<"name">>, Tag, not_found, Opts)]
+        ],
+    {ok, lists:foldl(fun hb_util:list_with/2, hd(Results), tl(Results))}.
 
 %%% Block range post-filter
 
