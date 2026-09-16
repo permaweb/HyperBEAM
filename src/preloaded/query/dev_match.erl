@@ -246,15 +246,7 @@ index(Handler, Req, Opts) ->
                 }
             }
     end.
-%% @doc The message written under its pairs, per ID. A commitment is not
-%% indexed as a message of its own: the message it commits is indexed under
-%% its committers.
-index_message(
-    _Handler,
-    Req = #{ <<"body">> := #{ <<"commitment-device">> := _ } },
-    _Opts
-) ->
-    {ok, Req};
+%% @doc Index the message under its signed IDs when stores are configured.
 index_message(Handler, Req, Opts) ->
     case store(Opts) of
         [] ->
