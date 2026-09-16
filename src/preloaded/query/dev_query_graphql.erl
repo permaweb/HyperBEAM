@@ -177,6 +177,8 @@ handle(_Base, RawReq, Opts) ->
 %% GraphQL library. We split the resolution flows into two separated functions:
 %% `message_query/4' for the HyperBEAM native API, and `dev_query_arweave:query/4'
 %% for the Arweave-compatible API.
+execute(#{object_type := <<"Block">>, opts := Opts}, Block, <<"id">>, _Args) ->
+    {ok, hb_maps:get(<<"indep_hash">>, Block, null, Opts)};
 execute(#{object_type := Type}, _Obj, <<"id">>, _Args)
         when Type =:= <<"Bundle">>; Type =:= <<"Parent">> ->
     {ok, <<>>};
@@ -252,8 +254,6 @@ message_query(Msg, Field, _Args, Opts)
         when Field =:= <<"name">> orelse Field =:= <<"value">> ->
     ?event({message_query_name_or_value, {object, Msg}, {field, Field}}),
     {ok, hb_maps:get(Field, Msg, null, Opts)};
-message_query(Msg = #{ <<"independent_hash">> := _ }, <<"id">>, _Args, Opts) ->
-    {ok, hb_maps:get(<<"independent_hash">>, Msg, null, Opts)};
 message_query(Msg, <<"id">>, _Args, Opts) ->
     ?event({message_query_id, {object, Msg}}),
     {ok, hb_message:id(Msg, all, Opts)};

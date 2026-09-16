@@ -59,11 +59,15 @@
 %%% then an empty binary; `data.type' reads `content-type'. These projections
 %%% do not reconstruct an Arweave transaction or its original tag list.
 %%%
-%%% `block' and `blocks' can read block IDs or cached height ranges and project
-%%% height, timestamp and previous hash. Block connection pagination is not
-%%% implemented. Bundle and ingestion-time filters and ingestion-time ordering
-%%% are not implemented. `networkInfo.height' reads
-%%% the configured Arweave node's status. `parent { id }' and `bundledIn { id }'
+%%% `blocks' pages by height, descending by default or `HEIGHT_ASC', within
+%%% inclusive `height.min/max' bounds. Height enumeration defaults to zero and
+%%% the network tip and reads at most `first + 1' heights. Supplied `ids' are
+%%% resolved, filtered by the given bounds, sorted and paged instead.
+%%% `height=' cursors resume exclusively; failed reads
+%%% return errors. `block(id: ...)' reads one block. Reads use the same local
+%%% and remote policy as transaction block bounds. Bundle and ingestion-time
+%%% filters and ingestion-time ordering are not implemented. `networkInfo.height'
+%%% reads the configured Arweave node's status. `parent { id }' and `bundledIn { id }'
 %%% return empty IDs. Other unsupported fields may return a placeholder
 %%% or a GraphQL type error. Schema acceptance does not imply filter support.
 -module(dev_query_arweave).
@@ -150,10 +154,10 @@ query(Obj, <<"transactions">>, Args, Opts) ->
         unservable -> cached_transactions(Args, Opts);
         Result -> Result
     end;
-query(Obj, <<"block">>, Args, Opts) ->
-    case query(Obj, <<"blocks">>, Args, Opts) of
-        {ok, []} -> {ok, null};
-        {ok, [Msg|_]} -> {ok, Msg}
+query(_Obj, <<"block">>, Args, Opts) ->
+    case hb_maps:get(<<"id">>, Args, null, Opts) of
+        null -> {ok, null};
+        ID -> read_block(ID, Opts)
     end;
 query(_Obj, <<"networkInfo">>, _Args, Opts) ->
     hb_ao:resolve(
@@ -161,27 +165,8 @@ query(_Obj, <<"networkInfo">>, _Args, Opts) ->
         <<"status">>,
         Opts
     );
-query(Obj, <<"blocks">>, Args, Opts) ->
-    ?event({blocks, 
-            {object, Obj}, 
-            {field, <<"blocks">>}, 
-            {args, Args}
-        }),
-    Matches = match_args(Args, Opts),
-    ?event({blocks_matches, Matches}),
-    Blocks =
-        lists:filtermap(
-            fun(Match) ->
-                case hb_cache:read(Match, Opts) of
-                    {ok, Msg} -> {true, Msg};
-                    _ -> false
-                end
-            end,
-            Matches
-        ),
-    % Return the blocks as a list of messages.
-    % Individual access methods are defined below.
-    {ok, Blocks};
+query(_Obj, <<"blocks">>, Args, Opts) ->
+    block_connection(Args, Opts);
 query(Block, <<"previous">>, _Args, Opts) ->
     {ok, hb_maps:get(<<"previous_block">>, Block, null, Opts)};
 query(Block, <<"height">>, _Args, Opts) ->
@@ -489,6 +474,91 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
     ),
     UserOrderSorted.
 
+%%% Block pages.
+
+%% @doc Read a bounded page of blocks by height, or from explicit block IDs.
+block_connection(RawArgs, Opts) ->
+    Present = fun(_Key, Value) -> Value =/= null end,
+    Args = hb_maps:filter(Present, RawArgs, Opts),
+    Range =
+        hb_maps:filter(Present, hb_maps:get(<<"height">>, Args, #{}, Opts), Opts),
+    Min = max(0, hb_maps:get(<<"min">>, Range, 0, Opts)),
+    maybe
+        {ok, After} ?= block_cursor(hb_maps:get(<<"after">>, Args, none, Opts)),
+        Direction =
+            case hb_maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>, Opts) of
+                <<"HEIGHT_ASC">> -> 1;
+                <<"INGESTED_AT_ASC">> -> unsupported;
+                <<"INGESTED_AT_DESC">> -> unsupported;
+                _ -> -1
+            end,
+        true ?= Direction =/= unsupported orelse
+            {error, <<"Unsupported block sort.">>},
+        IDs = hb_maps:get(<<"ids">>, Args, all, Opts),
+        Max =
+            case {IDs, hb_maps:get(<<"max">>, Range, infinity, Opts)} of
+                {all, infinity} ->
+                    Status =
+                        hb_util:ok(query(undefined, <<"networkInfo">>, #{}, Opts)),
+                    hb_maps:get(<<"height">>, Status, not_found, Opts);
+                {_, Bound} -> Bound
+            end,
+        {From, To} =
+            case {Direction, After} of
+                {1, H} when is_integer(H) -> {max(Min, H + 1), Max};
+                {-1, H} when is_integer(H) -> {Min, min(Max, H - 1)};
+                _ -> {Min, Max}
+            end,
+        Limit = page_size(Args, Opts),
+        Blocks = block_page(IDs, From, To, Direction, Limit + 1, Opts),
+        {ok,
+            #{
+                <<"edges">> =>
+                    [
+                        #{ <<"node">> => Block,
+                            <<"cursor">> => <<"height=", Height/binary>> }
+                    ||
+                        Block <- lists:sublist(Blocks, Limit),
+                        Height <- [hb_util:bin(
+                            hb_maps:get(<<"height">>, Block, not_found, Opts)
+                        )]
+                    ],
+                <<"pageInfo">> => #{ <<"hasNextPage">> => length(Blocks) > Limit }
+            }
+        }
+    end.
+
+%% @doc Parse an exclusive block-height cursor.
+block_cursor(After) when After =:= none; After =:= <<>> -> {ok, none};
+block_cursor(After) ->
+    try
+        <<"height=", Bin/binary>> = After,
+        Height = binary_to_integer(Bin),
+        true = Height >= 0,
+        {ok, Height}
+    catch _:_ -> {error, <<"Invalid cursor.">>}
+    end.
+
+%% @doc Read at most the requested height window; ID filters read their own set.
+block_page(all, Min, Max, Direction, Limit, Opts) ->
+    Heights =
+        if
+            Min > Max -> [];
+            Direction =:= 1 -> lists:seq(Min, min(Max, Min + Limit - 1));
+            true -> lists:seq(Max, max(Min, Max - Limit + 1), -1)
+        end,
+    [hb_util:ok(read_block(Height, Opts)) || Height <- Heights];
+block_page(IDs, Min, Max, Direction, Limit, Opts) ->
+    Blocks = [hb_util:ok(read_block(ID, Opts)) || ID <- lists:usort(IDs)],
+    Ordered =
+        lists:keysort(1,
+            [{Height, Block} || Block <- Blocks,
+                Height <- [hb_maps:get(<<"height">>, Block, not_found, Opts)],
+                Height >= Min, Height =< Max]
+        ),
+    Page = case Direction of 1 -> Ordered; -1 -> lists:reverse(Ordered) end,
+    [Block || {_Height, Block} <- lists:sublist(Page, Limit)].
+
 %% @doc Convert a block height range (`#{<<"min">> => Min, <<"max">> => Max}')
 %% into weave byte offset boundaries `{StartOffset, EndOffset}'. Notably, the
 %% highest offset is not the max block height. It is 'infinity', such that TXs
@@ -534,7 +604,7 @@ block_range_to_offset_range(Heights, Opts) ->
     ),
     {StartOffset, EndOffset}.
 
-%% @doc Read block metadata by height.  Tries the local block cache first;
+%% @doc Read block metadata by height or ID. Tries the local block cache first;
 %% when `query_arweave_remote_block_ranges' is `true' (the default) and the
 %% block is not cached locally, falls back to `arweave@2.9/block'.
 read_block(Height, Opts) ->

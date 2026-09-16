@@ -57,7 +57,7 @@ type Query {
     after: String
 
     # Optionally specify the result sort order.
-    #sort: SortOrder = HEIGHT_DESC
+    sort: SortOrder = HEIGHT_DESC
   ): BlockConnection!
 }
 

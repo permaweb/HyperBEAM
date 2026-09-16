@@ -264,7 +264,7 @@ block_by_height_query_test_parallel() ->
     Query =
         <<"""
             query {
-                blocks( height: {min: 1745749, max: 1745750} ) {
+                blocks( height: {min: 1745749, max: 1745750}, sort: HEIGHT_ASC ) {
                     edges {
                         node {
                             id
@@ -302,6 +302,81 @@ block_by_height_query_test_parallel() ->
             }
         },
         dev_query_graphql:test_query(Node, Query, #{}, Opts)
+    ),
+    PageQuery =
+        <<"""
+            query($height:RangeFilter, $sort:SortOrder, $after:String,
+                    $first:Int, $ids:[ID!]) {
+                blocks(height:$height, sort:$sort, after:$after,
+                        first:$first, ids:$ids) {
+                    pageInfo { hasNextPage }
+                    edges { cursor node { id height } }
+                }
+            }
+        """>>,
+    Bounds = #{ <<"min">> => 1745749, <<"max">> => 1745750 },
+    Page =
+        fun(Vars) ->
+            Res =
+                dev_query_graphql:test_query(Node, PageQuery,
+                    maps:merge(#{ <<"height">> => Bounds, <<"first">> => 1 }, Vars),
+                    Opts
+                ),
+            ?assertEqual([], maps:get(<<"errors">>, Res, [])),
+            hb_util:deep_get(<<"data/blocks">>, Res, Opts)
+        end,
+    lists:foreach(
+        fun({Sort, First, Last}) ->
+            Vars = #{ <<"sort">> => Sort },
+            #{ <<"edges">> := [#{ <<"cursor">> := Cursor,
+                <<"node">> := #{ <<"height">> := First, <<"id">> := ID } }],
+                <<"pageInfo">> := #{ <<"hasNextPage">> := true } } = Page(Vars),
+            ?assertEqual(64, byte_size(ID)),
+            #{ <<"edges">> := [#{ <<"cursor">> := Next,
+                <<"node">> := #{ <<"height">> := Last, <<"id">> := LastID } }],
+                <<"pageInfo">> := #{ <<"hasNextPage">> := false } } =
+                    Page(Vars#{ <<"after">> => Cursor }),
+            ?assertMatch(#{ <<"edges">> := [],
+                <<"pageInfo">> := #{ <<"hasNextPage">> := false } },
+                Page(Vars#{ <<"after">> => Next })),
+            ?assertMatch(#{ <<"edges">> := [#{ <<"node">> := #{ <<"id">> := ID } }],
+                <<"pageInfo">> := #{ <<"hasNextPage">> := false } },
+                Page(Vars#{ <<"ids">> => [ID, ID] })),
+            ?assertEqual(Page(Vars#{ <<"after">> => Cursor }),
+                Page(Vars#{ <<"ids">> => [LastID, ID], <<"after">> => Cursor }))
+        end,
+        [
+            {<<"HEIGHT_ASC">>, 1745749, 1745750},
+            {<<"HEIGHT_DESC">>, 1745750, 1745749}
+        ]
+    ),
+    ?assertMatch(#{ <<"edges">> := [#{ <<"node">> := #{ <<"height">> := 1745750 } }] },
+        Page(#{})),
+    ?assertMatch(#{ <<"edges">> := [],
+        <<"pageInfo">> := #{ <<"hasNextPage">> := true } },
+        Page(#{ <<"first">> => 0 })),
+    lists:foreach(
+        fun(Vars) ->
+            ?assertMatch(#{ <<"edges">> := [],
+                <<"pageInfo">> := #{ <<"hasNextPage">> := false } }, Page(Vars))
+        end,
+        [
+            #{ <<"ids">> => [] }, #{ <<"after">> => <<"height=0">> },
+            #{ <<"height">> => #{ <<"min">> => 1745750, <<"max">> => 1745749 } }
+        ]
+    ),
+    ?assertMatch(#{ <<"edges">> := [#{ <<"node">> := #{ <<"height">> := 1745750 } }] },
+        Page(#{ <<"height">> => Bounds#{ <<"min">> => null } })),
+    lists:foreach(
+        fun(Vars) ->
+            ?assertMatch(#{ <<"errors">> := [_ | _] },
+                dev_query_graphql:test_query(Node, PageQuery, Vars, Opts))
+        end,
+        [
+            #{ <<"after">> => <<"height=invalid">> },
+            #{ <<"after">> => <<"height=-1">> },
+            #{ <<"sort">> => <<"INGESTED_AT_ASC">> }
+        ]
     ).
 
 simple_ans104_query_test_parallel() ->
