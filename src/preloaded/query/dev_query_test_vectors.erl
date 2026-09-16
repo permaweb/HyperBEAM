@@ -785,6 +785,8 @@ transactions_query_filter_by_block_test_parallel() ->
     VerifyFun(1892158, 1892159, [EarlierID, LaterID], []),
     VerifyFun(1892156, 1892157, [], [EarlierID, LaterID]),
     VerifyFun(1892157, 1892158, [EarlierID], [LaterID]),
+    VerifyFun(null, 1892158, [EarlierID], [LaterID]),
+    VerifyFun(1892159, null, [LaterID], [EarlierID]),
     VerifyFun(1892159, 1892160, [LaterID], [EarlierID]).
 
 transactions_query_filter_by_block_excludes_unknown_offsets_test_parallel() ->

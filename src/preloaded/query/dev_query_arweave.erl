@@ -477,6 +477,7 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
 block_range_to_offset_range(Heights, Opts) ->
     StartOffset =
         case hb_maps:get(<<"min">>, Heights, 0, Opts) of
+            null -> 0;
             0 -> 0;
             RawMin ->
                 case read_block(hb_util:int(RawMin), Opts) of
@@ -494,6 +495,7 @@ block_range_to_offset_range(Heights, Opts) ->
         end,
     EndOffset =
         case hb_maps:get(<<"max">>, Heights, infinity, Opts) of
+            null -> infinity;
             infinity -> infinity;
             RawMax ->
                 case read_block(hb_util:int(RawMax), Opts) of
