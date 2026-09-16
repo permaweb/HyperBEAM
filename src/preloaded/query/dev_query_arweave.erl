@@ -53,16 +53,18 @@
 %%%
 %%% `id' and `tags' use the message projection in `dev_query_graphql'. Signature
 %%% and owner fields come from a signed commitment; recipient and anchor come
-%%% from commitment field mappings. `fee' and `quantity' read message values,
-%%% defaulting to zero. `data.size' measures `data', falling back to `body',
+%%% from commitment field mappings. `fee' (falling back to `reward') and
+%%% `quantity' default to zero, projected as winston and exact AR strings.
+%%% `data.size' measures `data', falling back to `body',
 %%% then an empty binary; `data.type' reads `content-type'. These projections
 %%% do not reconstruct an Arweave transaction or its original tag list.
 %%%
 %%% `block' and `blocks' can read block IDs or cached height ranges and project
 %%% height, timestamp and previous hash. Block connection pagination is not
-%%% implemented. Bundle and ingestion-time filters, ingestion-time ordering,
-%%% AR amount conversion and parent fields are not implemented. `bundledIn { id }'
-%%% returns an empty ID. Other unsupported fields may return a placeholder
+%%% implemented. Bundle and ingestion-time filters and ingestion-time ordering
+%%% are not implemented. `networkInfo.height' reads
+%%% the configured Arweave node's status. `parent { id }' and `bundledIn { id }'
+%%% return empty IDs. Other unsupported fields may return a placeholder
 %%% or a GraphQL type error. Schema acceptance does not imply filter support.
 -module(dev_query_arweave).
 %%% AO-Core API:
@@ -153,6 +155,12 @@ query(Obj, <<"block">>, Args, Opts) ->
         {ok, []} -> {ok, null};
         {ok, [Msg|_]} -> {ok, Msg}
     end;
+query(_Obj, <<"networkInfo">>, _Args, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        <<"status">>,
+        Opts
+    );
 query(Obj, <<"blocks">>, Args, Opts) ->
     ?event({blocks, 
             {object, Obj}, 
@@ -216,11 +224,21 @@ query(#{ <<"key">> := Key }, <<"key">>, _Args, _Opts) ->
 query(#{ <<"address">> := Address }, <<"address">>, _Args, _Opts) ->
     {ok, Address};
 query(Msg, <<"fee">>, _Args, Opts) ->
-    {ok, hb_maps:get(<<"fee">>, Msg, 0, Opts)};
+    {ok, hb_maps:get_first([{Msg, <<"fee">>}, {Msg, <<"reward">>}], 0, Opts)};
 query(Msg, <<"quantity">>, _Args, Opts) ->
     {ok, hb_maps:get(<<"quantity">>, Msg, 0, Opts)};
-query(Number, <<"winston">>, _Args, _Opts) when is_number(Number) ->
-    {ok, Number};
+query(Number, <<"winston">>, _Args, _Opts) ->
+    {ok, hb_util:bin(Number)};
+query(Number, <<"ar">>, _Args, _Opts) ->
+    Winston = hb_util:int(Number),
+    {ok,
+        iolist_to_binary(
+            io_lib:format(
+                "~B.~12..0B",
+                [Winston div ?WINSTON_PER_AR, Winston rem ?WINSTON_PER_AR]
+            )
+        )
+    };
 query(Msg, <<"recipient">>, _Args, Opts) ->
     case find_field_key(<<"field-target">>, Msg, Opts) of
         {ok, null} -> {ok, <<"">>};
@@ -247,7 +265,8 @@ query(#{ <<"data">> := Data }, <<"size">>, _Args, _Opts) ->
     {ok, byte_size(Data)};
 query(#{ <<"type">> := Type }, <<"type">>, _Args, _Opts) ->
     {ok, Type};
-query(_Msg, <<"bundledIn">>, _Args, _Opts) ->
+query(_Msg, Field, _Args, _Opts)
+        when Field =:= <<"bundledIn">>; Field =:= <<"parent">> ->
     {ok, #{}};
 query(Obj, Field, Args, _Opts) ->
     ?event({unimplemented_transactions_query,
@@ -477,6 +496,7 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
 block_range_to_offset_range(Heights, Opts) ->
     StartOffset =
         case hb_maps:get(<<"min">>, Heights, 0, Opts) of
+            null -> 0;
             0 -> 0;
             RawMin ->
                 case read_block(hb_util:int(RawMin), Opts) of
@@ -494,6 +514,7 @@ block_range_to_offset_range(Heights, Opts) ->
         end,
     EndOffset =
         case hb_maps:get(<<"max">>, Heights, infinity, Opts) of
+            null -> infinity;
             infinity -> infinity;
             RawMax ->
                 case read_block(hb_util:int(RawMax), Opts) of
