@@ -41,6 +41,7 @@
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
+-export([write_hashpath/3]).
 -export([match/2, list/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
@@ -108,7 +109,8 @@ ensure_loaded(Ref,
                     Next
             end;
         {error, not_found} ->
-            report_ensure_loaded_not_found(Ref, Lk, Opts)
+            report_ensure_loaded_not_found(Ref, Lk, Opts);
+        {error, Reason} -> erlang:error(Reason)
     end;
 ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
     % If the user provided their own options, we merge them and _overwrite_
@@ -136,7 +138,8 @@ ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpt
                 Type -> hb_util:decode(Type, LoadedMsg)
             end;
         {error, not_found} ->
-            report_ensure_loaded_not_found(Ref, Link, Opts)
+            report_ensure_loaded_not_found(Ref, Link, Opts);
+        {error, Reason} -> erlang:error(Reason)
     end;
 ensure_loaded(Ref, {link, ID, LinkOpts}, Opts) ->
 	ensure_loaded(Ref, {link, ID, LinkOpts#{ <<"lazy">> => true}}, Opts);
@@ -555,7 +558,7 @@ write_hashpath(Msg = #{ <<"priv">> := #{ <<"hashpath">> := HP } }, Opts) ->
 write_hashpath(MsgWithoutHP, Opts) ->
     write(MsgWithoutHP, Opts).
 write_hashpath(HP, Msg, Opts) when is_binary(HP) or is_list(HP) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
+    Store = hb_opts:get(attested_store, [], Opts),
     ?event_debug({writing_hashpath, {hashpath, HP}, {msg, Msg}, {store, Store}}),
     {ok, Path} = write(Msg, Opts),
     hb_store:link(Store, #{ hb_path:to_binary(HP) => Path }, Opts),
@@ -567,12 +570,15 @@ write_binary(Hashpath, Bin, Opts) ->
 write_binary(Hashpath, Bin, Store, Opts) ->
     ?event_debug({writing_binary, {hashpath, Hashpath}, {bin, Bin}, {store, Store}}),
     {ok, Path} = do_write_message(Bin, Store, Opts),
-    hb_store:link(Store, #{ hb_path:to_binary(Hashpath) => Path }, Opts),
+    LinkStore = hb_opts:get(attested_store, [], Opts),
+    hb_store:link(LinkStore, #{ hb_path:to_binary(Hashpath) => Path }, Opts),
     {ok, Path}.
 
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either
 %% a richly typed map or a direct binary. If `cache-read-mode' is `raw',
 %% composite reads return lazy links without decoding `ao-types'.
+read(Path, Opts) when ?IS_HASHPATH(Path) ->
+    hb_hashpath:load(Path, Opts);
 read(Path, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     case {
@@ -986,9 +992,8 @@ read_resolved(Base, Req, Opts) ->
 
 %% @doc Return a key from an in-memory message, returning the same form as
 %% a store read (`{Status, Value}').
-read_in_memory_key(BaseMsg, NormKey, _Opts) ->
-    % For now, just wrap maps:find.
-    case maps:find(NormKey, BaseMsg) of
+read_in_memory_key(BaseMsg, NormKey, Opts) ->
+    case hb_maps:find(NormKey, BaseMsg, Opts) of
         error ->
             ?event_debug(read_cached, {key_not_found, {key, NormKey}}),
             {error, not_found};
@@ -1005,7 +1010,12 @@ read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
     ReqID = hb_message:id(Req, all, Opts),
     hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
 read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
-    hashpath_read_result(read(hb_path:hashpath(BaseMsg, Req, Opts), Opts));
+    HP = hb_path:hashpath(BaseMsg, Req, Opts),
+    case hb_store:resolve(hb_opts:get(attested_store, [], Opts), HP, Opts) of
+        {ok, Path} when Path =/= HP ->
+            hashpath_read_result(read(Path, Opts));
+        _ -> miss
+    end;
 read_hashpath(_, _, _) -> miss.
 
 hashpath_read_result({ok, Msg}) -> {hit, {ok, Msg}};

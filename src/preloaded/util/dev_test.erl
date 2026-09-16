@@ -4,6 +4,9 @@
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
 -export([index/3, postprocess/3, load/3]).
+-export([vary_projection/3, vary_wildcard/3, vary_unspecified/3]).
+-export([vary_overlay/3, vary_request_overlay/3]).
+-export([vary_alternatives/3, vary_dependent/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -29,6 +32,8 @@ info(_) ->
 
 %% @doc Exports a default_handler function that can be used to test the
 %% handler resolution mechanism.
+-spec info(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ status := integer(), body := #{ _ => _ } }}.
 info(_Base, _Req, _Opts) ->
 	InfoBody = #{
 		<<"description">> => <<"Test device for testing the AO-Core framework">>,
@@ -49,6 +54,8 @@ info(_Base, _Req, _Opts) ->
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Example index handler.
+-spec index(#{ name => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body := binary(), 'content-type' := binary(), _ => _ }}.
 index(Msg, _Req, Opts) ->
     Name = hb_ao:get(<<"name">>, Msg, <<"turtles">>, Opts),
     {ok,
@@ -59,6 +66,8 @@ index(Msg, _Req, Opts) ->
     }.
 
 %% @doc Return a message with the device set to this module.
+-spec load(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ device := binary(), _ => _ }}.
 load(Base, _, _Opts) ->
     {ok, Base#{ <<"device">> => <<"test-device@1.0">> }}.
 
@@ -68,6 +77,18 @@ test_func(_) ->
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
 %% slot number in the results key.
+-spec compute(
+    #{ 'already-seen' => [integer()], _ => _ },
+    #{ slot := integer() },
+    #{ _ => _ }
+) ->
+    {ok,
+        #{
+            'already-seen' := [integer()],
+            results := #{ 'assignment-slot' := integer() },
+            _ => _
+        }
+    }.
 compute(Base, Req, Opts) ->
     AssignmentSlot = hb_ao:get(<<"slot">>, Req, Opts),
     Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
@@ -86,12 +107,19 @@ compute(Base, Req, Opts) ->
     }.
 
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
+-spec init(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ 'already-seen' := list(), _ => _ }}.
 init(Msg, _Req, Opts) ->
     ?event({init_called_on_dev_test, Msg}),
     {ok, hb_ao:set(Msg, #{ <<"already-seen">> => [] }, Opts)}.
 
 %% @doc Example `restore/3' handler. Sets the hidden key `Test/Started' to the
 %% value of `Current-Slot' and checks whether the `Already-Seen' key is valid.
+-spec restore(
+    #{ 'already-seen' => list(), _ => _ },
+    #{ _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, binary()}.
 restore(Msg, _Req, Opts) ->
     ?event({restore_called_on_dev_test, Msg}),
     case hb_ao:get(<<"already-seen">>, Msg, Opts) of
@@ -119,6 +147,7 @@ mul(Base, Req) ->
     {ok, #{ <<"state">> => State, <<"results">> => [Arg1 * Arg2] }}.
 
 %% @doc Do nothing when asked to snapshot.
+-spec snapshot(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{}}.
 snapshot(Base, Req, _Opts) ->
     ?event({snapshot_called, {base, Base}, {req, Req}}),
     {ok, #{}}.
@@ -133,12 +162,16 @@ append(Base, Req, Opts) ->
     {ok, Base#{ <<"result">> => <<Existing/binary, Prefix/binary, Bin/binary>> }}.
 
 %% @doc Set the `postprocessor-called' key to true in the HTTP server.
+-spec postprocess(#{ _ => _ }, #{ body := _, _ => _ }, #{ _ => _ }) ->
+    {ok, _}.
 postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->
     ?event({postprocess_called, Opts}),
     hb_http_server:set_opts(Opts#{ <<"postprocessor-called">> => true }),
     {ok, Msgs}.
 
 %% @doc Find a test worker's PID and send it an update message.
+-spec update_state(#{ _ => _ }, #{ 'test-id' => _, _ => _ }, #{ _ => _ }) ->
+    {ok, ok} | {error, binary()}.
 update_state(_Msg, Req, _Opts) ->
     case hb_ao:get(<<"test-id">>, Req) of
         not_found ->
@@ -155,6 +188,11 @@ update_state(_Msg, Req, _Opts) ->
     end.
 
 %% @doc Find a test worker's PID and send it an increment message.
+-spec increment_counter(
+    #{ _ => _ },
+    #{ 'test-id' => _, _ => _ },
+    #{ _ => _ }
+) -> {ok, ok} | {error, binary()}.
 increment_counter(_Base, Req, _Opts) ->
     case hb_ao:get(<<"test-id">>, Req) of
         not_found ->
@@ -174,6 +212,11 @@ increment_counter(_Base, Req, _Opts) ->
 
 %% @doc Does nothing, just sleeps `Req/duration or 750' ms and returns the 
 %% appropriate form in order to be used as a hook.
+-spec delay(
+    #{ _ => _ },
+    #{ duration => integer(), result => _, body => _, _ => _ },
+    #{ _ => _ }
+) -> {ok, _}.
 delay(Base, Req, Opts) ->
     Duration =
         hb_ao:get_first(
@@ -203,6 +246,11 @@ delay(Base, Req, Opts) ->
 %% 
 %% Caution: This function is not safe to use in production, as it may cause
 %% state inconsistencies.
+-spec mangle(
+    #{ commitments => #{ _ => _ }, _ => _ },
+    #{ _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, binary()}.
 mangle(Base, _Req, Opts) ->
     case hb_opts:get(mode, prod, Opts) of
         prod -> {error, <<"`mangle' unavailable in `prod` mode.">>};
@@ -220,7 +268,99 @@ mangle(Base, _Req, Opts) ->
             end
     end.
 
+%% @doc Return the inputs selected by the function's schema.
+-spec vary_projection(
+    #{
+        required := integer(),
+        optional => binary(),
+        deep := #{ slot := integer() }
+    },
+    #{ path := binary(), deep_request := #{ slot := integer() } },
+    #{ _ => _ }
+) -> {ok, #{ base := #{ _ => _ }, request := #{ _ => _ } }}.
+vary_projection(Base, Req, _Opts) ->
+    {ok, #{ <<"base">> => Base, <<"request">> => Req }}.
+
+%% @doc Return schema-selected inputs while retaining wildcard keys.
+-spec vary_wildcard(
+    #{ required := integer(), child => #{ slot := integer(), _ => _ }, _ => _ },
+    #{ path := binary(), required => integer(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ base := #{ _ => _ }, request := #{ _ => _ } }}.
+vary_wildcard(Base, Req, _Opts) ->
+    {ok, #{ <<"base">> => Base, <<"request">> => Req }}.
+
+%% @doc Return the inputs without declaring a Vary schema.
+vary_unspecified(Base, Req, _Opts) ->
+    {ok, #{ <<"base">> => Base, <<"request">> => Req }}.
+
+%% @doc Increment a counter in a projection of the base, returning a patch
+%% that the resolver lays over the whole base.
+-spec vary_overlay(#{ counter := integer() }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ '...' := base, counter := integer() }}.
+vary_overlay(Base = #{ <<"counter">> := Counter }, _Req, _Opts) ->
+    {ok, Base#{ <<"counter">> => Counter + 1 }}.
+
+%% @doc Increment a counter in a projection of the request, returning a patch
+%% that the resolver lays over the whole request.
+-spec vary_request_overlay(
+    #{ _ => _ },
+    #{ counter := integer() },
+    #{ _ => _ }
+) -> {ok, #{ '...' := request, counter := integer() }}.
+vary_request_overlay(_Base, Req = #{ <<"counter">> := Counter }, _Opts) ->
+    {ok, Req#{ <<"counter">> => Counter + 1 }}.
+
+%% @doc Select the result's overlay together with its accepted input types.
+-spec vary_alternatives(#{ value := integer() }, #{ value := integer() }, _) ->
+    {ok, #{ '...' := base, _ => _ }};
+    (#{ value := binary() }, #{ value := binary() }, _) ->
+    {ok, #{ '...' := request, _ => _ }}.
+vary_alternatives(Base, Req, Opts) ->
+    vary_projection(Base, Req, Opts).
+
+-type vary_input(T) :: #{ value := T }.
+%% @doc Constrain both inputs through a shared type, including a forward bound.
+-spec vary_dependent(vary_input(U), vary_input(T), _) ->
+    {ok, #{ '...' := base, _ => _ }} when U :: T, T :: integer() | binary().
+vary_dependent(Base, Req, Opts) ->
+    vary_projection(Base, Req, Opts).
+
 %%% Tests
+
+vary_alternatives_test_() ->
+    [
+        ?_test(begin
+            Opts = (vary_opts())#{ <<"cache-control">> => [<<"always">>] },
+            {ok, Ctx} =
+                hb_ao:resolve(
+                    #{
+                        <<"device">> => <<"test-device@1.0">>,
+                        <<"value">> => <<"7">>
+                    },
+                    #{ <<"path">> => Key, <<"value">> => Input },
+                    Opts#{ <<"return-context">> => true }
+                ),
+            ?assertMatch(
+                #{ <<"value">> := B },
+                maps:get(<<"varied-base">>, Ctx)
+            ),
+            ?assertMatch(
+                #{ <<"value">> := R },
+                maps:get(<<"varied-request">>, Ctx)
+            ),
+            ?assertEqual(Overlay, maps:get(<<"normalizer">>, Ctx)),
+            ?assert(hb_hashpath:verify_all(hb_hashpath:format(Ctx, Opts), Opts))
+        end)
+    ||
+        {Key, Input, B, R, Overlay} <-
+            [
+                {<<"vary-alternatives">>, <<"8">>, 7, 8, base},
+                {<<"vary-alternatives">>, <<"text">>, <<"7">>, <<"text">>, request},
+                {<<"vary-dependent">>, <<"8">>, 7, 8, base},
+                {<<"vary-dependent">>, <<"text">>, <<"7">>, <<"text">>, base}
+            ]
+    ].
 
 %% @doc Tests the resolution of a default function.
 device_with_function_key_module_test() ->
@@ -264,3 +404,375 @@ restore_test() ->
     Base = #{ <<"device">> => <<"test-device@1.0">>, <<"already-seen">> => [1] },
     {ok, Res} = hb_ao:resolve(Base, <<"restore">>, #{}),
     ?assertEqual([1], hb_private:get(<<"test-key/started-state">>, Res, #{})).
+
+vary_projection_and_coercion_test() ->
+    Opts = vary_opts(),
+    {ok, RequiredPath} = hb_cache:write(<<"7">>, Opts),
+    {ok, DeepPath} =
+        hb_cache:write(
+            #{ <<"slot">> => <<"8">>, <<"noise">> => <<"drop">> },
+            Opts
+        ),
+    {ok, DeepRequestPath} =
+        hb_cache:write(#{ <<"slot">> => <<"9">> }, Opts),
+    {ok, Res} =
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"required">> => {link, RequiredPath, #{}},
+                <<"deep">> => {link, DeepPath, #{}},
+                <<"noise">> => <<"drop">>
+            },
+            #{
+                <<"path">> => <<"vary-projection">>,
+                <<"deep-request">> => {link, DeepRequestPath, #{}},
+                <<"noise">> => <<"drop">>
+            },
+            Opts
+        ),
+    VariedBase = maps:get(<<"base">>, Res),
+    VariedReq = maps:get(<<"request">>, Res),
+    ?assertEqual(7, maps:get(<<"required">>, VariedBase)),
+    ?assertEqual(#{ <<"slot">> => 8 }, maps:get(<<"deep">>, VariedBase)),
+    ?assertNot(maps:is_key(<<"optional">>, VariedBase)),
+    ?assertNot(maps:is_key(<<"noise">>, VariedBase)),
+    ?assertEqual(
+        #{ <<"slot">> => 9 },
+        maps:get(<<"deep-request">>, VariedReq)
+    ),
+    ?assertNot(maps:is_key(<<"noise">>, VariedReq)).
+
+vary_required_key_missing_test() ->
+    Opts = vary_opts(),
+    ?assertThrow(
+        {required_key_missing, <<"required">>},
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"deep">> => #{ <<"slot">> => 1 }
+            },
+            #{
+                <<"path">> => <<"vary-projection">>,
+                <<"deep-request">> => #{ <<"slot">> => 1 }
+            },
+            Opts
+        )
+    ).
+
+vary_wildcard_preserves_other_keys_test() ->
+    Opts = vary_opts(),
+    {ok, BaseExtraPath} = hb_cache:write(<<"base">>, Opts),
+    {ok, RequestExtraPath} = hb_cache:write(<<"request">>, Opts),
+    BaseExtra = {link, BaseExtraPath, #{}},
+    RequestExtra = {link, RequestExtraPath, #{}},
+    {ok, Res} =
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"required">> => <<"1">>,
+                <<"extra">> => BaseExtra
+            },
+            #{
+                <<"path">> => <<"vary-wildcard">>,
+                <<"extra">> => RequestExtra
+            },
+            Opts
+        ),
+    ?assertEqual(1, maps:get(<<"required">>, maps:get(<<"base">>, Res))),
+    ?assertEqual(BaseExtra, maps:get(<<"extra">>, maps:get(<<"base">>, Res))),
+    ?assertEqual(
+        RequestExtra,
+        maps:get(<<"extra">>, maps:get(<<"request">>, Res))
+    ).
+
+%% @doc Loading a typed field preserves the message's signed identity.
+vary_loaded_link_preserves_commitments_test_() ->
+    [
+        {Description, fun() ->
+            vary_loaded_link_preserves_commitments(Which, Mode, Function)
+        end}
+    ||
+        {Description, Which, Mode, Function} <- [
+            {"unchanged base", <<"base">>, inline, <<"vary-wildcard">>},
+            {"loaded base", <<"base">>, lazy, <<"vary-wildcard">>},
+            {"unchanged request", <<"request">>, inline, <<"vary-wildcard">>},
+            {"loaded request", <<"request">>, lazy, <<"vary-wildcard">>},
+            {"no-schema base", <<"base">>, lazy, <<"vary-unspecified">>},
+            {"no-schema request", <<"request">>, lazy, <<"vary-unspecified">>}
+        ]
+    ].
+
+%% @doc Check signed identity before and after varying and caching an input.
+vary_loaded_link_preserves_commitments(Which, Mode, Function) ->
+    Wallet = ar_wallet:new(),
+    Signer = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = (vary_opts())#{ <<"priv-wallet">> => Wallet },
+    Signed = hb_message:commit(
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"path">> => Function,
+            <<"required">> => 7
+        },
+        Opts,
+        <<"httpsig@1.0">>
+    ),
+    SignedID = hb_message:id(Signed, [Signer], Opts),
+    {ok, _} = hb_cache:write(Signed, Opts),
+    {ok, Lazy} = hb_cache:read(SignedID, Opts),
+    ?assertMatch({link, _, _}, maps:get(<<"required">>, Lazy)),
+    ?assert(hb_message:verify(Lazy, [Signer], Opts)),
+    Input = case Mode of inline -> Signed; lazy -> Lazy end,
+    Varied = vary_signed_input(Which, Input, Function, Opts),
+    case Function of
+        <<"vary-unspecified">> ->
+            ?assertEqual(maps:get(<<"required">>, Lazy),
+                maps:get(<<"required">>, Varied));
+        _ -> ?assertEqual(7, maps:get(<<"required">>, Varied))
+    end,
+    ?assert(lists:member(Signer, hb_message:signers(Varied, Opts))),
+    ?assertEqual(SignedID, hb_message:id(Varied, [Signer], Opts)),
+    ?assert(hb_message:verify(Varied, [Signer], Opts)),
+    {ok, _} = hb_cache:write(Varied, Opts),
+    {ok, Cached} = hb_cache:read(SignedID, Opts),
+    ?assertEqual(7, hb_maps:get(<<"required">>, Cached, not_found, Opts)),
+    ?assert(lists:member(Signer, hb_message:signers(Cached, Opts))),
+    ?assertEqual(SignedID, hb_message:id(Cached, [Signer], Opts)),
+    ?assert(hb_message:verify(Cached, [Signer], Opts)).
+
+%% @doc Only changes to signed content invalidate parent or child commitments.
+vary_child_commitments_test_() ->
+    [
+        {Description, fun() ->
+            vary_child_commitments(Required, Slot, Mode, Keep)
+        end}
+    ||
+        {Description, Required, Slot, Mode, Keep} <- [
+            {"unchanged parent and child", 7, 7, inline, {true, true}},
+            {"loaded child", 7, 7, lazy, {true, true}},
+            {"coerced child", 7, <<"007">>, inline, {false, false}},
+            {"loaded and coerced child", 7, <<"007">>, lazy, {false, false}},
+            {"coerced parent preserves child", <<"007">>, 7, inline,
+                {true, false}}
+        ]
+    ].
+
+%% @doc Check each signed cache entry as well as the varied parent and child.
+vary_child_commitments(Required, Slot, Mode, {KeepChild, KeepParent}) ->
+    Wallet = ar_wallet:new(),
+    Signer = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = (vary_opts())#{ <<"priv-wallet">> => Wallet },
+    Child = hb_message:commit(#{ <<"slot">> => Slot }, Opts, <<"httpsig@1.0">>),
+    ChildID = hb_message:id(Child, [Signer], Opts),
+    {ok, _} = hb_cache:write(Child, Opts),
+    Parent = hb_message:commit(
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"required">> => Required,
+            <<"child">> => Child
+        },
+        Opts,
+        <<"httpsig@1.0">>
+    ),
+    ParentID = hb_message:id(Parent, [Signer], Opts),
+    {ok, _} = hb_cache:write(Parent, Opts),
+    {ok, Lazy} = hb_cache:read(ParentID, Opts),
+    ?assertMatch({link, _, _}, maps:get(<<"child">>, Lazy)),
+    LazyChild = hb_maps:get(<<"child">>, Lazy, not_found, Opts),
+    ?assertMatch({link, _, _}, maps:get(<<"slot">>, LazyChild)),
+    ?assert(hb_message:verify(Lazy, [Signer], Opts)),
+    % Keep the parent's scalar inline so only its child needs loading.
+    Input =
+        case Mode of
+            inline -> Parent;
+            lazy -> Lazy#{ <<"required">> => Required }
+        end,
+    {ok, Res} = hb_ao:resolve(Input, <<"vary-wildcard">>, Opts),
+    Varied = hb_maps:get(<<"base">>, Res, not_found, Opts),
+    VariedChild = maps:get(<<"child">>, Varied),
+    ?assertEqual(7, maps:get(<<"required">>, Varied)),
+    ?assertEqual(7, maps:get(<<"slot">>, VariedChild)),
+    {ok, _} = hb_cache:write(Varied, Opts),
+    {ok, CachedParent} = hb_cache:read(ParentID, Opts),
+    {ok, CachedChild} = hb_cache:read(ChildID, Opts),
+    ?assertEqual(Required,
+        hb_maps:get(<<"required">>, CachedParent, not_found, Opts)),
+    ?assertEqual(Slot, hb_maps:get(<<"slot">>, CachedChild, not_found, Opts)),
+    ?assertEqual(Slot, hb_maps:get(<<"slot">>,
+        hb_maps:get(<<"child">>, CachedParent, not_found, Opts),
+        not_found, Opts)),
+    ?assert(hb_message:verify(CachedChild, [Signer], Opts)),
+    ?assert(hb_message:verify(CachedParent, [Signer], Opts)),
+    ?assertEqual(
+        {KeepChild, KeepParent},
+        {
+            lists:member(Signer, hb_message:signers(VariedChild, Opts)),
+            lists:member(Signer, hb_message:signers(Varied, Opts))
+        }
+    ),
+    lists:foreach(
+        fun({Message, ID, Keep}) ->
+            case Keep of
+                true ->
+                    ?assertEqual(ID, hb_message:id(Message, [Signer], Opts)),
+                    ?assert(hb_message:verify(Message, [Signer], Opts));
+                false ->
+                    ?assertNot(hb_maps:is_key(<<"commitments">>, Message, Opts))
+            end
+        end,
+        [{VariedChild, ChildID, KeepChild}, {Varied, ParentID, KeepParent}]
+    ).
+
+%% @doc Caching coerced inputs must not change the original signed message.
+vary_coercion_preserves_original_signed_cache_entry_test_() ->
+    [
+        {binary_to_list(Which) ++ " " ++ atom_to_list(Mode), fun() ->
+            vary_coercion_preserves_original_signed_cache_entry(Which, Mode)
+        end}
+    || Which <- [<<"base">>, <<"request">>], Mode <- [inline, lazy]
+    ].
+
+%% @doc Exercise coercion of both in-memory and linked signed values.
+vary_coercion_preserves_original_signed_cache_entry(Which, Mode) ->
+    Wallet = ar_wallet:new(),
+    Signer = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = (vary_opts())#{ <<"priv-wallet">> => Wallet },
+    Signed = hb_message:commit(
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"path">> => <<"vary-wildcard">>,
+            <<"required">> => <<"007">>
+        },
+        Opts,
+        <<"httpsig@1.0">>
+    ),
+    ?assert(lists:member(Signer, hb_message:signers(Signed, Opts))),
+    ?assert(hb_message:is_signed_key(<<"required">>, Signed, Opts)),
+    SignedID = hb_message:id(Signed, [Signer], Opts),
+    {ok, _} = hb_cache:write(Signed, Opts),
+    {ok, Original} = hb_cache:read(SignedID, Opts),
+    ?assertMatch({link, _, _}, maps:get(<<"required">>, Original)),
+    ?assertEqual(
+        <<"007">>, hb_maps:get(<<"required">>, Original, not_found, Opts)
+    ),
+    ?assert(hb_message:verify(Original, [Signer], Opts)),
+    Input = case Mode of inline -> Signed; lazy -> Original end,
+    Varied = vary_signed_input(Which, Input, <<"vary-wildcard">>, Opts),
+    ?assertEqual(7, hb_maps:get(<<"required">>, Varied, not_found, Opts)),
+    {ok, VariedID} = hb_cache:write(Varied, Opts),
+    {ok, CachedVaried} = hb_cache:read(VariedID, Opts),
+    ?assertEqual(7, hb_maps:get(<<"required">>, CachedVaried, not_found, Opts)),
+    {ok, CachedOriginal} = hb_cache:read(SignedID, Opts),
+    ?assert(lists:member(Signer, hb_message:signers(CachedOriginal, Opts))),
+    ?assertEqual(SignedID, hb_message:id(CachedOriginal, [Signer], Opts)),
+    ?assertEqual(
+        {<<"007">>, true},
+        {
+            hb_maps:get(<<"required">>, CachedOriginal, not_found, Opts),
+            hb_message:verify(CachedOriginal, [Signer], Opts)
+        }
+    ),
+    ?assertNot(hb_maps:is_key(<<"commitments">>, Varied, Opts)).
+
+%% @doc Exercise either signed argument through the device's resolver path.
+vary_signed_input(Which, Input, Function, Opts) ->
+    {Base, Request} =
+        case Which of
+            <<"base">> -> {Input, Function};
+            <<"request">> ->
+                {
+                    #{
+                        <<"device">> => <<"test-device@1.0">>,
+                        <<"required">> => 7
+                    },
+                    Input
+                }
+        end,
+    {ok, Res} = hb_ao:resolve(Base, Request, Opts),
+    hb_maps:get(Which, Res, not_found, Opts).
+
+vary_unspecified_function_is_identity_test() ->
+    Opts = vary_opts(),
+    {ok, Path} = hb_cache:write(<<"kept">>, Opts),
+    Base = #{
+        <<"device">> => <<"test-device@1.0">>, <<"noise">> => {link, Path, #{}}
+    },
+    {ok, Res} = hb_ao:resolve(Base, <<"vary-unspecified">>, Opts),
+    ?assertEqual(
+        Base,
+        hb_private:reset(maps:get(<<"base">>, Res))
+    ).
+
+vary_overlay_patches_unvaried_base_test() ->
+    Opts = vary_opts(),
+    {ok, Res} =
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"counter">> => <<"1">>,
+                <<"noise">> => <<"kept">>
+            },
+            <<"vary-overlay">>,
+            Opts
+        ),
+    ?assertEqual(2, hb_ao:get(<<"counter">>, Res, Opts)),
+    ?assertEqual(<<"kept">>, hb_ao:get(<<"noise">>, Res, Opts)).
+
+vary_projection_uses_projected_cache_key_test() ->
+    Store = hb_test_utils:test_store(),
+    Opts =
+        #{
+            <<"store">> => Store,
+            <<"attested-store">> => hb_test_utils:test_store(),
+            <<"spawn-worker">> => false
+        },
+    Base =
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"required">> => <<"7">>,
+            <<"deep">> => #{ <<"slot">> => <<"8">> },
+            <<"noise">> => <<"first">>
+        },
+    Req =
+        #{
+            <<"path">> => <<"vary-projection">>,
+            <<"deep-request">> => #{ <<"slot">> => <<"9">> }
+        },
+    CachedReq = Req#{ <<"cache-control">> => [<<"only-if-cached">>] },
+    ?assertMatch(
+        {error, #{ <<"status">> := 504 }},
+        hb_ao:resolve(Base, CachedReq, Opts)
+    ),
+    {ok, First} =
+        hb_ao:resolve(Base, Req#{ <<"cache-control">> => [<<"store">>] }, Opts),
+    ?assert(hb_hashpath:verify_all(hb_path:hashpath(First, Opts), Opts)),
+    {ok, Second} =
+        hb_ao:resolve(
+            Base#{ <<"noise">> => <<"second">> },
+            CachedReq,
+            Opts
+        ),
+    ?assertEqual(7, hb_ao:get(<<"base/required">>, Second, Opts)),
+    FirstCtx = hb_hashpath:context(hb_path:hashpath(First, Opts), Opts),
+    SecondCtx = hb_hashpath:context(hb_path:hashpath(Second, Opts), Opts),
+    ?assertNotEqual(
+        maps:get(<<"base-id">>, FirstCtx), maps:get(<<"base-id">>, SecondCtx)
+    ),
+    ?assertEqual(
+        maps:get(<<"varied-base-id">>, FirstCtx),
+        maps:get(<<"varied-base-id">>, SecondCtx)
+    ),
+    ?assertEqual(
+        maps:get(<<"varied-result-id">>, FirstCtx),
+        maps:get(<<"varied-result-id">>, SecondCtx)
+    ),
+    ?assertEqual(8, hb_ao:get(<<"base/deep/slot">>, Second, Opts)),
+    ?assertEqual(9, hb_ao:get(<<"request/deep-request/slot">>, Second, Opts)).
+
+vary_opts() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:reset(Store),
+    #{
+        <<"store">> => Store,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"spawn-worker">> => false
+    }.

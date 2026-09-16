@@ -3,7 +3,8 @@
 %%% node Opts. It applies these settings when asked to maybe store/lookup in 
 %%% response to a request.
 -module(hb_cache_control).
--export([maybe_store/4, maybe_lookup/3]).
+-export([maybe_store/5, maybe_lookup/5]).
+-export([derive_cache_settings/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -18,11 +19,11 @@
 %% order of cache control sources is as follows:
 %% 1. The `Opts' map (letting the node operator have the final say).
 %% 2. The `Res' results message (granted by Base's device).
-%% 3. The `Req' message (the user's request).
+%% 3. The `OriginalReq' message (the user's request).
 %% Base is not used, such that it can specify cache control information about 
-%% itself, without affecting its outputs.
-maybe_store(Base, Req, Res, Opts) ->
-    case derive_cache_settings([Res, Req], Opts) of
+%% itself, without affecting its outputs. Cache identity uses the varied inputs.
+maybe_store(Base, Req, Res, OriginalReq, Opts) ->
+    case derive_cache_settings([Res, OriginalReq], Opts) of
         #{ <<"store">> := true } ->
             ?event(caching, {caching_result, {base, Base}, {req, Req}, {res, Res}}),
             dispatch_cache_write(Base, Req, Res, Opts);
@@ -37,16 +38,16 @@ maybe_store(Base, Req, Res, Opts) ->
 %%                        a 504 `Status'.
 %%      `no_cache':       If set, the cached values are never used. Returns
 %%                        `continue' to the caller.
-maybe_lookup(Base, Req, Opts) ->
+maybe_lookup(Base, Req, OriginalBase, OriginalReq, Opts) ->
     case exec_likely_faster_heuristic(Base, Req, Opts) of
         true ->
             ?event(caching, {skip_cache_check, exec_likely_faster_heuristic}),
             {continue, Base, Req};
-        false -> lookup(Base, Req, Opts)
+        false -> lookup(Base, Req, OriginalBase, OriginalReq, Opts)
     end.
 
-lookup(Base, Req, Opts) ->
-    case derive_cache_settings([Base, Req], Opts) of
+lookup(Base, Req, OriginalBase, OriginalReq, Opts) ->
+    case derive_cache_settings([OriginalBase, OriginalReq], Opts) of
         #{ <<"lookup">> := false } ->
             ?event({skip_cache_check, lookup_disabled}),
             maybe_load_base(Base, Req, Opts);
@@ -140,7 +141,11 @@ perform_cache_write(Base, Req, Res, Opts) ->
                 Opts
             );
         Map when is_map(Map) ->
-            hb_cache:write(Res, Opts);
+            hb_cache:write_hashpath(
+                hb_path:hashpath(Base, Req, Opts),
+                Res,
+                Opts
+            );
         _ ->
             ?event({cannot_write_result, Res}),
             skip_caching
@@ -387,9 +392,13 @@ message_source_cache_control_test() ->
 %%% Basic cached AO-Core resolution tests
 
 cache_binary_result_test() ->
-    CachedMsg = <<"test-message">>,
-    Base = #{ <<"test-key">> => CachedMsg },
-    Req = <<"test-key">>,
+    CachedMsg = <<"GOOD FUNCTION">>,
+    Base =
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"test-func">> => <<"literal">>
+        },
+    Req = <<"test-func">>,
     {ok, Res} = hb_ao:resolve(Base, Req, #{ <<"cache-control">> => [<<"always">>] }),
     ?assertEqual(CachedMsg, Res),
     {ok, Res2} = hb_ao:resolve(Base, Req, #{ <<"cache-control">> => [<<"only-if-cached">>] }),

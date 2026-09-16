@@ -8,10 +8,15 @@
 %% containting a gzip-encoded payload. Returns the rest of the base message 
 %% unchanged, with the `content-encoding' key unset.
 %% 
+-spec unzip(
+    #{ body => _, 'content-encoding' => binary(), _ => _ },
+    #{ _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ body => _, _ => _ }}.
 unzip(Base, _Req, Opts) ->
-    case hb_maps:get(<<"content-encoding">>, Base, <<"gzip">>, Opts) of
+    case maps:get(<<"content-encoding">>, Base, <<"gzip">>) of
         <<"gzip">> ->
-            case hb_maps:find(<<"body">>, Base, Opts) of
+            case maps:find(<<"body">>, Base) of
                 error ->
                     ?event(
                         debug_gzip,
@@ -19,7 +24,8 @@ unzip(Base, _Req, Opts) ->
                         Opts
                     ),
                     {ok, Base};
-                {ok, Body} ->
+                {ok, RawBody} ->
+                    Body = hb_util:bin(RawBody),
                     ?event(
                         debug_gzip,
                         {unzipping_body, {size, byte_size(Body)}},
@@ -48,8 +54,11 @@ unzip(Base, _Req, Opts) ->
 
 %% @doc Take a base message with a `body' key and return it zipped, in-place.
 %% Add a `content-encoding' key with the value `gzip'.
+-spec zip(#{ body => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body := binary(), 'content-encoding' := binary(), _ => _ }}
+    | {error, binary()}.
 zip(Base, _Req, Opts) ->
-    case hb_maps:find(<<"body">>, Base, Opts) of
+    case maps:find(<<"body">>, Base) of
         {ok, Body} ->
             {
                 ok,

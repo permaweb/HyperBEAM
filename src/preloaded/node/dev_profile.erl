@@ -6,7 +6,7 @@
 %%% If the `eval' function is instead directly invoked via Erlang, the first
 %%% argument may be a function to profile instead.
 -module(dev_profile).
--export([info/1, eval/1, eval/2, eval/3, eval/4]).
+-export([info/1, eval/1, eval/2, eval/3, eval_key/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -14,7 +14,7 @@
 info(_) ->
     #{
         excludes => [<<"keys">>, <<"set">>],
-        default => fun eval/4
+        default => fun eval_key/4
     }.
 
 %% @doc Invoke a profiling tool on a function or an AO-Core resolution. If a 
@@ -36,6 +36,8 @@ info(_) ->
 %% output from the engine formatted as an AO-Core message.
 eval(Fun) -> eval(Fun, #{}).
 eval(Fun, Opts) -> eval(Fun, #{}, Opts).
+-spec eval(function() | #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _} | {_, _}.
 eval(Fun, Req, Opts) when is_function(Fun) ->
     do_eval(
         Fun,
@@ -46,8 +48,10 @@ eval(Fun, Req, Opts) when is_function(Fun) ->
         Opts
     );
 eval(Base, Request, Opts) ->
-    eval(<<"eval">>, Base, Request, Opts).
-eval(PathKey, Base, Req, Opts) when not is_function(Base) ->
+    eval_key(<<"eval">>, Base, Request, Opts).
+-spec eval_key(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _} | {_, _}.
+eval_key(PathKey, Base, Req, Opts) when not is_function(Base) ->
     case hb_ao:get(PathKey, Req, undefined, Opts) of
         undefined ->
             {
