@@ -5,9 +5,10 @@
 %%% Each pair a message carries names one store group,
 %%% `~match@1.0/<name>=<value-path>', holding one key per message carrying
 %%% the pair, with no value: the message's weave offset as twenty decimal
-%%% digits, then its ID. The value's path is the hashpath of a binary value
-%%% and the ID of a nested message -- the path `hb_cache' links the value
-%%% under -- so a group's path is bounded and path-safe.
+%%% digits, then its 43-byte signed ID and commitment device. The value's
+%%% path is the hashpath of a binary value and the ID of a nested message
+%%% -- the path `hb_cache' links the value under -- so a group's path is
+%%% bounded and path-safe.
 %%%
 %%% The offset field sorts a group's keys by weave position, as bytes and as
 %%% terms alike: `-1' for a message with no weave position, then the offsets,
@@ -15,11 +16,13 @@
 %%% distinguishes results at the same offset.
 %%%
 %%% The stores of the index are the node's `match-index' stores (`store/1').
-%%% A store of the node's own holds a group's keys as its children; a
-%%% published index
-%%% maps groups and keys onto its rows through its store message's `to-key'
-%%% and `from-key', this device's `row' and `member' keys. A page is read
-%%% from every store, their keys merged.
+%%% Each store's `from-key' pipeline returns messages with `offset', `id',
+%%% and `commitment-device'; unknown IDs and devices are empty binaries.
+%%% The default `key' and `entry' pipelines encode and decode native keys.
+%%% Write entries carry their group's path in `path'. A published index maps
+%%% groups and keys onto its rows with `row' and decodes them with `member',
+%%% setting its commitment device in the pipeline. A page is read from
+%%% every store, their entries merged.
 %%%
 %%% The pairs of a message are its own keys, but its commitments and private
 %%% keys, and those two maps of the node's options -- else of the hook's
@@ -47,10 +50,12 @@
 %%%     row:      A group's path, or a key of one, as the row bits of a
 %%%               published index, at the request's `key-hash-size',
 %%%               `value-hash-size' and `offset-size'.
-%%%     member:   The row of a published index as a key of its group.
+%%%     key:      An entry message as a native key, under its optional `path'.
+%%%     entry:    A native key as an offset, ID and commitment-device message.
+%%%     member:   A row as a message carrying its offset.
 %%% '''
 -module(dev_match).
--export([info/0, all/3, index/3, locate/3, row/3, member/3]).
+-export([info/0, all/3, index/3, locate/3, row/3, member/3, entry/3, key/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -91,12 +96,18 @@ store(Opts) ->
             {Local, _} ->
                 Local
         end,
-    case MatchIndexStore of
-        false -> [];
-        true -> hb_opts:get(store, [], Opts);
-        ResolvedStore when not is_list(ResolvedStore) -> [ResolvedStore];
-        ResolvedStore -> ResolvedStore
-    end.
+    Stores =
+        case MatchIndexStore of
+            false -> [];
+            true -> hb_opts:get(store, [], Opts);
+            ResolvedStore when not is_list(ResolvedStore) -> [ResolvedStore];
+            ResolvedStore -> ResolvedStore
+        end,
+    Defaults = #{
+        <<"to-key">> => <<"~match@1.0/key">>,
+        <<"from-key">> => <<"~match@1.0/entry">>
+    },
+    [ maps:merge(Defaults, S) || S <- Stores ].
 
 %%% Groups and their keys.
 
@@ -117,8 +128,23 @@ value_path(Bin, Opts) when is_binary(Bin) ->
 value_path(Msg, Opts) ->
     hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }).
 
-%% @doc A key of a group: the offset then the ID.
-key({Offset, ID}) -> <<(digits(Offset))/binary, ID/binary>>.
+%% @doc Encode an entry's fields and optional path, or pass a group through.
+key(Base, _Req, Opts) ->
+    {ok, key(hb_cache:ensure_all_loaded(
+        hb_maps:get(<<"body">>, Base, Base, Opts), Opts
+    ))}.
+
+%% @doc A key of a group: the offset, signed ID, and commitment device.
+key(#{ <<"path">> := Path } = Match) ->
+    hb_path:to_binary([Path, key(maps:remove(<<"path">>, Match))]);
+key(#{ <<"offset">> := Offset } = Match) ->
+    ID = maps:get(<<"id">>, Match, <<>>),
+    Device = maps:get(<<"commitment-device">>, Match, <<>>),
+    case ID of
+        <<>> -> digits(Offset);
+        _ -> <<(digits(Offset))/binary, ID/binary, Device/binary>>
+    end;
+key(Path) when is_binary(Path) -> Path.
 
 %% @doc An offset as a key's field: twenty digits at a weave offset, and
 %% `-1' and `infinity' as themselves.
@@ -127,26 +153,32 @@ digits(Offset) when is_integer(Offset), Offset >= 0 ->
 digits(Other) ->
     hb_util:bin(Other).
 
-%% @doc The offset and ID a key carries; a bare offset carries no ID.
-parse(<<"-1", ID/binary>>) -> {-1, ID};
-parse(<<"infinity", ID/binary>>) -> {infinity, ID};
-parse(<<Digits:?OFFSET_DIGITS/binary, ID/binary>>) -> {hb_util:int(Digits), ID};
-parse(Digits) -> {hb_util:int(Digits), <<>>}.
+%% @doc Decode a native key, or normalize the fields decoded by a pipeline.
+entry(Base, _Req, Opts) ->
+    {ok, parse(hb_maps:get(<<"body">>, Base, Base, Opts))}.
+
+%% @doc An encoded key or decoded fields as an entry message.
+parse(#{ <<"offset">> := At } = Match) ->
+    #{ <<"offset">> := Offset } = cursor(At),
+    maps:merge(parse(Offset, <<>>), Match#{ <<"offset">> => Offset });
+parse(<<"-1", Rest/binary>>) -> parse(-1, Rest);
+parse(<<"infinity", Rest/binary>>) -> parse(infinity, Rest);
+parse(<<Digits:?OFFSET_DIGITS/binary, Rest/binary>>) ->
+    parse(hb_util:int(Digits), Rest);
+parse(Digits) -> parse(hb_util:int(Digits), <<>>).
+
+%% @doc Split the fixed-width signed ID from its trailing device.
+parse(Offset, <<ID:43/binary, Device/binary>>) ->
+    #{ <<"offset">> => Offset, <<"id">> => ID, <<"commitment-device">> => Device };
+parse(Offset, ID) ->
+    #{ <<"offset">> => Offset, <<"id">> => ID, <<"commitment-device">> => <<>> }.
 
 %% @doc The position of a key: its offset and ID. An empty ID names an
 %% offset boundary, closing the offset when reading down.
-position(desc, {Offset, <<>>}) ->
+position(desc, #{ <<"offset">> := Offset, <<"id">> := <<>> }) ->
     {Offset, ?LAST_ID};
-position(_Direction, Key) ->
-    Key.
-
-%% @doc A match as a message: its key, its offset and its ID when known.
-result(Key = {Offset, ID}) ->
-    Match = #{ <<"member">> => key(Key), <<"offset">> => Offset },
-    case ID of
-        <<>> -> Match;
-        _ -> Match#{ <<"id">> => ID }
-    end.
+position(_Direction, #{ <<"offset">> := Offset, <<"id">> := ID }) ->
+    {Offset, ID}.
 
 %%% Writing the index.
 
@@ -199,13 +231,24 @@ index_message(Handler, Req, IDs, Stores, Opts) ->
         ||
             {Name, Value} <- pairs(Handler, Msg, Opts)
         ],
+    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    Members =
+        [
+            #{
+                <<"offset">> => Offset, <<"id">> => ID,
+                <<"commitment-device">> =>
+                    hb_util:deep_get([ID, <<"commitment-device">>], Commitments, Opts)
+            }
+        ||
+            ID <- IDs
+        ],
     Keys =
         maps:from_list(
             [
-                {<<Group/binary, "/", (key({Offset, ID}))/binary>>, <<>>}
+                {Member#{ <<"path">> => Group }, <<>>}
             ||
                 Group <- Groups,
-                ID <- IDs
+                Member <- Members
             ]
         ),
     lists:foreach(
@@ -288,7 +331,7 @@ ids(Template, Req, Opts) ->
     Bounded = maps:merge(#{ <<"limit">> => all }, Req),
     case locate(Template, Bounded, Opts#{ <<"match-index">> => Local }) of
         {ok, Matches} ->
-            {ok, hb_util:unique([ ID || #{ <<"id">> := ID } <- Matches ])};
+            {ok, hb_util:unique([ ID || #{ <<"id">> := ID } <- identified(Matches) ])};
         {error, _} ->
             {error, not_found}
     end.
@@ -320,7 +363,7 @@ locate(Base, Req, Opts) ->
                         Direction, Groups, Cursor, Exclusive, To, Limit,
                         [], Opts
                     ),
-                {ok, [ result(Match) || Match <- Matches ]}
+                {ok, [ Match#{ <<"member">> => key(Match) } || Match <- Matches ]}
             end
     end.
 
@@ -369,7 +412,7 @@ start(desc) -> infinity.
 
 %% @doc A cursor from a key, an offset, `-1' or `infinity'.
 cursor(none) -> none;
-cursor(Offset) when is_integer(Offset); is_atom(Offset) -> {Offset, <<>>};
+cursor(Offset) when is_integer(Offset); is_atom(Offset) -> parse(Offset, <<>>);
 cursor(Key) -> parse(Key).
 
 %% @doc The matches from the cursor -- inclusive until a match, and
@@ -419,20 +462,24 @@ step(Direction, Groups, Cursor, Exclusive, Opts) ->
         Read = [ {Group, Pages} || {Group, _Key, Pages} <- Next ],
         Required =
             [
-                case lists:member({O, <<>>}, [H || {_, [H | _]} <- Pages]) of
-                    true -> {O, <<>>};
-                    false -> Key
+                case [H || {_, [H = #{ <<"offset">> := O2, <<"id">> := <<>> } | _]}
+                        <- Pages, O2 =:= O] of
+                    [Head | _] -> Head;
+                    [] -> Key
                 end
             ||
-                {_Group, Key = {O, _}, Pages} <- Next
+                {_Group, Key = #{ <<"offset">> := O }, Pages} <- Next
             ],
-        Known = lists:usort(identified(Required)),
-        case {lists:usort([ O || {O, _} <- Keys ]), Known, identified(Keys)} of
-            {[Offset], [], []} when Exclusive, element(1, Cursor) =:= Offset,
-                    element(2, Cursor) =/= <<>> ->
-                % A published row must not repeat an ID already returned here.
-                step(Direction, Read, {Offset, <<>>}, true, Opts);
-            {[_], Known, _} when length(Known) =< 1 ->
+        Known = identified(Required),
+        Offsets = lists:usort([ O || #{ <<"offset">> := O } <- Keys ]),
+        IDs = lists:usort([ ID || #{ <<"id">> := ID } <- Known ]),
+        case {Offsets, IDs, identified(Keys)} of
+            {[Offset], [], []} when Exclusive,
+                    map_get(<<"offset">>, Cursor) =:= Offset,
+                    map_get(<<"id">>, Cursor) =/= <<>> ->
+                % An offset-only row must not repeat an ID already returned here.
+                step(Direction, Read, cursor(Offset), true, Opts);
+            {[_], IDs, _} when length(IDs) =< 1 ->
                 {match, hd(Known ++ [first_of(Direction, Keys)]), Read};
             _ -> {next, last_of(Direction, Required), Read}
         end
@@ -450,7 +497,7 @@ next_keys(Direction, [{Group, Pages} | Rest], Cursor, Exclusive, Opts) ->
     end.
 
 %% @doc The keys carrying an ID.
-identified(Keys) -> [ Key || Key = {_Offset, ID} <- Keys, ID =/= <<>> ].
+identified(Keys) -> [ Key || Key = #{ <<"id">> := ID } <- Keys, ID =/= <<>> ].
 
 %% @doc The last key in the direction.
 last_of(asc, Keys) ->
@@ -501,9 +548,11 @@ from_cursor(Direction, Group, Page, Cursor, Exclusive, Store, Opts) ->
 
 %% @doc Whether a key lies behind the cursor in the direction, or at it
 %% when the cursor is exclusive. An ID-less row remains for IDs at its offset.
-behind(_Direction, {Offset, _ID}, {Offset, <<>>}, Exclusive) ->
+behind(_Direction, #{ <<"offset">> := Offset },
+        #{ <<"offset">> := Offset, <<"id">> := <<>> }, Exclusive) ->
     Exclusive;
-behind(_Direction, {Offset, <<>>}, {Offset, _ID}, _Exclusive) ->
+behind(_Direction, #{ <<"offset">> := Offset, <<"id">> := <<>> },
+        #{ <<"offset">> := Offset }, _Exclusive) ->
     false;
 behind(Direction, Key, Cursor, Exclusive) ->
     case {position(Direction, Key), position(Direction, Cursor)} of
@@ -515,15 +564,17 @@ behind(Direction, Key, Cursor, Exclusive) ->
 %% @doc The first of the stores' first keys in the direction, one carrying
 %% an ID ahead of one at the same offset without.
 first_of(asc, Heads) ->
-    {_, _, Head} =
+    {_, _, _, Head} =
         lists:min(
-            [ {Offset, ID =:= <<>>, K} || K = {Offset, ID} <- Heads ]
+            [ {Offset, ID =:= <<>>, ID, K}
+            || K = #{ <<"offset">> := Offset, <<"id">> := ID } <- Heads ]
         ),
     Head;
 first_of(desc, Heads) ->
-    {_, _, Head} =
+    {_, _, _, Head} =
         lists:max(
-            [ {Offset, ID =/= <<>>, K} || K = {Offset, ID} <- Heads ]
+            [ {Offset, ID =/= <<>>, ID, K}
+            || K = #{ <<"offset">> := Offset, <<"id">> := ID } <- Heads ]
         ),
     Head.
 
@@ -541,16 +592,18 @@ page(Direction, Group, Cursor, Store, Opts) ->
             <<"direction">> => Direction
         },
     case hb_store:list([Store], Request, Opts) of
-        {ok, Keys} -> {ok, [ parse(Key) || Key <- Keys ]};
         {error, not_found} -> {ok, []};
-        {error, _} = Error -> Error
+        Result -> Result
     end.
 
 %% @doc The key a store's page is read from: a cursor naming no ID stands
 %% for every key of its offset, so reading down it closes with the byte
 %% above every ID.
-from(desc, {Offset, <<>>}) -> key({Offset, ?LAST_ID});
-from(_Direction, Cursor) -> key(Cursor).
+from(desc, #{ <<"id">> := <<>> } = Cursor) ->
+    Cursor#{ <<"id">> => ?LAST_ID, <<"commitment-device">> => <<>> };
+from(desc, #{ <<"commitment-device">> := <<>> } = Cursor) ->
+    Cursor#{ <<"commitment-device">> => ?LAST_ID };
+from(_Direction, Cursor) -> Cursor.
 
 %%% The rows of a published index.
 
@@ -560,30 +613,31 @@ from(_Direction, Cursor) -> key(Cursor).
 %% value's path names; or a key's offset in `offset-size' bits, `-1' as zero
 %% and `infinity', with every offset past the field, as its maximum.
 row(Base, Req, Opts) ->
-    maybe
-        {ok, Body} ?= body(Base, Opts),
-        {KeyBits, ValueBits, OffsetBits} = sizes(Req, Opts),
-        case binary:split(Body, <<"=">>) of
-            [Name, ValuePath] ->
-                <<KeyHash:KeyBits/bitstring, _/bitstring>> =
-                    crypto:hash(sha256, <<?PREFIX/binary, Name/binary>>),
-                <<ValueHash:ValueBits/bitstring, _/bitstring>> =
-                    hb_util:decode(ValuePath),
-                {ok, <<KeyHash/bitstring, ValueHash/bitstring>>};
-            [Key] ->
-                {Offset, _ID} = parse(Key),
-                Max = (1 bsl OffsetBits) - 1,
-                case Offset of
-                    -1 -> {ok, <<0:OffsetBits>>};
-                    _ when is_integer(Offset), Offset < Max ->
-                        {ok, <<Offset:OffsetBits>>};
-                    _ -> {ok, <<Max:OffsetBits>>}
-                end
-        end
-    end.
+    {ok, row(
+        hb_cache:ensure_all_loaded(hb_maps:get(<<"body">>, Base, <<>>, Opts), Opts),
+        sizes(Req, Opts)
+    )}.
 
-%% @doc The row of a published index as a key of its group: the offset its
-%% trailing `offset-size' bits carry, `infinity' at the field's maximum.
+%% @doc Encode a group, an offset, or a complete row from their fields.
+row(#{ <<"path">> := Path } = Match, Sizes) ->
+    <<(row(Path, Sizes))/bitstring,
+        (row(maps:remove(<<"path">>, Match), Sizes))/bitstring>>;
+row(#{ <<"offset">> := Offset }, {_, _, OffsetBits}) ->
+    Max = (1 bsl OffsetBits) - 1,
+    case Offset of
+        -1 -> <<0:OffsetBits>>;
+        _ when is_integer(Offset), Offset < Max -> <<Offset:OffsetBits>>;
+        _ -> <<Max:OffsetBits>>
+    end;
+row(Body, {KeyBits, ValueBits, _OffsetBits}) ->
+    [Name, ValuePath] = binary:split(Body, <<"=">>),
+    <<KeyHash:KeyBits/bitstring, _/bitstring>> =
+        crypto:hash(sha256, <<?PREFIX/binary, Name/binary>>),
+    <<ValueHash:ValueBits/bitstring, _/bitstring>> = hb_util:decode(ValuePath),
+    <<KeyHash/bitstring, ValueHash/bitstring>>.
+
+%% @doc A row as a message carrying its trailing `offset-size' bits as
+%% `offset', with `infinity' at the field's maximum.
 member(Base, Req, Opts) ->
     maybe
         {ok, Row} ?= body(Base, Opts),
@@ -591,9 +645,9 @@ member(Base, Req, Opts) ->
         Max = (1 bsl OffsetBits) - 1,
         case Row of
             <<_:KeyBits, _:ValueBits, Max:OffsetBits>> ->
-                {ok, digits(infinity)};
+                {ok, cursor(infinity)};
             <<_:KeyBits, _:ValueBits, Offset:OffsetBits>> ->
-                {ok, digits(Offset)};
+                {ok, cursor(Offset)};
             _ ->
                 {error, {'invalid-row', Row}}
         end
@@ -675,6 +729,33 @@ weave_order_test() ->
         end,
     Template = #{ <<"type">> => <<"Message">>, <<"device">> => <<"message@1.0">> },
     Mined = Cache(Template#{ <<"n">> => <<"1">>, <<"a">> => <<"yes">> }, 5),
+    {ok, [MinedMatch]} =
+        hb_ao:raw(
+            <<"match@1.0">>, <<"locate">>, Template, #{}, Opts
+        ),
+    Device = hb_maps:get(<<"commitment-device">>, MinedMatch),
+    ?assertEqual(<<"httpsig@1.0">>, Device),
+    ?assertEqual(key(MinedMatch), maps:get(<<"member">>, MinedMatch)),
+    ?assertEqual(
+        {ok, [maps:remove(<<"member">>, MinedMatch)]},
+        hb_store:list(
+            store(Opts), #{ <<"list">> => group(<<"n">>, <<"1">>, Opts) }, Opts
+        )
+    ),
+    Normalized =
+        [ S#{ <<"from-key">> =>
+            <<"~bits@1.0/from=offset:160,id:344,commitment-device:_",
+                "/~match@1.0/entry/set&source=pipeline">> }
+        || S <- store(Opts) ],
+    ?assertEqual(
+        {ok, [MinedMatch#{
+            <<"device">> => <<"match@1.0">>, <<"source">> => <<"pipeline">>
+        }]},
+        hb_ao:raw(
+            <<"match@1.0">>, <<"locate">>, Template, #{},
+            Opts#{ <<"match-index">> => Normalized }
+        )
+    ),
     Later = Cache(Template#{ <<"n">> => <<"2">> }, 7),
     Pending = Cache(Template#{ <<"n">> => <<"3">> }, infinity),
     Unmined = Cache(Template#{ <<"n">> => <<"4">> }, -1),
@@ -705,7 +786,10 @@ weave_order_test() ->
         [{7, Later}],
         matches(
             Template,
-            #{ <<"after">> => key({5, Mined}), <<"limit">> => 1 },
+            #{
+                <<"after">> => key(#{ <<"offset">> => 5, <<"id">> => Mined }),
+                <<"limit">> => 1
+            },
             Opts
         )
     ),
@@ -734,20 +818,26 @@ weave_order_test() ->
     % Distinct signed IDs at one offset survive matching and both cursor orders.
     Peer = Cache(Template#{ <<"b">> => <<"yes">> }, 5),
     [First, Second] = Shared = lists:sort([{5, Mined}, {5, Peer}]),
+    [FirstCursor, SecondCursor] =
+        [ #{ <<"offset">> => O, <<"id">> => ID } || {O, ID} <- Shared ],
     Asc = #{ <<"from">> => 5, <<"to">> => 7 },
     Desc = #{ <<"direction">> => desc, <<"from">> => 5, <<"to">> => -1 },
     ?assertEqual(Shared, matches(Template, Asc, Opts)),
     ?assertEqual(lists:reverse(Shared), matches(Template, Desc, Opts)),
     ?assertEqual([First], matches(Template, Asc#{ <<"limit">> => 1 }, Opts)),
     ?assertEqual(
-        [Second], matches(Template, Asc#{ <<"after">> => key(First) }, Opts)
+        [Second], matches(Template, Asc#{ <<"after">> => FirstCursor }, Opts)
     ),
     ?assertEqual(
-        [First], matches(Template, Desc#{ <<"after">> => key(Second) }, Opts)
+        [First], matches(Template, Desc#{ <<"after">> => SecondCursor }, Opts)
     ),
     ?assertEqual(
         [{7, Later}],
         matches(Template, #{ <<"after">> => 5, <<"to">> => infinity }, Opts)
+    ),
+    ?assertEqual(
+        [Second, First],
+        matches(Template, Desc#{ <<"from">> => SecondCursor }, Opts)
     ),
     ?assertEqual([], matches(Template, Desc#{ <<"after">> => 5 }, Opts)),
     ?assertEqual([], matches(Template, Asc#{ <<"to">> => 5 }, Opts)),
@@ -802,7 +892,9 @@ paths_test() ->
             Wallets
         ),
     % Each signed ID contributes a separate result at the same offset.
-    cache(Signed, 1, Opts),
+    {ok, CommitmentsPath} =
+        hb_cache:write(hb_maps:get(<<"commitments">>, Signed), Opts),
+    cache(Signed#{ <<"commitments">> => {link, CommitmentsPath, #{}} }, 1, Opts),
     IDs = lists:sort(ids(Signed, Opts)),
     ?assertEqual(2, length(IDs)),
     cache(#{ <<"committer">> => <<"untrusted">> }, 3, Opts),
@@ -870,18 +962,23 @@ row_test() ->
         {ok, <<KeyHash/bitstring, ValueHash/bitstring>>},
         Normalize(<<"row">>, <<"type=", ValuePath/binary>>)
     ),
-    ?assertEqual({ok, <<5:49>>}, Normalize(<<"row">>, key({5, <<"id">>}))),
-    ?assertEqual({ok, <<0:49>>}, Normalize(<<"row">>, <<"-1">>)),
+    ?assertEqual(
+        {ok, <<5:49>>},
+        Normalize(<<"row">>, #{ <<"offset">> => 5 })
+    ),
+    ?assertEqual({ok, <<0:49>>}, Normalize(<<"row">>, #{ <<"offset">> => -1 })),
     ?assertEqual(
         {ok, <<((1 bsl 49) - 1):49>>},
-        Normalize(<<"row">>, <<"infinity~">>)
+        Normalize(<<"row">>, #{ <<"offset">> => infinity })
     ),
+    {ok, Row} = Normalize(<<"row">>, #{
+        <<"path">> => <<"type=", ValuePath/binary>>, <<"offset">> => 5
+    }),
+    ?assertEqual(<<KeyHash/bitstring, ValueHash/bitstring, 5:49>>, Row),
     ?assertEqual(
-        {ok, digits(5)},
-        Normalize(
-            <<"member">>,
-            <<KeyHash/bitstring, ValueHash/bitstring, 5:49>>
-        )
+        {ok, #{ <<"offset">> => 5, <<"id">> => <<>>,
+            <<"commitment-device">> => <<>> }},
+        Normalize(<<"member">>, Row)
     ).
 
 %% @doc A request over HTTP loses its private keys, so it is not the kernel.
