@@ -53,15 +53,16 @@
 %%%
 %%% `id' and `tags' use the message projection in `dev_query_graphql'. Signature
 %%% and owner fields come from a signed commitment; recipient and anchor come
-%%% from commitment field mappings. `fee' and `quantity' read message values,
-%%% defaulting to zero. `data.size' measures `data', falling back to `body',
+%%% from commitment field mappings. `fee' (falling back to `reward') and
+%%% `quantity' default to zero, projected as winston and exact AR strings.
+%%% `data.size' measures `data', falling back to `body',
 %%% then an empty binary; `data.type' reads `content-type'. These projections
 %%% do not reconstruct an Arweave transaction or its original tag list.
 %%%
 %%% `block' and `blocks' can read block IDs or cached height ranges and project
 %%% height, timestamp and previous hash. Block connection pagination is not
-%%% implemented. Bundle and ingestion-time filters, ingestion-time ordering,
-%%% and AR amount conversion are not implemented. `networkInfo.height' reads
+%%% implemented. Bundle and ingestion-time filters and ingestion-time ordering
+%%% are not implemented. `networkInfo.height' reads
 %%% the configured Arweave node's status. `parent { id }' and `bundledIn { id }'
 %%% return empty IDs. Other unsupported fields may return a placeholder
 %%% or a GraphQL type error. Schema acceptance does not imply filter support.
@@ -223,11 +224,21 @@ query(#{ <<"key">> := Key }, <<"key">>, _Args, _Opts) ->
 query(#{ <<"address">> := Address }, <<"address">>, _Args, _Opts) ->
     {ok, Address};
 query(Msg, <<"fee">>, _Args, Opts) ->
-    {ok, hb_maps:get(<<"fee">>, Msg, 0, Opts)};
+    {ok, hb_maps:get_first([{Msg, <<"fee">>}, {Msg, <<"reward">>}], 0, Opts)};
 query(Msg, <<"quantity">>, _Args, Opts) ->
     {ok, hb_maps:get(<<"quantity">>, Msg, 0, Opts)};
-query(Number, <<"winston">>, _Args, _Opts) when is_number(Number) ->
-    {ok, Number};
+query(Number, <<"winston">>, _Args, _Opts) ->
+    {ok, hb_util:bin(Number)};
+query(Number, <<"ar">>, _Args, _Opts) ->
+    Winston = hb_util:int(Number),
+    {ok,
+        iolist_to_binary(
+            io_lib:format(
+                "~B.~12..0B",
+                [Winston div ?WINSTON_PER_AR, Winston rem ?WINSTON_PER_AR]
+            )
+        )
+    };
 query(Msg, <<"recipient">>, _Args, Opts) ->
     case find_field_key(<<"field-target">>, Msg, Opts) of
         {ok, null} -> {ok, <<"">>};

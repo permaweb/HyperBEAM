@@ -332,6 +332,8 @@ simple_ans104_query_test_parallel() ->
                             id,
                             bundledIn { id }
                             parent { id }
+                            quantity { winston ar }
+                            fee { winston ar }
                             tags {
                                 name,
                                 value
@@ -364,6 +366,14 @@ simple_ans104_query_test_parallel() ->
                                     <<"id">> := ExpectedID,
                                     <<"bundledIn">> := #{ <<"id">> := <<>> },
                                     <<"parent">> := #{ <<"id">> := <<>> },
+                                    <<"quantity">> := #{
+                                        <<"winston">> := <<"0">>,
+                                        <<"ar">> := <<"0.000000000000">>
+                                    },
+                                    <<"fee">> := #{
+                                        <<"winston">> := <<"0">>,
+                                        <<"ar">> := <<"0.000000000000">>
+                                    },
                                     <<"tags">> :=
                                         [#{ <<"name">> := _, <<"value">> := _ }|_]
                                 }
@@ -861,32 +871,42 @@ transactions_query_filter_by_block_can_ignore_ranges_test_parallel() ->
     ).
 
 transactions_query_ids_preserve_arweave_tx_id_test_parallel() ->
-    {ok, _Node, Opts} = test_env_with_blocks(1892487, 1892487),
+    {ok, Node, Opts} = test_env_with_blocks(1892487, 1892487),
     ID = <<"mT7pIQx9ORnemXoIzWmKwymiZJxtOSvzxm3P44M9C1A">>,
     ?assertMatch(
         {ok, #{ <<"start">> := _ }},
         hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID, Opts)
     ),
     ?assertMatch(
-        {ok, #{
+        #{ <<"data">> := #{ <<"transactions">> := #{
             <<"count">> := <<"1">>,
             <<"edges">> := [
                 #{
-                    <<"id">> := ID,
-                    <<"node">> := _
+                    <<"node">> := #{
+                        <<"id">> := ID,
+                        <<"quantity">> := #{
+                            <<"winston">> := <<"0">>,
+                            <<"ar">> := <<"0.000000000000">>
+                        },
+                        <<"fee">> := #{
+                            <<"winston">> := <<"8549817344">>,
+                            <<"ar">> := <<"0.008549817344">>
+                        }
+                    }
                 }
             ]
-        }},
-        dev_query_arweave:query(
-            #{},
-            <<"transactions">>,
-            #{
-                <<"ids">> => [ID],
-                <<"block">> => #{
-                    <<"min">> => 1892487,
-                    <<"max">> => 1892487
+        } } },
+        dev_query_graphql:test_query(
+            Node,
+            <<"""
+                query($ids: [ID!]) {
+                    transactions(ids: $ids, block: {min: 1892487, max: 1892487}) {
+                        count
+                        edges { node { id quantity { winston ar } fee { winston ar } } }
+                    }
                 }
-            },
+            """>>,
+            #{ <<"ids">> => [ID] },
             Opts
         )
     ).
