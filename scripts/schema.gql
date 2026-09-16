@@ -1,6 +1,7 @@
 ### Supported GraphQL Queries. ###
 
 type Query {
+  networkInfo: NetworkInfo!
 
   # Get a message by its id or a subset of its keys.
   message(id: ID, keys: [KeyInput]): Message
@@ -30,7 +31,7 @@ type Query {
     ingested_at: RangeFilter
 
     # Find transactions within a given block height range.
-    block: RangeFilter
+    block: BlockFilter
 
     # Result page size (max: 100)
     first: Int = 10
@@ -125,6 +126,10 @@ type Tag {
 }
 
 # Block Schema
+type NetworkInfo {
+  height: Int!
+}
+
 type Block {
   # The block ID.
   id: ID
@@ -272,6 +277,11 @@ enum TagMatch {
 }
 
 # Filter with a min and max
+input BlockFilter {
+  min: Int
+  max: Int
+}
+
 input RangeFilter {
   # Minimum integer to filter from
   min: Int

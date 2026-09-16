@@ -216,6 +216,7 @@ simple_blocks_query_test_parallel() ->
     Query =
         <<"""
             query {
+                networkInfo { height }
                 blocks(
                     ids: ["V7yZNKPQLIQfUu8r8-lcEaz4o7idl6LTHn5AHlGIFF8TKfxIe7s_yFxjqan6OW45"]
                 ) {
@@ -233,6 +234,7 @@ simple_blocks_query_test_parallel() ->
     ?assertMatch(
         #{
             <<"data">> := #{
+                <<"networkInfo">> := #{ <<"height">> := Height },
                 <<"blocks">> := #{
                     <<"edges">> := [
                         #{
@@ -246,7 +248,7 @@ simple_blocks_query_test_parallel() ->
                     ]
                 }
             }
-        },
+        } when is_integer(Height) andalso Height >= 1745749,
         dev_query_graphql:test_query(Node, Query, #{}, Opts)
     ).
 
@@ -328,6 +330,10 @@ simple_ans104_query_test_parallel() ->
                     edges {
                         node {
                             id,
+                            bundledIn { id }
+                            parent { id }
+                            quantity { winston ar }
+                            fee { winston ar }
                             tags {
                                 name,
                                 value
@@ -358,6 +364,16 @@ simple_ans104_query_test_parallel() ->
                             <<"node">> :=
                                 #{
                                     <<"id">> := ExpectedID,
+                                    <<"bundledIn">> := #{ <<"id">> := <<>> },
+                                    <<"parent">> := #{ <<"id">> := <<>> },
+                                    <<"quantity">> := #{
+                                        <<"winston">> := <<"0">>,
+                                        <<"ar">> := <<"0.000000000000">>
+                                    },
+                                    <<"fee">> := #{
+                                        <<"winston">> := <<"0">>,
+                                        <<"ar">> := <<"0.000000000000">>
+                                    },
                                     <<"tags">> :=
                                         [#{ <<"name">> := _, <<"value">> := _ }|_]
                                 }
@@ -746,10 +762,10 @@ transactions_query_filter_by_block_test_parallel() ->
         fun(Start, End, Present, Absent) ->
             Q = 
                 <<"""
-                    query($ids: [ID!], $min: Int, $max: Int) {
+                    query($ids: [ID!], $block: BlockFilter) {
                         transactions(
                             ids: $ids,
-                            block: {min: $min, max: $max}
+                            block: $block
                         ) {
                             edges {
                                 node {
@@ -765,8 +781,7 @@ transactions_query_filter_by_block_test_parallel() ->
                     Q,
                     #{
                         <<"ids">> => Present ++ Absent,
-                        <<"min">> => Start,
-                        <<"max">> => End
+                        <<"block">> => #{ <<"min">> => Start, <<"max">> => End }
                     },
                     Opts
                 ),
@@ -783,6 +798,8 @@ transactions_query_filter_by_block_test_parallel() ->
     VerifyFun(1892158, 1892159, [EarlierID, LaterID], []),
     VerifyFun(1892156, 1892157, [], [EarlierID, LaterID]),
     VerifyFun(1892157, 1892158, [EarlierID], [LaterID]),
+    VerifyFun(null, 1892158, [EarlierID], [LaterID]),
+    VerifyFun(1892159, null, [LaterID], [EarlierID]),
     VerifyFun(1892159, 1892160, [LaterID], [EarlierID]).
 
 transactions_query_filter_by_block_excludes_unknown_offsets_test_parallel() ->
@@ -854,32 +871,42 @@ transactions_query_filter_by_block_can_ignore_ranges_test_parallel() ->
     ).
 
 transactions_query_ids_preserve_arweave_tx_id_test_parallel() ->
-    {ok, _Node, Opts} = test_env_with_blocks(1892487, 1892487),
+    {ok, Node, Opts} = test_env_with_blocks(1892487, 1892487),
     ID = <<"mT7pIQx9ORnemXoIzWmKwymiZJxtOSvzxm3P44M9C1A">>,
     ?assertMatch(
         {ok, #{ <<"start">> := _ }},
         hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID, Opts)
     ),
     ?assertMatch(
-        {ok, #{
+        #{ <<"data">> := #{ <<"transactions">> := #{
             <<"count">> := <<"1">>,
             <<"edges">> := [
                 #{
-                    <<"id">> := ID,
-                    <<"node">> := _
+                    <<"node">> := #{
+                        <<"id">> := ID,
+                        <<"quantity">> := #{
+                            <<"winston">> := <<"0">>,
+                            <<"ar">> := <<"0.000000000000">>
+                        },
+                        <<"fee">> := #{
+                            <<"winston">> := <<"8549817344">>,
+                            <<"ar">> := <<"0.008549817344">>
+                        }
+                    }
                 }
             ]
-        }},
-        dev_query_arweave:query(
-            #{},
-            <<"transactions">>,
-            #{
-                <<"ids">> => [ID],
-                <<"block">> => #{
-                    <<"min">> => 1892487,
-                    <<"max">> => 1892487
+        } } },
+        dev_query_graphql:test_query(
+            Node,
+            <<"""
+                query($ids: [ID!]) {
+                    transactions(ids: $ids, block: {min: 1892487, max: 1892487}) {
+                        count
+                        edges { node { id quantity { winston ar } fee { winston ar } } }
+                    }
                 }
-            },
+            """>>,
+            #{ <<"ids">> => [ID] },
             Opts
         )
     ).
