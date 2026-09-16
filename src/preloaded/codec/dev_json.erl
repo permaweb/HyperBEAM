@@ -19,6 +19,7 @@ to_hint(Msg, Req, Opts) ->
     end.
 
 %% @doc Encode a message to a JSON string, using JSON-native typing.
+-spec to(binary() | #{ _ => _ }, #{ bundle => boolean(), _ => _ }, #{ _ => _ }) -> {ok, binary()}.
 to(Msg, _Req, _Opts) when is_binary(Msg) ->
     {ok, hb_util:bin(json:encode(Msg))};
 to(Msg, Req, Opts) ->
@@ -56,6 +57,8 @@ to(Msg, Req, Opts) ->
     {ok, hb_json:encode(JSONStructured)}.
 
 %% @doc Decode a JSON string to a message.
+-spec from(binary() | #{ _ => _ }, #{ 'accept-codec' => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }}.
 from(Map, _Req, _Opts) when is_map(Map) -> {ok, Map};
 from(JSON, Req, Opts) ->
     ConvOpts = Opts#{ <<"hashpath">> => ignore },
@@ -89,6 +92,7 @@ from(JSON, Req, Opts) ->
     end.
 
 %% @doc Route commitments through `httpsig@1.0'.
+-spec commit(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 commit(Msg, Req, Opts) ->
     {ok,
         hb_message:commit(
@@ -99,6 +103,7 @@ commit(Msg, Req, Opts) ->
     }.
 
 %% @doc Route verification through `httpsig@1.0'.
+-spec verify(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 verify(Msg, Req, Opts) ->
     {ok,
         hb_message:verify(
@@ -108,12 +113,15 @@ verify(Msg, Req, Opts) ->
         )
     }.
 
+-spec committed(binary() | #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> [binary()].
 committed(Msg, Req, Opts) when is_binary(Msg) ->
     committed(hb_util:ok(from(Msg, Req, Opts)), Req, Opts);
 committed(Msg, _Req, Opts) ->
     hb_message:committed(Msg, all, Opts).
 
 %% @doc Deserialize the JSON string found at the given path.
+-spec deserialize(#{ _ => _ }, #{ target => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, #{ status := integer(), body := binary(), _ => _ }}.
 deserialize(Base, Req, Opts) ->
     Payload = 
         hb_ao:get(
@@ -141,6 +149,8 @@ deserialize(Base, Req, Opts) ->
     end.
 
 %% @doc Serialize a message to a JSON string.
+-spec serialize(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ 'content-type' := binary(), body := binary(), _ => _ }}.
 serialize(Base, Msg, Opts) ->
     {ok,
         #{

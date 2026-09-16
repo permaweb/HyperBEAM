@@ -25,6 +25,8 @@ info(_) ->
 %% pointer and its contents is loaded from the cache. For example,
 %% `GET /~name@1.0/reference' yields the message at the path specified by the
 %% `reference' key.
+-spec resolve(binary(), #{ _ => _ }, #{ load => boolean(), _ => _ }, #{ _ => _ }) ->
+    {ok, _} | not_found.
 resolve(Key, _, Req, Opts) ->
     Resolvers = hb_opts:get(name_resolvers, [], Opts),
     ?event({resolvers, Resolvers}),
@@ -78,6 +80,11 @@ execute_resolver(Key, Resolver, Opts) when is_map(Resolver) ->
 
 %% @doc Implements an `on/request' compatible hook that resolves names given in
 %% the `host` key to their corresponding ID and prepends it to the execution path.
+-spec request(
+    #{ _ => _ },
+    #{ request := #{ host := binary(), _ => _ }, body := _, _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, #{ status := integer(), body := binary(), _ => _ }}.
 request(HookMsg, HookReq, Opts) ->
     ?event({request_hook, {hook_msg, HookMsg}, {hook_req, HookReq}}),
     maybe

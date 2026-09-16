@@ -261,10 +261,12 @@ raw_default_message() ->
                 <<"capacity">> => 1024 * 1024 * 1024,
                 <<"read-only">> => true
             },
-        % Store for resolved device reference -> loaded module atom,
-        % shared across processes so the first caller to resolve a
-        % device spares the rest the index read and archive
-        % extraction. Defaults to a `hb_store_volatile`.
+        % Store for resolved device reference -> loaded module atom and
+        % module -> function schemas, shared across processes so the first
+        % caller to resolve a device spares the rest the index read, archive
+        % extraction and schema extraction. The schemes are extremely hot, and
+        % so are written as fully loaded messages as a single Erlang term. As a
+        % consequence, the store must be a `hb_store_volatile`.
         <<"loaded-device-store">> =>
             [
                 #{

@@ -145,8 +145,7 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 		{ok, Exclude} ->
 			case lists:member(Key, Exclude) of
 				true ->
-					MsgWithoutDevice =
-						hb_maps:without([<<"device">>], Msg, Opts),
+					MsgWithoutDevice = hb_maps:without([<<"device">>], Msg, Opts),
 					message_to_fun(
 						MsgWithoutDevice#{ <<"device">> => ?DEFAULT_DEVICE },
 						Key,
