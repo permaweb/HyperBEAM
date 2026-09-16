@@ -476,6 +476,9 @@ transactions_query_tags_test_parallel() ->
         <<"""
             query($types: [String!]!) {
                 transactions(
+                    ids: null,
+                    owners: null,
+                    after: null,
                     tags: [
                         {name: "type", values: $types},
                         {name: "variant", values: ["ao.N.1"]}
