@@ -151,7 +151,14 @@ handle(_Base, RawReq, Opts) ->
                         req => Req
                     },
                 ?event(graphql_context_created),
-                Response = graphql:execute(Ctx, AST2),
+                % Execution with an explicit timeout returns raw errors;
+                % format them before encoding the response as JSON.
+                Response =
+                    case graphql:execute(Ctx, AST2) of
+                        Result = #{ errors := Errors } ->
+                            Result#{ errors := graphql:format_errors(Ctx, Errors) };
+                        Result -> Result
+                    end,
                 ?event(graphql_executed),
                 JSON = hb_json:encode(Response),
                 ?event({graphql_response, {bytes, byte_size(JSON)}}),

@@ -71,13 +71,15 @@ query(#{ <<"matches">> := Matches, <<"terminal">> := Terminal },
         <<"edges">>, _Args, Opts) ->
     % The edges of an index-served page, read only when asked for. The
     % terminal page of a forced-next-page read marks its last cursor.
-    Edges = match_edges(Matches, Opts),
-    Marked =
-        case Terminal of
-            true -> force_terminal_cursor(Edges);
-            false -> Edges
-        end,
-    {ok, [{ok, Edge} || Edge <- Marked]};
+    maybe
+        {ok, Edges} ?= match_edges(Matches, Opts),
+        Marked =
+            case Terminal of
+                true -> force_terminal_cursor(Edges);
+                false -> Edges
+            end,
+        {ok, [{ok, Edge} || Edge <- Marked]}
+    end;
 query(#{ <<"template">> := Template, <<"ranges">> := Ranges },
         <<"count">>, _Args, Opts) ->
     % The count of an index-served page, read over its ranges on demand,
@@ -694,7 +696,7 @@ locate(Template, Req, Opts) ->
 %% @doc The edges of the page's matches in its order, under cursors naming
 %% their keys, read together. A match carrying an ID reads its cached
 %% message; one without reads the item at its offset from the weave. A
-%% match neither can read is dropped and reported.
+%% match neither can read fails the field, so clients can retry the page.
 match_edges(Matches, Opts) ->
     Read =
         hb_pmap:parallel_map(
@@ -702,21 +704,22 @@ match_edges(Matches, Opts) ->
             fun(Match) -> {Match, match_message(Match, Opts)} end,
             hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts)
         ),
-    lists:filtermap(
-        fun({#{ <<"member">> := Member }, {ok, Node}}) ->
-                {true,
-                    #{
-                        <<"cursor">> => <<?MEMBER_CURSOR, Member/binary>>,
-                        <<"node">> => Node
-                    }};
-            ({Match, Error}) ->
-                ?event(warning,
-                    {match_unreadable, {match, Match}, {error, Error}}
-                ),
-                false
-        end,
-        Read
-    ).
+    read_edges(Read).
+
+%% @doc Build edges in order, surfacing the first unreadable match.
+read_edges([]) -> {ok, []};
+read_edges([{#{ <<"member">> := Member }, {ok, Node}} | Rest]) ->
+    maybe
+        {ok, Edges} ?= read_edges(Rest),
+        {ok,
+            [#{
+                <<"cursor">> => <<?MEMBER_CURSOR, Member/binary>>,
+                <<"node">> => Node
+            } | Edges]}
+    end;
+read_edges([{Match, Error} | _]) ->
+    ?event(warning, {match_unreadable, {match, Match}, {error, Error}}),
+    {error, {match_unreadable, maps:get(<<"member">>, Match), Error}}.
 
 %% @doc A match's message: through `hb_cache' by its ID, or from the weave
 %% by its offset.
@@ -1086,6 +1089,37 @@ recipient_filters_test() ->
     ?assertEqual([], Edges([<<"different-tag-value">>])),
     ?assertEqual(Address,
         hb_util:deep_get(<<"node/recipient">>, Edge, not_found, Opts)).
+
+%% @doc An unreadable selected match fails the GraphQL field, and retrying
+%% after the message becomes available returns the same page's cursor.
+unreadable_page_test() ->
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()] },
+    Node = hb_http_server:start_node(Opts),
+    Template = #{ <<"type">> => <<"UnreadablePage">> },
+    {ok, _} = hb_cache:write(
+        hb_private:set(Template#{ <<"n">> => <<"1">> }, <<"offset">>, 7, Opts),
+        Opts),
+    Msg = Template#{ <<"n">> => <<"2">> },
+    ID = hb_message:id(Msg, none, Opts),
+    {ok, _} = hb_ao:raw(<<"match@1.0">>, #{}, #{
+        <<"path">> => <<"index">>,
+        <<"body">> => hb_private:set(Msg, <<"offset">>, 8, Opts),
+        <<"ids">> => [ID],
+        <<"priv">> => #{ <<"hook-caller">> => <<"kernel">> }
+    }, Opts),
+    Query = <<"""
+        { transactions(first: 1,
+            tags: [{name: "type", values: ["UnreadablePage"]}]) {
+            pageInfo { hasNextPage } edges { cursor node { id } }
+        } }
+        """>>,
+    Failed = dev_query_graphql:test_query(Node, Query, Opts),
+    ?assertMatch([_ | _], maps:get(<<"errors">>, Failed)),
+    {ok, ID} = hb_cache:write(hb_private:set(Msg, <<"offset">>, 8, Opts), Opts),
+    Retried = dev_query_graphql:test_query(Node, Query, Opts),
+    ?assertNot(maps:is_key(<<"errors">>, Retried)),
+    ?assertMatch([#{ <<"cursor">> := _, <<"node">> := #{ <<"id">> := ID } }],
+        hb_util:deep_get(<<"data/transactions/edges">>, Retried, [], Opts)).
 
 %% @doc A page served from the published index on Arweave, its items
 %% read from the weave: the twenty-four items of `action=Battle.Begin'
