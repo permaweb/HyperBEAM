@@ -925,6 +925,8 @@ write_tx_header(TX, Offset, Opts) ->
 %% index it by: an item in a pending bundle is pending itself.
 with_offset(Msg, #{ <<"relative">> := _ }, Opts) ->
     with_offset(Msg, infinity, Opts);
+with_offset(Bin, _Offset, _Opts) when is_binary(Bin) ->
+    Bin;
 with_offset(Msg, Offset, Opts) ->
     hb_private:set(Msg, <<"offset">>, Offset, Opts).
 
@@ -1617,8 +1619,10 @@ pending_range_indexes_bundle_children_test() ->
         },
         Wallet
     ),
+    Binary = <<"pending-binary-child">>,
+    BinaryChild = hb_message:convert(Binary, <<"ans104@1.0">>, DefaultOpts),
     {undefined, BundleData} =
-        ar_bundles:serialize_bundle(list, [Child], false),
+        ar_bundles:serialize_bundle(list, [Child, BinaryChild], false),
     RootTX =
         ar_tx:sign(
             ar_tx:generate_chunk_tree(
@@ -1675,10 +1679,10 @@ pending_range_indexes_bundle_children_test() ->
             <<"pending-index">> => [Pending]
         },
     try
-        {ok, #{ items_count := 1, total_txs := 1 }} =
+        {ok, #{ items_count := 2, total_txs := 1 }} =
             hb_ao:resolve(
                 <<"~copycat@1.0/arweave&from=pending&to=pending">>, Opts),
-        {ok, #{ items_count := 1, total_txs := 1 }} =
+        {ok, #{ items_count := 2, total_txs := 1 }} =
             hb_ao:resolve(
                 <<"~copycat@1.0/arweave&mode=full&from=pending&to=pending">>,
                 Opts),
@@ -1697,6 +1701,13 @@ pending_range_indexes_bundle_children_test() ->
             hb_cache:read(ChildID, hb_store:scope(Opts, local))
         ),
         ?assertEqual(ChildID, hb_message:id(ChildMsg, signed, Opts)),
+        ?assertEqual(
+            {ok, Binary},
+            hb_cache:read(
+                [<<"data">>, hb_path:hashpath(Binary, Opts)],
+                hb_store:scope(Opts, local)
+            )
+        ),
         % The mempool's items are located from the node's pending index
         % alone, at `infinity'.
         ?assertMatch(
