@@ -1074,7 +1074,7 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
         _:{necessary_message_not_found, _, _}:_ ->
             {error, not_found};
         _:_:_ ->
-            case ar_tx:verify_tx_id(hb_util:native_id(ID), TX) of
+            case TX#tx.id =:= hb_util:native_id(ID) andalso ar_tx:verify(TX) of
                 true ->
                     {
                         error,
