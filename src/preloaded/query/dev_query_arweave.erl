@@ -28,8 +28,8 @@
 %%% with `exclude-data=true', then converted to a structured message. This
 %%% requires a byte-addressable item and a device supporting header decoding;
 %%% it cannot identify a base-layer transaction by offset alone. Header reads
-%%% may span chunks. The payload is omitted, so `data.size' is zero for these
-%%% header-only results, not the size of the original payload.
+%%% may span chunks. The payload is omitted, so `data.size' is null for these
+%%% header-only results: its original length is unknown.
 %%%
 %%% Indexed pagination orders by offset and ID and returns `member=' cursors.
 %%% One ID at two offsets can produce two edges. Unreadable entries are omitted
@@ -55,8 +55,9 @@
 %%% and owner fields come from a signed commitment; recipient and anchor come
 %%% from commitment field mappings. `fee' (falling back to `reward') and
 %%% `quantity' default to zero, projected as winston and exact AR strings.
-%%% `data.size' measures `data', falling back to `body',
-%%% then an empty binary; `data.type' reads `content-type'. These projections
+%%% `data.size' measures binary `data', falling back to `body', then an empty
+%%% binary. Structured bodies and omitted payloads have unknown size (null).
+%%% `data.type' reads `content-type'. These projections
 %%% do not reconstruct an Arweave transaction or its original tag list.
 %%%
 %%% `blocks' pages by height, descending by default or `HEIGHT_ASC', within
@@ -244,18 +245,25 @@ query(Msg, <<"anchor">>, _Args, Opts) ->
     end;
 query(Msg, <<"data">>, _Args, Opts) ->
     Data =
-        hb_ao:get_first(
-            [
-                {{as, <<"message@1.0">>, Msg}, <<"data">>},
-                {{as, <<"message@1.0">>, Msg}, <<"body">>}
-            ],
-            <<>>,
-            Opts
-        ),
+        case hb_private:get(<<"query-data-omitted">>, Msg, false, Opts) of
+            true -> null;
+            false ->
+                hb_ao:get_first(
+                    [
+                        {{as, <<"message@1.0">>, Msg}, <<"data">>},
+                        {{as, <<"message@1.0">>, Msg}, <<"body">>}
+                    ],
+                    <<>>,
+                    Opts
+                )
+        end,
     Type = hb_maps:get(<<"content-type">>, Msg, null, Opts),
     {ok, #{ <<"data">> => Data, <<"type">> => Type }};
-query(#{ <<"data">> := Data }, <<"size">>, _Args, _Opts) ->
+query(#{ <<"data">> := Data }, <<"size">>, _Args, _Opts)
+        when is_binary(Data) ->
     {ok, byte_size(Data)};
+query(_Data, <<"size">>, _Args, _Opts) ->
+    {ok, null};
 query(#{ <<"type">> := Type }, <<"type">>, _Args, _Opts) ->
     {ok, Type};
 query(_Msg, Field, _Args, _Opts)
@@ -892,13 +900,8 @@ header_message({ok, Bytes}, Device, Opts) ->
                 Device, <<"deserialize">>, #{ <<"body">> => Bytes },
                 #{ <<"exclude-data">> => true }, Opts
             ),
-        {ok,
-            hb_message:convert(
-                TABM,
-                <<"structured@1.0">>,
-                tabm,
-                Opts
-            )}
+        Msg = hb_message:convert(TABM, <<"structured@1.0">>, tabm, Opts),
+        {ok, hb_private:set(Msg, <<"query-data-omitted">>, true, Opts)}
     catch _:Reason ->
         {error, {'invalid-item', Reason}}
     end;

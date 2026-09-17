@@ -109,8 +109,8 @@ type Amount {
 
 # Basic metadata about the transaction data payload.
 type MetaData {
-  # Size of the associated data in bytes.
-  size: String!
+  # Size of the associated binary data in bytes; null when unavailable.
+  size: String
 
   # Type is derived from the \`content-type\` tag on a transaction.
   type: String
