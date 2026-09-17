@@ -915,6 +915,9 @@ response_status(_Response) ->
 to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Opts) ->
     event_request(Path, Method, 404, LogExtra),
     {error, not_found};
+to_message(Path = <<"/tx/", _/binary>>, <<"GET">>, {error, #{ <<"status">> := 422 }}, LogExtra, _Opts) ->
+    event_request(Path, <<"GET">>, 422, LogExtra),
+    {failure, <<"Arweave peer could not process the request.">>};
 to_message(Path, Method, {error, Response}, LogExtra, _Opts) when is_map(Response) ->
     Status = maps:get(<<"status">>, Response, client_error),
     event_request(Path, Method, Status, LogExtra),
@@ -1056,15 +1059,38 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
                     Error -> Error    
                 end
         end,
-    {
-        ok,
-        hb_message:convert(
-            TXHeader#tx{ data = Data },
-            <<"structured@1.0">>,
-            <<"tx@1.0">>,
-            Opts
-        )
-    }.
+    TX = TXHeader#tx{ data = Data },
+    try
+        {
+            ok,
+            hb_message:convert(
+                TX,
+                <<"structured@1.0">>,
+                <<"tx@1.0">>,
+                Opts
+            )
+        }
+    catch
+        _:{necessary_message_not_found, _, _}:_ ->
+            {error, not_found};
+        _:_:_ ->
+            case ar_tx:verify_tx_id(hb_util:native_id(ID), TX) of
+                true ->
+                    {
+                        error,
+                        #{
+                            <<"status">> => 422,
+                            <<"body">> =>
+                                <<
+                                    "Required transaction available and valid, ",
+                                    "but not deserializable."
+                                >>
+                        }
+                    };
+                false ->
+                    {error, <<"Received invalid transaction.">>}
+            end
+    end.
 
 event_request(Path, Method, Status, Extra) ->
     BaseList = [{request, {explicit, Path}}, {method, Method}, {status, Status}],
@@ -1072,6 +1098,44 @@ event_request(Path, Method, Status, Extra) ->
     ?event(arweave_short, MergedTuple).
 
 %%% Tests
+
+unprocessable_transaction_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{ <<"exclude-data">> => true, <<"store">> => [] },
+    lists:foreach(
+        fun(Value) ->
+            TX = ar_tx:sign(#tx{
+                format = 2,
+                tags = [
+                    {<<"from-process">>, Value},
+                    {<<"ao-types">>, <<"from-process=\"integer\"">>}
+                ]
+            }, Wallet),
+            ID = hb_util:human_id(TX#tx.id),
+            Path = <<"/tx/", ID/binary>>,
+            Response = {ok, #{ <<"body">> =>
+                hb_json:encode(ar_tx:tx_to_json_struct(TX)) }},
+            Result = to_tx_message(tx, ID, Path, Response, [], Opts),
+            case Value of
+                <<"12345">> ->
+                    {ok, Message} = Result,
+                    ?assertEqual(12345, hb_maps:get(<<"from-process">>, Message));
+                _ ->
+                    ?assertMatch({error, #{ <<"status">> := 422 }}, Result),
+                    ?assertEqual(
+                        {error, <<"Received invalid transaction.">>},
+                        to_tx_message(tx, hb_util:human_id(<<0:256>>),
+                            Path, Response, [], Opts)
+                    )
+            end
+        end,
+        [<<"[object Object]">>, <<"a">>, <<"1.5">>, <<"12345">>]
+    ),
+    ?assertMatch(
+        {failure, _},
+        to_message(<<"/tx/test">>, <<"GET">>,
+            {error, #{ <<"status">> => 422 }}, [], Opts)
+    ).
 
 %% @doc A fixed bad interior offset from a live TX is rejected by
 %% bundle_header/3 as invalid_bundle_header.

@@ -475,6 +475,7 @@ index_transaction(Height, Index, TXID, Opts) ->
                     Address <- transaction_targets(TX)
                 ]
             };
+        {error, #{ <<"status">> := 422 }} -> {ok, []};
         Error -> Error
     end.
 
@@ -602,6 +603,7 @@ fetch_header_remote(TXID, Attempts, Opts) ->
                     end;
                 Result -> Result
             end;
+        {error, #{ <<"status">> := 422 }} = Error -> Error;
         _ when Attempts > 1 ->
             timer:sleep(fetch_retry_delay(Opts)),
             fetch_header_remote(TXID, Attempts - 1, Opts);
@@ -624,6 +626,7 @@ fetch_full_header(TXID, Attempts, Opts) ->
         no_result_cache(fetch_opts(Attempts, Opts))
     ) of
         {ok, Header} -> cache_header(TXID, Header, Opts);
+        {error, #{ <<"status">> := 422 }} = Error -> Error;
         _ when Attempts > 1 ->
             timer:sleep(fetch_retry_delay(Opts)),
             fetch_full_header(TXID, Attempts - 1, Opts);
@@ -1162,6 +1165,41 @@ block_validation_test() ->
             #{}
         )
     ).
+
+unprocessable_header_indexing_test_() ->
+    {timeout, 60,
+        fun() ->
+            Store = hb_test_utils:test_store(hb_store_volatile),
+            ok = hb_store:start(Store),
+            Opts = #{
+                <<"store">> => [Store],
+                <<"scheduler-store">> => [Store],
+                <<"gateway">> => <<"https://arweave.net">>,
+                <<"arweave-scheduler-fetch-attempts">> => 1
+            },
+            try
+                lists:foreach(
+                    fun(TXID) ->
+                        ?assertEqual({ok, []}, index_transaction(1, 0, TXID, Opts))
+                    end,
+                    [
+                        <<"gbNWU2YAM9N8sxx4CGtOcmBcwgk7h_o7zgHthnP9GW0">>,
+                        <<"lZhsB-RXx5IP04sX17LlsfbGAX-FZJ19q-iKv41gbQg">>
+                    ]
+                ),
+                ?assertMatch(
+                    {ok, [_ | _]},
+                    index_transaction(1, 0,
+                        <<"dZ048pvZ1Osx8Kqi90uah-z1TF7GI_1I-UGt_ujpHow">>, Opts)
+                ),
+                ?assertEqual(
+                    {error, not_found},
+                    collect_targets([{ok, []}, {error, not_found}], [])
+                )
+            after
+                hb_store:stop(Store)
+            end
+        end}.
 
 format_one_data_verification_test_() ->
     {timeout, 60,
