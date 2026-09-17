@@ -657,7 +657,28 @@ page(Direction, Group, Cursor, Store, Opts) ->
         },
     case hb_store:list([Store], Request, Opts) of
         {error, not_found} -> {ok, []};
+        {ok, Rows} when Direction =:= asc,
+                map_get(<<"id">>, Cursor) =/= <<>> ->
+            resume_offset_row(Rows, Request, Cursor, Store, Opts);
         Result -> Result
+    end.
+
+%% @doc Retain an offset-only predicate that sorts before a concrete cursor.
+%% A separate one-row seek keeps continuation reads bounded.
+resume_offset_row(Rows, Request, Cursor, Store, Opts) ->
+    Offset = maps:get(<<"offset">>, Cursor),
+    case Rows of
+        [#{ <<"offset">> := Offset, <<"id">> := <<>> } | _] -> {ok, Rows};
+        _ ->
+            From = Cursor#{ <<"id">> => <<>>, <<"commitment-device">> => <<>> },
+            case hb_store:list([Store],
+                    Request#{ <<"from">> => From, <<"limit">> => 1 }, Opts) of
+                {ok, [Row = #{ <<"offset">> := Offset, <<"id">> := <<>> }]} ->
+                    {ok, [Row | Rows]};
+                {ok, _} -> {ok, Rows};
+                {error, not_found} -> {ok, Rows};
+                Error -> Error
+            end
     end.
 
 %% @doc The key a store's page is read from: a cursor naming no ID stands
