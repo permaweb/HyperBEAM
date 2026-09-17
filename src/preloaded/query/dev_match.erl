@@ -75,6 +75,8 @@
 %%% The encoder also receives binary group paths and pathless entry messages
 %%% for list bounds. List results pass through `from-key' to become entries.
 %%% Reads merge all configured stores using ordered, inclusive batch listing.
+%%% Local reads are bounded by `match-batch-size' (default 256, minimum 2);
+%%% remote stores retain their physical batch policy.
 %%% While entries remain beyond a cursor, a batch must include at least one
 %%% of them; a batch containing only the cursor is treated as exhausted.
 %%%
@@ -641,11 +643,16 @@ first_of(desc, Heads) ->
 %% batch must hold a key past it while any remains. A store without the
 %% group has none.
 page(Direction, Group, Cursor, Store, Opts) ->
+    Limit =
+        case hb_store:scope([Store], local) of
+            [] -> batch;
+            _ -> max(2, hb_util:int(hb_opts:get(match_batch_size, 256, Opts)))
+        end,
     Request =
         #{
             <<"list">> => Group,
             <<"from">> => from(Direction, Cursor),
-            <<"limit">> => batch,
+            <<"limit">> => Limit,
             <<"direction">> => Direction
         },
     case hb_store:list([Store], Request, Opts) of
