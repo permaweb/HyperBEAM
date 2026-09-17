@@ -261,7 +261,10 @@ query(Msg, <<"data">>, _Args, Opts) ->
                 )
         end,
     Type = hb_maps:get(<<"content-type">>, Msg, null, Opts),
-    {ok, #{ <<"data">> => Data, <<"type">> => Type }};
+    {ok, Size} = find_field_key(<<"field-data_size">>, Msg, Opts),
+    {ok, #{ <<"data">> => Data, <<"type">> => Type, <<"size">> => Size }};
+query(#{ <<"size">> := Size }, <<"size">>, _Args, _Opts) when Size =/= null ->
+    {ok, Size};
 query(#{ <<"data">> := Data }, <<"size">>, _Args, _Opts)
         when is_binary(Data) ->
     {ok, byte_size(Data)};
