@@ -55,8 +55,9 @@
 %%% and owner fields come from a signed commitment; recipient and anchor come
 %%% from commitment field mappings. `fee' (falling back to `reward') and
 %%% `quantity' default to zero, projected as winston and exact AR strings.
-%%% `data.size' measures binary `data', falling back to `body', then an empty
-%%% binary. Structured bodies and omitted payloads have unknown size (null).
+%%% `data.size' prefers an L1 transaction's declared or indexed payload size,
+%%% then measures binary `data', falling back to `body', then an empty binary.
+%%% Structured bodies and omitted payloads have unknown size (null).
 %%% `data.type' reads `content-type'. These projections
 %%% do not reconstruct an Arweave transaction or its original tag list.
 %%% Transaction `block' uses the matched weave position and cached block
@@ -261,7 +262,11 @@ query(Msg, <<"data">>, _Args, Opts) ->
                 )
         end,
     Type = hb_maps:get(<<"content-type">>, Msg, null, Opts),
-    {ok, Size} = find_field_key(<<"field-data_size">>, Msg, Opts),
+    Size =
+        case find_field_key(<<"field-data_size">>, Msg, Opts) of
+            {ok, null} -> indexed_data_size(Msg, Opts);
+            {ok, DeclaredSize} -> DeclaredSize
+        end,
     {ok, #{ <<"data">> => Data, <<"type">> => Type, <<"size">> => Size }};
 query(#{ <<"size">> := Size }, <<"size">>, _Args, _Opts) when Size =/= null ->
     {ok, Size};
@@ -359,6 +364,26 @@ find_field_key(Field, Msg, Opts) ->
                         {ok, Value} -> {ok, Value};
                         error -> {ok, null}
                     end
+            end
+    end.
+
+%% @doc The offset index length is the payload size for an L1 transaction.
+indexed_data_size(Msg, Opts) ->
+    case hb_private:get(<<"query-match">>, Msg, #{}, Opts) of
+        #{ <<"commitment-device">> := <<"tx@1.0">>,
+            <<"length">> := Length } -> Length;
+        #{ <<"id">> := ID } when ID =/= <<>> -> indexed_l1_size(ID, Opts);
+        _ -> null
+    end.
+
+indexed_l1_size(ID, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> null;
+        Store ->
+            case hb_store_arweave:read_offset(Store, ID, Opts) of
+                {ok, #{ <<"codec-device">> := <<"tx@1.0">>,
+                    <<"length">> := Length }} -> Length;
+                _ -> null
             end
     end.
 
