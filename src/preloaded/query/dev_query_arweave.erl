@@ -51,15 +51,18 @@
 %%% The AO-Core request's `force-next-page=true' forces `hasNextPage=true' and
 %%% appends `&remaining=0' to the last cursor when no further match is found.
 %%%
-%%% `id' and `tags' use the message projection in `dev_query_graphql'. Signature
-%%% and owner fields come from a signed commitment; recipient and anchor come
-%%% from commitment field mappings. `fee' (falling back to `reward') and
-%%% `quantity' default to zero, projected as winston and exact AR strings.
+%%% `id' uses the message projection in `dev_query_graphql'. `tags' uses the
+%%% selected commitment's original ordered tags when available; otherwise it
+%%% projects the message without Arweave transaction fields. The fallback
+%%% cannot restore original tag order or duplicates. Signature and owner fields
+%%% come from a signed commitment; recipient and anchor come from commitment
+%%% field mappings. L1 `fee' and `quantity' come from commitment fields;
+%%% other message types retain their message-key fallback. Amounts are projected
+%%% as winston and exact AR strings.
 %%% `data.size' prefers an L1 transaction's declared or indexed payload size,
 %%% then measures binary `data', falling back to `body', then an empty binary.
 %%% Structured bodies and omitted payloads have unknown size (null).
-%%% `data.type' reads `content-type'. These projections
-%%% do not reconstruct an Arweave transaction or its original tag list.
+%%% `data.type' reads `content-type'.
 %%% Transaction `block' uses the matched weave position and cached block
 %%% ranges, searching remote block heights on a miss when remote block reads
 %%% are enabled. L1 IDs resolve shared boundaries; pending positions return null.
@@ -221,6 +224,8 @@ query(#{ <<"key">> := Key }, <<"key">>, _Args, _Opts) ->
     {ok, Key};
 query(#{ <<"address">> := Address }, <<"address">>, _Args, _Opts) ->
     {ok, Address};
+query(Msg, <<"tags">>, _Args, Opts) ->
+    {ok, [{ok, Tag} || Tag <- transaction_tags(Msg, Opts)]};
 query(Msg, <<"fee">>, _Args, Opts) ->
     transaction_amount(Msg, <<"field-reward">>, [<<"fee">>, <<"reward">>], Opts);
 query(Msg, <<"quantity">>, _Args, Opts) ->
@@ -287,6 +292,104 @@ query(Obj, Field, Args, _Opts) ->
         {args, Args}
     }),
     {ok, <<"Not implemented.">>}.
+
+%% @doc Return an Arweave transaction's original tags when its commitment
+%% preserves them, otherwise project only non-structural message fields.
+transaction_tags(Msg, Opts) ->
+    case matching_commitment(
+            #{ <<"commitment-device">> => '_' }, Msg, Opts) of
+        {ok, Commitment} ->
+            case hb_maps:find(<<"original-tags">>, Commitment, Opts) of
+                {ok, OriginalTags} ->
+                    hb_util:message_to_ordered_list(OriginalTags, Opts);
+                error ->
+                    projected_tags(Msg, Commitment, Opts)
+            end;
+        not_found ->
+            Device = case transaction_device(Msg, Opts) of
+                {ok, FoundDevice} -> FoundDevice;
+                _ -> undefined
+            end,
+            projected_tags(
+                Msg,
+                #{ <<"commitment-device">> => Device },
+                Opts
+            )
+    end.
+
+%% @doc Find the commitment selected by the query match, falling back to a
+%% specification for header-only and legacy query results.
+matching_commitment(Spec, Msg, Opts) ->
+    Match = hb_private:get(<<"query-match">>, Msg, #{}, Opts),
+    Selected =
+        case maps:get(<<"id">>, Match, undefined) of
+            ID when is_binary(ID), ID =/= <<>> ->
+                hb_message:commitment(ID, Msg, Opts);
+            _ -> not_found
+        end,
+    case Selected of
+        Commitment when is_map(Commitment) -> {ok, Commitment};
+        _ ->
+            case hb_message:commitment(Spec, Msg, Opts) of
+                {ok, _ID, Commitment} -> {ok, Commitment};
+                _ -> not_found
+            end
+    end.
+
+%% @doc Read the selected transaction's commitment device.
+transaction_device(Msg, Opts) ->
+    Match = hb_private:get(<<"query-match">>, Msg, #{}, Opts),
+    case maps:get(<<"commitment-device">>, Match, undefined) of
+        Device when is_binary(Device) -> {ok, Device};
+        _ -> find_field_key(<<"commitment-device">>, Msg, Opts)
+    end.
+
+%% @doc Project normalized tags when no lossless original tag list is stored.
+projected_tags(Msg, Commitment, Opts) ->
+    Device = hb_maps:get(
+        <<"commitment-device">>, Commitment, undefined, Opts
+    ),
+    Common =
+        [<<"data">>, <<"body">>] ++
+        [
+            Tag
+        ||
+            {Field, Tag} <-
+                [
+                    {<<"field-anchor">>, <<"anchor">>},
+                    {<<"field-target">>, <<"target">>}
+                ],
+            hb_maps:is_key(Field, Commitment, Opts)
+        ],
+    Excluded =
+        case Device of
+            <<"tx@1.0">> ->
+                [
+                    <<"quantity">>, <<"reward">>, <<"format">>,
+                    <<"data-root">>, <<"data-size">>
+                    | Common
+                ];
+            _ -> Common
+        end,
+    Fields =
+        hb_maps:to_list(
+            hb_private:reset(
+                hb_maps:without(
+                    Excluded,
+                    hb_message:uncommitted(Msg, Opts),
+                    Opts
+                )
+            ),
+            Opts
+        ),
+    [
+        #{
+            <<"name">> => Name,
+            <<"value">> => dev_query_graphql:field_value(Value, Opts)
+        }
+    ||
+        {Name, Value} <- Fields
+    ].
 
 %% @doc Serve a transactions page through `hb_cache': the IDs the query's
 %% arguments match, annotated with their offsets, filtered to the block

@@ -6,7 +6,7 @@
 %%% GraphQL Callbacks:
 -export([execute/4, input/2]).
 %%% Submodule helpers:
--export([keys_to_template/1, test_query/3, test_query/4]).
+-export([field_value/2, keys_to_template/1, test_query/3, test_query/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("graphql/include/graphql.hrl").
 -include_lib("graphql/src/graphql_internal.hrl").
@@ -23,7 +23,6 @@
         <<"id">>,
         <<"message">>,
         <<"keys">>,
-        <<"tags">>,
         <<"name">>,
         <<"value">>,
         <<"cursor">>
