@@ -917,6 +917,9 @@ response_status(_Response) ->
 to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Opts) ->
     event_request(Path, Method, 404, LogExtra),
     {error, not_found};
+to_message(Path = <<"/tx/", _/binary>>, <<"GET">>, {error, #{ <<"status">> := 422 }}, LogExtra, _Opts) ->
+    event_request(Path, <<"GET">>, 422, LogExtra),
+    {failure, <<"Arweave peer could not process the request.">>};
 to_message(Path, Method, {error, Response}, LogExtra, _Opts) when is_map(Response) ->
     Status = maps:get(<<"status">>, Response, client_error),
     event_request(Path, Method, Status, LogExtra),
@@ -945,6 +948,21 @@ to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, Result, LogExtra, Opts) ->
 to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     {ok, Body};
+to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, Response}, LogExtra, Opts) ->
+    ContentLength = hb_maps:get(
+        <<"Content-Length">>,
+        Response,
+        hb_maps:get(<<"content-length">>, Response, -1, Opts),
+        Opts
+    ),
+    case hb_util:int(ContentLength) of
+        0 ->
+            event_request(Path, <<"GET">>, 200, LogExtra),
+            {ok, <<>>};
+        _ ->
+            event_request(Path, <<"GET">>, server_error, LogExtra),
+            {error, server_error}
+    end;
 to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     Block =
@@ -1025,6 +1043,8 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
             false ->
                 DataRes =
                     case Type of
+                        tx when TXHeader#tx.format =:= 1 ->
+                            {ok, TXHeader#tx.data};
                         tx ->
                             request(<<"GET">>, <<"/raw/", ID/binary>>, Opts);
                         pending ->
@@ -1041,15 +1061,38 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
                     Error -> Error    
                 end
         end,
-    {
-        ok,
-        hb_message:convert(
-            TXHeader#tx{ data = Data },
-            <<"structured@1.0">>,
-            <<"tx@1.0">>,
-            Opts
-        )
-    }.
+    TX = TXHeader#tx{ data = Data },
+    try
+        {
+            ok,
+            hb_message:convert(
+                TX,
+                <<"structured@1.0">>,
+                <<"tx@1.0">>,
+                Opts
+            )
+        }
+    catch
+        _:{necessary_message_not_found, _, _}:_ ->
+            {error, not_found};
+        _:_:_ ->
+            case TX#tx.id =:= hb_util:native_id(ID) andalso ar_tx:verify(TX) of
+                true ->
+                    {
+                        error,
+                        #{
+                            <<"status">> => 422,
+                            <<"body">> =>
+                                <<
+                                    "Required transaction available and valid, ",
+                                    "but not deserializable."
+                                >>
+                        }
+                    };
+                false ->
+                    {error, <<"Received invalid transaction.">>}
+            end
+    end.
 
 event_request(Path, Method, Status, Extra) ->
     BaseList = [{request, {explicit, Path}}, {method, Method}, {status, Status}],
@@ -1057,6 +1100,44 @@ event_request(Path, Method, Status, Extra) ->
     ?event(arweave_short, MergedTuple).
 
 %%% Tests
+
+unprocessable_transaction_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{ <<"exclude-data">> => true, <<"store">> => [] },
+    lists:foreach(
+        fun(Value) ->
+            TX = ar_tx:sign(#tx{
+                format = 2,
+                tags = [
+                    {<<"from-process">>, Value},
+                    {<<"ao-types">>, <<"from-process=\"integer\"">>}
+                ]
+            }, Wallet),
+            ID = hb_util:human_id(TX#tx.id),
+            Path = <<"/tx/", ID/binary>>,
+            Response = {ok, #{ <<"body">> =>
+                hb_json:encode(ar_tx:tx_to_json_struct(TX)) }},
+            Result = to_tx_message(tx, ID, Path, Response, [], Opts),
+            case Value of
+                <<"12345">> ->
+                    {ok, Message} = Result,
+                    ?assertEqual(12345, hb_maps:get(<<"from-process">>, Message));
+                _ ->
+                    ?assertMatch({error, #{ <<"status">> := 422 }}, Result),
+                    ?assertEqual(
+                        {error, <<"Received invalid transaction.">>},
+                        to_tx_message(tx, hb_util:human_id(<<0:256>>),
+                            Path, Response, [], Opts)
+                    )
+            end
+        end,
+        [<<"[object Object]">>, <<"a">>, <<"1.5">>, <<"12345">>]
+    ),
+    ?assertMatch(
+        {failure, _},
+        to_message(<<"/tx/test">>, <<"GET">>,
+            {error, #{ <<"status">> => 422 }}, [], Opts)
+    ).
 
 %% @doc A fixed bad interior offset from a live TX is rejected by
 %% bundle_header/3 as invalid_bundle_header.
@@ -1222,6 +1303,18 @@ best_response_non_map_error_round_trips_test_parallel() ->
     ?assertEqual(
         {error, FailedConnect},
         to_message(<<"/tx">>, <<"GET">>, {error, FailedConnect}, [], #{})
+    ).
+
+empty_raw_response_test() ->
+    ?assertEqual(
+        {ok, <<>>},
+        to_message(
+            <<"/raw/empty">>,
+            <<"GET">>,
+            {ok, #{ <<"Content-Length">> => <<"0">> }},
+            [],
+            #{}
+        )
     ).
 
 post_tx_json_two_node_test(Node1TxResponse, Node2TxResponse) ->
@@ -1402,6 +1495,19 @@ get_tx_basic_data_test_parallel() ->
     },
     ?assert(hb_message:match(ExpectedMsg, StructuredWithHash, only_present)),
     ok.
+
+get_tx_format_one_data_test_parallel() ->
+    {ok, TX} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => <<"U-rx7euDqM6GPl9fLTGrirZxLIihy-ZsfuIZOYHJjPk">>,
+            <<"exclude-data">> => false
+        },
+        #{}
+    ),
+    ?assertEqual(17967, byte_size(hb_ao:get(<<"data">>, TX))),
+    ?assert(hb_message:verify(TX, all, #{})).
 
 %% @doc The data for this transaction ends with two smaller chunks.
 get_tx_split_chunk_test_parallel() ->

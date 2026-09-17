@@ -325,6 +325,7 @@ decode(Type, Value) when is_binary(Type) ->
     );
 decode(integer, Value) ->
     {item, Number, _} = hb_structured_fields:parse_item(Value),
+    true = is_integer(Number),
     Number;
 decode(float, Value) ->
     binary_to_float(Value);
