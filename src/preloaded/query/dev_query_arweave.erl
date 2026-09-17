@@ -76,7 +76,7 @@
 %%% or a GraphQL type error. Schema acceptance does not imply filter support.
 -module(dev_query_arweave).
 %%% AO-Core API:
--export([query/4]).
+-export([query/4, block_opts/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -517,7 +517,7 @@ transaction_block(Msg, Opts) ->
     Match = hb_private:get(<<"query-match">>, Msg, #{}, Opts),
     case Match of
         #{ <<"offset">> := Offset } when is_integer(Offset), Offset >= 0 ->
-            Sorted = list_to_tuple(lists:sort(cached_block_heights(Opts))),
+            Sorted = maps:get(<<"query-block-heights">>, block_opts(Opts)),
             case block_at_offset(Match, Sorted, 1, tuple_size(Sorted), Opts) of
                 {ok, null} -> remote_transaction_block(Match, Opts);
                 Result -> Result
@@ -767,6 +767,12 @@ latest_cached_block(Opts) ->
 %% @doc List block heights already available in the Arweave pseudo-path cache.
 cached_block_heights(Opts) ->
     hb_cache:list_numbered(<<"~arweave@2.9/block/height">>, Opts).
+
+%% @doc Share the sorted block catalog between resolvers in one request.
+block_opts(Opts = #{ <<"query-block-heights">> := _ }) -> Opts;
+block_opts(Opts) ->
+    Opts#{ <<"query-block-heights">> =>
+        list_to_tuple(lists:sort(cached_block_heights(Opts))) }.
 
 %%% Index-served pages
 
