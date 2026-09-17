@@ -372,6 +372,8 @@ indexed_data_size(Msg, Opts) ->
     case hb_private:get(<<"query-match">>, Msg, #{}, Opts) of
         #{ <<"commitment-device">> := <<"tx@1.0">>,
             <<"length">> := Length } -> Length;
+        #{ <<"commitment-device">> := Device }
+                when Device =/= <<>>, Device =/= <<"tx@1.0">> -> null;
         #{ <<"id">> := ID } when ID =/= <<>> -> indexed_l1_size(ID, Opts);
         _ -> null
     end.
@@ -1477,7 +1479,7 @@ published_pages() ->
                 ) {
                     count
                     pageInfo { hasNextPage }
-                    edges { cursor node { id tags { name value } } }
+                    edges { cursor node { id data { size } tags { name value } } }
                 }
             }
         """>>,
@@ -1517,7 +1519,8 @@ published_pages() ->
     ?assertEqual(24, length(lists:usort(IDs))),
     ?assert(
         lists:all(
-            fun(#{ <<"node">> := #{ <<"tags">> := Tags } }) ->
+            fun(#{ <<"node">> := #{ <<"tags">> := Tags,
+                    <<"data">> := #{ <<"size">> := null } } }) ->
                 lists:member(
                     #{
                         <<"name">> => <<"action">>,
