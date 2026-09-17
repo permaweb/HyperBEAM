@@ -480,8 +480,8 @@ transactions_query_tags_test_parallel() ->
                     owners: null,
                     after: null,
                     tags: [
-                        {name: "type", values: $types},
-                        {name: "variant", values: ["ao.N.1"]}
+                        {name: "Type", values: $types},
+                        {name: "VARIANT", values: ["ao.N.1"]}
                     ]
                 ) {
                     edges {
@@ -731,7 +731,7 @@ transactions_query_combined_test_parallel() ->
     Query =
         <<"""
             query($owners: [String!], $ids: [ID!], $recipients: [String!],
-                $tags: [TagFilter!] = [{name: "type", values: ["Message", "Other"]}]) {
+                $tags: [TagFilter!] = [{name: "Type", values: ["Message", "Other"]}]) {
                 transactions(
                     owners: $owners,
                     ids: $ids,
@@ -768,7 +768,7 @@ transactions_query_combined_test_parallel() ->
                 fun({Values, Expected}) ->
                     Result = dev_query_graphql:test_query(TestNode, Query,
                         #{ <<"ids">> => [MatchID], <<"tags">> =>
-                            [#{ <<"name">> => <<"type">>, <<"values">> => V }
+                            [#{ <<"name">> => <<"TyPe">>, <<"values">> => V }
                             || V <- Values] }, Opts),
                     ?assertNot(maps:is_key(<<"errors">>, Result)),
                     ?assertEqual(Expected, transaction_ids(Result, Opts))
@@ -776,6 +776,7 @@ transactions_query_combined_test_parallel() ->
                 [
                     {[[<<"Other">>, <<"Message">>], [<<"Message">>]], [MatchID]},
                     {[[<<"Other">>, <<"Absent">>]], []},
+                    {[[<<"message">>]], []},
                     {[[<<"Message">>], [<<"Other">>]], []},
                     {[[]], []},
                     {[], [MatchID]}
