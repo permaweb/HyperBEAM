@@ -515,6 +515,10 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
 %% Use the matched position, so pending entries cannot inherit a confirmed block.
 transaction_block(Msg, Opts) ->
     Match = hb_private:get(<<"query-match">>, Msg, #{}, Opts),
+    match_block(Match, Opts).
+
+%% @doc Resolve the containing block from a match's position and signed ID.
+match_block(Match, Opts) ->
     case Match of
         #{ <<"offset">> := Offset } when is_integer(Offset), Offset >= 0 ->
             Sorted = maps:get(<<"query-block-heights">>, block_opts(Opts)),
@@ -873,15 +877,22 @@ index_ranges(Direction, Args, Opts) ->
             {asc, {Start, infinity}} ->
                 [#{ <<"from">> => Start }];
             {asc, {Start, End}} ->
-                [#{ <<"from">> => Start, <<"to">> => End }];
+                [#{ <<"from">> => Start, <<"to">> => End + 1 }];
             {desc, open} ->
                 [#{ <<"from">> => infinity }];
             {desc, {Start, infinity}} ->
                 [#{ <<"from">> => infinity, <<"to">> => Start - 1 }];
             {desc, {Start, End}} ->
-                [#{ <<"from">> => End - 1, <<"to">> => Start - 1 }]
+                [#{ <<"from">> => End, <<"to">> => Start - 1 }]
         end,
-    [ Range#{ <<"direction">> => Direction } || Range <- Bounds ].
+    Filter =
+        case Window of
+            open -> #{};
+            {Low, High} -> #{ <<"block">> => Heights,
+                <<"block-start">> => Low, <<"block-end">> => High }
+        end,
+    [ (maps:merge(Range, Filter))#{ <<"direction">> => Direction }
+        || Range <- Bounds ].
 
 %% @doc The matches of a page: the ranges read in order from the cursor,
 %% which lies in the range holding its key.
@@ -893,7 +904,12 @@ index_matches(Predicates, Ranges, After, Limit, Opts) ->
             {<<"-1", _/binary>>, [_Weave, Unmined]} -> [Unmined];
             _ -> Ranges
         end,
-    locate_ranges(Predicates, Ahead, After, Limit, Opts).
+    QueryOpts =
+        case lists:any(fun(Range) -> maps:is_key(<<"block">>, Range) end, Ahead) of
+            true -> block_opts(Opts);
+            false -> Opts
+        end,
+    locate_ranges(Predicates, Ahead, After, Limit, QueryOpts).
 
 %% @doc The matches of the ranges in order from the cursor, as far as the
 %% page has room.
@@ -908,11 +924,56 @@ locate_ranges(Predicates, [Range | Rest], After, Limit, Opts) ->
         end,
     maybe
         {ok, Matches} ?=
-            locate(Predicates, Bounds#{ <<"limit">> => Limit }, Opts),
+            locate_range(Predicates, Bounds, Limit, Opts),
         {ok, More} ?=
             locate_ranges(Predicates, Rest, none, Limit - length(Matches), Opts),
         {ok, Matches ++ More}
     end.
+
+%% @doc Filter boundary candidates before counting the page, refilling it
+%% from the last examined member with bounded reads until full or exhausted.
+locate_range(Predicates, Bounds, Limit, Opts) ->
+    maybe
+        {ok, Matches} ?= locate(Predicates, Bounds#{ <<"limit">> => Limit }, Opts),
+        Accepted = [Match || Match <- Matches, in_block_range(Match, Bounds, Opts)],
+        case length(Matches) =:= Limit andalso length(Accepted) < Limit of
+            false -> {ok, Accepted};
+            true ->
+                Next = (maps:remove(<<"from">>, Bounds))#{
+                    <<"after">> => maps:get(<<"member">>, lists:last(Matches)) },
+                maybe
+                    {ok, More} ?= locate_range(
+                        Predicates, Next, Limit - length(Accepted), Opts),
+                    {ok, Accepted ++ More}
+                end
+        end
+    end.
+
+%% @doc Byte ranges identify bundled items, but L1s at shared boundaries
+%% require block membership to distinguish zero-data transactions.
+in_block_range(Match, #{ <<"block">> := Heights, <<"block-start">> := Start,
+        <<"block-end">> := End }, Opts) ->
+    Offset = maps:get(<<"offset">>, Match, undefined),
+    Min = case maps:get(<<"min">>, Heights, 0) of null -> 0; Low -> Low end,
+    Max = case maps:get(<<"max">>, Heights, infinity) of
+        null -> infinity; High -> High end,
+    case pending_offset(Offset) of
+        true -> End =:= infinity;
+        false when is_integer(Offset), Offset >= Start, Offset =< End ->
+            case maps:get(<<"commitment-device">>, Match, <<>>) of
+                <<"tx@1.0">> when Offset =:= End;
+                        Offset =:= Start, Min > 0 ->
+                    case hb_util:ok(match_block(Match, Opts)) of
+                        null -> false;
+                        Block ->
+                            Height = hb_maps:get(<<"height">>, Block, -1, Opts),
+                            Height >= Min andalso Height =< Max
+                    end;
+                _ -> Offset < End
+            end;
+        false -> false
+    end;
+in_block_range(_Match, _Range, _Opts) -> true.
 
 %% @doc The matches of the predicates through `~match@1.0'. A node without
 %% stores of the index is `unservable'; a failing store is an error, as
@@ -1153,6 +1214,7 @@ offset_cursor(ID, Offset) when is_binary(ID) ->
         false -> <<"offset=", (hb_util:bin(Offset))/binary>>
     end.
 
+pending_offset(infinity) -> true;
 pending_offset(relative) -> true;
 pending_offset(#{ <<"relative">> := _, <<"offset">> := _ }) -> true;
 pending_offset(_) -> false.
@@ -1173,20 +1235,19 @@ filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
 do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
     {StartOffset, EndOffset} =
         block_range_to_offset_range(Heights, Opts),
+    Range = #{ <<"block">> => Heights, <<"block-start">> => StartOffset,
+        <<"block-end">> => EndOffset },
+    QueryOpts = block_opts(Opts),
     Filtered =
         lists:filter(
-            fun(#{ <<"offset">> := Offset }) when Offset =:= relative ->
-                    EndOffset =:= infinity;
-                (#{ <<"offset">> := Offset }) when is_map(Offset) ->
-                    EndOffset =:= infinity;
-                (#{ <<"offset">> := IDOffset, <<"length">> := Length })
-                        when is_integer(IDOffset) ->
-                    ((StartOffset =:= 0) orelse (IDOffset >= StartOffset)) andalso
-                        (
-                            (EndOffset =:= infinity) orelse
-                                (IDOffset + Length =< EndOffset)
-                        );
-                (_) -> false
+            fun(Match) ->
+                in_block_range(Match, Range, QueryOpts) andalso
+                    case Match of
+                        #{ <<"offset">> := Offset, <<"length">> := Length }
+                                when is_integer(Offset), is_integer(EndOffset) ->
+                            Offset + Length =< EndOffset;
+                        _ -> true
+                    end
             end,
             AnnotatedIDs
         ),
