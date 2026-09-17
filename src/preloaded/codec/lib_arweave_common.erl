@@ -15,8 +15,8 @@ from(Binary, _Req, _Opts) when is_binary(Binary) ->
     {ok, Binary};
 from(TX, Req, Opts) when is_record(TX, tx) ->
     case lists:keyfind(<<"ao-type">>, 1, TX#tx.tags) of
-        false -> from_item(TX, Req, Opts);
-        {<<"ao-type">>, <<"binary">>} -> {ok, TX#tx.data}
+        {<<"ao-type">>, <<"binary">>} -> {ok, TX#tx.data};
+        _ -> from_item(TX, Req, Opts)
     end.
 
 from_item(RawTX, Req, Opts) ->
