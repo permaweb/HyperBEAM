@@ -487,7 +487,8 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
     {Pending, Confirmed} =
         lists:partition(fun(#{ <<"offset">> := Offset }) -> pending_offset(Offset) end, WithOffset),
     ByID = fun(#{ <<"id">> := A }, #{ <<"id">> := B }) -> A < B end,
-    ByOffset = fun(#{ <<"offset">> := A }, #{ <<"offset">> := B }) -> A < B end,
+    ByOffset = fun(#{ <<"offset">> := A, <<"id">> := AID },
+        #{ <<"offset">> := B, <<"id">> := BID }) -> {A, AID} =< {B, BID} end,
     UserOrderSorted =
         case SortOrder of
             <<"HEIGHT_ASC">> ->
@@ -1106,10 +1107,10 @@ native_tags(Tags, Opts) ->
 annotate_ids(IDs, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store -> unavailable;
-        StoreOpts -> annotate_offsets(IDs, StoreOpts, undefined, 0, Opts)
+        StoreOpts -> annotate_offsets(lists:sort(IDs), StoreOpts, #{}, Opts)
     end.
-annotate_offsets([], _StoreOpts, _LastOffset, _Ordinate, _Opts) -> [];
-annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
+annotate_offsets([], _StoreOpts, _Ordinals, _Opts) -> [];
+annotate_offsets([ID|IDs], StoreOpts, Ordinals, Opts) ->
     {Offset, Annotated} =
         case hb_store_arweave:read_offset(StoreOpts, ID, Opts) of
             {ok, Location = #{ <<"start">> := StartOffset, <<"length">> := Length }} ->
@@ -1126,16 +1127,18 @@ annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
             _ ->
                 {undefined, #{ <<"id">> => ID }}
         end,
-    {NewOrdinate, Postfix} =
-        case Offset =/= undefined andalso not pending_offset(Offset) andalso Offset =:= LastOffset of
-            true -> {Ordinate + 1, <<"-", (hb_util:bin(Ordinate + 1))/binary>>};
-            false -> {0, <<>>}
+    Ordinate = maps:get(Offset, Ordinals, 0),
+    Postfix =
+        case is_integer(Offset) andalso Ordinate > 0 of
+            true -> <<"-", (hb_util:bin(Ordinate))/binary>>;
+            false -> <<>>
         end,
     WithCursor =
         Annotated#{
             <<"cursor">> => << (offset_cursor(ID, Offset))/binary, Postfix/binary >>
         },
-    [WithCursor | annotate_offsets(IDs, StoreOpts, Offset, NewOrdinate, Opts)].
+    [WithCursor | annotate_offsets(IDs, StoreOpts,
+        Ordinals#{ Offset => Ordinate + 1 }, Opts)].
 
 offset_cursor(ID, undefined) when is_binary(ID) -> <<"ephemeral=", ID/binary>>;
 offset_cursor(ID, Offset) when is_binary(ID) ->
