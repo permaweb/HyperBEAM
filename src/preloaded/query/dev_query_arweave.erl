@@ -57,8 +57,8 @@
 %%% cannot restore original tag order or duplicates. Signature and owner fields
 %%% come from a signed commitment; recipient and anchor come from commitment
 %%% field mappings. L1 `fee' and `quantity' come from commitment fields;
-%%% other message types retain their message-key fallback. Amounts are projected
-%%% as winston and exact AR strings.
+%%% ANS-104 items return zero. Amounts are projected as winston and exact AR
+%%% strings.
 %%% `data.size' prefers an L1 transaction's declared or indexed payload size,
 %%% then measures binary `data', falling back to `body', then an empty binary.
 %%% Structured bodies and omitted payloads have unknown size (null).
@@ -443,14 +443,16 @@ encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 43 -> {ok, Bin};
 encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 64 -> {ok, Bin};
 encode_anchor(Other) -> {error, <<"invalid_anchor: ", Other/binary>>}.
 
-%% @doc L1 amounts use commitment fields; other messages use their own keys.
+%% @doc L1 amounts use commitment fields. ANS-104 items have no native amounts;
+%% other message types retain their existing message-key fallback.
 transaction_amount(Msg, Field, Keys, Opts) ->
-    case find_field_key(<<"commitment-device">>, Msg, Opts) of
+    case transaction_device(Msg, Opts) of
         {ok, <<"tx@1.0">>} ->
             case find_field_key(Field, Msg, Opts) of
                 {ok, null} -> {ok, 0};
                 Amount -> Amount
             end;
+        {ok, <<"ans104@1.0">>} -> {ok, 0};
         _ -> {ok, hb_maps:get_first([{Msg, Key} || Key <- Keys], 0, Opts)}
     end.
 
