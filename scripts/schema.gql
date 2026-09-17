@@ -230,7 +230,7 @@ type BlockConnection {
 # Find transactions with the following tag name and value
 input TagFilter {
   # The tag name
-  name: String
+  name: String!
 
   # An array of values to match against. If multiple values are passed then transactions with _any_ matching tag value from the set will be returned.
   #
@@ -243,7 +243,7 @@ input TagFilter {
   # `{name: "app-name", values: ["app-1", "app-2", "app-3"]}`
   #
   # Returns all transactions where the `app-name` tag has a value of either `app-1` _or_ `app-2` _or_ `app-3`.
-  values: [String!]
+  values: [String!]!
 
   # The operator to apply to to the tag filter. Defaults to EQ (equal).
   #op: TagOperator! = EQ
