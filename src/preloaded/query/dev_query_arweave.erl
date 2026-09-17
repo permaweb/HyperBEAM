@@ -59,6 +59,9 @@
 %%% binary. Structured bodies and omitted payloads have unknown size (null).
 %%% `data.type' reads `content-type'. These projections
 %%% do not reconstruct an Arweave transaction or its original tag list.
+%%% Transaction `block' uses the matched weave position and cached block
+%%% ranges, searching remote block heights on a miss when remote block reads
+%%% are enabled. L1 IDs resolve shared boundaries; pending positions return null.
 %%%
 %%% `blocks' pages by height, descending by default or `HEIGHT_ASC', within
 %%% inclusive `height.min/max' bounds. Height enumeration defaults to zero and
@@ -163,9 +166,9 @@ query(Obj, <<"transactions">>, RawArgs, Opts) ->
         unservable -> cached_transactions(Args, Opts);
         Result -> Result
     end;
-query(_Obj, <<"block">>, Args, Opts) ->
+query(Obj, <<"block">>, Args, Opts) ->
     case hb_maps:get(<<"id">>, Args, null, Opts) of
-        null -> {ok, null};
+        null -> transaction_block(Obj, Opts);
         ID -> read_block(ID, Opts)
     end;
 query(_Obj, <<"networkInfo">>, _Args, Opts) ->
@@ -385,7 +388,9 @@ read_ids(_, 0, _Opts) -> [];
 read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Msg} ->
-            [AnnotatedID#{ <<"node">> => Msg } | read_ids(Rest, Count - 1, Opts)];
+            [AnnotatedID#{ <<"node">> =>
+                hb_private:set(Msg, <<"query-match">>, AnnotatedID, Opts)
+            } | read_ids(Rest, Count - 1, Opts)];
         _ ->
             read_ids(Rest, Count, Opts)
     end.
@@ -491,6 +496,82 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
     UserOrderSorted.
 
 %%% Block pages.
+
+%% @doc Find a transaction's block, trying cached headers before remote ones.
+%% Use the matched position, so pending entries cannot inherit a confirmed block.
+transaction_block(Msg, Opts) ->
+    Match = hb_private:get(<<"query-match">>, Msg, #{}, Opts),
+    case Match of
+        #{ <<"offset">> := Offset } when is_integer(Offset), Offset >= 0 ->
+            Sorted = list_to_tuple(lists:sort(cached_block_heights(Opts))),
+            case block_at_offset(Match, Sorted, 1, tuple_size(Sorted), Opts) of
+                {ok, null} -> remote_transaction_block(Match, Opts);
+                Result -> Result
+            end;
+        _ -> {ok, null}
+    end.
+
+%% @doc Search all heights only when the node allows remote block reads.
+remote_transaction_block(Match, Opts) ->
+    case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
+        true ->
+            maybe
+                {ok, Status} ?= query(undefined, <<"networkInfo">>, #{}, Opts),
+                Height = hb_util:int(hb_maps:get(<<"height">>, Status, 0, Opts)),
+                block_at_offset(Match, remote, 0, Height, Opts)
+            end;
+        _ -> {ok, null}
+    end.
+
+%% @doc Binary-search blocks by their weave ranges. L1 membership
+%% disambiguates zero-data transactions at shared block boundaries.
+block_at_offset(_Match, _Heights, Low, High, _Opts) when Low > High ->
+    {ok, null};
+block_at_offset(Match = #{ <<"offset">> := Offset }, Heights, Low, High, Opts) ->
+    Mid = (Low + High) div 2,
+    maybe
+        {ok, Block} ?=
+            case Heights of
+                remote -> read_block(Mid, Opts);
+                _ -> read_cached_block(element(Mid, Heights), Opts)
+            end,
+        End = hb_util:int(hb_maps:get(<<"weave_size">>, Block, 0, Opts)),
+        Start = End - hb_util:int(hb_maps:get(<<"block_size">>, Block, 0, Opts)),
+        case {Offset < Start, Offset > End} of
+            {true, _} -> block_at_offset(Match, Heights, Low, Mid - 1, Opts);
+            {_, true} -> block_at_offset(Match, Heights, Mid + 1, High, Opts);
+            _ ->
+                case block_contains(Match, Block, End, Opts) of
+                    true -> {ok, Block};
+                    false ->
+                        maybe
+                            {ok, null} ?=
+                                case Offset =:= Start of
+                                    true -> block_at_offset(
+                                        Match, Heights, Low, Mid - 1, Opts);
+                                    false -> {ok, null}
+                                end,
+                            case Offset =:= End of
+                                true -> block_at_offset(
+                                    Match, Heights, Mid + 1, High, Opts);
+                                false -> {ok, null}
+                            end
+                        end
+                end
+        end
+    else
+        {error, not_found} -> {ok, null};
+        Error -> Error
+    end.
+
+%% @doc L1s must occur in the block's TX list; bundled items occupy bytes
+%% before its end. Zero-data L1s can also sit exactly at the end.
+block_contains(Match = #{ <<"commitment-device">> := <<"tx@1.0">> },
+        Block, _End, Opts) ->
+    lists:member(hb_maps:get(<<"id">>, Match, <<>>, Opts),
+        hb_maps:get(<<"txs">>, Block, [], Opts));
+block_contains(#{ <<"offset">> := Offset }, _Block, End, _Opts) ->
+    Offset < End.
 
 %% @doc Read a bounded page of blocks by height, or from explicit block IDs.
 block_connection(RawArgs, Opts) ->
@@ -664,19 +745,14 @@ read_cached_block(Height, Opts) ->
 
 %% @doc Return the latest block height indexed in the Arweave pseudo-path cache.
 latest_cached_block(Opts) ->
-    Blocks =
-        hb_cache:list_numbered(
-            hb_path:to_binary([
-                <<"~arweave@2.9">>,
-                <<"block">>,
-                <<"height">>
-            ]),
-            Opts
-        ),
-    case Blocks of
+    case cached_block_heights(Opts) of
         [] -> not_found;
-        _ -> {ok, lists:max(Blocks)}
+        Blocks -> {ok, lists:max(Blocks)}
     end.
+
+%% @doc List block heights already available in the Arweave pseudo-path cache.
+cached_block_heights(Opts) ->
+    hb_cache:list_numbered(<<"~arweave@2.9/block/height">>, Opts).
 
 %%% Index-served pages
 
@@ -846,11 +922,12 @@ match_edges(Matches, Opts) ->
             hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts)
         ),
     lists:filtermap(
-        fun({#{ <<"member">> := Member }, {ok, Node}}) ->
+        fun({Match = #{ <<"member">> := Member }, {ok, Node}}) ->
                 {true,
                     #{
                         <<"cursor">> => <<?MEMBER_CURSOR, Member/binary>>,
-                        <<"node">> => Node
+                        <<"node">> =>
+                            hb_private:set(Node, <<"query-match">>, Match, Opts)
                     }};
             ({Match, Error}) ->
                 ?event(warning,
@@ -1022,12 +1099,14 @@ annotate_offsets([], _StoreOpts, _LastOffset, _Ordinate, _Opts) -> [];
 annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
     {Offset, Annotated} =
         case hb_store_arweave:read_offset(StoreOpts, ID, Opts) of
-            {ok, #{ <<"start">> := StartOffset, <<"length">> := Length }} ->
+            {ok, Location = #{ <<"start">> := StartOffset, <<"length">> := Length }} ->
                 {
                     StartOffset,
                     #{
                         <<"id">> => ID,
                         <<"offset">> => StartOffset,
+                        <<"commitment-device">> =>
+                            hb_maps:get(<<"codec-device">>, Location, <<>>, Opts),
                         <<"length">> => Length
                     }
                 };
