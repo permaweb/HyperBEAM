@@ -21,6 +21,10 @@ serialize(TX, _Req, _Opts) when is_record(TX, tx) ->
 %% @doc Deserialize a binary ans104 message to a TABM.
 deserialize(#{ <<"body">> := Binary }, Req, Opts) ->
     deserialize(Binary, Req, Opts);
+deserialize(Binary, Req = #{ <<"exclude-data">> := true }, Opts)
+        when is_binary(Binary) ->
+    {ok, _HeaderSize, TX} = ar_bundles:deserialize_header(Binary),
+    deserialize(TX#tx{ data = <<>>, data_size = 0 }, Req, Opts);
 deserialize(Binary, Req, Opts) when is_binary(Binary) ->
     deserialize(ar_bundles:deserialize(Binary), Req, Opts);
 deserialize(TX, Req, Opts) when is_record(TX, tx) ->

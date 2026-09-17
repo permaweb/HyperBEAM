@@ -1,6 +1,7 @@
 ### Supported GraphQL Queries. ###
 
 type Query {
+  networkInfo: NetworkInfo!
 
   # Get a message by its id or a subset of its keys.
   message(id: ID, keys: [KeyInput]): Message
@@ -30,7 +31,7 @@ type Query {
     ingested_at: RangeFilter
 
     # Find transactions within a given block height range.
-    block: RangeFilter
+    block: BlockFilter
 
     # Result page size (max: 100)
     first: Int = 10
@@ -56,7 +57,7 @@ type Query {
     after: String
 
     # Optionally specify the result sort order.
-    #sort: SortOrder = HEIGHT_DESC
+    sort: SortOrder = HEIGHT_DESC
   ): BlockConnection!
 }
 
@@ -108,8 +109,8 @@ type Amount {
 
 # Basic metadata about the transaction data payload.
 type MetaData {
-  # Size of the associated data in bytes.
-  size: String!
+  # Size of the associated binary data in bytes; null when unavailable.
+  size: String
 
   # Type is derived from the \`content-type\` tag on a transaction.
   type: String
@@ -125,6 +126,10 @@ type Tag {
 }
 
 # Block Schema
+type NetworkInfo {
+  height: Int!
+}
+
 type Block {
   # The block ID.
   id: ID
@@ -225,7 +230,7 @@ type BlockConnection {
 # Find transactions with the following tag name and value
 input TagFilter {
   # The tag name
-  name: String
+  name: String!
 
   # An array of values to match against. If multiple values are passed then transactions with _any_ matching tag value from the set will be returned.
   #
@@ -238,7 +243,7 @@ input TagFilter {
   # `{name: "app-name", values: ["app-1", "app-2", "app-3"]}`
   #
   # Returns all transactions where the `app-name` tag has a value of either `app-1` _or_ `app-2` _or_ `app-3`.
-  values: [String!]
+  values: [String!]!
 
   # The operator to apply to to the tag filter. Defaults to EQ (equal).
   #op: TagOperator! = EQ
@@ -272,6 +277,11 @@ enum TagMatch {
 }
 
 # Filter with a min and max
+input BlockFilter {
+  min: Int
+  max: Int
+}
+
 input RangeFilter {
   # Minimum integer to filter from
   min: Int

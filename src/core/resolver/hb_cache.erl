@@ -324,13 +324,14 @@ write_message_ops(Msg, Opts) when is_map(Msg) ->
     ?event_debug(debug_cache, {writing_message, Msg}),
     UncommittedID =
         hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }),
-    AllIDs = calculate_all_ids(Msg, UncommittedID, Opts),
-    AltIDs = AllIDs -- [UncommittedID],
+    {SignedIDs, UnsignedIDs, AllID} = calculate_all_ids(Msg, UncommittedID, Opts),
     MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
     ?event_debug(debug_cache,
         {writing_message,
             {id, UncommittedID},
-            {alt_ids, AltIDs},
+            {signed_ids, SignedIDs},
+            {unsigned_ids, UnsignedIDs},
+            {all_id, AllID},
             {original, Msg}
         }
     ),
@@ -342,6 +343,9 @@ write_message_ops(Msg, Opts) when is_map(Msg) ->
             [{group, UncommittedID}],
             maps:without([<<"priv">>], Msg)
         ),
+    % Create an operation to link from the root ID the keys are replicated under
+    % to each of the known alternative IDs for the message (the combined 'all'
+    % ID, signed IDs, and _other_ non-root IDs).
     Ops =
         lists:foldl(
             fun(AltID, Acc) ->
@@ -353,8 +357,8 @@ write_message_ops(Msg, Opts) when is_map(Msg) ->
                 ),
                 [{link, AltID, UncommittedID} | Acc]
             end,
-            [{index_hook, AllIDs, Msg} | KeyOps],
-            AltIDs
+            [{index_hook, AllID, SignedIDs, UnsignedIDs, Msg} | KeyOps],
+            lists:uniq((SignedIDs ++ UnsignedIDs ++ [AllID])) -- [UncommittedID]
         ),
     {ok, UncommittedID, lists:reverse(Ops)}.
 
@@ -458,14 +462,21 @@ run_write_ops(Store, Ops, Opts) ->
     run_write_ops(Store, Ops, Opts, []).
 run_write_ops(Store, [], Opts, Pending) ->
     flush_write_ops(Store, Pending, Opts);
-run_write_ops(Store, [{index_hook, IDs, Msg} | Rest], Opts, Pending) ->
+run_write_ops(
+        Store,
+        [{index_hook, AllID, SignedIDs, UnsignedIDs, Msg} | Rest],
+        Opts,
+        Pending
+) ->
     flush_write_ops(Store, Pending, Opts),
     {ok, _} =
         hb_hook:on(
             <<"cache-write">>,
             #{
                 <<"body">> => Msg,
-                <<"ids">> => IDs,
+                <<"all-id">> => AllID,
+                <<"signed-ids">> => SignedIDs,
+                <<"unsigned-ids">> => UnsignedIDs,
                 <<"priv">> => #{ <<"hook-caller">> => <<"kernel">> }
             },
             Opts
@@ -532,21 +543,31 @@ calculate_all_ids(Bin, _UncommittedID, _Opts) when is_binary(Bin) -> [];
 calculate_all_ids(Msg, UncommittedID, Opts) ->
     CommIDs = 
         hb_maps:keys(
-            hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+            Comms = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
             Opts
+        ),
+    {SignedIDs, UnsignedIDs} =
+        lists:partition(
+            fun(ID) ->
+                Comm = hb_maps:get(ID, Comms, #{}, Opts),
+                is_map_key(<<"committer">>, Comm)
+            end,
+            CommIDs
         ),
     ?event_debug({calculating_ids, {msg, Msg}, {comm_ids, CommIDs}}),
     case length(CommIDs) of
         0 ->
             % With no commitments the `all' id is the uncommitted id we already
             % computed; skip re-serializing the message to recompute it.
-            [UncommittedID];
+            {[], [UncommittedID], UncommittedID};
         _ ->
-            All = hb_message:id(Msg, all, Opts#{ <<"linkify-mode">> => discard }),
-            case lists:member(All, CommIDs) of
-                true -> CommIDs;
-                false -> [All | CommIDs]
-            end
+            AllID =
+                hb_message:id(
+                    Msg,
+                    all,
+                    Opts#{ <<"linkify-mode">> => discard }
+                ),
+            {SignedIDs, UnsignedIDs, AllID}
     end.
 
 %% @doc Write a hashpath and its message to the store and link it.
@@ -1221,7 +1242,7 @@ test_match_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_l
     skip;
 test_match_message(Store) ->
     hb_store:reset(Store),
-    Opts = #{ <<"store">> => Store },
+    Opts = #{ <<"store">> => Store, <<"match-index">> => false },
     % Write two messages that match the template, and a third that does not.
     {ok, ID1} = hb_cache:write(#{ <<"x">> => <<"1">> }, Opts),
     {ok, ID2} = hb_cache:write(#{ <<"y">> => <<"2">>, <<"z">> => <<"3">> }, Opts),
@@ -1248,7 +1269,7 @@ test_match_linked_message(Store) when map_get(<<"store-module">>, Store) =/= hb_
     skip;
 test_match_linked_message(Store) ->
     hb_store:reset(Store),
-    Opts = #{ <<"store">> => Store },
+    Opts = #{ <<"store">> => Store, <<"match-index">> => false },
     Msg = #{ <<"a">> => Inner = #{ <<"b">> => <<"c">>, <<"d">> => <<"e">> } },
     {ok, _ID} = write(Msg, Opts),
     {ok, [MatchedID]} = match(#{ <<"b">> => <<"c">> }, Opts),
@@ -1268,7 +1289,7 @@ test_match_typed_message(Store) when map_get(<<"store-module">>, Store) =/= hb_s
     skip;
 test_match_typed_message(Store) ->
     hb_store:reset(Store),
-    Opts = #{ <<"store">> => Store },
+    Opts = #{ <<"store">> => Store, <<"match-index">> => false },
     % Add some messages that should not match the template, as well as the main
     % message that should match the template.
     write(#{ <<"atom-value">> => atom, <<"wrong">> => <<"wrong">> }, Opts),
@@ -1320,7 +1341,7 @@ test_raw_match_read(Store) ->
 
 test_immediate_marker_values(Store) ->
     hb_store:reset(Store),
-    Opts = #{ <<"store">> => Store },
+    Opts = #{ <<"store">> => Store, <<"match-index">> => false },
     Msg = #{
         <<"groupish">> => <<"group">>,
         <<"linkish">> => <<"link:literal">>,
@@ -1362,10 +1383,10 @@ test_cache_write_hook(Store) ->
     Msg = hb_private:set(Committed, <<"offset">>, 1, Opts),
     {ok, ID} = write(Msg, Opts),
     Req = receive R = #{ <<"body">> := #{ <<"a">> := _ } } -> R end,
-    #{ <<"body">> := Body, <<"ids">> := IDs } = Req,
+    #{ <<"body">> := Body, <<"signed-ids">> := IDs } = Req,
     ?assertEqual(<<"kernel">>, hb_private:get(<<"hook-caller">>, Req, Opts)),
     ?assertEqual(1, hb_private:get(<<"offset">>, Body, Opts)),
-    ?assertEqual([hb_message:id(Msg, all, Opts)], IDs),
+    ?assertEqual([hb_message:id(Msg, signed, Opts)], IDs),
     ?assertEqual({ok, IDs}, match(#{ <<"a">> => <<"b">> }, Opts)),
     {ok, Keys} = hb_store:list(Store, ID, Opts),
     ?assertNot(lists:member(<<"priv">>, Keys)).

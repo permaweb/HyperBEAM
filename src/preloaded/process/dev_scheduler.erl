@@ -57,7 +57,7 @@ info() ->
                 <<"init">>,
                 <<"checkpoint">>
             ],
-        excludes => [set, keys],
+        excludes => [committers, set, keys],
         default => fun router/4
     }.
 

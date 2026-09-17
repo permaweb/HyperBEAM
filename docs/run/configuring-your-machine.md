@@ -167,5 +167,5 @@ rebar3 shell --erl_opts "-hb_port 8080 -hb_key path/to/key.json"
 
 When running a release build (see [Running a HyperBEAM Node](./running-a-hyperbeam-node.md)), configuration works similarly:
 
-1.  A `config.flat` file will be present in the release directory (e.g., `_build/default/rel/hb/config.flat`). Edit this file to set your desired parameters for the release environment.
-2.  Environment variables (`HB_*`) can still be used to override the settings in the release's `config.flat` when starting the node using the `bin/hb` script.
+1.  Supply the node's configuration at deployment time. For example, start the release with `HB_CONFIG=/path/to/config.json bin/hb foreground`.
+2.  Local configuration files are not copied into the release during the build. JSON and flat configuration files remain supported by `HB_CONFIG`.

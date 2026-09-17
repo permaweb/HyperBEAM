@@ -39,7 +39,7 @@
 
 info(_Opts) ->
     #{
-        excludes => [<<"keys">>, <<"set">>],
+        excludes => [<<"committers">>, <<"keys">>, <<"set">>],
         default => fun default/4
     }.
 
@@ -216,12 +216,15 @@ query_match_key(Path, Opts) ->
 test_setup() ->
     Store = hb_test_utils:test_store(),
     Opts = #{ <<"store">> => Store, <<"priv-wallet">> => ar_wallet:new() },
-    % Write a simple message.
+    % Write a simple committed message.
     hb_cache:write(
-        #{
-            <<"basic">> => <<"binary-value">>,
-            <<"basic-2">> => <<"binary-value-2">>
-        },
+        hb_message:commit(
+            #{
+                <<"basic">> => <<"binary-value">>,
+                <<"basic-2">> => <<"binary-value-2">>
+            },
+            Opts
+        ),
         Opts
     ),
     % Write a nested and committed message.
@@ -239,8 +242,14 @@ test_setup() ->
         ),
         Opts
     ),
-    % Write a list message with complex keys.
-    hb_cache:write([<<"a">>, 2, ok], Opts),
+    % Write a committed numbered list with typed values.
+    hb_cache:write(
+        hb_message:commit(
+            hb_util:list_to_numbered_message([<<"a">>, 2, ok]),
+            Opts
+        ),
+        Opts
+    ),
     {ok, Opts, #{ <<"nested">> => hb_message:id(Nested, all, Opts) }}.
 
 %% @doc Search for and find a basic test key.
@@ -307,7 +316,10 @@ list_test() ->
             <<"~query@1.0/all?2+integer=2&3+atom=ok&return=messages">>,
             Opts
         ),
-    ?assertEqual([<<"a">>, 2, ok], Msg),
+    ?assertEqual(
+        [<<"a">>, 2, ok],
+        hb_util:message_to_ordered_list(hb_message:uncommitted(Msg, Opts), Opts)
+    ),
     ok.
 
 %% @doc Ensure user's can opt not to specify a key to resolve, instead specifying

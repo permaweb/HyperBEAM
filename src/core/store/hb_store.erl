@@ -80,6 +80,7 @@
 %%%                         the `Key` ahead of store normalization and
 %%%                         invocation, unless an additional `prefix-strip'
 %%%                         store message key is explicitly set to `false'.
+%%%                         A key message carries this path in its `path' field.
 %%%     `[to|from]-key`:    An AO-Core path, resolved in `raw' mode with the
 %%%                         (post-prefix handling) key as its `Base/body`
 %%%                         message. The result is utilized as the key the
@@ -585,6 +586,13 @@ to_pairs(Store, Values, Req, Opts) ->
 %% @doc Normalize a path to the store: admit it by the store's `prefix',
 %% stripped from it unless `prefix-strip' is `false', then through the
 %% store's `to-key'. A path without the prefix is `not_found' for the store.
+to_key(Store, #{ <<"path">> := Path } = Key, Opts) ->
+    maybe
+        {ok, Admitted} ?= to_key(maps:remove(<<"to-key">>, Store), Path, Opts),
+        execute_normalizer(
+            <<"to-key">>, Store, Key#{ <<"path">> => Admitted }, Opts
+        )
+    end;
 to_key(Store, Path, Opts) ->
     Prefix = maps:get(<<"prefix">>, Store, <<>>),
     PrefixBitSize = bit_size(Prefix),
@@ -1463,6 +1471,29 @@ normalize_pipeline_test() ->
     ?assertEqual(
         {ok, <<"one">>},
         read(<<"b64/", SingleKey/binary>>, SingleOpts)
+    ),
+    % Key messages retain their fields while their path obeys prefix rules.
+    KeyMessage = #{ <<"path">> => <<"b64/message">>, <<"key">> => <<"alternate">> },
+    lists:foreach(
+        fun({Field, Strip, Expected}) ->
+            MessageStore = Store#{
+                <<"to-key">> => <<"~message@1.0/body/", Field/binary>>,
+                <<"prefix-strip">> => Strip
+            },
+            ?assertEqual(ok, write([MessageStore], #{ KeyMessage => <<"val">> }, #{})),
+            ?assertEqual(
+                {ok, hb_util:encode(<<"val">>)}, read([Raw], Expected, #{})
+            ),
+            ?assertEqual(
+                {error, not_found},
+                write([MessageStore], #{
+                    KeyMessage#{ <<"path">> => <<"outside">> } => <<"val">>
+                }, #{})
+            )
+        end,
+        [{<<"path">>, true, <<"message">>},
+            {<<"path">>, false, <<"b64/message">>},
+            {<<"key">>, true, <<"alternate">>}]
     ),
     ?event(testing, {normalized_write_and_read_passed}),
     % Each child a list or a composite read enumerates is encoded, and a

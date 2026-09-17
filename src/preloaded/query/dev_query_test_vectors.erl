@@ -216,6 +216,7 @@ simple_blocks_query_test_parallel() ->
     Query =
         <<"""
             query {
+                networkInfo { height }
                 blocks(
                     ids: ["V7yZNKPQLIQfUu8r8-lcEaz4o7idl6LTHn5AHlGIFF8TKfxIe7s_yFxjqan6OW45"]
                 ) {
@@ -233,6 +234,7 @@ simple_blocks_query_test_parallel() ->
     ?assertMatch(
         #{
             <<"data">> := #{
+                <<"networkInfo">> := #{ <<"height">> := Height },
                 <<"blocks">> := #{
                     <<"edges">> := [
                         #{
@@ -246,7 +248,7 @@ simple_blocks_query_test_parallel() ->
                     ]
                 }
             }
-        },
+        } when is_integer(Height) andalso Height >= 1745749,
         dev_query_graphql:test_query(Node, Query, #{}, Opts)
     ).
 
@@ -262,7 +264,7 @@ block_by_height_query_test_parallel() ->
     Query =
         <<"""
             query {
-                blocks( height: {min: 1745749, max: 1745750} ) {
+                blocks( height: {min: 1745749, max: 1745750}, sort: HEIGHT_ASC ) {
                     edges {
                         node {
                             id
@@ -300,6 +302,81 @@ block_by_height_query_test_parallel() ->
             }
         },
         dev_query_graphql:test_query(Node, Query, #{}, Opts)
+    ),
+    PageQuery =
+        <<"""
+            query($height:RangeFilter, $sort:SortOrder, $after:String,
+                    $first:Int, $ids:[ID!]) {
+                blocks(height:$height, sort:$sort, after:$after,
+                        first:$first, ids:$ids) {
+                    pageInfo { hasNextPage }
+                    edges { cursor node { id height } }
+                }
+            }
+        """>>,
+    Bounds = #{ <<"min">> => 1745749, <<"max">> => 1745750 },
+    Page =
+        fun(Vars) ->
+            Res =
+                dev_query_graphql:test_query(Node, PageQuery,
+                    maps:merge(#{ <<"height">> => Bounds, <<"first">> => 1 }, Vars),
+                    Opts
+                ),
+            ?assertEqual([], maps:get(<<"errors">>, Res, [])),
+            hb_util:deep_get(<<"data/blocks">>, Res, Opts)
+        end,
+    lists:foreach(
+        fun({Sort, First, Last}) ->
+            Vars = #{ <<"sort">> => Sort },
+            #{ <<"edges">> := [#{ <<"cursor">> := Cursor,
+                <<"node">> := #{ <<"height">> := First, <<"id">> := ID } }],
+                <<"pageInfo">> := #{ <<"hasNextPage">> := true } } = Page(Vars),
+            ?assertEqual(64, byte_size(ID)),
+            #{ <<"edges">> := [#{ <<"cursor">> := Next,
+                <<"node">> := #{ <<"height">> := Last, <<"id">> := LastID } }],
+                <<"pageInfo">> := #{ <<"hasNextPage">> := false } } =
+                    Page(Vars#{ <<"after">> => Cursor }),
+            ?assertMatch(#{ <<"edges">> := [],
+                <<"pageInfo">> := #{ <<"hasNextPage">> := false } },
+                Page(Vars#{ <<"after">> => Next })),
+            ?assertMatch(#{ <<"edges">> := [#{ <<"node">> := #{ <<"id">> := ID } }],
+                <<"pageInfo">> := #{ <<"hasNextPage">> := false } },
+                Page(Vars#{ <<"ids">> => [ID, ID] })),
+            ?assertEqual(Page(Vars#{ <<"after">> => Cursor }),
+                Page(Vars#{ <<"ids">> => [LastID, ID], <<"after">> => Cursor }))
+        end,
+        [
+            {<<"HEIGHT_ASC">>, 1745749, 1745750},
+            {<<"HEIGHT_DESC">>, 1745750, 1745749}
+        ]
+    ),
+    ?assertMatch(#{ <<"edges">> := [#{ <<"node">> := #{ <<"height">> := 1745750 } }] },
+        Page(#{})),
+    ?assertMatch(#{ <<"edges">> := [],
+        <<"pageInfo">> := #{ <<"hasNextPage">> := true } },
+        Page(#{ <<"first">> => 0 })),
+    lists:foreach(
+        fun(Vars) ->
+            ?assertMatch(#{ <<"edges">> := [],
+                <<"pageInfo">> := #{ <<"hasNextPage">> := false } }, Page(Vars))
+        end,
+        [
+            #{ <<"ids">> => [] }, #{ <<"after">> => <<"height=0">> },
+            #{ <<"height">> => #{ <<"min">> => 1745750, <<"max">> => 1745749 } }
+        ]
+    ),
+    ?assertMatch(#{ <<"edges">> := [#{ <<"node">> := #{ <<"height">> := 1745750 } }] },
+        Page(#{ <<"height">> => Bounds#{ <<"min">> => null } })),
+    lists:foreach(
+        fun(Vars) ->
+            ?assertMatch(#{ <<"errors">> := [_ | _] },
+                dev_query_graphql:test_query(Node, PageQuery, Vars, Opts))
+        end,
+        [
+            #{ <<"after">> => <<"height=invalid">> },
+            #{ <<"after">> => <<"height=-1">> },
+            #{ <<"sort">> => <<"INGESTED_AT_ASC">> }
+        ]
     ).
 
 simple_ans104_query_test_parallel() ->
@@ -328,6 +405,10 @@ simple_ans104_query_test_parallel() ->
                     edges {
                         node {
                             id,
+                            bundledIn { id }
+                            parent { id }
+                            quantity { winston ar }
+                            fee { winston ar }
                             tags {
                                 name,
                                 value
@@ -358,6 +439,16 @@ simple_ans104_query_test_parallel() ->
                             <<"node">> :=
                                 #{
                                     <<"id">> := ExpectedID,
+                                    <<"bundledIn">> := #{ <<"id">> := <<>> },
+                                    <<"parent">> := #{ <<"id">> := <<>> },
+                                    <<"quantity">> := #{
+                                        <<"winston">> := <<"0">>,
+                                        <<"ar">> := <<"0.000000000000">>
+                                    },
+                                    <<"fee">> := #{
+                                        <<"winston">> := <<"0">>,
+                                        <<"ar">> := <<"0.000000000000">>
+                                    },
                                     <<"tags">> :=
                                         [#{ <<"name">> := _, <<"value">> := _ }|_]
                                 }
@@ -383,11 +474,14 @@ transactions_query_tags_test_parallel() ->
     ),
     Query =
         <<"""
-            query {
+            query($types: [String!]!) {
                 transactions(
+                    ids: null,
+                    owners: null,
+                    after: null,
                     tags: [
-                        {name: "type", values: ["Message"]},
-                        {name: "variant", values: ["ao.N.1"]}
+                        {name: "Type", values: $types},
+                        {name: "VARIANT", values: ["ao.N.1"]}
                     ]
                 ) {
                     edges {
@@ -406,7 +500,7 @@ transactions_query_tags_test_parallel() ->
         dev_query_graphql:test_query(
             Node,
             Query,
-            #{},
+            #{ <<"types">> => [<<"Message">>] },
             Opts
         ),
     ExpectedID = hb_message:id(WrittenMsg, all, Opts),
@@ -532,7 +626,7 @@ transactions_query_recipients_test_parallel() ->
             Node,
             Query,
             #{
-                <<"recipients">> => [AliceAddress]
+                <<"recipients">> => [AliceAddress, hb:address(ar_wallet:new())]
             },
             Opts
         ),
@@ -625,7 +719,7 @@ transactions_query_combined_test_parallel() ->
     Opts =
         #{
             <<"priv-wallet">> => Wallet = ar_wallet:new(),
-            <<"store">> => [hb_test_utils:test_store()]
+            <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -636,13 +730,13 @@ transactions_query_combined_test_parallel() ->
     ),
     Query =
         <<"""
-            query($owners: [String!], $ids: [ID!]) {
+            query($owners: [String!], $ids: [ID!], $recipients: [String!],
+                $tags: [TagFilter!] = [{name: "Type", values: ["Message", "Other"]}]) {
                 transactions(
                     owners: $owners,
                     ids: $ids,
-                    tags: [
-                        {name: "type", values: ["Message"]}
-                    ]
+                    recipients: $recipients,
+                    tags: $tags
                 ) {
                     edges {
                         node {
@@ -668,6 +762,39 @@ transactions_query_combined_test_parallel() ->
         ),
     ?event({expected_id, ExpectedID}),
     ?event({transactions_query_combined_test, Res}),
+    lists:foreach(
+        fun({TestNode, MatchID}) ->
+            lists:foreach(
+                fun({Values, Expected}) ->
+                    Result = dev_query_graphql:test_query(TestNode, Query,
+                        #{ <<"ids">> => [MatchID], <<"tags">> =>
+                            [#{ <<"name">> => <<"TyPe">>, <<"values">> => V }
+                            || V <- Values] }, Opts),
+                    ?assertNot(maps:is_key(<<"errors">>, Result)),
+                    ?assertEqual(Expected, transaction_ids(Result, Opts))
+                end,
+                [
+                    {[[<<"Other">>, <<"Message">>], [<<"Message">>]], [MatchID]},
+                    {[[<<"Other">>, <<"Absent">>]], []},
+                    {[[<<"message">>]], []},
+                    {[[<<"Message">>], [<<"Other">>]], []},
+                    {[[]], []},
+                    {[], [MatchID]}
+                ]
+            )
+        end,
+        [{Node, ExpectedID},
+            {hb_http_server:start_node(Opts#{
+                <<"priv-wallet">> => ar_wallet:new(), <<"match-index">> => false
+            }), hb_message:id(WrittenMsg, none, Opts)}]
+    ),
+    lists:foreach(
+        fun(Filter) ->
+            Empty = dev_query_graphql:test_query(Node, Query, #{ Filter => [] }, Opts),
+            ?assertEqual([], hb_util:deep_get(<<"data/transactions/edges">>, Empty, Opts))
+        end,
+        [<<"ids">>, <<"owners">>, <<"recipients">>]
+    ),
     ?assertMatch(
         #{
             <<"data">> := #{
@@ -738,10 +865,10 @@ transactions_query_filter_by_block_test_parallel() ->
         fun(Start, End, Present, Absent) ->
             Q = 
                 <<"""
-                    query($ids: [ID!], $min: Int, $max: Int) {
+                    query($ids: [ID!], $block: BlockFilter) {
                         transactions(
                             ids: $ids,
-                            block: {min: $min, max: $max}
+                            block: $block
                         ) {
                             edges {
                                 node {
@@ -757,8 +884,7 @@ transactions_query_filter_by_block_test_parallel() ->
                     Q,
                     #{
                         <<"ids">> => Present ++ Absent,
-                        <<"min">> => Start,
-                        <<"max">> => End
+                        <<"block">> => #{ <<"min">> => Start, <<"max">> => End }
                     },
                     Opts
                 ),
@@ -775,6 +901,8 @@ transactions_query_filter_by_block_test_parallel() ->
     VerifyFun(1892158, 1892159, [EarlierID, LaterID], []),
     VerifyFun(1892156, 1892157, [], [EarlierID, LaterID]),
     VerifyFun(1892157, 1892158, [EarlierID], [LaterID]),
+    VerifyFun(null, 1892158, [EarlierID], [LaterID]),
+    VerifyFun(1892159, null, [LaterID], [EarlierID]),
     VerifyFun(1892159, 1892160, [LaterID], [EarlierID]).
 
 transactions_query_filter_by_block_excludes_unknown_offsets_test_parallel() ->
@@ -846,32 +974,42 @@ transactions_query_filter_by_block_can_ignore_ranges_test_parallel() ->
     ).
 
 transactions_query_ids_preserve_arweave_tx_id_test_parallel() ->
-    {ok, _Node, Opts} = test_env_with_blocks(1892487, 1892487),
+    {ok, Node, Opts} = test_env_with_blocks(1892487, 1892487),
     ID = <<"mT7pIQx9ORnemXoIzWmKwymiZJxtOSvzxm3P44M9C1A">>,
     ?assertMatch(
         {ok, #{ <<"start">> := _ }},
         hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID, Opts)
     ),
     ?assertMatch(
-        {ok, #{
+        #{ <<"data">> := #{ <<"transactions">> := #{
             <<"count">> := <<"1">>,
             <<"edges">> := [
                 #{
-                    <<"id">> := ID,
-                    <<"node">> := _
+                    <<"node">> := #{
+                        <<"id">> := ID,
+                        <<"quantity">> := #{
+                            <<"winston">> := <<"0">>,
+                            <<"ar">> := <<"0.000000000000">>
+                        },
+                        <<"fee">> := #{
+                            <<"winston">> := <<"8549817344">>,
+                            <<"ar">> := <<"0.008549817344">>
+                        }
+                    }
                 }
             ]
-        }},
-        dev_query_arweave:query(
-            #{},
-            <<"transactions">>,
-            #{
-                <<"ids">> => [ID],
-                <<"block">> => #{
-                    <<"min">> => 1892487,
-                    <<"max">> => 1892487
+        } } },
+        dev_query_graphql:test_query(
+            Node,
+            <<"""
+                query($ids: [ID!]) {
+                    transactions(ids: $ids, block: {min: 1892487, max: 1892487}) {
+                        count
+                        edges { node { id quantity { winston ar } fee { winston ar } } }
+                    }
                 }
-            },
+            """>>,
+            #{ <<"ids">> => [ID] },
             Opts
         )
     ).

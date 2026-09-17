@@ -14,7 +14,7 @@
 info(_Opts) ->
     #{
         default => fun lookup/4,
-        excludes => [<<"set">>, <<"keys">>]
+        excludes => [<<"committers">>, <<"set">>, <<"keys">>]
     }.
 
 %% @doc Lookup a process by name.

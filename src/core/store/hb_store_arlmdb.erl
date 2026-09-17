@@ -72,7 +72,7 @@
 %%%                 "&offset-size=49">>,
 %%%         <<"from-key">> =>
 %%%             <<"~match@1.0/member&key-hash-size=39&value-hash-size=40",
-%%%                 "&offset-size=49">>
+%%%                 "&offset-size=49/set&commitment-device=ans104@1.0">>
 %%%     }
 %%% '''
 %%% The file is LMDB 1.0 (`MDB_DATA_VERSION' 3, little-endian), of pages

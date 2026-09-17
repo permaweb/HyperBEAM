@@ -27,7 +27,13 @@
 %% @doc Handle all requests aside `known` with the `location/4' resolver.
 info() ->
     #{
-        excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>],
+        excludes => [
+            <<"committers">>,
+            <<"keys">>,
+            <<"set">>,
+            <<"set-path">>,
+            <<"remove">>
+        ],
         default => fun read/4
     }.
 
