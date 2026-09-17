@@ -221,9 +221,9 @@ query(#{ <<"key">> := Key }, <<"key">>, _Args, _Opts) ->
 query(#{ <<"address">> := Address }, <<"address">>, _Args, _Opts) ->
     {ok, Address};
 query(Msg, <<"fee">>, _Args, Opts) ->
-    {ok, hb_maps:get_first([{Msg, <<"fee">>}, {Msg, <<"reward">>}], 0, Opts)};
+    transaction_amount(Msg, <<"field-reward">>, [<<"fee">>, <<"reward">>], Opts);
 query(Msg, <<"quantity">>, _Args, Opts) ->
-    {ok, hb_maps:get(<<"quantity">>, Msg, 0, Opts)};
+    transaction_amount(Msg, <<"field-quantity">>, [<<"quantity">>], Opts);
 query(Number, <<"winston">>, _Args, _Opts) ->
     {ok, hb_util:bin(Number)};
 query(Number, <<"ar">>, _Args, _Opts) ->
@@ -335,8 +335,18 @@ encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 43 -> {ok, Bin};
 encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 64 -> {ok, Bin};
 encode_anchor(Other) -> {error, <<"invalid_anchor: ", Other/binary>>}.
 
-%% @doc Find and return a value from the fields of a message (from its
-%% commitments).
+%% @doc L1 amounts use commitment fields; other messages use their own keys.
+transaction_amount(Msg, Field, Keys, Opts) ->
+    case find_field_key(<<"commitment-device">>, Msg, Opts) of
+        {ok, <<"tx@1.0">>} ->
+            case find_field_key(Field, Msg, Opts) of
+                {ok, null} -> {ok, 0};
+                Amount -> Amount
+            end;
+        _ -> {ok, hb_maps:get_first([{Msg, Key} || Key <- Keys], 0, Opts)}
+    end.
+
+%% @doc Find a field preserved by a message's commitment.
 find_field_key(Field, Msg, Opts) ->
     case hb_message:commitments(#{ Field => '_' }, Msg, Opts) of
         not_found -> {ok, null};
