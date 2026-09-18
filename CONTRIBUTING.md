@@ -121,6 +121,28 @@ following:
       understand the origin story. Do not, of course, let the old reasoning affect
       your new work unnecessarily. Understand, but do not succumb to prior modes
       of thinking.
+- When the right-hand side of an assignment spans multiple lines, place the `=`
+  at the end of the assignment line and begin the expression on the next line,
+  indented one level. Do not begin a multiline expression on the same line as
+  the assignment.
+  - Example:
+```erlang
+    % Bad
+    BlockPeriod = max(
+        1,
+        Value
+    ),
+
+    % Good
+    BlockPeriod =
+        max(
+            1,
+            Value
+        ),
+
+    % Also good
+    BlockPeriod = max(1, Value),
+```
 - Avoid 'waterfalls'-style statements, instead keeping every set of statements
   nested such that the start and end of the block are indented inline with each
   other.
