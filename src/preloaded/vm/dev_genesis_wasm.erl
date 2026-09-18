@@ -459,7 +459,7 @@ do_import(Proc, CheckpointMessage, Opts) ->
                 <<"snapshot">> => CheckpointMessage
             },
         % Save the state snapshot into the store.
-        {ok, _} ?= dev_process_cache:write(ProcID, Slot, WithSnapshot, Opts),
+        {ok, _} ?= lib_process:cache_write(ProcID, Slot, WithSnapshot, Opts),
         % Return the normalized process message.
         {ok, WithSnapshot}
     else
@@ -605,7 +605,7 @@ import_legacy_checkpoint() ->
     ?assert(byte_size(SnapshotData) > 0),
     ?assertMatch(
         {ok, Slot, _} when Slot > 0,
-        dev_process_cache:latest(ProcID, Opts)
+        lib_process:cache_latest(ProcID, Opts)
     ),
     {ok, ActualSlot} =
         hb_ao:resolve(<<ProcID/binary, "~process@1.0/compute/at-slot">>, Opts),
