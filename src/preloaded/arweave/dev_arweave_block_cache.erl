@@ -1,5 +1,7 @@
 %%% @doc A module that performs caching operations for the Arweave device, 
 %%% focused on ensuring that block metadata is queriable via pseudo-paths.
+%%% `arweave-block-store' selects the store for headers and their height/hash
+%%% aliases, defaulting to the node's `store'.
 -module(dev_arweave_block_cache).
 -export([latest/1, heights/1, read/2, write/2]).
 -export([path/2]).
@@ -30,14 +32,14 @@ heights(Opts) ->
                 <<"block">>,
                 <<"height">>
             ]),
-            Opts
+            opts(Opts)
         ),
     ?event(arweave_cache, {listed_blocks, length(AllBlocks)}),
     {ok, AllBlocks}.
 
 %% @doc Read a block from the cache.
 read(Block, Opts) ->
-    Res = hb_cache:read(path(Block, Opts), Opts),
+    Res = hb_cache:read(path(Block, Opts), opts(Opts)),
     ?event(arweave_cache, {read_block, {reference, Block}, {result, Res}}),
     Res.
 
@@ -48,10 +50,12 @@ path(Block, _Opts) when is_integer(Block) ->
         <<"block">>,
         <<"height">>,
         hb_util:bin(Block)
-    ]).
+    ]);
+path(Block, _Opts) -> Block.
 
 %% @doc Write a block to the cache and create pseudo-paths for it.
-write(Block, Opts) ->
+write(Block, RawOpts) ->
+    Opts = opts(RawOpts),
     {ok, Height} = hb_maps:find(<<"height">>, Block, Opts),
     {ok, BlockID} = hb_maps:find(<<"indep_hash">>, Block, Opts),
     {ok, BlockHash} = hb_maps:find(<<"hash">>, Block, Opts),
@@ -64,3 +68,8 @@ write(Block, Opts) ->
     hb_cache:link(MsgID, path(Height, Opts), Opts),
     ?event(arweave_cache, {wrote_block, {height, Height}, {message_id, MsgID}}),
     {ok, MsgID}.
+
+%% @doc Select the block cache's store without changing other node options.
+opts(Opts) ->
+    Opts#{ <<"store">> =>
+        hb_opts:get(arweave_block_store, hb_opts:get(store, [], Opts), Opts) }.

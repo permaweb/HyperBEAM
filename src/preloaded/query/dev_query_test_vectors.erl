@@ -257,10 +257,15 @@ block_by_height_query_test_parallel() ->
         #{
             <<"priv-wallet">> => ar_wallet:new(),
             <<"store">> => [hb_test_utils:test_store()],
-            <<"arweave-index-blocks">> => true
+            <<"arweave-block-store">> => hb_test_utils:test_store(),
+            <<"arweave-index-blocks">> => true,
+            <<"query-arweave-remote-block-ranges">> => false
         },
     Node = hb_http_server:start_node(Opts),
     get_test_blocks(Node, Opts),
+    ?assertEqual([], hb_cache:list_numbered(<<"~arweave@2.9/block/height">>, Opts)),
+    ?assertEqual([1745749, 1745750], lists:sort(hb_util:ok(
+        hb_ao:resolve(<<"~arweave@2.9/block-heights">>, Opts)))),
     Query =
         <<"""
             query {

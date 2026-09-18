@@ -3,6 +3,8 @@
 %%% If `to' is omitted, it keeps moving downward from `from' until it reaches a
 %%% block that is already indexed at the requested mode. If `to' is provided,
 %%% every block in the range is processed.
+%%% `mode=blocks' stores only block headers in `arweave-block-store' (or `store'),
+%%% irrespective of `arweave-index-blocks', and does not process pending TXs.
 %%%
 %%% Every transaction header and, in `full' mode, every bundled item an index
 %%% run caches carries its weave offset as `priv/offset'.
@@ -29,7 +31,13 @@ arweave(_Base, Request, Opts) ->
                     list_index(From, To, Opts)
             end;
         {ok, IndexMode} ->
-            case parse_range(Request, Opts) of
+            % Reading the tip must not mark it complete before a blocks run.
+            RangeOpts =
+                case IndexMode of
+                    blocks -> Opts#{ <<"arweave-index-blocks">> => false };
+                    _ -> Opts
+                end,
+            case parse_range(Request, RangeOpts) of
                 {error, unavailable} ->
                     {error, unavailable};
                 {ok, {IncludePending, From, To}} ->
@@ -38,11 +46,12 @@ arweave(_Base, Request, Opts) ->
             end;
         {error, Mode} ->
             {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary,
-                "`. Supported modes are: shallow, deep, full, list">>}
+                "`. Supported modes are: blocks, shallow, deep, full, list">>}
     end.
 
 request_mode(Request, Opts) ->
     case hb_maps:get(<<"mode">>, Request, <<"shallow">>, Opts) of
+        <<"blocks">> -> {ok, blocks};
         <<"shallow">> -> {ok, shallow};
         <<"deep">> -> {ok, deep};
         <<"full">> -> {ok, full};
@@ -115,6 +124,9 @@ latest_height(Opts) ->
         {error, Reason} -> {error, Reason}
     end.
 
+index_range(Request, _IncludePending, From, To, blocks, Opts) ->
+    fetch_blocks(Request, From, To, blocks,
+        Opts#{ <<"arweave-index-blocks">> => true });
 index_range(Request, true, From, To, IndexMode, Opts) ->
     case index_pending(Request, IndexMode, Opts) of
         {ok, PendingRes} ->
@@ -291,6 +303,8 @@ is_already_indexed({ok, Block}, Opts) ->
 is_already_indexed({error, _}, _Opts) ->
     false.
 
+process_block({ok, _Block}, _Current, _To, blocks, _Opts) ->
+    ok;
 process_block(BlockRes, Current, To, IndexMode, Opts) ->
     case BlockRes of
         {ok, Block} ->
@@ -349,6 +363,16 @@ write_block_index(Height, IndexMode, Opts) ->
         Opts
     ).
 
+is_block_indexed(Height, blocks, Opts) ->
+    case hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{ <<"path">> => <<"block">>, <<"block">> => Height,
+            <<"cache-control">> => [<<"only-if-cached">>] },
+        Opts
+    ) of
+        {ok, _} -> true;
+        _ -> false
+    end;
 is_block_indexed(Height, IndexMode, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store ->
@@ -1418,10 +1442,23 @@ list_index_test_parallel() ->
     ok.
 
 auto_stop_on_indexed_block_test_parallel() ->
-    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {_TestStore, _StoreOpts, BaseOpts} = setup_index_opts(),
+    Opts = BaseOpts#{
+        <<"arweave-block-store">> => hb_test_utils:test_store(),
+        <<"arweave-index-blocks">> => false
+    },
     IndexedBlock = 1827941,
     Higher1 = IndexedBlock + 1,
     Higher2 = IndexedBlock + 2,
+    {ok, IndexedBlock} = hb_ao:resolve(
+        <<"~copycat@1.0/arweave&from=1827941&to=1827941&mode=blocks">>, Opts),
+    {ok, IndexedBlock} = hb_ao:resolve(
+        <<"~copycat@1.0/arweave&from=1827943&mode=blocks">>, Opts),
+    ?assertEqual([IndexedBlock, Higher1, Higher2], lists:sort(hb_util:ok(
+        hb_ao:resolve(<<"~arweave@2.9/block-heights">>, Opts)))),
+    ?assertNot(has_any_indexed_tx(Higher2, Opts)),
+    ?assertNot(has_any_indexed_tx(Higher1, Opts)),
+    ?assertNot(has_any_indexed_tx(IndexedBlock, Opts)),
     {ok, IndexedBlock} =
         hb_ao:resolve(
             <<

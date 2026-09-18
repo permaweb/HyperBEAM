@@ -797,7 +797,7 @@ latest_cached_block(Opts) ->
 
 %% @doc List block heights already available in the Arweave pseudo-path cache.
 cached_block_heights(Opts) ->
-    hb_cache:list_numbered(<<"~arweave@2.9/block/height">>, Opts).
+    hb_util:ok(hb_ao:resolve(<<"~arweave@2.9/block-heights">>, Opts)).
 
 %% @doc Share the sorted block catalog between resolvers in one request.
 block_opts(Opts = #{ <<"query-block-heights">> := _ }) -> Opts;

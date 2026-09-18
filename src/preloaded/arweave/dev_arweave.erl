@@ -8,7 +8,7 @@
 -device_libraries([lib_arweave_common]).
 -export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
--export([pending/3]).
+-export([pending/3, block_heights/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
 -export([get_chunk/2]).
@@ -747,7 +747,7 @@ block(Base, Request, Opts) when is_map(Base) ->
             end
     end;
 block({id, ID}, Req, Opts) ->
-    case hb_cache:read(ID, Opts) of
+    case dev_arweave_block_cache:read(ID, Opts) of
         {ok, Block} ->
             ?event(arweave_short, {read_block_from_cache,
                 {id, {explicit, ID}}
@@ -789,6 +789,10 @@ block({height, Height}, Req, Opts) ->
                 Opts
             )
     end.
+
+%% @doc List the block heights available in the block cache.
+block_heights(_Base, _Request, Opts) ->
+    dev_arweave_block_cache:heights(Opts).
 
 %% @doc Return whether the request only permits cached values.
 only_if_cached(Req, Opts) ->
