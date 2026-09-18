@@ -565,10 +565,23 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, IndexMode, Opts) ->
 process_txs(ValidTXs, BlockStartOffset, IndexMode, Opts) ->
     Results = parallel_map(
         ValidTXs,
-        fun(TXWithData) -> process_tx(TXWithData, BlockStartOffset, IndexMode, Opts) end,
+        fun({{TX, _}, _} = TXWithData) ->
+            index_item(hb_util:encode(TX#tx.id), fun() ->
+                process_tx(TXWithData, BlockStartOffset, IndexMode, Opts)
+            end, counters(0, 0, 1))
+        end,
         Opts
     ),
     sum_counters(Results).
+
+%% @doc Contain a downstream failure at the individual ID being indexed.
+index_item(ID, Fun, OnError) ->
+    try Fun()
+    catch Class:Reason ->
+        ?event(copycat_short, {arweave_item_skipped,
+            {id, {explicit, ID}}, {class, Class}, {reason, Reason}}),
+        OnError
+    end.
 
 sum_counters(Results) ->
     lists:foldl(
@@ -618,7 +631,9 @@ index_pending(IndexMode, Opts) ->
             Results = parallel_map(
                 TXIDs,
                 fun(TXID) ->
-                    process_pending_tx(TXID, IndexMode, PendingOpts)
+                    index_item(TXID, fun() ->
+                        process_pending_tx(TXID, IndexMode, PendingOpts)
+                    end, counters(0, 0, 1))
                 end,
                 Opts
             ),
@@ -721,6 +736,8 @@ index_pending_children(TXID, TX, IndexMode, Store, Opts) ->
             end
     end.
 
+index_full_bundle_items([], _, _, _, _, _, {error, _} = Error) ->
+    Error;
 index_full_bundle_items(
         [], _ItemsBin, _ItemStartOffset, _IndexMode, _Store, _Opts, Count) ->
     {ok, Count};
@@ -734,6 +751,25 @@ index_full_bundle_items(
     Count
 ) when byte_size(ItemsBin) >= Size ->
     <<ItemBinary:Size/binary, RestBin/binary>> = ItemsBin,
+    Result = index_item(hb_util:encode(ItemID), fun() ->
+        index_full_bundle_item(ItemID, ItemBinary, ItemStartOffset, IndexMode, Store, Opts)
+    end, {error, 'item-index-failed'}),
+    NextCount =
+        case {Count, Result} of
+            {N, {ok, Added}} when is_integer(N) -> N + Added;
+            {{error, _}, _} -> Count;
+            {_, Error} -> Error
+        end,
+    index_full_bundle_items(
+        Rest, RestBin, add_data_offset(ItemStartOffset, Size),
+        IndexMode, Store, Opts, NextCount);
+index_full_bundle_items(
+        _BundleIndex, _ItemsBin, _ItemStartOffset, _IndexMode,
+        _Store, _Opts, _Count) ->
+    {error, invalid_bundle_header}.
+
+%% @doc Index one item without consuming its siblings.
+index_full_bundle_item(ItemID, ItemBinary, ItemStartOffset, IndexMode, Store, Opts) ->
     EncodedItemID = hb_util:encode(ItemID),
     ParseResult =
         case IndexMode of
@@ -749,10 +785,10 @@ index_full_bundle_items(
         EncodedItemID,
         <<"ans104@1.0">>,
         ItemStartOffset,
-        Size
+        byte_size(ItemBinary)
     ) of
         ok ->
-            ok =
+            CacheRes = index_item(EncodedItemID, fun() ->
                 case {IndexMode, ParseResult} of
                     {full, {ok, _, Parsed}} ->
                         LocalOpts = hb_store:scope(Opts, local),
@@ -765,7 +801,8 @@ index_full_bundle_items(
                             ),
                         ok;
                     _ -> ok
-                end,
+                end
+            end, error),
             DescendantRes =
                 case {IndexMode =/= shallow, ParseResult} of
                     {true, {ok, HeaderSize, ParsedItem}} ->
@@ -782,31 +819,18 @@ index_full_bundle_items(
                                 {ok, 0}
                         end;
                     {true, _} ->
-                        {ok, 0};
+                        {error, 'invalid-item'};
                     _ ->
                         {ok, 0}
                 end,
-            case DescendantRes of
-                {ok, DescendantCount} ->
-                    index_full_bundle_items(
-                        Rest,
-                        RestBin,
-                        add_data_offset(ItemStartOffset, Size),
-                        IndexMode,
-                        Store,
-                        Opts,
-                        Count + 1 + DescendantCount
-                    );
-                {error, _} = Error ->
-                    Error
+            case {CacheRes, DescendantRes} of
+                {ok, {ok, DescendantCount}} -> {ok, 1 + DescendantCount};
+                {_, {error, _} = Error} -> Error;
+                _ -> {error, 'item-index-failed'}
             end;
         WriteError ->
             {error, {write_offset_failed, WriteError}}
-    end;
-index_full_bundle_items(
-        _BundleIndex, _ItemsBin, _ItemStartOffset, _IndexMode,
-        _Store, _Opts, _Count) ->
-    {error, invalid_bundle_header}.
+    end.
 
 add_data_offset(#{ <<"relative">> := TXID, <<"offset">> := Offset }, Add) ->
     #{ <<"relative">> => TXID, <<"offset">> => Offset + Add };
@@ -918,7 +942,7 @@ write_tx_header(TX, Offset, Opts) ->
                     {reason, Reason}
                 }
             ),
-            ok
+            {error, {Class, Reason}}
     end.
 
 %% @doc A message carrying its weave offset privately, for `hb_cache' to
@@ -1610,6 +1634,20 @@ highest_contiguous_indexed_block(Current, Max, LastIndexed, Opts) ->
     end.
 
 pending_range_indexes_bundle_children_test() ->
+    pending_bundle_children([]).
+
+pending_range_isolates_bad_child_test() ->
+    Bad = (ar_bundles:sign_item(#tx{data = <<"original">>}, ar_wallet:new()))#tx{
+        data = <<"modified">>
+    },
+    pending_bundle_children([Bad]),
+    Good = ar_bundles:sign_item(#tx{data = <<"nested-child">>}, ar_wallet:new()),
+    Nested = ar_bundles:sign_item(#tx{data = [Bad, Good]}, ar_wallet:new()),
+    Opts = pending_bundle_children([Nested]),
+    ?assertMatch({ok, _}, hb_cache:read(hb_util:encode(Good#tx.id),
+        hb_store:scope(Opts, local))).
+
+pending_bundle_children(Rejected) ->
     {_TestStore, StoreOpts, DefaultOpts} = setup_index_opts(),
     Wallet = ar_wallet:new(),
     Child = ar_bundles:sign_item(
@@ -1622,7 +1660,7 @@ pending_range_indexes_bundle_children_test() ->
     Binary = <<"pending-binary-child">>,
     BinaryChild = hb_message:convert(Binary, <<"ans104@1.0">>, DefaultOpts),
     {undefined, BundleData} =
-        ar_bundles:serialize_bundle(list, [Child, BinaryChild], false),
+        ar_bundles:serialize_bundle(list, [Child] ++ Rejected ++ [BinaryChild], false),
     RootTX =
         ar_tx:sign(
             ar_tx:generate_chunk_tree(
@@ -1676,13 +1714,17 @@ pending_range_indexes_bundle_children_test() ->
             <<"routes">> => Routes,
             <<"arweave-index-blocks">> => false,
             <<"arweave-index-store">> => ReadStore,
-            <<"pending-index">> => [Pending]
+            <<"pending-index">> => [Pending],
+            <<"paranoid-verify">> => [cache_write]
         },
     try
-        {ok, #{ items_count := 2, total_txs := 1 }} =
+        ShallowCount = 2 + length(Rejected),
+        {ok, #{ items_count := ShallowCount, total_txs := 1 }} =
             hb_ao:resolve(
                 <<"~copycat@1.0/arweave&from=pending&to=pending">>, Opts),
-        {ok, #{ items_count := 2, total_txs := 1 }} =
+        FullCount = case Rejected of [] -> 2; _ -> 0 end,
+        Skipped = length(Rejected),
+        {ok, #{ items_count := FullCount, total_txs := 1, skipped_count := Skipped }} =
             hb_ao:resolve(
                 <<"~copycat@1.0/arweave&mode=full&from=pending&to=pending">>,
                 Opts),
@@ -1718,7 +1760,8 @@ pending_range_indexes_bundle_children_test() ->
                 #{ <<"path">> => <<"locate">> },
                 (hb_store:scope(Opts, local))#{ <<"match-index">> => [Pending] }
             )
-        )
+        ),
+        Opts
     after
         hb_mock_server:stop(MockHandle)
     end.
