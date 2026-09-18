@@ -116,7 +116,7 @@ latest_height(Opts) ->
     end.
 
 index_range(Request, true, From, To, IndexMode, Opts) ->
-    case index_pending(IndexMode, Opts) of
+    case index_pending(Request, IndexMode, Opts) of
         {ok, PendingRes} ->
             case block_range_empty(From, To) of
                 true ->
@@ -624,12 +624,59 @@ index_full_bundle_bytes(BundleData, BundleStartOffset, IndexMode, Store, Opts) -
     end.
 
 %% @doc Index unconfirmed transactions from the Arweave mempool.
-index_pending(IndexMode, Opts) ->
+index_pending(Request, IndexMode, Opts) ->
+    case hb_opts:get(pending_index, [], Opts) of
+        [] -> index_pending(Request, IndexMode, [], Opts);
+        Store ->
+            Name = {copycat_pending, Store},
+            Base = #{
+                <<"device">> => #{
+                    info => fun() -> #{ grouper => fun() -> Name end } end,
+                    index =>
+                        fun(_, #{ <<"request">> := Req, <<"mode">> := Mode,
+                                <<"options">> := IndexOpts }) ->
+                            index_pending(Req, Mode, Store, IndexOpts)
+                        end
+                }
+            },
+            Worker =
+                hb_name:singleton(
+                    Name,
+                    fun() ->
+                        hb_persistent:default_worker(Name, Base, #{
+                            <<"static-worker">> => true,
+                            <<"resolve-mode">> => raw
+                        })
+                    end
+                ),
+            % Worker controls must not replace the caller's indexing options.
+            Work = #{
+                <<"path">> => <<"index">>,
+                <<"request">> => Request,
+                <<"mode">> => IndexMode,
+                <<"options">> => Opts
+            },
+            Ref = erlang:monitor(process, Worker),
+            Worker ! {resolve, self(), Name, Work, #{}},
+            try hb_persistent:default_await(Worker, Name, Base, Work, #{})
+            after erlang:demonitor(Ref, [flush])
+            end
+    end.
+
+%% @doc Reuse completed parents only while their pending index is retained.
+index_pending(Request, IndexMode, Store, Opts) ->
     case hb_ao:resolve(<<?ARWEAVE_DEVICE/binary, "/pending">>, Opts) of
         {ok, TXIDs} when is_list(TXIDs) ->
-            PendingOpts = pending_opts(Opts),
+            Indexed = pending_index(Request, IndexMode, TXIDs, Store, Opts),
+            Remaining = [ID || ID <- TXIDs, not maps:get(ID, Indexed)],
+            ok = write_pending_index(maps:from_keys(Remaining, false), Store, Opts),
+            PendingOpts =
+                case Store of
+                    [] -> Opts;
+                    _ -> Opts#{ <<"match-index">> => Store }
+                end,
             Results = parallel_map(
-                TXIDs,
+                Remaining,
                 fun(TXID) ->
                     index_item(TXID, fun() ->
                         process_pending_tx(TXID, IndexMode, PendingOpts)
@@ -637,22 +684,63 @@ index_pending(IndexMode, Opts) ->
                 end,
                 Opts
             ),
+            Completed = maps:from_list([
+                {ID, true}
+            ||
+                {ID, #{ skipped_count := 0 }} <- lists:zip(Remaining, Results)
+            ]),
+            ok = write_pending_index(Completed, Store, Opts),
             {ok, (sum_counters(Results))#{ total_txs => length(TXIDs) }};
         Error ->
             Error
     end.
 
-%% @doc The options the mempool is indexed with: the node's `pending-index'
-%% store -- emptied ahead of each index run, so it must be a store of the
-%% mempool's own -- as the match index of every message the run caches. A
-%% node without one indexes the mempool with everything else.
-pending_opts(Opts) ->
-    case hb_opts:get(pending_index, [], Opts) of
-        [] -> Opts;
-        Store ->
+%% @doc Completion markers belong to the dedicated pending index, not the message
+%% stores. Rebuild when a parent leaves, to remove its children's predicates
+%% too. A node without a pending index cannot reuse these markers.
+pending_index(_Request, _Mode, TXIDs, [], _Opts) ->
+    maps:from_keys(TXIDs, false);
+pending_index(Request, Mode, TXIDs, Store, Opts) ->
+    Current = maps:from_keys(TXIDs, false),
+    ModeBin = atom_to_binary(Mode),
+    maybe
+        {ok, ModeBin} ?=
+            hb_store:read(Store, <<"~copycat@1.0/pending-mode">>, Opts),
+        false ?= hb_util:bool(hb_maps:get(<<"reindex">>, Request, false, Opts)),
+        {ok, Previous} ?= hb_store:list(Store, <<"~copycat@1.0/pending">>, Opts),
+        0 ?= map_size(maps:without(TXIDs, maps:from_keys(Previous, false))),
+        maps:merge(
+            Current,
+            maps:from_list([
+                {ID,
+                    hb_store:read(Store, <<"~copycat@1.0/pending/", ID/binary>>, Opts)
+                        =:= {ok, <<"1">>}}
+            ||
+                ID <- Previous
+            ])
+        )
+    else
+        _ ->
             ok = hb_store:reset(Store),
-            Opts#{ <<"match-index">> => Store }
+            ok = hb_store:group(Store, <<"~copycat@1.0/pending">>, Opts),
+            ok = hb_store:write(
+                Store, #{ <<"~copycat@1.0/pending-mode">> => ModeBin }, Opts),
+            Current
     end.
+
+%% @doc Record attempted parents before writes and completions after them.
+write_pending_index(_Indexed, [], _Opts) -> ok;
+write_pending_index(Indexed, Store, Opts) ->
+    hb_store:write(
+        Store,
+        maps:from_list([
+            {<<"~copycat@1.0/pending/", ID/binary>>,
+                case Complete of true -> <<"1">>; false -> <<"0">> end}
+        ||
+            {ID, Complete} <- maps:to_list(Indexed)
+        ]),
+        Opts
+    ).
 
 process_pending_tx(TXID, IndexMode, Opts) ->
     case resolve_pending_tx_header(TXID, Opts) of
@@ -1636,6 +1724,9 @@ highest_contiguous_indexed_block(Current, Max, LastIndexed, Opts) ->
 pending_range_indexes_bundle_children_test() ->
     pending_bundle_children([]).
 
+pending_lmdb_reuse_test() ->
+    pending_bundle_children([], hb_store_lmdb).
+
 pending_range_isolates_bad_child_test() ->
     Bad = (ar_bundles:sign_item(#tx{data = <<"original">>}, ar_wallet:new()))#tx{
         data = <<"modified">>
@@ -1648,6 +1739,9 @@ pending_range_isolates_bad_child_test() ->
         hb_store:scope(Opts, local))).
 
 pending_bundle_children(Rejected) ->
+    pending_bundle_children(Rejected, hb_store_volatile).
+
+pending_bundle_children(Rejected, StoreModule) ->
     {_TestStore, StoreOpts, DefaultOpts} = setup_index_opts(),
     Wallet = ar_wallet:new(),
     Child = ar_bundles:sign_item(
@@ -1678,9 +1772,15 @@ pending_bundle_children(Rejected) ->
         ),
     TXID = hb_util:encode(RootTX#tx.id),
     ChildID = hb_util:encode(ar_bundles:id(Child, signed)),
+    Extra = ar_tx:sign(#tx{ format = 2 }, Wallet),
+    ExtraID = hb_util:encode(Extra#tx.id),
     DataPath =
         ar_merkle:generate_path(RootTX#tx.data_root, 0, RootTX#tx.data_tree),
     HeaderJSON = ar_tx:tx_to_json_struct(RootTX#tx{ data = <<>> }),
+    Headers = #{
+        TXID => hb_json:encode(HeaderJSON),
+        ExtraID => hb_json:encode(ar_tx:tx_to_json_struct(Extra))
+    },
     ChunkBody =
         hb_json:encode(
             #{
@@ -1688,11 +1788,36 @@ pending_bundle_children(Rejected) ->
                 <<"data_path">> => hb_util:encode(DataPath)
             }
         ),
+    Control = hb_test_utils:test_store(hb_store_volatile),
+    ok = hb_store:write(
+        Control,
+        #{
+            <<"pending">> => hb_json:encode([TXID]),
+            <<"chunk-status">> => <<"200">>
+        },
+        #{}
+    ),
+    Parent = self(),
     {ok, MockNode, MockHandle} = hb_mock_server:start([
         {"/block/current", block_current, {200, <<"{\"height\": 10}">>}},
-        {"/tx/pending", pending, {200, hb_json:encode([TXID])}},
-        {"/unconfirmed_tx/:id", pending_tx, {200, hb_json:encode(HeaderJSON)}},
-        {"/unconfirmed_chunk/:id/:offset", pending_chunk, {200, ChunkBody}}
+        {"/tx/pending", pending, fun(_) ->
+            case hb_store:read(Control, <<"hold">>, #{}) of
+                {ok, <<"true">>} ->
+                    Parent ! {pending_request, self()},
+                    receive continue -> ok after 1000 -> error(timeout) end;
+                _ -> ok
+            end,
+            {ok, IDs} = hb_store:read(Control, <<"pending">>, #{}),
+            {200, IDs}
+        end},
+        {"/unconfirmed_tx/:id", pending_tx, fun(Req) ->
+            #{ id := ID } = maps:get(<<"bindings">>, Req),
+            {200, maps:get(ID, Headers)}
+        end},
+        {"/unconfirmed_chunk/:id/:offset", pending_chunk, fun(_) ->
+            {ok, Status} = hb_store:read(Control, <<"chunk-status">>, #{}),
+            {binary_to_integer(Status), ChunkBody}
+        end}
     ]),
     Routes = [
         #{
@@ -1708,9 +1833,24 @@ pending_bundle_children(Rejected) ->
         }
     ],
     ReadStore = StoreOpts#{ <<"routes">> => Routes },
-    Pending = hb_test_utils:test_store(hb_store_volatile),
+    Pending = hb_test_utils:test_store(StoreModule),
+    RemoteOpts = #{
+        <<"store">> => [hb_test_utils:test_store(hb_store_volatile)],
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"port">> => 0
+    },
+    RootMsg =
+        hb_message:convert(
+            RootTX, <<"structured@1.0">>, <<"tx@1.0">>, DefaultOpts),
+    {ok, _} = hb_cache:write(RootMsg, RemoteOpts),
+    Remote = #{
+        <<"store-module">> => hb_store_remote_node,
+        <<"node">> => hb_http_server:start_node(RemoteOpts),
+        <<"read-only">> => true
+    },
     Opts =
         DefaultOpts#{
+            <<"store">> => [Remote | hb_opts:get(store, [], DefaultOpts)],
             <<"routes">> => Routes,
             <<"arweave-index-blocks">> => false,
             <<"arweave-index-store">> => ReadStore,
@@ -1718,6 +1858,7 @@ pending_bundle_children(Rejected) ->
             <<"paranoid-verify">> => [cache_write]
         },
     try
+        ?assertMatch({ok, _}, hb_cache:read(TXID, #{ <<"store">> => [Remote] })),
         ShallowCount = 2 + length(Rejected),
         {ok, #{ items_count := ShallowCount, total_txs := 1 }} =
             hb_ao:resolve(
@@ -1761,10 +1902,204 @@ pending_bundle_children(Rejected) ->
                 (hb_store:scope(Opts, local))#{ <<"match-index">> => [Pending] }
             )
         ),
+        case Rejected of
+            [] ->
+                pending_reuse_checks(
+                    TXID, ExtraID, ChildID, Control, MockHandle, Opts);
+            _ ->
+                ?assertMatch(
+                    {ok, #{ skipped_count := Skipped }},
+                    hb_ao:resolve(
+                        <<"~copycat@1.0/arweave&mode=full&from=pending&to=pending">>,
+                        Opts
+                    )
+                )
+        end,
         Opts
     after
-        hb_mock_server:stop(MockHandle)
+        hb_mock_server:stop(MockHandle),
+        cowboy:stop_listener(
+            hb_util:human_id(
+                ar_wallet:to_address(maps:get(<<"priv-wallet">>, RemoteOpts))
+            )
+        ),
+        case hb_name:lookup({copycat_pending, [Pending]}) of
+            undefined -> ok;
+            Worker -> exit(Worker, shutdown)
+        end
     end.
+
+%% @doc Completion is independent of readable messages; retained predicates
+%% survive reuse, while failures, departures and resets cannot hide work.
+pending_reuse_checks(TXID, ExtraID, ChildID, Control, Mock, Opts) ->
+    Path = <<"~copycat@1.0/arweave&mode=full&from=pending&to=pending">>,
+    Run = fun() -> hb_ao:resolve(Path, Opts) end,
+    Counts =
+        fun() ->
+            [
+                length(hb_mock_server:get_requests(Mock, Tag))
+            ||
+                Tag <- [pending_tx, pending_chunk]
+            ]
+        end,
+    SetPending =
+        fun(IDs) ->
+            hb_store:write(
+                Control, #{ <<"pending">> => hb_json:encode(IDs) }, #{})
+        end,
+    Pending = hb_opts:get(pending_index, [], Opts),
+    ?assertEqual(
+        {ok, <<"1">>},
+        hb_store:read(Pending, <<"~copycat@1.0/pending/", TXID/binary>>, Opts)
+    ),
+    Locate =
+        fun() ->
+            hb_ao:raw(
+                <<"match@1.0">>,
+                #{ <<"content-type">> => <<"text/plain">> },
+                #{ <<"path">> => <<"locate">> },
+                Opts#{ <<"match-index">> => Pending }
+            )
+        end,
+    % A warm pass makes no header or chunk requests and retains the rows.
+    Before = Counts(),
+    Monitors = process_info(self(), monitors),
+    lists:foreach(
+        fun(_) ->
+            ?assertMatch({ok, #{ items_count := 0, skipped_count := 0 }}, Run()),
+            ?assertEqual(Before, Counts()),
+            ?assertMatch({ok, [#{ <<"id">> := ChildID }]}, Locate())
+        end,
+        lists:seq(1, 3)
+    ),
+    ?assertEqual(Monitors, process_info(self(), monitors)),
+    % Only an added parent is fetched. Removing one rebuilds the pending
+    % index, leaving the confirmed index untouched.
+    ok = SetPending([TXID, ExtraID]),
+    ?assertMatch({ok, #{ total_txs := 2, skipped_count := 0 }}, Run()),
+    [Headers, Chunks] = Before,
+    ?assertEqual([Headers + 1, Chunks], Counts()),
+    Confirmed = hb_test_utils:test_store(hb_store_volatile),
+    ok = hb_store:write(Confirmed, #{ <<"sentinel">> => <<"retained">> }, #{}),
+    ok = SetPending([ExtraID]),
+    ?assertMatch(
+        {ok, #{ total_txs := 1 }},
+        hb_ao:resolve(Path, Opts#{ <<"match-index">> => [Confirmed] })
+    ),
+    ?assertEqual({ok, []}, Locate()),
+    ?assertEqual(
+        {ok, [ExtraID]}, hb_store:list(Pending, <<"~copycat@1.0/pending">>, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"retained">>},
+        hb_store:read(Confirmed, <<"sentinel">>, #{})
+    ),
+    % Failed downloads are retried without fetching completed siblings.
+    ok = SetPending([TXID, ExtraID]),
+    ok = hb_store:write(Control, #{ <<"chunk-status">> => <<"500">> }, #{}),
+    ?assertMatch({ok, #{ skipped_count := 1 }}, Run()),
+    ?assertEqual(
+        {ok, <<"0">>},
+        hb_store:read(Pending, <<"~copycat@1.0/pending/", TXID/binary>>, Opts)
+    ),
+    ok = hb_store:write(Control, #{ <<"chunk-status">> => <<"200">> }, #{}),
+    ?assertMatch({ok, #{ items_count := 2, skipped_count := 0 }}, Run()),
+    ?assertMatch({ok, [#{ <<"id">> := ChildID }]}, Locate()),
+    % An explicit rebuild or an emptied store must not reuse completions.
+    ?assertMatch(
+        {ok, #{ items_count := 2 }},
+        hb_ao:resolve(<<Path/binary, "&reindex=true">>, Opts)
+    ),
+    ok = hb_store:reset(Pending),
+    [BeforeHeaders, BeforeChunks] = Counts(),
+    Results = hb_pmap:parallel_map(lists:seq(1, 4), fun(_) -> Run() end, 4),
+    ?assertEqual(4, length(Results)),
+    lists:foreach(
+        fun(Result) ->
+            ?assertMatch({ok, #{ total_txs := 2, skipped_count := 0 }}, Result)
+        end,
+        Results
+    ),
+    ?assertEqual([BeforeHeaders + 3, BeforeChunks + 1], Counts()),
+    ?assertMatch({ok, [#{ <<"id">> := ChildID }]}, Locate()),
+    % A later caller supplies its own stores, not the worker's first options.
+    Fresh = #{ <<"store">> => [hb_test_utils:test_store(hb_store_volatile)] },
+    ?assertEqual({error, not_found}, hb_cache:read(ChildID, Fresh)),
+    ?assertMatch(
+        {ok, #{ items_count := 2 }},
+        hb_ao:resolve(<<Path/binary, "&reindex=true">>, maps:merge(Opts, Fresh))
+    ),
+    ?assertMatch({ok, _}, hb_cache:read(ChildID, Fresh)),
+    % Different modes share the same worker, including forced rebuilds.
+    ok = hb_store:write(Control, #{ <<"hold">> => <<"true">> }, #{}),
+    Force =
+        fun(Mode) ->
+            spawn_monitor(
+                fun() ->
+                    ?assertMatch(
+                        {ok, #{ items_count := 2, skipped_count := 0 }},
+                        hb_ao:resolve(
+                            <<
+                                "~copycat@1.0/arweave&from=pending&to=pending&"
+                                "reindex=true&mode=", Mode/binary
+                            >>,
+                            Opts
+                        )
+                    )
+                end
+            )
+        end,
+    First = Force(<<"full">>),
+    FirstHTTP =
+        receive {pending_request, P1} -> P1 after 1000 -> error(timeout) end,
+    Second = Force(<<"shallow">>),
+    Worker = hb_name:lookup({copycat_pending, Pending}),
+    ?assert(
+        hb_util:wait_until(
+            fun() ->
+                {messages, Messages} = process_info(Worker, messages),
+                lists:any(
+                    fun({resolve, _, _, _, _}) -> true; (_) -> false end,
+                    Messages
+                )
+            end,
+            500
+        )
+    ),
+    receive {pending_request, _} -> ?assert(false) after 0 -> ok end,
+    FirstHTTP ! continue,
+    SecondHTTP =
+        receive {pending_request, P2} -> P2 after 1000 -> error(timeout) end,
+    SecondHTTP ! continue,
+    lists:foreach(
+        fun({PID, Ref}) ->
+            receive
+                {'DOWN', Ref, process, PID, Reason} -> ?assertEqual(normal, Reason)
+            after 1000 ->
+                ?assert(false)
+            end
+        end,
+        [First, Second]
+    ),
+    ok = hb_store:write(Control, #{ <<"hold">> => <<"false">> }, #{}),
+    ?assertEqual({ok, []}, Locate()),
+    ?assertMatch({ok, #{ items_count := 2, skipped_count := 0 }}, Run()),
+    ?assertMatch({ok, [#{ <<"id">> := ChildID }]}, Locate()),
+    % Without a dedicated index there are no completion markers to trust.
+    Untracked = maps:remove(<<"pending-index">>, Opts),
+    ?assertMatch({ok, #{ items_count := 2 }}, hb_ao:resolve(Path, Untracked)),
+    ?assertMatch({ok, #{ items_count := 2 }}, hb_ao:resolve(Path, Untracked)),
+    % An empty pool clears the rows and retains only the mode marker.
+    ok = SetPending([]),
+    ?assertMatch({ok, #{ total_txs := 0, items_count := 0 }}, Run()),
+    ?assertEqual({ok, []}, Locate()),
+    ?assertEqual(
+        {ok, <<"full">>}, hb_store:read(Pending, <<"~copycat@1.0/pending-mode">>, Opts)
+    ),
+    ?assertEqual(
+        {ok, []}, hb_store:list(Pending, <<"~copycat@1.0/pending">>, Opts)
+    ),
+    ?assertMatch({ok, #{ total_txs := 0, items_count := 0 }}, Run()).
 
 assert_indexed_range(From, To, _Opts) when From < To ->
     ok;
