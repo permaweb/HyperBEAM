@@ -277,10 +277,18 @@ longest_prefix_match(Key, EdgeLabels, N) ->
     longest_prefix_match({<<>>, 0}, Key, EdgeLabels, N).
 longest_prefix_match(Best, _Key, [], _N) -> Best;
 longest_prefix_match({BestLabel, BestSize}, Key, [EdgeLabel | EdgeLabels], N) ->
-    case bitwise_lcp(Key, EdgeLabel, N) of
-        Size when Size > BestSize ->
-            longest_prefix_match({EdgeLabel, Size}, Key, EdgeLabels, N);
-        _ ->
+    Size = bitwise_lcp(Key, EdgeLabel, N),
+    <<Prefix:Size/bitstring, _/bitstring>> = EdgeLabel,
+    % Split before a metadata key, keeping a shared edge for its descendants.
+    MatchSize =
+        case lists:member(Prefix, ?RESERVED_KEYS) of
+            true -> Size - N;
+            false -> Size
+        end,
+    case MatchSize > BestSize of
+        true ->
+            longest_prefix_match({EdgeLabel, MatchSize}, Key, EdgeLabels, N);
+        false ->
             longest_prefix_match({BestLabel, BestSize}, Key, EdgeLabels, N)
     end.
 
@@ -453,6 +461,41 @@ basic_retrievability_test() ->
     ?assertEqual(not_found, hb_ao:get(<<"cardan">>, Trie, Opts)),
     ?assertEqual(not_found, hb_ao:get(<<"cardana">>, Trie, Opts)),
     ?assertEqual(not_found, hb_ao:get(<<"carm">>, Trie, Opts)).
+
+device_prefix_test() ->
+    Opts = test_opts(),
+    ?assertEqual(
+        {ok, <<"1">>},
+        hb_ao:resolve(
+            <<"/~trie@1.0/set&a=1/set&deviceaa=2/set&bb=3/a">>,
+            Opts
+        )
+    ),
+    KeyVals = [
+        {<<"a">>, 1}, {<<"deviceaa">>, 2}, {<<"devicebb">>, 3},
+        {<<"d">>, 4}, {<<"de">>, 5}, {<<"dev">>, 6},
+        {<<"deviceaab">>, 7}, {<<"bb">>, 8}
+    ],
+    lists:foreach(
+        fun(Entries) ->
+            Trie = lists:foldl(
+                fun({Key, Value}, Acc) -> hb_ao:set(Acc, #{Key => Value}, Opts) end,
+                #{ <<"device">> => <<"trie@1.0">> },
+                Entries
+            ),
+            ?assertEqual(<<"trie@1.0">>, hb_maps:get(<<"device">>, Trie, Opts)),
+            {ok, ID} = hb_cache:write(Trie, Opts),
+            {ok, Loaded} = hb_cache:read(ID, Opts),
+            lists:foreach(
+                fun({Key, Value}) ->
+                    ?assertEqual(Value, hb_ao:get(Key, Loaded, Opts))
+                end,
+                Entries
+            ),
+            ?assert(verify_nodes(Loaded, Opts))
+        end,
+        [KeyVals, lists:reverse(KeyVals)]
+    ).
 
 basic_key_collection_test() ->
     Opts = test_opts(),
