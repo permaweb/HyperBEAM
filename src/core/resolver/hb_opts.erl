@@ -496,7 +496,7 @@ raw_default_message() ->
                     <<"remote-index">> => false
                 }
             ],
-        <<"match-index">> => [?DEFAULT_PRIMARY_STORE],
+        <<"match-index">> => false,
         <<"priv-store">> =>
             [
                 #{
