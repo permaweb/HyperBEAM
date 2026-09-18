@@ -925,8 +925,8 @@ write_tx_header(TX, Offset, Opts) ->
 %% index it by: an item in a pending bundle is pending itself.
 with_offset(Msg, #{ <<"relative">> := _ }, Opts) ->
     with_offset(Msg, infinity, Opts);
-with_offset(Bin, _Offset, _Opts) when is_binary(Bin) ->
-    Bin;
+with_offset(Msg, _Offset, _Opts) when is_binary(Msg); is_list(Msg) ->
+    Msg;
 with_offset(Msg, Offset, Opts) ->
     hb_private:set(Msg, <<"offset">>, Offset, Opts).
 
@@ -1728,6 +1728,14 @@ assert_indexed_range(From, To, _Opts) when From < To ->
 assert_indexed_range(From, To, Opts) ->
     ?assert(has_any_indexed_tx(From, Opts)),
     assert_indexed_range(From - 1, To, Opts).
+
+list_item_full_mode_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {ok, 2003013} = hb_ao:resolve(
+        <<"~copycat@1.0/arweave&from=2003013&to=2003013&mode=full">>,
+        Opts
+    ),
+    ?assert(is_block_indexed(2003013, full, Opts)).
 
 small_block_full_mode_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
