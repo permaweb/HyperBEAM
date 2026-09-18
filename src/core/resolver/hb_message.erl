@@ -566,7 +566,7 @@ verify(Msg, Spec, Opts) ->
         hb_ao:raw(<<"message@1.0">>, <<"verify">>, Msg, Spec, Opts),
     Res.
 
-%% @doc Verify a message recursively, including all nested messages.
+%% @doc Verify a message and its loaded children, without traversing links.
 paranoid_verify(Msg, Opts) ->
     paranoid_verify(default, Msg, Opts).
 paranoid_verify(Topic, Msg, Opts) ->
@@ -615,21 +615,14 @@ do_paranoid_verify(Topic, Msg, Opts) ->
     end.
 do_paranoid_verify(Topic, Path, {_Status, Msg}, Opts) ->
     do_paranoid_verify(Topic, Path, Msg, Opts);
-do_paranoid_verify(Topic, Path, Link, Opts) when ?IS_LINK(Link) ->
-    case hb_opts:get(paranoid_verify_links, true, Opts) of
-        false -> true;
-        true ->
-            do_paranoid_verify(Topic, Path, hb_cache:ensure_loaded(Link, Opts), Opts)
-    end;
 do_paranoid_verify(Topic, Path, ListMsg, Opts) when is_list(ListMsg) ->
     do_paranoid_verify(Topic, Path, hb_util:list_to_numbered_message(ListMsg), Opts);
 do_paranoid_verify(Topic, Path, Msg, Opts) when is_map(Msg) ->
-    hb_maps:map(
+    maps:map(
         fun(Key, Value) ->
             do_paranoid_verify(Topic, Path ++ [Key], Value, Opts)
         end,
-        uncommitted(hb_private:reset(Msg), Opts),
-        Opts
+        uncommitted(hb_private:reset(Msg), Opts)
     ),
     try true = verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, Opts)
     catch

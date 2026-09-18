@@ -1124,7 +1124,35 @@ paranoid_message_verification_test(RawOpts) ->
     Opts = paranoid_opts(RawOpts),
     Base = hb_message:normalize_commitments(#{ <<"a">> => 1 }, Opts),
     ?assert(hb_message:paranoid_verify(Base, Opts)),
-    ?assertThrow(_, hb_message:paranoid_verify(Base#{ <<"a">> => 2 }, Opts)).
+    ?assertThrow(_, hb_message:paranoid_verify(Base#{ <<"a">> => 2 }, Opts)),
+    % Verify loaded children and link commitments without loading link targets.
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Link = {link, ID, #{ <<"type">> => <<"link">> }},
+    ?assertEqual({error, not_found}, hb_cache:read(ID, Opts)),
+    ?assert(hb_message:paranoid_verify(Link, Opts)),
+    Linked = hb_message:normalize_commitments(
+        #{ <<"child">> => Base, <<"reference">> => Link },
+        Opts
+    ),
+    ?assert(hb_message:paranoid_verify(Linked, Opts)),
+    ?assert(hb_message:paranoid_verify({ok, Linked}, Opts)),
+    ?assert(hb_message:paranoid_verify([Link, Linked], Opts)),
+    ?assertThrow(
+        {paranoid_verification_failure, default, <<"child">>, _, _},
+        hb_message:paranoid_verify(
+            Linked#{ <<"child">> => Base#{ <<"a">> => 2 } },
+            Opts
+        )
+    ),
+    ?assertThrow(
+        {paranoid_verification_failure, default, <<>>, _, _},
+        hb_message:paranoid_verify(Linked#{ <<"reference">> => <<"changed">> }, Opts)
+    ),
+    ?assertMatch(
+        {ok, _},
+        hb_cache:write(Linked, Opts#{ <<"paranoid-verify">> => [cache_write] })
+    ),
+    ?assertEqual({error, not_found}, hb_cache:read(ID, Opts)).
 
 paranoid_input_verification_test(RawOpts) ->
     Opts = paranoid_opts(RawOpts),
