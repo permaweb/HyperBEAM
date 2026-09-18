@@ -469,12 +469,61 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     wasm_val_vec_new(&prepared_args, input_args->size - 1, prepared_data);
     DRV_DEBUG("Prepared %zu arguments for function call", prepared_args.size);
 
-    uint64_t argc = prepared_args.size;
-    uint64_t* argv = malloc(sizeof(uint64_t) * argc);
+    if(prepared_args.size != param_types->size) {
+        DRV_DEBUG("Prepared argument count does not match function type");
+        free(prepared_args.data);
+        return -1;
+    }
+
+    uint32_t argc = 0;
+    for (size_t i = 0; i < prepared_args.size; ++i) {
+        wasm_valkind_t kind = wasm_valtype_kind(param_types->data[i]);
+        argc += (kind == WASM_I64 || kind == WASM_F64) ? 2 : 1;
+    }
+    uint32_t* argv = malloc(sizeof(uint32_t) * argc);
+    if(!argv) {
+        DRV_DEBUG("Failed to allocate WAMR argv");
+        free(prepared_args.data);
+        return -1;
+    }
     
-    // Convert prepared arguments to an array of 64-bit integers
-    for (uint64_t i = 0; i < argc; ++i) {
-        argv[i] = prepared_args.data[i].of.i64;
+    // Convert prepared arguments to the 32-bit cell array expected by WAMR
+    uint32_t arg_i = 0;
+    for (size_t i = 0; i < prepared_args.size; ++i) {
+        wasm_valkind_t kind = wasm_valtype_kind(param_types->data[i]);
+        switch(kind) {
+            case WASM_I32:
+                argv[arg_i++] = (uint32_t) prepared_args.data[i].of.i32;
+                break;
+            case WASM_F32:
+                memcpy(
+                    &argv[arg_i++],
+                    &prepared_args.data[i].of.f32,
+                    sizeof(uint32_t)
+                );
+                break;
+            case WASM_I64:
+                memcpy(
+                    &argv[arg_i],
+                    &prepared_args.data[i].of.i64,
+                    sizeof(uint64_t)
+                );
+                arg_i += 2;
+                break;
+            case WASM_F64:
+                memcpy(
+                    &argv[arg_i],
+                    &prepared_args.data[i].of.f64,
+                    sizeof(uint64_t)
+                );
+                arg_i += 2;
+                break;
+            default:
+                DRV_DEBUG("Unsupported indirect argument type: %d", kind);
+                free(argv);
+                free(prepared_args.data);
+                return -1;
+        }
     }
 
 
@@ -491,8 +540,10 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
 
     // Attempt to call the function and check for any exceptions
     if (!wasm_runtime_call_indirect(proc->exec_env, function_index, argc, argv)) {
-        if (wasm_runtime_get_exception(proc->exec_env)) {
-            DRV_DEBUG("%s", wasm_runtime_get_exception(proc->exec_env));
+        wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(proc->exec_env);
+        const char* exception = wasm_runtime_get_exception(module_inst);
+        if (exception) {
+            DRV_DEBUG("%s", exception);
         }
         DRV_DEBUG("WASM function call failed");
         result = -1;
@@ -568,7 +619,8 @@ int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_v
     if (wasm_runtime_call_wasm_a(proc->exec_env, func->func_comm_rt, result_types->size, results, param_types->size, params)) {
         DRV_DEBUG("=   Function call successful");
     } else {
-        const char* exception = wasm_runtime_get_exception(proc->exec_env);
+        wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(proc->exec_env);
+        const char* exception = wasm_runtime_get_exception(module_inst);
         DRV_DEBUG("=   Function call failed: %s", exception);
         return -1;
     }
@@ -579,4 +631,3 @@ int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_v
 
     return 0;
 }
-
