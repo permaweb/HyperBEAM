@@ -548,12 +548,76 @@ transaction_block(Msg, Opts) ->
 match_block(Match, Opts) ->
     case Match of
         #{ <<"offset">> := Offset } when is_integer(Offset), Offset >= 0 ->
-            Sorted = maps:get(<<"query-block-heights">>, block_opts(Opts)),
-            case block_at_offset(Match, Sorted, 1, tuple_size(Sorted), Opts) of
-                {ok, null} -> remote_transaction_block(Match, Opts);
+            case indexed_transaction_block(Match, Opts) of
+                {ok, null} -> cached_transaction_block(Match, Opts);
                 Result -> Result
             end;
         _ -> {ok, null}
+    end.
+
+%% @doc Resolve one match through the ordered block-offset index. Equal weave
+%% ends are walked until an L1's signed ID identifies its exact block.
+indexed_transaction_block(Match = #{ <<"offset">> := Offset }, Opts) ->
+    indexed_transaction_block(Match, {Offset, 0}, true, Opts).
+
+indexed_transaction_block(Match = #{ <<"offset">> := Offset }, Boundary,
+        Inclusive, Opts) ->
+    case next_offset_block(Boundary, Inclusive, Opts) of
+        {ok, none} -> {ok, null};
+        {ok, Block} ->
+            End = hb_util:int(
+                hb_maps:get(<<"weave_size">>, Block, 0, Opts)),
+            Start = End - hb_util:int(
+                hb_maps:get(<<"block_size">>, Block, 0, Opts)),
+            case {Offset < Start, block_contains(Match, Block, End, Opts)} of
+                {true, _} -> {ok, null};
+                {false, true} -> {ok, Block};
+                {false, false} when Offset =:= End ->
+                    Height = hb_util:int(
+                        hb_maps:get(<<"height">>, Block, 0, Opts)),
+                    indexed_transaction_block(
+                        Match, {End, Height}, false, Opts
+                    );
+                {false, false} -> {ok, null}
+            end;
+        Error -> Error
+    end.
+
+%% @doc Read one block-offset row. Store lists include their `from' key, so a
+%% continuation asks for two rows and removes the boundary already examined.
+next_offset_block({Offset, Height}, Inclusive, Opts) ->
+    Limit = case Inclusive of true -> 1; false -> 2 end,
+    Req = #{
+        <<"path">> => <<"block-offsets">>,
+        <<"direction">> => asc,
+        <<"limit">> => Limit,
+        <<"from-offset">> => Offset,
+        <<"from-height">> => Height
+    },
+    case hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> }, Req, Opts) of
+        {ok, Entries} ->
+            Remaining =
+                case Inclusive of
+                    true -> Entries;
+                    false ->
+                        [Entry || Entry <- Entries,
+                            hb_util:int(hb_maps:get(
+                                <<"height">>, Entry, -1, Opts)) =/= Height]
+                end,
+            case Remaining of
+                [Entry | _] -> {ok, Entry};
+                [] -> {ok, none}
+            end;
+        Error -> Error
+    end.
+
+%% @doc Search the cached height catalog, then remote block heights.
+cached_transaction_block(Match, Opts) ->
+    Sorted = maps:get(<<"query-block-heights">>, block_opts(Opts)),
+    case block_at_offset(Match, Sorted, 1, tuple_size(Sorted), Opts) of
+        {ok, null} -> remote_transaction_block(Match, Opts);
+        Result -> Result
     end.
 
 %% @doc Search all heights only when the node allows remote block reads.

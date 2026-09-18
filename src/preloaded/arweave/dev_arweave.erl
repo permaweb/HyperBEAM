@@ -7,7 +7,8 @@
 -implements(<<"arweave@2.9">>).
 -device_libraries([lib_arweave_common]).
 -export([info/0]).
--export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
+-export([tx/3, raw/3, chunk/3, block/3, block_offsets/3]).
+-export([current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
@@ -722,30 +723,35 @@ get_chunk(Offset, Opts) ->
 %% an integer, it is used as a block height. If it is not present, the current
 %% block is used.
 block(Base, Request, Opts) when is_map(Base) ->
-    Block =
-        hb_ao:get_first(
-            [
-                {Request, <<"block">>},
-                {Base, <<"block">>}
-            ],
-            not_found,
-            Opts
-        ),
-    case Block of
-        <<"current">> -> current(Base, Request, Opts);
-        not_found -> current(Base, Request, Opts);
-        ID when ?IS_BLOCK_ID(ID) -> block({id, ID}, Request, Opts);
-        MaybeHeight ->
-            try hb_util:int(MaybeHeight) of
-                Int -> block({height, Int}, Request, Opts)
-            catch
-                _:_ ->
-                    {
-                        error,
-                        <<"Invalid block reference `", MaybeHeight/binary, "`">>
-                    }
+    case hb_maps:find(<<"offset">>, Request, Opts) of
+        {ok, Offset} -> block({offset, hb_util:int(Offset)}, Request, Opts);
+        error ->
+            Block =
+                hb_ao:get_first(
+                    [
+                        {Request, <<"block">>},
+                        {Base, <<"block">>}
+                    ],
+                    not_found,
+                    Opts
+                ),
+            case Block of
+                <<"current">> -> current(Base, Request, Opts);
+                not_found -> current(Base, Request, Opts);
+                ID when ?IS_BLOCK_ID(ID) -> block({id, ID}, Request, Opts);
+                MaybeHeight ->
+                    try hb_util:int(MaybeHeight) of
+                        Int -> block({height, Int}, Request, Opts)
+                    catch
+                        _:_ ->
+                            {error,
+                                <<"Invalid block reference `",
+                                    MaybeHeight/binary, "`">>}
+                    end
             end
     end;
+block({offset, Offset}, _Req, Opts) ->
+    dev_arweave_block_cache:read_offset(Offset, Opts);
 block({id, ID}, Req, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Block} ->
@@ -789,6 +795,21 @@ block({height, Height}, Req, Opts) ->
                 Opts
             )
     end.
+
+%% @doc List blocks by their ending weave offset. The optional `from-offset'
+%% and `from-height' identify an inclusive boundary in that ordered index.
+block_offsets(_Base, Req, Opts) ->
+    Direction = hb_util:atom(
+        hb_maps:get(<<"direction">>, Req, asc, Opts)),
+    Limit = hb_util:int(hb_maps:get(<<"limit">>, Req, 1, Opts)),
+    From =
+        case hb_maps:find(<<"from-offset">>, Req, Opts) of
+            {ok, Offset} ->
+                {hb_util:int(Offset),
+                    hb_util:int(hb_maps:get(<<"from-height">>, Req, 0, Opts))};
+            error -> none
+        end,
+    dev_arweave_block_cache:entries(Direction, From, Limit, Opts).
 
 %% @doc Return whether the request only permits cached values.
 only_if_cached(Req, Opts) ->

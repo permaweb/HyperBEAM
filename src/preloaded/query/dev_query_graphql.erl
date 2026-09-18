@@ -140,11 +140,6 @@ handle(_Base, RawReq, Opts) ->
                 ?event(graphql_validated),
                 Coerced = graphql:type_check_params(FunEnv, OpName, Vars),
                 ?event(graphql_type_checked_params),
-                QueryOpts =
-                    case selects_block(AST2) of
-                        true -> dev_query_arweave:block_opts(Opts);
-                        false -> Opts
-                    end,
                 Ctx =
                     #{
                         params => Coerced,
@@ -155,7 +150,7 @@ handle(_Base, RawReq, Opts) ->
                                 ?DEFAULT_QUERY_TIMEOUT,
                                 Opts
                             ),
-                        opts => QueryOpts,
+                        opts => Opts,
                         req => Req
                     },
                 ?event(graphql_context_created),
@@ -180,19 +175,6 @@ handle(_Base, RawReq, Opts) ->
                     {error, Error}
             end
     end.
-
-%% @doc Find block selections, including aliases and fragment definitions,
-%% so requests without block metadata do not enumerate cached block heights.
-selects_block(#document{ definitions = Definitions }) -> selects_block(Definitions);
-selects_block([]) -> false;
-selects_block([#field{ selection_set = Selection } = Field | Rest]) ->
-    graphql_ast:id(Field) =:= <<"block">> orelse
-        selects_block(Selection) orelse selects_block(Rest);
-selects_block([#op{ selection_set = Selection } | Rest]) ->
-    selects_block(Selection) orelse selects_block(Rest);
-selects_block([#frag{ selection_set = Selection } | Rest]) ->
-    selects_block(Selection) orelse selects_block(Rest);
-selects_block([_ | Rest]) -> selects_block(Rest).
 
 %% @doc The main entrypoint for resolving GraphQL elements, called by the
 %% GraphQL library. We split the resolution flows into two separated functions:
