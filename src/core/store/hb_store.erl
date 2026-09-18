@@ -760,8 +760,6 @@ admin_call([Store | Rest], Function, Req, Opts) ->
 
 admin_post_process(stop, Store) ->
     set(Store, undefined);
-admin_post_process(reset, Store) ->
-    set(Store, undefined);
 admin_post_process(_, _Store) ->
     ok.
 
@@ -1408,6 +1406,27 @@ prefix_pipeline_test() ->
     ?assertEqual({error, not_found}, read([Ungated], <<"inner">>, #{})),
     ?assertEqual({ok, <<"2">>}, read([Plain], <<"outer">>, #{})),
     ?event(testing, {unprefixed_skip_and_strip_off_passed}).
+
+%% @doc Resetting a store preserves visibility for existing readers.
+reset_shared_instance_test() ->
+    Store = hb_test_utils:test_store(hb_store_volatile),
+    ok = write(Store, #{ <<"before">> => <<"old">> }, #{}),
+    {PID, Ref} =
+        spawn_monitor(
+            fun() ->
+                ?assertEqual({ok, <<"old">>}, read(Store, <<"before">>, #{})),
+                ok = reset(Store),
+                ok = write(Store, #{ <<"after">> => <<"new">> }, #{})
+            end
+        ),
+    receive
+        {'DOWN', Ref, process, PID, Reason} -> ?assertEqual(normal, Reason)
+    after 1000 ->
+        ?assert(false)
+    end,
+    ?assertEqual({error, not_found}, read(Store, <<"before">>, #{})),
+    ?assertEqual({ok, <<"new">>}, read(Store, <<"after">>, #{})),
+    stop(Store).
 
 %% @doc Test that lifecycle operations bypass path preprocessing for a store
 %% carrying a prefix.
