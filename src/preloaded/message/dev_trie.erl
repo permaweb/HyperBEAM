@@ -122,7 +122,7 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
             case bit_size(KeySuffix) > 0 of
                 true ->
                     % Implicit leaf node creation!
-                    TrieNode#{KeySuffix => Val};
+                    add_edge(TrieNode, KeySuffix, Val);
                 false ->
                     TrieNode#{<<"node-value">> => Val}
             end;
@@ -152,10 +152,11 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
                             >> = KeySuffix,
                             TrieNode#{
                                 EdgeLabel =>
-                                    #{
-                                        <<"node-value">> => SubTrie,
-                                        KeySuffixSuffix => Val
-                                    }
+                                    add_edge(
+                                        #{<<"node-value">> => SubTrie},
+                                        KeySuffixSuffix,
+                                        Val
+                                    )
                             }
                     end;
                 true ->
@@ -189,20 +190,34 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
             case bit_size(KeySuffixSuffix) > 0 of
                 true ->
                     NewTrie#{
-                        EdgeLabelPrefix => #{
-                            EdgeLabelSuffix => SubTrie,
-                            % Implicit leaf node!
-                            KeySuffixSuffix => Val
-                        }
+                        EdgeLabelPrefix =>
+                            add_edge(
+                                add_edge(#{}, EdgeLabelSuffix, SubTrie),
+                                KeySuffixSuffix,
+                                Val
+                            )
                     };
                 false ->
                     NewTrie#{
-                        EdgeLabelPrefix => #{
-                            EdgeLabelSuffix => SubTrie,
-                            <<"node-value">> => Val
-                        }
+                        EdgeLabelPrefix =>
+                            add_edge(
+                                #{<<"node-value">> => Val},
+                                EdgeLabelSuffix,
+                                SubTrie
+                            )
                     }
             end
+    end.
+
+%% @doc Split reserved edge labels so they cannot overwrite node metadata.
+add_edge(TrieNode, Label, Value) ->
+    case lists:member(Label, ?RESERVED_KEYS) of
+        true ->
+            PrefixSize = byte_size(Label) - 1,
+            <<Prefix:PrefixSize/binary, Suffix/binary>> = Label,
+            TrieNode#{Prefix => #{Suffix => Value}};
+        false ->
+            TrieNode#{Label => Value}
     end.
 
 retrieve(TrieNode, Key, Opts) ->
