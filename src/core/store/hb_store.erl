@@ -685,6 +685,7 @@ execute_normalizer(Setting, Store, Term, Opts) ->
             hb_ao:raw(
                 #{ <<"path">> => Path, <<"0.body">> => Term },
                 Opts#{
+                    <<"linkify-mode">> => false,
                     <<"store">> =>
                         [ S || S <- AllOptsStores, not has_processing_pipeline(S) ]
                 }
@@ -1424,6 +1425,23 @@ prefix_pipeline_stop_test() ->
     after 1000 ->
         ?assert(false)
     end.
+
+%% @doc Normalization preserves structured fields without a writable body store.
+normalize_without_body_store_test() ->
+    ID = <<"Zw5s5IwC1EPFMj0FqnBkV5GpR2P39AeJk9Oe57h9Tzs">>,
+    ?assertEqual(
+        {ok, <<"00000391500788188382", ID/binary, "ans104@1.0">>},
+        execute_normalizer(
+            <<"to-key">>,
+            #{ <<"to-key">> => <<"~match@1.0/key">> },
+            #{
+                <<"offset">> => 391500788188382,
+                <<"id">> => ID,
+                <<"commitment-device">> => <<"ans104@1.0">>
+            },
+            #{ <<"store">> => [], <<"on">> => #{} }
+        )
+    ).
 
 %% @doc Test that `to-key' and `to-value' rewrite a request's paths and
 %% values ahead of the store -- for writes and reads alike -- and that
