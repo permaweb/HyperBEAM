@@ -5,19 +5,33 @@
 %%% The `Config' message for a call to `request/5' may contain the following
 %%% fields:
 %%% 
-%%% - `multirequest-nodes': A list of nodes to request from.
-%%% - `multirequest-responses': The number of responses to gather.
-%%% - `multirequest-stop-after': Whether to stop after the required number of
-%%%   responses.
-%%% - `multirequest-parallel': Whether to run the requests in parallel.
-%%% - `multirequest-admissible': A message to resolve against the response.
-%%% - `multirequest-admissible-status': The statuses that are admissible.
-%%% 
-%%% The `admissible' message is executed as a `base' message, with its `path'
-%%% field moved to the request (or set to `is-admissible' if not present):
+%%% - `nodes': A list of nodes to request from.
+%%% - `responses': The number of responses to gather.
+%%% - `stop-after': Whether to stop after the required number of responses.
+%%% - `parallel': Whether to run the requests in parallel.
+%%% - `admissible': A predicate message to resolve against each response.
+%%% - `admissible-status': The response statuses that are admissible.
+%%%
+%%% A request message may override these fields with their `multirequest-'
+%%% prefixed equivalents.
+%%%
+%%% The optional `admissible' predicate is resolved with its `path' moved to the
+%%% response request. The path defaults to `is-admissible'. The request also
+%%% carries the responding node as private `admissibility/node' context.
 %%% ```
 %%%     resolve(Base, Response#{ <<"path">> => Base/path OR /is-admissible }, Opts)
-%%% '''
+%%% ```
+%%%
+%%% An admissibility message may contain an optional `decorator' message. The
+%%% decorator is resolved first with the predicate base in the request `body'.
+%%% Its `path' defaults to `decorator' and may be set explicitly. The decorated
+%%% result becomes the predicate base. A decorator error or exception makes the
+%%% response inadmissible.
+%%%
+%%% A predicate admits a response by returning `true' as an atom or binary. It
+%%% may instead return a message containing `ao-result', whose value identifies
+%%% the result key to read from that message. Missing, false, invalid, or failed
+%%% predicate results make the response inadmissible.
 -module(hb_http_multi).
 -export([request/5]).
 -include("include/hb.hrl").
@@ -120,7 +134,8 @@ multirequest_opt(Key, Config, Message, Default, Opts) ->
             {Config, Key}
         ],
         Default,
-        Opts#{ <<"hashpath">> => ignore }
+        %% force-message allow us to keep the response Erlang friendly
+        Opts#{ <<"hashpath">> => ignore, <<"force-message">> => false }
     ).
 
 %% @doc Check if a response is admissible, according to the configuration. First,
@@ -129,7 +144,7 @@ multirequest_opt(Key, Config, Message, Default, Opts) ->
 %% 
 %% If the response is `ok', we check the status and the response message against
 %% the configuration.
-is_admissible(ok, Res, Admissible, Statuses, Opts) ->
+is_admissible(ok, Res, Admissible, Statuses, Node, Opts) ->
     ?event(debug_multi,
         {is_admissible,
             {response, Res},
@@ -139,10 +154,10 @@ is_admissible(ok, Res, Admissible, Statuses, Opts) ->
     ),
     AdmissibleStatus = admissible_status(Res, Statuses),
     ?event(debug_multi, {admissible_status, {result, AdmissibleStatus}}),
-    AdmissibleResponse = admissible_response(Res, Admissible, Opts),
+    AdmissibleResponse = admissible_response(Res, Admissible, Node, Opts),
     ?event(debug_multi, {admissible_response, {result, AdmissibleResponse}}),
     AdmissibleStatus andalso AdmissibleResponse;
-is_admissible(_, _, _, _, _) -> false.
+is_admissible(_, _, _, _, _, _) -> false.
 
 %% @doc Serially request a message, collecting responses until the required
 %% number of responses have been gathered. Ensure that the statuses are
@@ -153,7 +168,7 @@ serial_multirequest(_Nodes, 0, _Method, _Path, _Message, _Admissible, _Statuses,
 serial_multirequest([], _, _Method, _Path, _Message, _Admissible, _Statuses, _Opts) -> {[], []};
 serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Admissible, Statuses, Opts) ->
     {ErlStatus, Res} = hb_http:request(Method, Node, Path, Message, Opts),
-    case is_admissible(ErlStatus, Res, Admissible, Statuses, Opts) of
+    case is_admissible(ErlStatus, Res, Admissible, Statuses, Node, Opts) of
         true ->
             ?event(debug_http, {admissible_status, {response, Res}}),
             {AdmissibleAcc, AllAcc} = serial_multirequest(
@@ -200,12 +215,12 @@ start_workers(Count, Ref, Nodes, Method, Path, Message, Opts) ->
             fun(Node) ->
                 spawn(
                     fun() ->
-                        Res =
+                        {Status, NewRes} =
                             try hb_http:request(Method, Node, Path, Message, Opts)
                             catch C:R -> {error, {worker_crash, C, R}}
                             end,
                         receive no_reply -> stopping
-                        after 0 -> Parent ! {Ref, self(), Res}
+                        after 0 -> Parent ! {Ref, self(), {Status, NewRes, Node}}
                         end
                     end
                 )
@@ -236,18 +251,42 @@ admissible_status(Status, Statuses) when is_list(Statuses) ->
 
 %% @doc If an `admissable` message is set for the request, check if the response
 %% adheres to it. Else, return `true'.
-admissible_response(_Response, undefined, _Opts) -> true;
-admissible_response(Response, Msg, Opts) ->
+admissible_response(_Response, undefined, _Node, _Opts) -> true;
+admissible_response(Response, Msg, Node, Opts) ->
     Path = hb_maps:get(<<"path">>, Msg, <<"is-admissible">>, Opts),
-    Req = Response#{ <<"path">> => Path },
-    Base = hb_message:without_unless_signed([<<"path">>], Msg, Opts),
-    ?event(debug_multi,
-        {executing_admissible_message, {message, Base}, {req, Req}}
-    ),
-    try hb_ao:resolve(Base, Req, Opts) of
+    Decorator = hb_maps:get(<<"decorator">>, Msg, undefined, Opts),
+    Req =
+        hb_private:set(
+            Response#{ <<"path">> => Path },
+            <<"admissibility/node">>,
+            Node,
+            Opts
+        ),
+    AdmissibleOpts =
+        Opts#{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
+    try
+        Base =
+            apply_decorator(
+                hb_message:without_unless_signed(
+                    [<<"path">>, <<"decorator">>],
+                    Msg,
+                    Opts
+                ),
+                Req,
+                Decorator,
+                AdmissibleOpts
+            ),
+        ?event(debug_multi,
+            {executing_admissible_message, {message, Base}, {req, Req}}
+        ),
+        hb_ao:resolve(Base, Req, AdmissibleOpts)
+    of
         {ok, Res} when is_atom(Res) or is_binary(Res) ->
             ?event(debug_multi, {admissible_result, {result, Res}}),
             hb_util:atom(Res) == true;
+        {ok, #{<<"ao-result">> := Key} = Res} ->
+            ?event(debug_multi, {admissible_result, {result, Res}}),
+            hb_util:atom(hb_maps:get(Key, Res, false, Opts)) == true;
         {error, Reason} ->
             ?event(debug_multi, {admissible_error, {reason, Reason}}),
             false
@@ -261,6 +300,29 @@ admissible_response(Response, Msg, Opts) ->
                 }
             ),
             false
+    end.
+
+%% @doc Apply the optional decorator before resolving the admissibility
+%% predicate.
+apply_decorator(Base, _Req, undefined, _Opts) -> Base;
+apply_decorator(Base, Req, Decorator, Opts) ->
+    DecoratorPath =
+        hb_maps:get(<<"path">>, Decorator, <<"decorator">>, Opts),
+    DecoratorBase =
+        hb_maps:without([<<"path">>], Decorator, Opts),
+    case hb_ao:resolve(
+            DecoratorBase,
+            Req#{ <<"path">> => DecoratorPath, <<"body">> => Base },
+            Opts
+        ) of
+        {ok, Decorated} -> Decorated;
+        Error ->
+            ?event(error,
+                {invalid_decorator_response,
+                    {path, DecoratorPath},
+                    {error, Error}
+                }),
+            throw({invalid_decorator_response, Error})
     end.
 
 %% @doc Collect the necessary number of responses, and stop workers if
@@ -280,10 +342,10 @@ parallel_responses(AdmissibleRes, AllRes, Procs, _, _, Ref, 0, true, _Admissible
     {AdmissibleRes, AllRes};
 parallel_responses(AdmissibleRes, AllRes, Procs, Queue, {Method, Path, Message}, Ref, Awaiting, StopAfter, Admissible, Statuses, Opts) ->
     receive
-        {Ref, Pid, {Status, NewRes}} ->
+        {Ref, Pid, {Status, NewRes, Node}} ->
             WorkersWithoutPid = lists:delete(Pid, Procs),
             NewAllRes = [{Status, NewRes} | AllRes],
-            case is_admissible(Status, NewRes, Admissible, Statuses, Opts) of
+            case is_admissible(Status, NewRes, Admissible, Statuses, Node, Opts) of
                 true ->
                     NewAwaiting = Awaiting - 1,
                     {NewProcs, NewQueue} =
@@ -349,6 +411,102 @@ ao_node(URL) ->
     #{<<"uri">> => <<URL/binary, "~meta@1.0/info">>,
       <<"opts">> => #{ <<"http-client">> => httpc }}.
 
+with_admissibility_value(Node, Value) ->
+    Node#{
+        <<"opts">> =>
+            (maps:get(<<"opts">>, Node))#{
+                <<"admissibility-value">> => Value
+            }
+    }.
+
+node_context_predicate() ->
+    #{
+        <<"device">> => <<"message@1.0">>,
+        <<"path">> => <<"admitted">>,
+        <<"decorator">> =>
+            #{
+                <<"device">> =>
+                    #{
+                        decorator =>
+                            fun(_Base, Req, Opts) ->
+                                Target = hb_maps:get(<<"body">>, Req, #{}, Opts),
+                                Node =
+                                    hb_private:get(
+                                        <<"admissibility/node">>,
+                                        Req,
+                                        #{},
+                                        Opts
+                                    ),
+                                NodeOpts =
+                                    hb_maps:get(<<"opts">>, Node, #{}, Opts),
+                                Value =
+                                    hb_maps:get(
+                                        <<"admissibility-value">>,
+                                        NodeOpts,
+                                        false,
+                                        Opts
+                                    ),
+                                {ok, Target#{ <<"admitted">> => Value }}
+                            end
+                    }
+            }
+    }.
+
+ao_result_predicate(Value) ->
+    #{
+        <<"device">> =>
+            #{
+                predicate =>
+                    fun(_Base, _Req, _Opts) ->
+                        {ok,
+                            #{
+                                <<"ao-result">> => <<"admitted">>,
+                                <<"admitted">> => Value
+                            }}
+                    end
+            },
+        <<"path">> => <<"predicate">>
+    }.
+
+custom_decorator_predicate() ->
+    #{
+        <<"device">> => <<"message@1.0">>,
+        <<"path">> => <<"decorated">>,
+        <<"decorator">> =>
+            #{
+                <<"device">> =>
+                    #{
+                        custom_decorator =>
+                            fun(_Base, Req, Opts) ->
+                                Target = hb_maps:get(<<"body">>, Req, #{}, Opts),
+                                {ok, Target#{ <<"decorated">> => true }}
+                            end
+                    },
+                <<"path">> => <<"custom-decorator">>
+            }
+    }.
+
+failing_decorator_predicate() ->
+    #{
+        <<"device">> =>
+            #{
+                predicate =>
+                    fun(_Base, _Req, _Opts) -> {ok, true} end
+            },
+        <<"path">> => <<"predicate">>,
+        <<"decorator">> =>
+            #{
+                <<"device">> =>
+                    #{
+                        failing_decorator =>
+                            fun(_Base, _Req, _Opts) ->
+                                {error, decoration_failed}
+                            end
+                    },
+                <<"path">> => <<"failing-decorator">>
+            }
+    }.
+
 dead_node() ->
     {ok, S} = gen_tcp:listen(0, []),
     {ok, Port} = inet:port(S),
@@ -395,6 +553,55 @@ multirequest_test_() ->
                 ?assertMatch({error, {no_viable_responses, _}},
                     multi([crash(), crash()],
                         #{<<"parallel">> => true, <<"stop-after">> => true}))
+            end},
+            {"node context decorator", fun() ->
+                Node = maps:get(fast, N),
+                Extra = #{ <<"admissible">> => node_context_predicate() },
+                ?assertMatch(
+                    {ok, _},
+                    multi([with_admissibility_value(Node, true)], Extra)
+                ),
+                ?assertMatch(
+                    {error, {no_viable_responses, _}},
+                    multi([with_admissibility_value(Node, false)], Extra)
+                )
+            end},
+            {"ao-result predicate", fun() ->
+                Node = maps:get(fast, N),
+                ?assertMatch(
+                    {ok, _},
+                    multi(
+                        [Node],
+                        #{ <<"admissible">> => ao_result_predicate(true) }
+                    )
+                ),
+                ?assertMatch(
+                    {error, {no_viable_responses, _}},
+                    multi(
+                        [Node],
+                        #{ <<"admissible">> => ao_result_predicate(false) }
+                    )
+                )
+            end},
+            {"custom decorator path", fun() ->
+                Node = maps:get(fast, N),
+                ?assertMatch(
+                    {ok, _},
+                    multi(
+                        [Node],
+                        #{ <<"admissible">> => custom_decorator_predicate() }
+                    )
+                )
+            end},
+            {"decorator failure is inadmissible", fun() ->
+                Node = maps:get(fast, N),
+                ?assertMatch(
+                    {error, {no_viable_responses, _}},
+                    multi(
+                        [Node],
+                        #{ <<"admissible">> => failing_decorator_predicate() }
+                    )
+                )
             end}
         ]} end}.
 
