@@ -320,6 +320,41 @@ manifest_404_error_test_parallel() ->
     ),
     ok.
 
+manifest_path_with_spaces_test_parallel() ->
+    Opts = #{ <<"store">> => hb_opts:get(store, no_viable_store, #{}) },
+    Page = #{
+        <<"content-type">> => <<"image/png">>,
+        <<"body">> => <<"Page With Spaces">>
+    },
+    {ok, PageID} = hb_cache:write(Page, Opts),
+    IndexPage = #{
+        <<"content-type">> => <<"text/html">>,
+        <<"body">> => <<"Index Page">>
+    },
+    {ok, IndexID} = hb_cache:write(IndexPage, Opts),
+    Manifest = #{
+        <<"paths">> => #{
+            <<"ID With Spaces.png">> => #{ <<"id">> => PageID },
+            <<"index.html">> => #{ <<"id">> => IndexID }
+        },
+        <<"index">> => #{ <<"path">> => <<"index.html">> }
+    },
+    ManifestMsg = #{
+        <<"device">> => <<"manifest@1.0">>,
+        <<"body">> => hb_json:encode(Manifest)
+    },
+    {ok, ManifestID} = hb_cache:write(ManifestMsg, Opts),
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, #{ <<"body">> := <<"Page With Spaces">> }},
+        hb_http:get(
+            Node,
+            << ManifestID/binary, "/ID%20With%20Spaces.png" >>,
+            Opts
+        )
+    ),
+    ok.
+
 create_generic_manifest(Opts) ->
     IndexPage = #{
         <<"content-type">> => <<"text/html">>,
