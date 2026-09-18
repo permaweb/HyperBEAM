@@ -494,20 +494,6 @@ raw_default_message() ->
                         [?DEFAULT_PRIMARY_STORE, ?DEFAULT_OFFSET_INDEX],
                     <<"local-store">> => [?DEFAULT_PRIMARY_STORE],
                     <<"remote-index">> => false
-                },
-                #{
-                    <<"store-module">> => hb_store_gateway,
-                    <<"subindex">> => [
-                        #{
-                            <<"name">> => <<"Data-Protocol">>,
-                            <<"value">> => <<"ao">>
-                        }
-                    ],
-                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
-                },
-                #{
-                    <<"store-module">> => hb_store_gateway,
-                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
                 }
             ],
         <<"match-index">> => [?DEFAULT_PRIMARY_STORE],
