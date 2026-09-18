@@ -387,7 +387,12 @@ snapshot(Base, _Req, Opts) ->
         not_found ->
             {error, <<"Cannot snapshot Lua state: state not initialized.">>};
         State ->
-            {ok, #{ <<"body">> => term_to_binary(luerl:externalize(State)) }}
+            % NB: luerl never garbage collects on its own. `luerl_heap:gc/1'
+            % runs only when called, so an uncollected VM serialises every
+            % table ever allocated.
+            {ok, #{
+                <<"body">> => term_to_binary(luerl:externalize(luerl:gc(State)))
+            }}
     end.
 
 %% @doc Restore the Lua state from a snapshot, if it exists.
