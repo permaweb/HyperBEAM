@@ -24,20 +24,17 @@
 %%% but cannot be properly normalized.
 -define(RADIX, 256).
 
-%%% @doc Trie node metadata keys that must not be treated as edge labels.
--define(RESERVED_KEYS, [
-    <<"node-value">>,
-    <<"device">>,
-    <<"commitments">>,
-    <<"priv">>,
-    <<"hashpath">>
-]).
-
 info() ->
     #{
         default => fun get/4,
-        reserved => ?RESERVED_KEYS
-     }.
+        reserved => [
+            <<"node-value">>,
+            <<"device">>,
+            <<"commitments">>,
+            <<"priv">>,
+            <<"hashpath">>
+        ]
+    }.
 
 keys(Trie, Opts) ->
     collect_keys(Trie, <<>>, Opts, []).
@@ -252,12 +249,12 @@ retrieve(TrieNode, Key, Opts, KeyPrefixSizeAcc) ->
 %% @doc Get a list of edge labels for a given trie node.
 edges(TrieNode, _Opts) when not is_map(TrieNode) -> [];
 edges(TrieNode, Opts) ->
-    Filtered = hb_maps:without(
-        ?RESERVED_KEYS,
-        TrieNode,
-        Opts
-    ),
-    hb_maps:keys(Filtered).
+    [
+        Key
+    ||
+        Key <- hb_maps:keys(TrieNode, Opts),
+        not hb_device:is_reserved(?MODULE, TrieNode, Key, Opts)
+    ].
 
 %% @doc Compute the longest common binary prefix of A and B, comparing chunks of
 %% N bits.
