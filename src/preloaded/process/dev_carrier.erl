@@ -180,11 +180,19 @@ seed_value(Base, Opts) ->
 %% untouched rather than failing the slot, which would stop the process on every
 %% node for good.
 action(Base, Body, Opts) ->
-    case hb_util:to_lower(field(<<"action">>, Body, <<>>, Opts)) of
+    case normalize_action(field(<<"action">>, Body, <<>>, Opts)) of
         <<"transfer">> -> transfer(Base, Body, Opts);
         <<"set">> -> set_value(Base, Body, Opts);
         _ -> Base
     end.
+
+%% @doc Leave malformed actions unmatched by the carrier's routes.
+normalize_action(Action) when is_binary(Action) ->
+    try hb_util:to_lower(Action)
+    catch
+        error:_ -> Action
+    end;
+normalize_action(Action) -> Action.
 
 %%% The token
 
@@ -687,6 +695,46 @@ action_case_is_ignored_test() ->
             ),
             Opts
         ),
+    ?assertEqual(1, held_by(Moved, BuyerAddr, Opts)).
+
+%% @doc Malformed actions leave state unchanged without blocking a later transfer.
+malformed_actions_do_not_block_transfer_test() ->
+    Opts = (test_opts())#{ <<"hashpath">> => ignore },
+    {Owner, OwnerAddr} = party(),
+    {_, BuyerAddr} = party(),
+    Base = (name_held_by(OwnerAddr))#{ <<"device">> => <<"carrier@1.0">> },
+    Unchanged = lists:foldl(
+        fun(Action, State) ->
+            {ok, Next} = hb_ao:resolve(
+                State,
+                #{
+                    <<"path">> => <<"compute">>,
+                    <<"process">> => ?PROCESS,
+                    <<"body">> => tx(Owner, #{
+                        <<"target">> => ?PROCESS,
+                        <<"action">> => Action,
+                        <<"recipient">> => BuyerAddr,
+                        <<"quantity">> => <<"1">>
+                    })
+                },
+                Opts
+            ),
+            ?assertEqual(State, Next),
+            Next
+        end,
+        Base,
+        [3.14, 7, true, #{}, [3.14], <<255>>]
+    ),
+    {ok, Moved} = hb_ao:resolve(
+        Unchanged,
+        #{
+            <<"path">> => <<"compute">>,
+            <<"process">> => ?PROCESS,
+            <<"body">> => transfer_tx(Owner, BuyerAddr, 1)
+        },
+        Opts
+    ),
+    ?assertEqual(0, held_by(Moved, OwnerAddr, Opts)),
     ?assertEqual(1, held_by(Moved, BuyerAddr, Opts)).
 
 %% @doc A transaction assigned to this name but not addressed to it is left
