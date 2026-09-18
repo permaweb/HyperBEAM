@@ -96,7 +96,14 @@ ensure_loaded(Ref,
                             Next,
                             #{
                                 <<"type">> => <<"link">>,
-                                <<"lazy">> => false
+                                <<"lazy">> => false,
+                                <<"store">> =>
+                                    lists:flatten([
+                                        hb_opts:get(store, [], Opts),
+                                        hb_opts:get(
+                                            store, [], link_opts(#{}, RawOpts)
+                                        )
+                                    ])
                             }
                         },
                         RawOpts
@@ -1449,6 +1456,17 @@ write_with_only_read_only_store_test() ->
     Opts = #{ <<"store">> => [ReadOnlyStore] },
     ?assertMatch({ok, _}, write(<<"some-binary-payload">>, Opts)),
     ?assertMatch({ok, _}, write(#{ <<"hello">> => <<"world">> }, Opts)).
+
+%% @doc Nested links retain their source store outside the caller's store chain.
+isolated_nested_store_test() ->
+    Store = hb_test_utils:test_store(hb_store_volatile, <<"isolated-nested">>),
+    ok = hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store] },
+    Msg = #{ <<"child">> => #{ <<"value">> => <<"nested">> } },
+    {ok, ID} = write(Msg, Opts),
+    {ok, Lazy} = read(ID, Opts),
+    ?assertEqual(Msg, ensure_all_loaded(Lazy, #{ <<"store">> => [] })),
+    ok = hb_store:stop(Store).
 
 %% @doc Run a specific test with a given store module.
 run_test() ->
