@@ -86,7 +86,7 @@ verify(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     {ok, EncMsg, EncComm, _} = normalize_for_encoding(Base, Req, Opts),
     SigBase = signature_base(EncMsg, EncComm, Opts),
-    KeyRes = dev_httpsig_keyid:req_to_key_material(Req, Opts),
+    KeyRes = lib_httpsig_keyid:req_to_key_material(Req, Opts),
     RawSignature = hb_util:decode(Signature = maps:get(<<"signature">>, Req)),
     ?event_debug(debug_httpsig,
         {
@@ -211,8 +211,8 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
     % Extract the key material from the request.
     Opts = opts(RawOpts),
     ?event_debug({req_to_key_material, {priv_req, Req}}),
-    {ok, Scheme, Key, KeyID} = dev_httpsig_keyid:req_to_key_material(Req, Opts),
-    Committer = dev_httpsig_keyid:keyid_to_committer(Scheme, KeyID),
+    {ok, Scheme, Key, KeyID} = lib_httpsig_keyid:req_to_key_material(Req, Opts),
+    Committer = lib_httpsig_keyid:keyid_to_committer(Scheme, KeyID),
     % Remove any existing hmac commitments with the given keyid before adding
     % the new one.
     Msg =

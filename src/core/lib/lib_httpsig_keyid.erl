@@ -8,7 +8,7 @@
 %%% 
 %%% These functions are abstracted in order to allow for the addition of new
 %%% schemes in the future.
--module(dev_httpsig_keyid).
+-module(lib_httpsig_keyid).
 -export([req_to_key_material/2, keyid_to_committer/1, keyid_to_committer/2]).
 -include_lib("include/hb.hrl").
 

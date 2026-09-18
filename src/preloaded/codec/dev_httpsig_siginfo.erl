@@ -294,7 +294,7 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
         end,
     KeyID = maps:get(<<"keyid">>, Commitment4, <<>>),
     Commitment5 =
-        case dev_httpsig_keyid:keyid_to_committer(KeyID) of
+        case lib_httpsig_keyid:keyid_to_committer(KeyID) of
             undefined ->
                 Commitment4;
             Committer ->
