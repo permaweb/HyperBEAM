@@ -363,3 +363,9 @@ trie_keys_skip_reserved_keys_test() ->
             <<"alice">> => 1
         },
     ?assertEqual([<<>>, <<"alice">>], lists:sort(hb_ao:keys(Trie, #{}))).
+
+test_device_function_keys_are_reserved_test_parallel() ->
+    TestDevice = #{ <<"device">> => <<"test-device@1.0">> },
+    ?assert(is_reserved(TestDevice, <<"test-func">>, #{})),
+    ?assert(is_reserved(TestDevice, <<"compute">>, #{})),
+    ?assertNot(is_reserved(TestDevice, <<"alice">>, #{})).
