@@ -1347,16 +1347,15 @@ header_message(Error, _Device, _Opts) ->
 %% query.  The `block' range is applied as a post-filter over the candidate
 %% set rather than as a set-producing index lookup.
 match_args(Args, Opts) when is_map(Args) ->
-    match_args(
-        maps:to_list(
-            maps:with(
-                ?SUPPORTED_QUERY_ARGS,
-                Args
+    case indexed_explicit_ids(Args, Opts) of
+        {ok, IDs} -> IDs;
+        unservable ->
+            match_args(
+                maps:to_list(maps:with(?SUPPORTED_QUERY_ARGS, Args)),
+                [],
+                Opts
             )
-        ),
-        [],
-        Opts
-    ).
+    end.
 match_args([], [], _Opts) -> [];
 match_args([], Results, _Opts) ->
     ?event({match_args_results, Results}),
@@ -1373,6 +1372,41 @@ match_args([{Field, X} | Rest], Acc, Opts) ->
         {ok, Result} -> match_args(Rest, [Result | Acc], Opts);
         ignore -> match_args(Rest, Acc, Opts);
         {error, _} = Error -> throw(Error)
+    end.
+
+%% @doc Prove requested IDs against bounded index reads. A missed proof retains
+%% the complete plan, as the ID may also be indexed at another position.
+indexed_explicit_ids(Args, Opts) ->
+    maybe
+        true ?= hb_opts:get(match_index, false, Opts) =/= false,
+        true ?= hb_opts:get(cache_read_mode, normal, Opts) =/= raw,
+        [_ | _] = IDs ?= explicit_ids(Args, Opts),
+        {ok, [_ | _] = Predicates} ?=
+            index_predicates(maps:without([<<"ids">>, <<"id">>], Args), Opts),
+        Annotated = annotate_ids(IDs, Opts),
+        true ?= is_list(Annotated),
+        true ?= lists:all(
+            fun(#{ <<"id">> := ID, <<"offset">> := Offset }) ->
+                    From = #{
+                        <<"id">> => ID,
+                        <<"offset">> => case pending_offset(Offset) of
+                            true -> infinity;
+                            false -> Offset
+                        end
+                    },
+                    hb_ao:raw(<<"match@1.0">>, #{}, #{
+                        <<"path">> => <<"all">>, <<"predicates">> => Predicates,
+                        <<"from">> => From,
+                        <<"to">> => From#{ <<"id">> := <<ID/binary, 0>> },
+                        <<"limit">> => 1
+                    }, Opts) =:= {ok, [ID]};
+               (_) -> false
+            end,
+            Annotated
+        ),
+        {ok, IDs}
+    else
+        _ -> unservable
     end.
 
 %% @doc Generate a match upon `tags' in the arguments, if given.

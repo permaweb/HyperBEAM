@@ -721,14 +721,19 @@ transactions_query_ids_test_parallel() ->
 
 %% @doc Test transactions query with combined filters
 transactions_query_combined_test_parallel() ->
+    ArweaveStore = #{ <<"index-store">> => hb_test_utils:test_store() },
     Opts =
         #{
             <<"priv-wallet">> => Wallet = ar_wallet:new(),
+            <<"arweave-index-store">> => ArweaveStore,
             <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
     ExpectedID = hb_message:id(WrittenMsg, all, Opts),
+    hb_cache:write(hb_private:set(WrittenMsg, <<"offset">>, 10, Opts), Opts),
+    ok = hb_store_arweave:write_offset(
+        ArweaveStore, ExpectedID, <<"ans104@1.0">>, 10, 0),
     ?assertMatch(
         {ok, [_]},
         hb_cache:match(#{<<"type">> => <<"Message">>}, Opts)
@@ -767,6 +772,9 @@ transactions_query_combined_test_parallel() ->
         ),
     ?event({expected_id, ExpectedID}),
     ?event({transactions_query_combined_test, Res}),
+    % A different indexed position must remain discoverable after a bounded miss.
+    ok = hb_store_arweave:write_offset(
+        ArweaveStore, ExpectedID, <<"ans104@1.0">>, 20, 0),
     lists:foreach(
         fun({TestNode, MatchID}) ->
             lists:foreach(
@@ -794,11 +802,12 @@ transactions_query_combined_test_parallel() ->
             }), hb_message:id(WrittenMsg, none, Opts)}]
     ),
     lists:foreach(
-        fun(Filter) ->
-            Empty = dev_query_graphql:test_query(Node, Query, #{ Filter => [] }, Opts),
+        fun({Filter, Values}) ->
+            Empty = dev_query_graphql:test_query(Node, Query, #{ Filter => Values }, Opts),
             ?assertEqual([], hb_util:deep_get(<<"data/transactions/edges">>, Empty, Opts))
         end,
-        [<<"ids">>, <<"owners">>, <<"recipients">>]
+        [{Filter, []} || Filter <- [<<"ids">>, <<"owners">>, <<"recipients">>]] ++
+            [{<<"ids">>, [hb_util:encode(crypto:hash(sha256, <<"missing">>))]}]
     ),
     ?assertMatch(
         #{
