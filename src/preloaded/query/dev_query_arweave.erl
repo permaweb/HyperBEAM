@@ -449,14 +449,24 @@ force_terminal_cursor(Edges) ->
 %% of offset-annotated messages.
 read_ids([], _Count, _Opts) -> [];
 read_ids(_, 0, _Opts) -> [];
-read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
+read_ids([ID], _Count, Opts) -> read_id(ID, Opts);
+read_ids(IDs, Count, Opts) ->
+    {Page, Rest} = lists:split(min(Count, length(IDs)), IDs),
+    Read = lists:append(hb_pmap:parallel_map(
+        Page,
+        fun(Annotated) -> read_id(Annotated, Opts) end,
+        hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts)
+    )),
+    Read ++ read_ids(Rest, Count - length(Read), Opts).
+
+%% @doc Read one annotated ID, omitting messages the stores cannot supply.
+read_id(AnnotatedID = #{ <<"id">> := ID }, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Msg} ->
             [AnnotatedID#{ <<"node">> =>
                 hb_private:set(Msg, <<"query-match">>, AnnotatedID, Opts)
-            } | read_ids(Rest, Count - 1, Opts)];
-        _ ->
-            read_ids(Rest, Count, Opts)
+            }];
+        _ -> []
     end.
 
 %% @doc Drop to the cursor position, returning the list of items after the cursor.
@@ -1574,9 +1584,12 @@ pending_offsets_page_by_cursor_test() ->
         ArweaveStore, NumericID, <<"tx@1.0">>, 10, 1),
     ok = hb_store_arweave:write_offset(
         ArweaveStore, PendingA, <<"tx@1.0">>, relative, 0),
+    Missing = hb_util:encode(crypto:hash(sha256, <<"missing">>)),
+    ok = hb_store_arweave:write_offset(
+        ArweaveStore, Missing, <<"tx@1.0">>, 11, 0),
     BaseArgs =
         #{
-            <<"ids">> => [PendingA, NumericID],
+            <<"ids">> => [PendingA, Missing, NumericID],
             <<"block">> => #{ <<"min">> => 0 },
             <<"first">> => 1
         },
