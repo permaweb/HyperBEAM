@@ -981,10 +981,9 @@ transactions_query_filter_by_block_can_ignore_ranges_test_parallel() ->
 transactions_query_ids_preserve_arweave_tx_id_test_parallel() ->
     {ok, Node, Opts} = test_env_with_blocks(1892487, 1892487),
     ID = <<"mT7pIQx9ORnemXoIzWmKwymiZJxtOSvzxm3P44M9C1A">>,
-    ?assertMatch(
-        {ok, #{ <<"start">> := _ }},
-        hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID, Opts)
-    ),
+    {ok, #{ <<"start">> := _, <<"length">> := Length }} =
+        hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID, Opts),
+    DataSize = hb_util:bin(Length),
     ?assertMatch(
         #{ <<"data">> := #{ <<"transactions">> := #{
             <<"count">> := <<"1">>,
@@ -992,6 +991,7 @@ transactions_query_ids_preserve_arweave_tx_id_test_parallel() ->
                 #{
                     <<"node">> := #{
                         <<"id">> := ID,
+                        <<"data">> := #{ <<"size">> := DataSize },
                         <<"quantity">> := #{
                             <<"winston">> := <<"0">>,
                             <<"ar">> := <<"0.000000000000">>
@@ -1010,7 +1010,8 @@ transactions_query_ids_preserve_arweave_tx_id_test_parallel() ->
                 query($ids: [ID!]) {
                     transactions(ids: $ids, block: {min: 1892487, max: 1892487}) {
                         count
-                        edges { node { id quantity { winston ar } fee { winston ar } } }
+                        edges { node { id data { size }
+                            quantity { winston ar } fee { winston ar } } }
                     }
                 }
             """>>,

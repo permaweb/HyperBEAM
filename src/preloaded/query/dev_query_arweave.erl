@@ -268,36 +268,39 @@ query(Msg, <<"anchor">>, _Args, Opts) ->
         {ok, null} -> {ok, <<"">>};
         {ok, Anchor} -> encode_anchor(Anchor)
     end;
-query(Msg, <<"data">>, _Args, Opts) ->
-    Data =
-        case hb_private:get(<<"query-data-omitted">>, Msg, false, Opts) of
-            true -> null;
-            false ->
-                hb_ao:get_first(
-                    [
-                        {{as, <<"message@1.0">>, Msg}, <<"data">>},
-                        {{as, <<"message@1.0">>, Msg}, <<"body">>}
-                    ],
-                    <<>>,
-                    Opts
-                )
-        end,
-    Type = hb_maps:get(<<"content-type">>, Msg, null, Opts),
+query(Msg, <<"data">>, _Args, _Opts) ->
+    {ok, Msg};
+query(Msg, <<"size">>, _Args, Opts) ->
     Size =
         case find_field_key(<<"field-data_size">>, Msg, Opts) of
             {ok, null} -> indexed_data_size(Msg, Opts);
             {ok, DeclaredSize} -> DeclaredSize
         end,
-    {ok, #{ <<"data">> => Data, <<"type">> => Type, <<"size">> => Size }};
-query(#{ <<"size">> := Size }, <<"size">>, _Args, _Opts) when Size =/= null ->
-    {ok, Size};
-query(#{ <<"data">> := Data }, <<"size">>, _Args, _Opts)
-        when is_binary(Data) ->
-    {ok, byte_size(Data)};
-query(_Data, <<"size">>, _Args, _Opts) ->
-    {ok, null};
-query(#{ <<"type">> := Type }, <<"type">>, _Args, _Opts) ->
-    {ok, Type};
+    case Size of
+        null ->
+            Data =
+                case hb_private:get(<<"query-data-omitted">>, Msg, false, Opts) of
+                    true -> null;
+                    false ->
+                        hb_ao:get_first(
+                            [
+                                {{as, <<"message@1.0">>, Msg}, <<"data">>},
+                                {{as, <<"message@1.0">>, Msg}, <<"body">>}
+                            ],
+                            <<>>,
+                            Opts
+                        )
+                end,
+            {ok,
+                case Data of
+                    Bin when is_binary(Bin) -> byte_size(Bin);
+                    _ -> null
+                end
+            };
+        _ -> {ok, Size}
+    end;
+query(Msg, <<"type">>, _Args, Opts) ->
+    {ok, hb_maps:get(<<"content-type">>, Msg, null, Opts)};
 query(_Msg, Field, _Args, _Opts)
         when Field =:= <<"bundledIn">>; Field =:= <<"parent">> ->
     {ok, #{}};
