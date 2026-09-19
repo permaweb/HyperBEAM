@@ -533,7 +533,11 @@ fetch_block_remote(Height, Opts) ->
 fetch_block_remote(Height, Attempts, Opts) ->
     FetchOpts = no_result_cache(fetch_opts(Attempts, Opts)),
     case hb_ao:resolve(
-        <<?ARWEAVE_DEVICE/binary, "/block&block=", (hb_util:bin(Height))/binary>>,
+        #{
+            <<"path">> => <<?ARWEAVE_DEVICE/binary, "/block">>,
+            <<"block">> => Height,
+            <<"cache-control">> => [<<"no-cache">>]
+        },
         FetchOpts
     ) of
         {ok, Block} ->
@@ -1165,6 +1169,62 @@ block_validation_test() ->
             #{}
         )
     ).
+
+block_cache_refresh_test_() ->
+    {timeout, 60,
+        fun() ->
+            Stores = [hb_test_utils:test_store(hb_store_volatile)
+                || _ <- lists:seq(1, 3)],
+            lists:foreach(fun hb_store:start/1, Stores),
+            [Ambient, Blocks, Scheduler] = Stores,
+            Opts = no_result_cache(#{
+                <<"store">> => [Ambient],
+                <<"arweave-block-store">> => [Blocks],
+                <<"scheduler-store">> => [Scheduler],
+                <<"gateway">> => <<"http://chain-3.arweave.xyz:1984">>,
+                <<"arweave-scheduler-fetch-attempts">> => 1
+            }),
+            Height = 2003806,
+            Req = #{ <<"path">> => <<"~arweave@2.9/block">>,
+                <<"block">> => Height },
+            try
+                {ok, Canonical} = fetch_block(Height, Opts),
+                Orphan = Canonical#{ <<"indep_hash">> =>
+                    <<"kOJgXHI4xd7gTjHGg5j9OimYygCIGyGrenmcGimIeR3jxBLZKXA9V2TKxP7J1V2v">> },
+                ?assertNotEqual(Orphan, Canonical),
+                BlockOpts = Opts#{ <<"store">> => [Blocks] },
+                {ok, OrphanID} = hb_cache:write(Orphan, BlockOpts),
+                ok = hb_cache:link(OrphanID,
+                    <<"~arweave@2.9/block/height/2003806">>, BlockOpts),
+                {ok, Cached} = hb_ao:resolve(Req, Opts),
+                ?assertEqual(Orphan, hb_cache:ensure_all_loaded(Cached, Opts)),
+                ?assertEqual({ok, Canonical}, fetch_block(Height, Opts)),
+                {ok, _} = dev_arweave_scheduler_cache:write_block(
+                    Height, Canonical, Opts
+                ),
+                Offline = Opts#{ <<"gateway">> => <<"http://127.0.0.1:1">>,
+                    <<"routes">> => [] },
+                ?assertEqual({ok, Canonical}, fetch_block(Height, Offline)),
+                {ok, Refreshed} = hb_ao:resolve(
+                    Req#{ <<"cache-control">> => [<<"no-cache">>] },
+                    (fetch_opts(1, Opts))#{ <<"arweave-index-blocks">> => true }
+                ),
+                ?assertEqual(Canonical,
+                    hb_cache:ensure_all_loaded(Refreshed, Opts)),
+                {ok, Stored} = hb_ao:resolve(
+                    Req#{ <<"cache-control">> => [<<"only-if-cached">>] },
+                    Offline
+                ),
+                ?assertEqual(Canonical,
+                    hb_cache:ensure_all_loaded(Stored, Opts)),
+                ?assertEqual({error, not_found}, hb_ao:resolve(
+                    Req#{ <<"cache-control">> =>
+                        [<<"no-cache">>, <<"only-if-cached">>] }, Offline
+                ))
+            after
+                lists:foreach(fun hb_store:stop/1, Stores)
+            end
+        end}.
 
 unprocessable_header_indexing_test_() ->
     {timeout, 60,

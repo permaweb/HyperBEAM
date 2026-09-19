@@ -747,7 +747,7 @@ block(Base, Request, Opts) when is_map(Base) ->
             end
     end;
 block({id, ID}, Req, Opts) ->
-    case dev_arweave_block_cache:read(ID, Opts) of
+    case read_cached_block(ID, Req, Opts) of
         {ok, Block} ->
             ?event(arweave_short, {read_block_from_cache,
                 {id, {explicit, ID}}
@@ -762,7 +762,7 @@ block({id, ID}, Req, Opts) ->
             request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
     end;
 block({height, Height}, Req, Opts) ->
-    case dev_arweave_block_cache:read(Height, Opts) of
+    case read_cached_block(Height, Req, Opts) of
         {ok, Block} ->
             ?event(arweave_short, {read_block_from_cache,
                 {height, Height}
@@ -793,6 +793,16 @@ block({height, Height}, Req, Opts) ->
 %% @doc List the block heights available in the block cache.
 block_heights(_Base, _Request, Opts) ->
     dev_arweave_block_cache:heights(Opts).
+
+%% @doc Bypass stored headers when the caller requests a fresh block.
+read_cached_block(Block, Req, Opts) ->
+    case lists:member(
+        <<"no-cache">>,
+        hb_maps:get(<<"cache-control">>, Req, [], Opts)
+    ) of
+        true -> {error, not_found};
+        false -> dev_arweave_block_cache:read(Block, Opts)
+    end.
 
 %% @doc Return whether the request only permits cached values.
 only_if_cached(Req, Opts) ->
