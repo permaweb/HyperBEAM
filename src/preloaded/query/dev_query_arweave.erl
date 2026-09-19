@@ -7,8 +7,17 @@
 %%% optional string `count'. Supported filters are `ids', `tags', `owners',
 %%% `recipients' and `block'. Tag names address message keys. Values within a
 %%% tag are ORed; separate tags and other filters are ANDed. Owners are
-%%% committers and recipients are targets. A query without a selecting filter
-%%% does not enumerate the store; a block range alone is not a selecting filter.
+%%% committers and recipients are targets. Without these selecting filters,
+%%% queries enumerate confirmed base-layer TXs from block headers, optionally
+%%% within inclusive `block.min/max' heights. This excludes bundled data items
+%%% and pending messages. Heights start at zero and end at the compact index's
+%%% tip, or the network tip if the index is empty and remote reads are enabled.
+%%% Within a height, TX IDs sort lexically; descending reverses both orders.
+%%% `block=...&tx=...' cursors resume exclusively within that height. Missing
+%%% headers return errors; empty blocks are skipped. `count' has the same cap
+%%% as indexed queries and ignores `after'. Selected nodes read by ID from the
+%%% configured stores, falling back to `~arweave@2.9/tx' with `exclude-data=true'.
+%%% Their block fields reuse the containing header.
 %%%
 %%% `first' limits the page, clamped between zero and node option
 %%% `max-page-size' (default 100). The schema defaults `first' to 10; calls
@@ -37,12 +46,15 @@
 %%% index matches, not their readability. `count' ignores `after' and counts
 %%% matches across the query's ranges, capped by `query-arweave-max-index-count'
 %%% (default 1000); it is neither an uncapped total nor a count of readable
-%%% edges. Other supported queries use cache matching and ID reads; their
+%%% edges. Cursor-only indexed and block-TX pages do not read transaction
+%%% messages; their cursors identify candidates regardless of readability.
+%%% Other supported queries use cache matching and ID reads; their
 %%% count is the number of candidate IDs before pagination and read failures.
 %%% Without an Arweave offset store, that path cannot order or filter by weave
 %%% position.
 %%%
-%%% `block' bounds are inclusive heights translated to weave byte ranges.
+%%% With selecting filters, `block' bounds are inclusive heights translated
+%%% to weave byte ranges.
 %%% Indexed matching tests entry offsets; cache matching tests each item's
 %%% start and end. Block metadata is read locally, then remotely unless
 %%% `query-arweave-remote-block-ranges=false'. A missing lower or upper bound's
@@ -146,6 +158,12 @@ query(#{ <<"predicates">> := Predicates, <<"ranges">> := Ranges },
     case index_matches(Predicates, Ranges, none, Cap, Opts) of
         {ok, Matches} -> {ok, hb_util:bin(length(Matches))};
         Error -> Error
+    end;
+query(#{ <<"block-range">> := Range }, <<"count">>, _Args, Opts) ->
+    Cap = hb_opts:get(query_arweave_max_index_count, ?DEFAULT_MAX_INDEX_COUNT, Opts),
+    maybe
+        {ok, Matches} ?= block_transactions(Range, none, Cap, Opts),
+        {ok, hb_util:bin(length(Matches))}
     end;
 query(Obj, <<"transaction">>, Args, Opts) ->
     case query(Obj, <<"transactions">>, Args, Opts) of
@@ -906,13 +924,18 @@ cached_block_heights(Opts) ->
 
 %%% Index-served pages
 
-%% @doc Serve a transactions page from the `~match@1.0' index: the matches
-%% of the query's pairs over its block range from its cursor, in the sort's
-%% direction. Every query the index cannot serve is `unservable':
-%% `cached_transactions' answers it.
+%% @doc Select block enumeration for unfiltered queries, indexed matching for
+%% predicates, or `unservable' for the cache-matching path.
 index_connection(Args, Opts) ->
+    case index_predicates(Args, Opts) of
+        {ok, []} -> block_transaction_connection(Args, Opts);
+        {ok, Predicates} -> index_connection(Predicates, Args, Opts);
+        Result -> Result
+    end.
+
+%% @doc Read a page selected by indexed predicates.
+index_connection(Predicates, Args, Opts) ->
     maybe
-        {ok, Predicates} ?= index_predicates(Args, Opts),
         {ok, After} ?= index_cursor(Args, Opts),
         Direction =
             case hb_maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>, Opts) of
@@ -938,7 +961,7 @@ index_connection(Args, Opts) ->
 
 %% @doc The query's AND predicates, each with alternative values. Owners and
 %% recipients use `committer' and `target'. Explicit IDs, a height or bundle
-%% filter, and a query naming no predicate are `unservable'.
+%% filter are `unservable'. An empty predicate list selects block enumeration.
 index_predicates(Args, Opts) ->
     Get = fun(Filter) -> hb_maps:get(Filter, Args, null, Opts) end,
     Fields =
@@ -965,8 +988,103 @@ index_predicates(Args, Opts) ->
         Predicates = Tags ++
             [ #{ <<"name">> => Pair, <<"values">> => Values }
             || {Pair, Values} <- Fields, Values =/= null ],
-        true ?= Predicates =/= [] orelse unservable,
         {ok, Predicates}
+    end.
+
+%% @doc Page base-layer TX IDs directly from their containing block headers.
+block_transaction_connection(RawArgs, Opts) ->
+    Present = fun(_Key, Value) -> Value =/= null end,
+    Args = hb_maps:filter(Present, RawArgs, Opts),
+    Range = case hb_opts:get(query_arweave_ignore_block_ranges, false, Opts) of
+        true -> #{};
+        false -> hb_maps:filter(Present, hb_maps:get(<<"block">>, Args, #{}, Opts), Opts)
+    end,
+    maybe
+        {ok, After} ?= block_transaction_cursor(hb_maps:get(<<"after">>, Args, null, Opts)),
+        {ok, Tip} ?= block_index_tip(Opts),
+        Bounds = #{
+            <<"min">> => max(0, hb_maps:get(<<"min">>, Range, 0, Opts)),
+            <<"max">> => min(Tip, hb_maps:get(<<"max">>, Range, Tip, Opts)),
+            <<"direction">> => case hb_maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>, Opts) of
+                <<"HEIGHT_ASC">> -> 1;
+                _ -> -1
+            end
+        },
+        Limit = page_size(Args, Opts),
+        {ok, Matches} ?= block_transactions(Bounds, After, Limit + 1, Opts),
+        More = length(Matches) > Limit,
+        Force = force_next_page(Args, Opts),
+        {ok, #{
+            <<"matches">> => lists:sublist(Matches, Limit),
+            <<"block-range">> => Bounds,
+            <<"terminal">> => Force andalso not More,
+            <<"pageInfo">> => #{ <<"hasNextPage">> => More orelse Force }
+        }}
+    end.
+
+%% @doc Find the indexed tip with one ordered seek, without listing headers.
+block_index_tip(Opts) ->
+    case hb_ao:resolve(<<"~arweave@2.9/blocks&direction=desc">>, Opts) of
+        {ok, [Entry]} -> {ok, hb_maps:get(<<"height">>, Entry, Opts)};
+        {ok, []} ->
+            case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
+                false -> {ok, -1};
+                true ->
+                    maybe
+                        {ok, Status} ?= query(undefined, <<"networkInfo">>, #{}, Opts),
+                        {ok, hb_util:int(hb_maps:get(<<"height">>, Status, Opts))}
+                    end
+            end;
+        Error -> Error
+    end.
+
+%% @doc Decode a height and TX ID, accepting the forced-page terminal marker.
+block_transaction_cursor(After) when After =:= null; After =:= <<>> -> {ok, none};
+block_transaction_cursor(After) ->
+    try
+        [<<"block=", H/binary>>, <<"tx=", ID:43/binary>> | Tail] =
+            binary:split(After, <<"&">>, [global]),
+        true = Tail =:= [] orelse Tail =:= [<<"remaining=0">>],
+        Height = binary_to_integer(H),
+        true = Height >= 0,
+        <<_:32/binary>> = hb_util:native_id(ID),
+        {ok, #{ <<"height">> => Height, <<"id">> => ID }}
+    catch _:_ -> {error, <<"Invalid cursor.">>}
+    end.
+
+%% @doc Start at the cursor's height, clamped to the near end of the range.
+block_transactions(Range = #{ <<"min">> := Min, <<"max">> := Max,
+        <<"direction">> := Direction }, After, Limit, Opts) ->
+    Height = case {Direction, After} of
+        {1, #{ <<"height">> := H }} -> max(Min, H);
+        {-1, #{ <<"height">> := H }} -> min(Max, H);
+        {1, none} -> Min;
+        {-1, none} -> Max
+    end,
+    block_transactions(Height, Range, After, Limit, Opts).
+
+%% @doc Read enough headers for the page; reuse each header for block fields.
+block_transactions(Height, #{ <<"min">> := Min, <<"max">> := Max }, _After,
+        Limit, _Opts) when Height < Min; Height > Max; Limit =:= 0 -> {ok, []};
+block_transactions(Height, Range = #{ <<"direction">> := Direction }, After, Limit, Opts) ->
+    maybe
+        {ok, Block} ?= read_block(Height, Opts),
+        IDs = lists:sort(hb_maps:get(<<"txs">>, Block, [], Opts)),
+        Ordered = case Direction of 1 -> IDs; -1 -> lists:reverse(IDs) end,
+        Remaining = case After of
+            #{ <<"height">> := Height, <<"id">> := Last } ->
+                [ID || ID <- Ordered, (Direction =:= 1 andalso ID > Last)
+                    orelse (Direction =:= -1 andalso ID < Last)];
+            _ -> Ordered
+        end,
+        Matches = [#{
+            <<"id">> => ID, <<"commitment-device">> => <<"tx@1.0">>,
+            <<"block-result">> => {ok, Block},
+            <<"cursor">> => <<"block=", (hb_util:bin(Height))/binary, "&tx=", ID/binary>>
+        } || ID <- lists:sublist(Remaining, Limit)],
+        {ok, Rest} ?= block_transactions(Height + Direction, Range, none,
+            Limit - length(Matches), Opts),
+        {ok, Matches ++ Rest}
     end.
 
 %% @doc The match the page resumes after, from the cursor of an
@@ -1118,18 +1236,20 @@ locate(Predicates, Req, Opts) ->
 %% their keys, read together. A match carrying an ID reads its cached
 %% message; one without reads the item at its offset from the weave. A
 %% match neither can read is dropped and reported.
+match_edges(Matches, #{ <<"query-arweave-nodes">> := false }) ->
+    [#{ <<"cursor">> => match_cursor(Match) } || Match <- Matches];
 match_edges(Matches, Opts) ->
     Read =
         hb_pmap:parallel_map(
-            Matches,
-            fun(Match) -> {Match, match_message(Match, Opts)} end,
+            [maps:remove(<<"block-result">>, Match) || Match <- Matches],
+            fun(Match) -> match_message(Match, Opts) end,
             hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts)
         ),
     block_edges(lists:filtermap(
-        fun({Match = #{ <<"member">> := Member }, {ok, Node}}) ->
+        fun({Match, {ok, Node}}) ->
                 {true,
                     #{
-                        <<"cursor">> => <<?MEMBER_CURSOR, Member/binary>>,
+                        <<"cursor">> => match_cursor(Match),
                         <<"node">> =>
                             hb_private:set(Node, <<"query-match">>, Match, Opts)
                     }};
@@ -1139,11 +1259,22 @@ match_edges(Matches, Opts) ->
                 ),
                 false
         end,
-        Read
+        lists:zip(Matches, Read)
     ), Opts).
+
+%% @doc Preserve block-page cursors, or encode a match index member.
+match_cursor(#{ <<"cursor">> := Cursor }) -> Cursor;
+match_cursor(#{ <<"member">> := Member }) -> <<?MEMBER_CURSOR, Member/binary>>.
 
 %% @doc A match's message: through `hb_cache' by its ID, or from the weave
 %% by its offset.
+match_message(#{ <<"id">> := ID, <<"cursor">> := <<"block=", _/binary>> }, Opts) ->
+    case hb_cache:read(ID, Opts) of
+        {ok, Msg} -> {ok, Msg};
+        {error, not_found} -> hb_ao:resolve(#{ <<"path">> => <<"~arweave@2.9/tx">>,
+            <<"tx">> => ID, <<"exclude-data">> => true }, Opts);
+        Error -> Error
+    end;
 match_message(#{ <<"id">> := ID }, Opts) when ID =/= <<>> ->
     hb_cache:read(ID, Opts);
 match_message(#{ <<"offset">> := Offset, <<"commitment-device">> := Device }, Opts) ->

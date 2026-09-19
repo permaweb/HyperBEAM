@@ -150,7 +150,10 @@ handle(_Base, RawReq, Opts) ->
                                 ?DEFAULT_QUERY_TIMEOUT,
                                 Opts
                             ),
-                        opts => Opts#{ <<"query-arweave-blocks">> => selects_block(AST2) },
+                        opts => Opts#{
+                            <<"query-arweave-blocks">> => selects(<<"block">>, AST2),
+                            <<"query-arweave-nodes">> => selects(<<"node">>, AST2)
+                        },
                         req => Req
                     },
                 ?event(graphql_context_created),
@@ -176,17 +179,17 @@ handle(_Base, RawReq, Opts) ->
             end
     end.
 
-%% @doc Recognize selected block fields, including aliases and fragments.
-selects_block(#document{ definitions = Definitions }) -> selects_block(Definitions);
-selects_block([]) -> false;
-selects_block([#field{ selection_set = Selection } = Field | Rest]) ->
-    graphql_ast:id(Field) =:= <<"block">> orelse
-        selects_block(Selection) orelse selects_block(Rest);
-selects_block([#op{ selection_set = Selection } | Rest]) ->
-    selects_block(Selection) orelse selects_block(Rest);
-selects_block([#frag{ selection_set = Selection } | Rest]) ->
-    selects_block(Selection) orelse selects_block(Rest);
-selects_block([_ | Rest]) -> selects_block(Rest).
+%% @doc Recognize selected fields, including aliases and fragments.
+selects(Name, #document{ definitions = Definitions }) -> selects(Name, Definitions);
+selects(_Name, []) -> false;
+selects(Name, [#field{ selection_set = Selection } = Field | Rest]) ->
+    graphql_ast:id(Field) =:= Name orelse
+        selects(Name, Selection) orelse selects(Name, Rest);
+selects(Name, [#op{ selection_set = Selection } | Rest]) ->
+    selects(Name, Selection) orelse selects(Name, Rest);
+selects(Name, [#frag{ selection_set = Selection } | Rest]) ->
+    selects(Name, Selection) orelse selects(Name, Rest);
+selects(Name, [_ | Rest]) -> selects(Name, Rest).
 
 %% @doc The main entrypoint for resolving GraphQL elements, called by the
 %% GraphQL library. We split the resolution flows into two separated functions:

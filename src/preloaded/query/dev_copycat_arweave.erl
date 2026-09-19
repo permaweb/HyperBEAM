@@ -1199,6 +1199,87 @@ block_index_boundaries(Module) ->
         {ID, case Block of null -> null; _ -> hb_maps:get(<<"height">>, Block) end}
         || #{ <<"node">> := #{ <<"id">> := ID, <<"block">> := Block } } <- Edges])).
 
+%% @doc Unfiltered GraphQL pages use block headers, including empty blocks and
+%% distinct zero-data TXs at one position, in either direction.
+block_transaction_pages_test() ->
+    Wallet = ar_wallet:new(),
+    Blocks = hb_test_utils:test_store(hb_store_lmdb),
+    Opts = #{ <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)],
+        <<"arweave-block-store">> => Blocks, <<"priv-wallet">> => Wallet,
+        <<"port">> => 0, <<"query-arweave-remote-block-ranges">> => false,
+        <<"query-arweave-max-index-count">> => 4,
+        <<"gateway">> => <<"http://127.0.0.1:1">> },
+    IDs = lists:sort([begin
+        Msg = hb_message:commit(#{ <<"test-tx">> => hb_util:bin(N) }, Opts, <<"tx@1.0">>),
+        {ok, _} = hb_cache:write(Msg, Opts),
+        hb_message:id(Msg, signed, Opts)
+    end || N <- lists:seq(1, 5)]),
+    lists:foreach(fun({H, TXs}) -> block_index_header(H, 100, 0, TXs, Blocks) end,
+        [{0, lists:sublist(IDs, 2)}, {1, []}, {2, lists:nthtail(2, IDs)}]),
+    {ok, 0} = hb_ao:resolve(<<"~copycat@1.0/arweave&mode=blocks&from=2&to=0",
+        "&include-proofs=false&include-block-index=true">>, Opts),
+    Node = hb_http_server:start_node(Opts),
+    Query = <<"query($block:BlockFilter,$sort:SortOrder,$after:String,$first:Int){",
+        "transactions(block:$block,sort:$sort,after:$after,first:$first,tags:[]){",
+        "count pageInfo{hasNextPage} edges{cursor ...Item}}}",
+        "fragment Item on TransactionEdge {node{id block{height}}}">>,
+    Request = fun(Vars) ->
+        {ok, Reply} = hb_http:post(Node, #{ <<"path">> => <<"~query@1.0/graphql">>,
+            <<"content-type">> => <<"application/json">>,
+            <<"codec-device">> => <<"json@1.0">>,
+            <<"body">> => hb_json:encode(#{ <<"query">> => Query,
+                <<"variables">> => Vars }) }, #{}),
+        hb_json:decode(hb_maps:get(<<"body">>, Reply))
+    end,
+    Page = fun(Vars) ->
+        Res = Request(maps:merge(#{ <<"first">> => 2 }, Vars)),
+        ?assertEqual([], maps:get(<<"errors">>, Res, [])),
+        hb_util:deep_get(<<"data/transactions">>, Res, Opts)
+    end,
+    Pages = fun Pages(Sort, After) ->
+        #{ <<"edges">> := Edges, <<"count">> := <<"4">>,
+            <<"pageInfo">> := #{ <<"hasNextPage">> := More }} =
+                Page(#{ <<"sort">> => Sort, <<"after">> => After }),
+        case More of
+            true -> Edges ++ Pages(Sort, maps:get(<<"cursor">>, lists:last(Edges)));
+            false -> Edges
+        end
+    end,
+    try
+        Asc = Pages(<<"HEIGHT_ASC">>, null),
+        ?assertEqual(IDs, [ID || #{ <<"node">> := #{ <<"id">> := ID }} <- Asc]),
+        ?assertEqual([0, 0, 2, 2, 2], [H || #{ <<"node">> := #{ <<"block">> :=
+            #{ <<"height">> := H } }} <- Asc]),
+        ?assertEqual(lists:reverse(Asc), Pages(<<"HEIGHT_DESC">>, null)),
+        ?assertMatch(#{ <<"edges">> := [_, _], <<"count">> := <<"2">>,
+            <<"pageInfo">> := #{ <<"hasNextPage">> := false }},
+            Page(#{ <<"block">> => #{ <<"max">> => 0, <<"min">> => null }})),
+        ?assertMatch(#{ <<"count">> := <<"3">> },
+            Page(#{ <<"block">> => #{ <<"min">> => 2 }})),
+        ?assertMatch(#{ <<"edges">> := [], <<"count">> := <<"0">> },
+            Page(#{ <<"block">> => #{ <<"min">> => 9000000 }})),
+        ?assertMatch(#{ <<"edges">> := [],
+            <<"pageInfo">> := #{ <<"hasNextPage">> := true }},
+            Page(#{ <<"first">> => 0 })),
+        Last = maps:get(<<"cursor">>, lists:last(Asc)),
+        ?assertMatch(#{ <<"edges">> := [],
+            <<"pageInfo">> := #{ <<"hasNextPage">> := false }},
+            Page(#{ <<"sort">> => <<"HEIGHT_ASC">>,
+                <<"after">> => <<Last/binary, "&remaining=0">> })),
+        ?assertMatch(#{ <<"errors">> := [_ | _] },
+            Request(#{ <<"after">> => <<"block=bad&tx=bad">> })),
+        % Cursor-only reads need neither cached transactions nor a gateway.
+        {ok, Reply} = hb_ao:resolve(#{ <<"path">> => <<"~query@1.0/graphql">>,
+            <<"method">> => <<"POST">>, <<"body">> => hb_json:encode(#{
+                <<"query">> => <<"{transactions(first:5){edges{cursor}}}">>
+            }) }, Opts#{ <<"store">> => [] }),
+        ?assertEqual([maps:with([<<"cursor">>], E) || E <- lists:reverse(Asc)],
+            hb_util:deep_get(<<"data/transactions/edges">>,
+                hb_json:decode(hb_maps:get(<<"body">>, Reply)), Opts))
+    after
+        cowboy:stop_listener(hb_util:human_id(ar_wallet:to_address(Wallet)))
+    end.
+
 %% @doc Cache a sparse header fixture through ordinary message/cache APIs.
 block_index_header(Height, End, Size, TXs, Store) ->
     Opts = #{ <<"store">> => Store },
