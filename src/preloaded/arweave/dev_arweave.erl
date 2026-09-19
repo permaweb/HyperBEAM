@@ -720,8 +720,18 @@ get_chunk(Offset, Opts) ->
 %% is present, it is used to look up the associated block. If it is of Arweave
 %% block hash length (43 characters), it is used as an ID. If it is parsable as
 %% an integer, it is used as a block height. If it is not present, the current
-%% block is used.
-block(Base, Request, Opts) when is_map(Base) ->
+%% block is used. `include-proofs' defaults to true; false omits `poa' and
+%% `poa2' from the returned and cached header after fetching from Arweave.
+%% A full request refetches a cached header whose proofs are absent.
+block(Base, Request, RawOpts) when is_map(Base) ->
+    Opts = RawOpts#{ <<"include-proofs">> =>
+        hb_util:bool(
+            hb_maps:get_first(
+                [{Request, <<"include-proofs">>}, {Base, <<"include-proofs">>}],
+                hb_opts:get(include_proofs, true, RawOpts),
+                RawOpts
+            )
+        ) },
     Block =
         hb_ao:get_first(
             [
@@ -732,8 +742,8 @@ block(Base, Request, Opts) when is_map(Base) ->
             Opts
         ),
     case Block of
-        <<"current">> -> current(Base, Request, Opts);
-        not_found -> current(Base, Request, Opts);
+        <<"current">> -> request(<<"GET">>, <<"/block/current">>, Opts);
+        not_found -> request(<<"GET">>, <<"/block/current">>, Opts);
         ID when ?IS_BLOCK_ID(ID) -> block({id, ID}, Request, Opts);
         MaybeHeight ->
             try hb_util:int(MaybeHeight) of
@@ -794,14 +804,27 @@ block({height, Height}, Req, Opts) ->
 block_heights(_Base, _Request, Opts) ->
     dev_arweave_block_cache:heights(Opts).
 
-%% @doc Bypass stored headers when the caller requests a fresh block.
+%% @doc Bypass stored headers for refreshes or when required proofs are absent.
 read_cached_block(Block, Req, Opts) ->
-    case lists:member(
-        <<"no-cache">>,
-        hb_maps:get(<<"cache-control">>, Req, [], Opts)
-    ) of
+    maybe
+        false ?= lists:member(
+            <<"no-cache">>, hb_maps:get(<<"cache-control">>, Req, [], Opts)),
+        {ok, Cached} ?= dev_arweave_block_cache:read(Block, Opts),
+        false ?= hb_opts:get(include_proofs, true, Opts)
+            andalso not hb_maps:is_key(<<"poa">>, Cached, Opts),
+        {ok, block_proofs(Cached, Opts)}
+    else
         true -> {error, not_found};
-        false -> dev_arweave_block_cache:read(Block, Opts)
+        Error -> Error
+    end.
+
+%% @doc Remove proof payloads without loading their cached links.
+block_proofs(Block, Opts) ->
+    case hb_opts:get(include_proofs, true, Opts) of
+        true -> Block;
+        false ->
+            hb_maps:without(
+                [<<"poa">>, <<"poa2">>], hb_message:uncommitted(Block, Opts), Opts)
     end.
 
 %% @doc Return whether the request only permits cached values.
@@ -812,8 +835,8 @@ only_if_cached(Req, Opts) ->
     ).
 
 %% @doc Retrieve the current block information from Arweave.
-current(_Base, _Request, Opts) ->
-    request(<<"GET">>, <<"/block/current">>, Opts).
+current(Base, Request, Opts) ->
+    block(Base, Request#{ <<"block">> => <<"current">> }, Opts).
 
 price(Base, Request, Opts) ->
     Size =
@@ -979,7 +1002,7 @@ to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, Response}, LogExtra, Op
     end;
 to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
-    Block =
+    Decoded =
         hb_message:convert(
             Body,
             <<"structured@1.0">>,
@@ -991,6 +1014,7 @@ to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
             },
             Opts
         ),
+    Block = block_proofs(Decoded, Opts),
     CacheRes =
         case hb_opts:get(arweave_index_blocks, true, Opts) of
             true -> dev_arweave_block_cache:write(Block, Opts);
@@ -1114,6 +1138,72 @@ event_request(Path, Method, Status, Extra) ->
     ?event(arweave_short, MergedTuple).
 
 %%% Tests
+
+%% @doc Proof-free headers stay isolated, satisfy metadata queries offline,
+%% and cannot satisfy a request for proofs until the full block is fetched.
+include_proofs_test_() ->
+    [{timeout, 60, fun() -> include_proofs(Height) end}
+        || Height <- [0, 1000000, 2003806]].
+
+%% @doc Exercise both proof representations across historical block formats.
+include_proofs(Height) ->
+    Stores = [hb_test_utils:test_store(hb_store_volatile)
+        || _ <- lists:seq(1, 2)],
+    lists:foreach(fun hb_store:start/1, Stores),
+    [Ambient, Blocks] = Stores,
+    Opts = #{
+        <<"store">> => [Ambient],
+        <<"arweave-block-store">> => [Blocks],
+        <<"gateway">> => <<"http://chain-3.arweave.xyz:1984">>,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    Req = #{ <<"path">> => <<"~arweave@2.9/block">>,
+        <<"block">> => Height },
+    CachePath = <<"~arweave@2.9/block/height/", (hb_util:bin(Height))/binary>>,
+    Offline = Opts#{ <<"gateway">> => <<"http://127.0.0.1:1">>,
+        <<"routes">> => [] },
+    CachedReq = Req#{ <<"cache-control">> => [<<"only-if-cached">>] },
+    Public = fun(Msg) ->
+        hb_private:reset(hb_cache:ensure_all_loaded(Msg, Opts))
+    end,
+    try
+        {ok, RawFull} = hb_ao:resolve(Req,
+            Opts#{ <<"arweave-index-blocks">> => false }),
+        Full = Public(RawFull),
+        ?assert(hb_maps:is_key(<<"poa">>, Full)),
+        ?assertEqual(Height =:= 2003806, hb_maps:is_key(<<"poa2">>, Full)),
+        Expected = hb_maps:without([<<"poa">>, <<"poa2">>], Full),
+        {ok, Lean} = hb_ao:resolve(
+            Req#{ <<"include-proofs">> => false }, Opts),
+        ?assertEqual(Expected, Public(Lean)),
+        {ok, Stored} = hb_cache:read(
+            CachePath,
+            Opts#{ <<"store">> => [Blocks] }),
+        ?assertEqual(Expected, Public(Stored)),
+        ?assertEqual({error, not_found}, hb_cache:read(
+            CachePath, Opts)),
+        lists:foreach(fun(Reference) ->
+            Read = CachedReq#{ <<"block">> => Reference },
+            ?assertEqual({error, not_found}, hb_ao:resolve(Read, Offline)),
+            {ok, Header} = hb_ao:resolve(
+                Read#{ <<"include-proofs">> => <<"false">> }, Offline),
+            ?assertEqual(Expected, Public(Header))
+        end, [Height, hb_maps:get(<<"indep_hash">>, Full)]),
+        % Explicit cache controls still apply to proof-free reads.
+        ?assertEqual({error, not_found}, hb_ao:resolve(
+            CachedReq#{ <<"include-proofs">> => false,
+                <<"cache-control">> => [<<"no-cache">>, <<"only-if-cached">>] },
+            Offline)),
+        {ok, Restored} = hb_ao:resolve(Req, Opts),
+        ?assertEqual(Full, Public(Restored)),
+        {ok, Warm} = hb_ao:resolve(CachedReq, Offline),
+        ?assertEqual(Full, Public(Warm)),
+        {ok, WarmLean} = hb_ao:resolve(
+            CachedReq#{ <<"include-proofs">> => false }, Offline),
+        ?assertEqual(Expected, Public(WarmLean))
+    after
+        lists:foreach(fun hb_store:stop/1, Stores)
+    end.
 
 unprocessable_transaction_test() ->
     Wallet = ar_wallet:new(),

@@ -5,6 +5,7 @@
 %%% every block in the range is processed.
 %%% `mode=blocks' stores only block headers in `arweave-block-store' (or `store'),
 %%% irrespective of `arweave-index-blocks', and does not process pending TXs.
+%%% `include-proofs=false' omits block proofs from the returned/cached headers.
 %%%
 %%% Every transaction header and, in `full' mode, every bundled item an index
 %%% run caches carries its weave offset as `priv/offset'.
@@ -21,7 +22,10 @@
 %% @doc Fetch blocks from an Arweave node between a given range, or from the
 %% latest known block towards the Genesis block. If no range is provided, we
 %% fetch blocks from the latest known block towards the Genesis block.
-arweave(_Base, Request, Opts) ->
+arweave(_Base, Request, RawOpts) ->
+    Opts = RawOpts#{ <<"include-proofs">> =>
+        hb_util:bool(hb_maps:get(<<"include-proofs">>, Request,
+            hb_opts:get(include_proofs, true, RawOpts), RawOpts)) },
     case request_mode(Request, Opts) of
         {ok, list} ->
             case parse_range(Request, Opts) of
@@ -117,7 +121,8 @@ normalize_height(_Key, Height, Tip) ->
 
 latest_height(Opts) ->
     case hb_ao:resolve(
-        <<?ARWEAVE_DEVICE/binary, "/current/height">>,
+        #{ <<"path">> => <<?ARWEAVE_DEVICE/binary, "/current/height">>,
+            <<"include-proofs">> => hb_opts:get(include_proofs, true, Opts) },
         Opts
     ) of
         {ok, ResolvedHeight} -> {ok, hb_util:int(ResolvedHeight)};
@@ -222,11 +227,9 @@ fetch_block_header(Height, Opts) ->
     ?event(debug_copycat, {fetching_block, Height}),
     observe_event(<<"block_header">>, fun() ->
         hb_ao:resolve(
-            <<
-                ?ARWEAVE_DEVICE/binary,
-                "/block=",
-                (hb_util:bin(Height))/binary
-            >>,
+            #{ <<"path">> => <<?ARWEAVE_DEVICE/binary, "/block">>,
+                <<"block">> => Height,
+                <<"include-proofs">> => hb_opts:get(include_proofs, true, Opts) },
             Opts
         )
     end).
@@ -367,6 +370,7 @@ is_block_indexed(Height, blocks, Opts) ->
     case hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"path">> => <<"block">>, <<"block">> => Height,
+            <<"include-proofs">> => hb_opts:get(include_proofs, true, Opts),
             <<"cache-control">> => [<<"only-if-cached">>] },
         Opts
     ) of
@@ -1440,6 +1444,60 @@ list_index_test_parallel() ->
         ], maps:get(<<"indexed">>, BlockInfo)),
     ?assertEqual([ ], maps:get(<<"not-indexed">>, BlockInfo)),
     ok.
+
+%% @doc Copycat forwards the proof setting and GraphQL uses the lean cache.
+proof_free_blocks_test_() ->
+    {timeout, 60, fun() ->
+        Wallet = ar_wallet:new(),
+        Opts = #{
+            <<"priv-wallet">> => Wallet,
+            <<"port">> => 0,
+            <<"store">> => [hb_test_utils:test_store(hb_store_volatile)],
+            <<"arweave-block-store">> => hb_test_utils:test_store(hb_store_volatile),
+            <<"gateway">> => <<"http://chain-3.arweave.xyz:1984">>,
+            <<"arweave-index-blocks">> => false,
+            <<"query-arweave-remote-block-ranges">> => false
+        },
+        Node = hb_http_server:start_node(Opts),
+        try
+            {ok, _} = hb_http:get(Node, <<
+                "/~copycat@1.0/arweave&mode=blocks&from=2003806&to=2003806",
+                "&include-proofs=false"
+            >>, #{}),
+            Offline = Opts#{ <<"gateway">> => <<"http://127.0.0.1:1">>,
+                <<"routes">> => [],
+                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
+            Req = #{ <<"path">> => <<"~arweave@2.9/block">>,
+                <<"block">> => 2003806,
+                <<"cache-control">> => [<<"only-if-cached">>] },
+            ?assertEqual({error, not_found}, hb_ao:resolve(Req, Offline)),
+            {ok, Block} = hb_ao:resolve(
+                Req#{ <<"include-proofs">> => false }, Offline),
+            ?assertNot(hb_maps:is_key(<<"poa">>, Block)),
+            ?assertNot(hb_maps:is_key(<<"poa2">>, Block)),
+            {ok, Reply} = hb_ao:resolve(#{
+                <<"path">> => <<"~query@1.0/graphql">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> => hb_json:encode(#{ <<"query">> => <<
+                    "{ blocks(height: {min: 2003806, max: 2003806}) ",
+                    "{ edges { node { height timestamp id } } } }"
+                >> })
+            }, Offline),
+            ?assertMatch(#{ <<"data">> := #{ <<"blocks">> := #{
+                <<"edges">> := [#{ <<"node">> := #{ <<"height">> := 2003806 } }]
+            } } }, hb_json:decode(hb_maps:get(<<"body">>, Reply, <<>>, Offline))),
+            % A lean header is not complete for a default blocks run.
+            {ok, _} = hb_http:get(Node, <<
+                "/~copycat@1.0/arweave&mode=blocks&from=2003806&to=2003806",
+                "&reindex=false"
+            >>, #{}),
+            {ok, Full} = hb_ao:resolve(Req, Offline),
+            ?assert(hb_maps:is_key(<<"poa">>, Full)),
+            ?assert(hb_maps:is_key(<<"poa2">>, Full))
+        after
+            cowboy:stop_listener(hb_util:human_id(ar_wallet:to_address(Wallet)))
+        end
+    end}.
 
 auto_stop_on_indexed_block_test_parallel() ->
     {_TestStore, _StoreOpts, BaseOpts} = setup_index_opts(),

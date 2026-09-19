@@ -758,7 +758,8 @@ read_block(Height, Opts) ->
                     ?event({read_block_remote, {height, Height}}),
                     hb_ao:resolve(
                         #{ <<"device">> => <<"arweave@2.9">> },
-                        #{ <<"path">> => <<"block">>, <<"block">> => Height },
+                        #{ <<"path">> => <<"block">>, <<"block">> => Height,
+                            <<"include-proofs">> => false },
                         Opts
                     );
                 _ -> {error, not_found}
@@ -769,7 +770,8 @@ read_block(Height, Opts) ->
                     ?event({read_block_remote, {height, Height}}),
                     hb_ao:resolve(
                         #{ <<"device">> => <<"arweave@2.9">> },
-                        #{ <<"path">> => <<"block">>, <<"block">> => Height },
+                        #{ <<"path">> => <<"block">>, <<"block">> => Height,
+                            <<"include-proofs">> => false },
                         Opts
                     );
                 _ -> {error, not_found}
@@ -783,6 +785,7 @@ read_cached_block(Height, Opts) ->
         #{
             <<"path">> => <<"block">>,
             <<"block">> => Height,
+            <<"include-proofs">> => false,
             <<"cache-control">> => [<<"only-if-cached">>]
         },
         Opts
