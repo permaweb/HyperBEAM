@@ -1694,7 +1694,10 @@ published_pages() ->
                         <<"to-key">> => <<"~match@1.0/row", Sizes/binary>>,
                         <<"from-key">> =>
                             <<"~match@1.0/member", Sizes/binary,
-                                "/set&commitment-device=ans104@1.0">>
+                                "/set&commitment-device=ans104@1.0">>,
+                        <<"from-list">> =>
+                            <<"~match@1.0/members", Sizes/binary,
+                                "&commitment-device=ans104@1.0">>
                     }
                 ]
         },

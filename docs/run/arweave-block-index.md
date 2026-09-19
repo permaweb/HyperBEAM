@@ -61,15 +61,32 @@ start with `"list-batch-size": 32`; retain its name and other settings:
   "store-module": "hb_store_lmdb",
   "ao-types": "store-module=\"atom\"",
   "name": "/var/lib/hyperbeam/match-index",
-  "list-batch-size": 32
+  "list-batch-size": 32,
+  "from-list": "~match@1.0/entries"
 }
 ```
 
 The default is 256, with a minimum of 2 for inclusive cursor progress.
 Volatile and filesystem stores honor the same setting and bounded default.
 `batch-size` controls write flushing, independently. Move any node-level
-`match-batch-size` tuning to this store setting. Keep the published ArLMDB
-definition unchanged: it retains its natural pages. No reindex is needed.
+`match-batch-size` tuning to this store setting. ArLMDB retains its natural
+pages. No reindex is needed.
+
+`from-list` normalizes a returned batch in one AO-Core call. Add the native
+`~match@1.0/entries` path to each native `match-index` read definition, including
+the pending index view. Leave the message `store` and `pending-store` writer
+definitions as they are. On the published index with 39/40/49-bit fields, add:
+
+```json
+{
+  "from-list": "~match@1.0/members&key-hash-size=39&value-hash-size=40&offset-size=49&commitment-device=ans104@1.0"
+}
+```
+
+Retain its existing `from-key`, `to-key`, root, prefix and other settings.
+`from-list` replaces per-child normalization only for listing. Deploy updated
+`hb_store` and rebuilt `match@1.0` before enabling it. Custom encodings need
+their own equivalent batch decoder; omitting `from-list` keeps per-key decoding.
 
 ## Generate the starting index
 

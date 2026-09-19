@@ -87,6 +87,10 @@
 %%%                         store sees.
 %%%     `[to|from]-value`:  An AO-Core path, resolved in `raw' mode with a
 %%%                         successful result as the `Base/body`.
+%%%     `from-list`:        An AO-Core path receiving all enumerated children
+%%%                         as `Base/body', returning their normalized list.
+%%%                         Replaces per-child `from-key' and `from-value'
+%%%                         for `list' results.
 %%% '''
 -module(hb_store).
 -export([behavior_info/1]).
@@ -143,7 +147,8 @@ behavior_info(callbacks) ->
 
 %% @doc The store message keys that describe a normalization pipeline.
 -define(PIPELINE_KEYS, [
-    <<"prefix">>, <<"to-key">>, <<"from-key">>, <<"to-value">>, <<"from-value">>
+    <<"prefix">>, <<"to-key">>, <<"from-key">>, <<"to-value">>, <<"from-value">>,
+    <<"from-list">>
 ]).
 
 %%% Store named terms registry functions.
@@ -626,6 +631,8 @@ from_store(Store, read, {composite, Children}, Opts) ->
         {ok, Norm} ?= from_children(Store, Children, Opts),
         {composite, Norm}
     end;
+from_store(Store = #{ <<"from-list">> := _ }, list, {ok, Children}, Opts) ->
+    execute_normalizer(<<"from-list">>, Store, Children, Opts);
 from_store(Store, list, {ok, Children}, Opts) ->
     from_children(Store, Children, Opts);
 from_store(Store, resolve, {ok, Path}, Opts) ->
@@ -1545,9 +1552,14 @@ normalize_pipeline_test() ->
         {ok, [hb_util:encode(<<"a">>)]},
         list([Store], <<"b64/", EncodedGroup/binary>>, #{})
     ),
+    BatchStore = Store#{ <<"from-list">> => <<"~message@1.0/body">> },
+    ?assertEqual(
+        {ok, [<<"a">>]},
+        list([BatchStore], <<"b64/", EncodedGroup/binary>>, #{})
+    ),
     ?assertEqual(
         {composite, [hb_util:encode(<<"a">>)]},
-        read([Store], <<"b64/", EncodedGroup/binary>>, #{})
+        read([BatchStore], <<"b64/", EncodedGroup/binary>>, #{})
     ),
     ?assertEqual(
         {ok, <<"b64/", EncodedChild/binary>>},

@@ -74,6 +74,8 @@
 %%% the group. `hb_store' applies prefix handling and `to-key' to these keys.
 %%% The encoder also receives binary group paths and pathless entry messages
 %%% for list bounds. List results pass through `from-key' to become entries.
+%%% A `from-list' pipeline can decode the entire batch instead, using `entries'
+%%% for native keys or `members' for packed rows.
 %%% Reads merge all configured stores using ordered, inclusive batch listing.
 %%% Stores determine batch sizes: LMDB uses its `list-batch-size' setting;
 %%% ArLMDB uses its physical batch policy.
@@ -81,13 +83,14 @@
 %%% of them; a batch containing only the cursor is treated as exhausted.
 %%%
 %%% Default pipelines are `~match@1.0/key' and `~match@1.0/entry'; explicit
-%%% store pipelines override them. These adapter keys use the base's `body',
-%%% or the base itself if it has no `body':
+%%% store pipelines override them. `key' and `entry' use the base's `body',
+%%% or the base itself if it has no `body'; batch adapters take a `body' list:
 %%% ```
 %%%     key:    Encode an entry as a native binary key, joined to its `path'
 %%%             when present. A binary group path passes through unchanged.
 %%%     entry:  Decode a native key, or normalize an entry message's offset
 %%%             and supply empty `id' and `commitment-device' when absent.
+%%%     entries: Decode a list of native keys in one call.
 %%% '''
 %%% Native keys concatenate the offset, the 43-byte base64url signed ID, and
 %%% the variable-length device name. Nonnegative offsets occupy 20 zero-padded
@@ -103,6 +106,8 @@
 %%%              `path'. IDs and devices are not encoded.
 %%%     member:  Decode a complete binary row into an entry with empty ID and
 %%%              device. The row must contain exactly the configured bits.
+%%%     members: Decode a list of rows, assigning the request's optional
+%%%              `commitment-device' (empty by default) to each entry.
 %%% '''
 %%% A row contains leading bits of SHA-256(`~match@1.0/<name>'), leading bits
 %%% of the base64url-decoded value path, then the unsigned offset. `row' maps
@@ -111,6 +116,7 @@
 %%% known commitment device, for example with `/set&commitment-device=ans104@1.0'.
 -module(dev_match).
 -export([info/0, all/3, index/3, locate/3, row/3, member/3, entry/3, key/3]).
+-export([entries/3, members/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -211,6 +217,10 @@ digits(Other) ->
 %% @doc Decode a native key, or normalize the fields decoded by a pipeline.
 entry(Base, _Req, Opts) ->
     {ok, parse(hb_maps:get(<<"body">>, Base, Base, Opts))}.
+
+%% @doc Decode a batch of native keys without repeating pipeline setup.
+entries(Base, _Req, Opts) ->
+    {ok, [parse(Key) || Key <- hb_maps:get(<<"body">>, Base, [], Opts)]}.
 
 %% @doc An encoded key or decoded fields as an entry message.
 parse(#{ <<"offset">> := At } = Match) ->
@@ -736,6 +746,21 @@ member(Base, Req, Opts) ->
         end
     end.
 
+%% @doc Decode a batch of packed rows, retaining its configured device.
+members(Base, Req, Opts) ->
+    Device = hb_maps:get(<<"commitment-device">>, Req, <<>>, Opts),
+    lists:foldr(
+        fun(Row, Acc) ->
+            maybe
+                {ok, Rest} ?= Acc,
+                {ok, Entry} ?= member(#{ <<"body">> => Row }, Req, Opts),
+                {ok, [Entry#{ <<"commitment-device">> := Device } | Rest]}
+            end
+        end,
+        {ok, []},
+        hb_maps:get(<<"body">>, Base, [], Opts)
+    ).
+
 %% @doc The widths of a row's fields, from the request.
 sizes(Req, Opts) ->
     {
@@ -765,7 +790,8 @@ test_opts() ->
             <<"list-batch-size">> => 2
         },
     hb_store:start([Store]),
-    #{ <<"store">> => [Store], <<"match-index">> => [Store] }.
+    #{ <<"store">> => [Store],
+        <<"match-index">> => [Store#{ <<"from-list">> => <<"~match@1.0/entries">> }] }.
 
 %% @doc Cache a message at an offset, answering its ID.
 cache(Msg, Offset, Opts) ->
@@ -827,7 +853,7 @@ weave_order_test() ->
         )
     ),
     Normalized =
-        [ S#{ <<"from-key">> =>
+        [ (maps:remove(<<"from-list">>, S))#{ <<"from-key">> =>
             <<"~bits@1.0/from=offset:160,id:344,commitment-device:_",
                 "/~match@1.0/entry/set&source=pipeline">> }
         || S <- store(Opts) ],
@@ -1107,6 +1133,12 @@ row_test() ->
         {ok, #{ <<"offset">> => 5, <<"id">> => <<>>,
             <<"commitment-device">> => <<>> }},
         Normalize(<<"member">>, Row)
+    ),
+    {ok, Entry} = Normalize(<<"member">>, Row),
+    ?assertEqual({ok, [Entry, Entry]}, Normalize(<<"members">>, [Row, Row])),
+    ?assertEqual(
+        {error, {'invalid-row', <<0>>}},
+        Normalize(<<"members">>, [Row, <<0>>])
     ).
 
 %% @doc A request over HTTP loses its private keys, so it is not the kernel.
