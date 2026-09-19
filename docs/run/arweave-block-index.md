@@ -54,14 +54,14 @@ avoids reprocessing historical TXs just to populate compact entries.
 With the store batching patch, `match@1.0` requests `limit=batch`. Each store
 chooses its batch policy. Deploy the core changes with rebuilt `match@1.0`
 and `query@1.0` devices. On the existing LMDB message inside `match-index`,
-start with `"list-batch-size": 32`; retain its name and other settings:
+start with `"list-batch-size": 256`; retain its name and other settings:
 
 ```json
 {
   "store-module": "hb_store_lmdb",
   "ao-types": "store-module=\"atom\"",
   "name": "/var/lib/hyperbeam/match-index",
-  "list-batch-size": 32,
+  "list-batch-size": 256,
   "from-list": "~match@1.0/entries"
 }
 ```
