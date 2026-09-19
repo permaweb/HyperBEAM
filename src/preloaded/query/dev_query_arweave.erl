@@ -951,7 +951,7 @@ index_connection(Predicates, Args, Opts) ->
             index_matches(Predicates, Ranges, After, PageSize + 1, Opts),
         More = length(Matches) > PageSize,
         ForceNextPage = force_next_page(Args, Opts),
-        {ok,
+        Page =
             #{
                 <<"matches">> => lists:sublist(Matches, PageSize),
                 <<"terminal">> => ForceNextPage andalso not More,
@@ -959,7 +959,15 @@ index_connection(Predicates, Args, Opts) ->
                 <<"ranges">> => Ranges,
                 <<"pageInfo">> =>
                     #{ <<"hasNextPage">> => More orelse ForceNextPage }
-            }}
+            },
+        {ok,
+            case After =:= none andalso not More of
+                true ->
+                    Cap = hb_opts:get(query_arweave_max_index_count,
+                        ?DEFAULT_MAX_INDEX_COUNT, Opts),
+                    Page#{ <<"count">> => hb_util:bin(min(length(Matches), Cap)) };
+                false -> Page
+            end}
     end.
 
 %% @doc The query's AND predicates, each with alternative values. Owners and
@@ -1599,7 +1607,8 @@ pending_offsets_page_by_cursor_test() ->
 unmined_pages_test() ->
     Opts = #{
         <<"store">> => [hb_test_utils:test_store()],
-        <<"priv-wallet">> => ar_wallet:new()
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"query-arweave-max-index-count">> => 2
     },
     Node = hb_http_server:start_node(Opts),
     lists:foreach(
@@ -1617,13 +1626,14 @@ unmined_pages_test() ->
     ),
     Query =
         <<"""
-            query($after: String, $sort: SortOrder) {
+            query($after: String, $sort: SortOrder, $first: Int = 1) {
                 transactions(
                     tags: [{ name: "type", values: ["Unmined"] }],
-                    first: 1,
+                    first: $first,
                     after: $after,
                     sort: $sort
                 ) {
+                    count
                     pageInfo { hasNextPage }
                     edges { cursor node { id } }
                 }
@@ -1632,6 +1642,7 @@ unmined_pages_test() ->
     Pages =
         fun Pages(Sort, After, Acc) ->
             #{
+                <<"count">> := <<"2">>,
                 <<"edges">> := [Edge = #{ <<"cursor">> := Cursor }],
                 <<"pageInfo">> := #{ <<"hasNextPage">> := More }
             } =
@@ -1655,6 +1666,13 @@ unmined_pages_test() ->
     Descending = Pages(<<"HEIGHT_DESC">>, null, []),
     ?assertEqual(3, length(lists:usort(Descending))),
     ?assertEqual(lists:reverse(Descending), Pages(<<"HEIGHT_ASC">>, null, [])),
+    ?assertMatch(
+        #{ <<"data">> := #{ <<"transactions">> := #{
+            <<"count">> := <<"2">>,
+            <<"pageInfo">> := #{ <<"hasNextPage">> := false }
+        }}},
+        dev_query_graphql:test_query(Node, Query, #{ <<"first">> => 10 }, Opts)
+    ),
     #{ <<"errors">> := Errors } =
         dev_query_graphql:test_query(
             Node, Query, #{ <<"after">> => <<"member=nonsense">> }, Opts

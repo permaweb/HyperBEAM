@@ -87,6 +87,8 @@ Retain its existing `from-key`, `to-key`, root, prefix and other settings.
 `from-list` replaces per-child normalization only for listing. Deploy updated
 `hb_store` and rebuilt `match@1.0` before enabling it. Custom encodings need
 their own equivalent batch decoder; omitting `from-list` keeps per-key decoding.
+GraphQL count remains capped at `query-arweave-max-index-count` (default 1000),
+and an exhausted first page supplies its count without another index traversal.
 
 ## Generate the starting index
 
