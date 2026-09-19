@@ -49,6 +49,28 @@ recurring ingestion. With that argument, a missing compact entry makes a block
 incomplete for Copycat even if its TXs were already indexed. Bootstrapping first
 avoids reprocessing historical TXs just to populate compact entries.
 
+## Match index read batches
+
+With the store batching patch, `match@1.0` requests `limit=batch`. Each store
+chooses its batch policy. Deploy the core changes with rebuilt `match@1.0`
+and `query@1.0` devices. On the existing LMDB message inside `match-index`,
+start with `"list-batch-size": 32`; retain its name and other settings:
+
+```json
+{
+  "store-module": "hb_store_lmdb",
+  "ao-types": "store-module=\"atom\"",
+  "name": "/var/lib/hyperbeam/match-index",
+  "list-batch-size": 32
+}
+```
+
+The default is 256, with a minimum of 2 for inclusive cursor progress.
+Volatile and filesystem stores honor the same setting and bounded default.
+`batch-size` controls write flushing, independently. Move any node-level
+`match-batch-size` tuning to this store setting. Keep the published ArLMDB
+definition unchanged: it retains its natural pages. No reindex is needed.
+
 ## Generate the starting index
 
 Run these requests against the node's local administrative listener, avoiding

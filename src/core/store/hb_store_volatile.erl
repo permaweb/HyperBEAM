@@ -170,7 +170,7 @@ list_path(Opts, Path, Req) ->
     case lookup_entry(Opts, Path) of
         group ->
             Children = immediate_children(Opts, Path),
-            {ok, hb_store_utils:apply_list_bounds(Children, Req)};
+            {ok, hb_store_utils:apply_list_bounds(Children, Req, Opts)};
         {link, Link} ->
             list_path(Opts, hb_path:to_binary(Link), Req);
         nil when Path =:= ?ROOT_GROUP ->

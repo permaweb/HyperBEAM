@@ -75,8 +75,8 @@
 %%% The encoder also receives binary group paths and pathless entry messages
 %%% for list bounds. List results pass through `from-key' to become entries.
 %%% Reads merge all configured stores using ordered, inclusive batch listing.
-%%% Local reads are bounded by `match-batch-size' (default 256, minimum 2);
-%%% remote stores retain their physical batch policy.
+%%% Stores determine batch sizes: LMDB uses its `list-batch-size' setting;
+%%% ArLMDB uses its physical batch policy.
 %%% While entries remain beyond a cursor, a batch must include at least one
 %%% of them; a batch containing only the cursor is treated as exhausted.
 %%%
@@ -600,7 +600,7 @@ from_cursor(Direction, Group, Page, Cursor, Exclusive, Store, Opts) ->
             {ok, Left};
         _ ->
             maybe
-                {ok, Read} ?= page(Direction, Group, Cursor, Store, Opts),
+                {ok, Read} ?= page(Direction, Group, Cursor, Exclusive, Store, Opts),
                 {ok, lists:dropwhile(Behind, Read)}
             end
     end.
@@ -642,17 +642,12 @@ first_of(desc, Heads) ->
 %% holding nothing past the cursor ends the store's part, so a store's
 %% batch must hold a key past it while any remains. A store without the
 %% group has none.
-page(Direction, Group, Cursor, Store, Opts) ->
-    Limit =
-        case hb_store:scope([Store], local) of
-            [] -> batch;
-            _ -> max(2, hb_util:int(hb_opts:get(match_batch_size, 256, Opts)))
-        end,
+page(Direction, Group, Cursor, Exclusive, Store, Opts) ->
     Request =
         #{
             <<"list">> => Group,
-            <<"from">> => from(Direction, Cursor),
-            <<"limit">> => Limit,
+            <<"from">> => from(Direction, Cursor, Exclusive),
+            <<"limit">> => batch,
             <<"direction">> => Direction
         },
     case hb_store:list([Store], Request, Opts) of
@@ -683,12 +678,15 @@ resume_offset_row(Rows, Request, Cursor, Store, Opts) ->
 
 %% @doc The key a store's page is read from: a cursor naming no ID stands
 %% for every key of its offset, so reading down it closes with the byte
-%% above every ID.
-from(desc, #{ <<"id">> := <<>> } = Cursor) ->
+%% above every ID. Exclusive offset bounds seek past all IDs at that offset.
+from(asc, #{ <<"id">> := <<>> } = Cursor, true) ->
     Cursor#{ <<"id">> => ?LAST_ID, <<"commitment-device">> => <<>> };
-from(desc, #{ <<"commitment-device">> := <<>> } = Cursor) ->
+from(desc, #{ <<"id">> := <<>> } = Cursor, true) -> Cursor;
+from(desc, #{ <<"id">> := <<>> } = Cursor, _Exclusive) ->
+    Cursor#{ <<"id">> => ?LAST_ID, <<"commitment-device">> => <<>> };
+from(desc, #{ <<"commitment-device">> := <<>> } = Cursor, _Exclusive) ->
     Cursor#{ <<"commitment-device">> => ?LAST_ID };
-from(_Direction, Cursor) -> Cursor.
+from(_Direction, Cursor, _Exclusive) -> Cursor.
 
 %%% The rows of a published index.
 
@@ -763,7 +761,8 @@ body(Base, Opts) ->
 test_opts() ->
     Store =
         (hb_test_utils:test_store(hb_store_lmdb))#{
-            <<"capacity">> => ?TEST_CAPACITY
+            <<"capacity">> => ?TEST_CAPACITY,
+            <<"list-batch-size">> => 2
         },
     hb_store:start([Store]),
     #{ <<"store">> => [Store], <<"match-index">> => [Store] }.

@@ -2,6 +2,7 @@
 %%% implementations
 -module(hb_store_utils).
 -export([list_request_bounds/1, apply_list_bounds/2]).
+-export([list_request_bounds/2, apply_list_bounds/3]).
 -export([is_link/1, to_path/1, is_data_path/1, child_prefix/1]).
 -export([immediate_children/2, resolve_path_links/2]).
 -include_lib("eunit/include/eunit.hrl").
@@ -22,6 +23,20 @@ list_request_bounds(Req) ->
             end,
         <<"direction">> => hb_util:atom(maps:get(<<"direction">>, Req, asc))
     }.
+
+%% @doc Bound batches by a store's `list-batch-size', with at least two
+%% children for progress from inclusive cursors. Other limits pass through.
+list_request_bounds(Req, Store) ->
+    case list_request_bounds(Req) of
+        #{ <<"limit">> := batch } = Bounds ->
+            Bounds#{ <<"limit">> :=
+                max(2, hb_util:int(maps:get(<<"list-batch-size">>, Store, 256))) };
+        Bounds -> Bounds
+    end.
+
+%% @doc Apply a store's batch policy before selecting its children.
+apply_list_bounds(Children, Req, Store) ->
+    apply_list_bounds(Children, list_request_bounds(Req, Store)).
 
 %% @doc The children a list request answers with, from every child a store
 %% holds: all of them, in the store's own order, unless the request bounds
@@ -176,7 +191,8 @@ list_bounds(Store) ->
     ),
     List =
         fun(Req) ->
-            hb_store:list(Store, Req#{ <<"list">> => <<"set">> }, #{})
+            hb_store:list(Store#{ <<"list-batch-size">> => 2 },
+                Req#{ <<"list">> => <<"set">> }, #{})
         end,
     {ok, All} = List(#{}),
     ?assertEqual([<<"a">>, <<"b">>, <<"c">>, <<"d">>], lists:sort(All)),
@@ -195,6 +211,8 @@ list_bounds(Store) ->
         ),
     {ok, Many} = hb_store:list(Store, <<"many">>, #{}),
     ?assertEqual(1500, length(Many)),
+    ?assertMatch({ok, Batch} when length(Batch) =:= 256,
+        hb_store:list(Store, #{ <<"list">> => <<"many">>, <<"limit">> => batch }, #{})),
     ?assertEqual(
         {ok, [<<"b">>, <<"c">>]},
         List(#{ <<"from">> => <<"b">>, <<"limit">> => 2 })
@@ -212,7 +230,7 @@ list_bounds(Store) ->
         List(#{ <<"direction">> => desc, <<"limit">> => 2 })
     ),
     ?assertEqual(
-        {ok, [<<"c">>, <<"d">>]},
-        List(#{ <<"from">> => <<"c">>, <<"limit">> => batch })
+        {ok, [<<"b">>, <<"c">>]},
+        List(#{ <<"from">> => <<"b">>, <<"limit">> => batch })
     ),
     ?assertEqual({ok, []}, List(#{ <<"from">> => <<"e">> })).

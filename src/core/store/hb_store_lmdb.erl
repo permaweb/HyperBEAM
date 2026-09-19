@@ -423,14 +423,15 @@ list(Opts, Req = #{ <<"list">> := Path }, _NodeOpts) ->
 
 %% @doc The children of a group through the NIF's cursor: every one, or
 %% those the request names from its `from' in its direction, no more than
-%% its limit -- a batch being every child: LMDB reads a page at a time only
-%% from a key's fixed-size duplicate values, and the database holds none.
+%% its limit. A `batch' uses the store's `list-batch-size' (default 256,
+%% minimum 2 for inclusive cursor progress), independently of the write
+%% flush threshold `batch-size'. An `all' request remains unbounded.
 list_children(Opts, ResolvedPath, Req) ->
     #{
         <<"from">> := From,
         <<"limit">> := Limit,
         <<"direction">> := Direction
-    } = hb_store_utils:list_request_bounds(Req),
+    } = hb_store_utils:list_request_bounds(Req, Opts),
     #{ <<"db">> := DBInstance } = find_env(Opts),
     Options =
         [ {from, From} || From =/= none ] ++
@@ -783,10 +784,12 @@ list_test() ->
     StoreOpts = #{
         <<"store-module">> => ?MODULE,
         <<"name">> => <<"/tmp/store-2">>,
+        <<"list-batch-size">> => 2,
         <<"capacity">> => ?DEFAULT_SIZE
     },
     test_reset(StoreOpts),
     ?assertEqual({ok, []}, test_list(StoreOpts, <<"colors">>)),
+    test_group(StoreOpts, <<"colors">>),
     % Create immediate children under colors/
     test_write(StoreOpts, <<"colors/red">>, <<"1">>),
     test_write(StoreOpts, <<"colors/blue">>, <<"2">>),
@@ -808,6 +811,19 @@ list_test() ->
     % Should NOT include deeply nested items like foo, bar, deep, value
     ExpectedChildren = [<<"blue">>, <<"green">>, <<"multi">>, <<"nested">>, <<"primary">>, <<"red">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedChildren) end, ListResult)),
+    % Batches are bounded in both directions; explicit limits remain independent.
+    lists:foreach(
+        fun({Limit, Direction, Expected}) ->
+            ?assertEqual({ok, Expected}, list(StoreOpts, #{
+                <<"list">> => <<"colors">>, <<"from">> => <<"multi">>,
+                <<"limit">> => Limit, <<"direction">> => Direction
+            }, #{}))
+        end,
+        [{batch, asc, [<<"multi">>, <<"nested">>]},
+            {batch, desc, [<<"multi">>, <<"green">>]},
+            {1, asc, [<<"multi">>]},
+            {all, asc, [<<"multi">>, <<"nested">>, <<"primary">>, <<"red">>]}]
+    ),
     % Test listing a nested directory - should only show immediate children
     {ok, NestedListResult} = test_list(StoreOpts, <<"colors/multi">>),
     ?event_debug({nested_list_result, NestedListResult}),
