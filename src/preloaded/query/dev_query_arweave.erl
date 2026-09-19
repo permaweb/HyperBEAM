@@ -60,9 +60,12 @@
 %%% Structured bodies and omitted payloads have unknown size (null).
 %%% `data.type' reads `content-type'. These projections
 %%% do not reconstruct an Arweave transaction or its original tag list.
-%%% Transaction `block' uses the matched weave position and cached block
-%%% ranges, searching remote block heights on a miss when remote block reads
-%%% are enabled. L1 IDs resolve shared boundaries; pending positions return null.
+%%% Transaction `block' seeks the compact block index at the matched weave
+%%% position, then reads the selected header. Index misses fall back to cached
+%%% block ranges, sharing the height catalogue within the page, then remote
+%%% heights when enabled. L1 IDs resolve shared boundaries; pending positions
+%%% return null. Block metadata is prepared only for selected fields or L1
+%%% boundary checks; empty pages do not enumerate cached heights.
 %%%
 %%% `blocks' pages by height, descending by default or `HEIGHT_ASC', within
 %%% inclusive `height.min/max' bounds. Height enumeration defaults to zero and
@@ -77,7 +80,7 @@
 %%% or a GraphQL type error. Schema acceptance does not imply filter support.
 -module(dev_query_arweave).
 %%% AO-Core API:
--export([query/4, block_opts/1]).
+-export([query/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -396,7 +399,7 @@ connection(Ordered, Args, Opts) ->
     Remaining = drop_to_cursor(Args, Ordered, Opts),
     CountToReturn = page_size(Args, Opts),
     ResultsPagePlusOne = read_ids(Remaining, CountToReturn + 1, Opts),
-    ResultsPage = lists:sublist(ResultsPagePlusOne, CountToReturn),
+    ResultsPage = block_edges(lists:sublist(ResultsPagePlusOne, CountToReturn), Opts),
     HasNextPage = length(ResultsPagePlusOne) > CountToReturn,
     ForceNextPage = force_next_page(Args, Opts),
     Edges =
@@ -546,14 +549,99 @@ transaction_block(Msg, Opts) ->
 
 %% @doc Resolve the containing block from a match's position and signed ID.
 match_block(Match, Opts) ->
-    case Match of
-        #{ <<"offset">> := Offset } when is_integer(Offset), Offset >= 0 ->
-            Sorted = maps:get(<<"query-block-heights">>, block_opts(Opts)),
-            case block_at_offset(Match, Sorted, 1, tuple_size(Sorted), Opts) of
-                {ok, null} -> remote_transaction_block(Match, Opts);
-                Result -> Result
-            end;
-        _ -> {ok, null}
+    {Result, _} = resolve_match_block(Match, Opts),
+    Result.
+
+%% @doc Reuse prepared results and lazily share fallback heights within a page.
+resolve_match_block(#{ <<"block-result">> := Result }, Opts) -> {Result, Opts};
+resolve_match_block(Match = #{ <<"offset">> := Offset }, Opts)
+        when is_integer(Offset), Offset >= 0 ->
+    From = case hb_maps:get(<<"commitment-device">>, Match, <<>>, Opts) of
+        <<"tx@1.0">> -> Offset;
+        _ -> Offset + 1
+    end,
+    case indexed_block(Match, From, 0, Opts) of
+        {ok, null} ->
+            QueryOpts = case maps:is_key(<<"query-block-heights">>, Opts) of
+                true -> Opts;
+                false -> Opts#{ <<"query-block-heights">> =>
+                    list_to_tuple(lists:sort(cached_block_heights(Opts))) }
+            end,
+            Sorted = maps:get(<<"query-block-heights">>, QueryOpts),
+            Result = case block_at_offset(Match, Sorted, 1, tuple_size(Sorted), QueryOpts) of
+                {ok, null} -> remote_transaction_block(Match, QueryOpts);
+                Found -> Found
+            end,
+            {Result, QueryOpts};
+        Result -> {Result, Opts}
+    end;
+resolve_match_block(_Match, Opts) -> {{ok, null}, Opts}.
+
+%% @doc Prepare only requested block metadata, listing fallback heights at
+%% most once for the batch. Results stay with the match in request-private data.
+prepare_blocks(Matches, Needed, Opts) ->
+    lists:mapfoldl(
+        fun(Match, QueryOpts) ->
+            case Needed(Match) of
+                false -> {Match, QueryOpts};
+                true ->
+                    {Result, NextOpts} = resolve_match_block(Match, QueryOpts),
+                    {Match#{ <<"block-result">> => Result }, NextOpts}
+            end
+        end,
+        Opts,
+        Matches
+    ).
+
+%% @doc Project selected block fields after reading a nonempty transaction page.
+block_edges(Edges, Opts) ->
+    case hb_opts:get(query_arweave_blocks, false, Opts) of
+        false -> Edges;
+        true ->
+            Matches = [hb_private:get(<<"query-match">>, maps:get(<<"node">>, Edge), #{}, Opts)
+                || Edge <- Edges],
+            {Prepared, _} = prepare_blocks(Matches, fun(_) -> true end, Opts),
+            [Edge#{ <<"node">> := hb_private:set(maps:get(<<"node">>, Edge),
+                <<"query-match">>, Match, Opts) }
+                || {Edge, Match} <- lists:zip(Edges, Prepared)]
+    end.
+
+%% @doc L1s at either byte boundary need membership checks for height filters.
+block_boundary(#{ <<"commitment-device">> := <<"tx@1.0">>, <<"offset">> := Offset },
+        #{ <<"block-start">> := Start, <<"block-end">> := End }) ->
+    is_integer(Offset) andalso (Offset =:= Start orelse Offset =:= End);
+block_boundary(_Match, _Bounds) -> false.
+
+%% @doc Seek the first candidate by end offset, then read only its header.
+%% L1s also inspect every same-end block for zero-data transaction membership.
+indexed_block(Match = #{ <<"offset">> := Offset }, From, Height, Opts) ->
+    maybe
+        {ok, [Entry]} ?= hb_ao:resolve(
+            #{ <<"path">> => <<"~arweave@2.9/blocks">>,
+                <<"weave-size">> => From, <<"height">> => Height }, Opts),
+        End = hb_maps:get(<<"weave-size">>, Entry, 0, Opts),
+        Result = read_block(hb_maps:get(<<"hash">>, Entry, not_found, Opts), Opts),
+        case Result of
+            {ok, Block} ->
+                BlockEnd = hb_util:int(hb_maps:get(<<"weave_size">>, Block, 0, Opts)),
+                Start = BlockEnd - hb_util:int(hb_maps:get(<<"block_size">>, Block, 0, Opts)),
+                case Start =< Offset andalso BlockEnd =:= End
+                        andalso block_contains(Match, Block, End, Opts) of
+                    true -> {ok, Block};
+                    false when End =:= Offset ->
+                        indexed_block(Match, End,
+                            hb_maps:get(<<"height">>, Entry, 0, Opts) + 1, Opts);
+                    false -> {ok, null}
+                end;
+            {error, not_found} when End =:= Offset ->
+                indexed_block(Match, End,
+                    hb_maps:get(<<"height">>, Entry, 0, Opts) + 1, Opts);
+            {error, not_found} -> {ok, null};
+            ReadError -> ReadError
+        end
+    else
+        {ok, []} -> {ok, null};
+        Error -> Error
     end.
 
 %% @doc Search all heights only when the node allows remote block reads.
@@ -802,12 +890,6 @@ latest_cached_block(Opts) ->
 cached_block_heights(Opts) ->
     hb_util:ok(hb_ao:resolve(<<"~arweave@2.9/block-heights">>, Opts)).
 
-%% @doc Share the sorted block catalog between resolvers in one request.
-block_opts(Opts = #{ <<"query-block-heights">> := _ }) -> Opts;
-block_opts(Opts) ->
-    Opts#{ <<"query-block-heights">> =>
-        list_to_tuple(lists:sort(cached_block_heights(Opts))) }.
-
 %%% Index-served pages
 
 %% @doc Serve a transactions page from the `~match@1.0' index: the matches
@@ -934,12 +1016,7 @@ index_matches(Predicates, Ranges, After, Limit, Opts) ->
             {<<"-1", _/binary>>, [_Weave, Unmined]} -> [Unmined];
             _ -> Ranges
         end,
-    QueryOpts =
-        case lists:any(fun(Range) -> maps:is_key(<<"block">>, Range) end, Ahead) of
-            true -> block_opts(Opts);
-            false -> Opts
-        end,
-    locate_ranges(Predicates, Ahead, After, Limit, QueryOpts).
+    locate_ranges(Predicates, Ahead, After, Limit, Opts).
 
 %% @doc The matches of the ranges in order from the cursor, as far as the
 %% page has room.
@@ -965,7 +1042,9 @@ locate_ranges(Predicates, [Range | Rest], After, Limit, Opts) ->
 locate_range(Predicates, Bounds, Limit, Opts) ->
     maybe
         {ok, Matches} ?= locate(Predicates, Bounds#{ <<"limit">> => Limit }, Opts),
-        Accepted = [Match || Match <- Matches, in_block_range(Match, Bounds, Opts)],
+        {Prepared, QueryOpts} = prepare_blocks(Matches,
+            fun(Match) -> block_boundary(Match, Bounds) end, Opts),
+        Accepted = [Match || Match <- Prepared, in_block_range(Match, Bounds, QueryOpts)],
         case length(Matches) =:= Limit andalso length(Accepted) < Limit of
             false -> {ok, Accepted};
             true ->
@@ -973,7 +1052,7 @@ locate_range(Predicates, Bounds, Limit, Opts) ->
                     <<"after">> => maps:get(<<"member">>, lists:last(Matches)) },
                 maybe
                     {ok, More} ?= locate_range(
-                        Predicates, Next, Limit - length(Accepted), Opts),
+                        Predicates, Next, Limit - length(Accepted), QueryOpts),
                     {ok, Accepted ++ More}
                 end
         end
@@ -1032,7 +1111,7 @@ match_edges(Matches, Opts) ->
             fun(Match) -> {Match, match_message(Match, Opts)} end,
             hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts)
         ),
-    lists:filtermap(
+    block_edges(lists:filtermap(
         fun({Match = #{ <<"member">> := Member }, {ok, Node}}) ->
                 {true,
                     #{
@@ -1047,7 +1126,7 @@ match_edges(Matches, Opts) ->
                 false
         end,
         Read
-    ).
+    ), Opts).
 
 %% @doc A match's message: through `hb_cache' by its ID, or from the weave
 %% by its offset.
@@ -1267,7 +1346,8 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
         block_range_to_offset_range(Heights, Opts),
     Range = #{ <<"block">> => Heights, <<"block-start">> => StartOffset,
         <<"block-end">> => EndOffset },
-    QueryOpts = block_opts(Opts),
+    {Prepared, QueryOpts} = prepare_blocks(AnnotatedIDs,
+        fun(Match) -> block_boundary(Match, Range) end, Opts),
     Filtered =
         lists:filter(
             fun(Match) ->
@@ -1279,7 +1359,7 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
                         _ -> true
                     end
             end,
-            AnnotatedIDs
+            Prepared
         ),
     ?event({filtered_out_of_range, length(AnnotatedIDs) - length(Filtered)}),
     Filtered.

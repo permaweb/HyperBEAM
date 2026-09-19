@@ -6,6 +6,10 @@
 %%% `mode=blocks' stores only block headers in `arweave-block-store' (or `store'),
 %%% irrespective of `arweave-index-blocks', and does not process pending TXs.
 %%% `include-proofs=false' omits block proofs from the returned/cached headers.
+%%% `mode=block-index' imports the compact native index without block headers
+%%% or pending transactions. `include-block-index=true' also records compact
+%%% entries from headers fetched by blocks, shallow, deep, full and list modes;
+%%% it defaults to false. Both use `arweave-block-store'.
 %%%
 %%% Every transaction header and, in `full' mode, every bundled item an index
 %%% run caches carries its weave offset as `priv/offset'.
@@ -47,12 +51,13 @@ arweave(_Base, Request, Opts) ->
             end;
         {error, Mode} ->
             {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary,
-                "`. Supported modes are: blocks, shallow, deep, full, list">>}
+                "`. Supported modes are: block-index, blocks, shallow, deep, full, list">>}
     end.
 
 request_mode(Request, Opts) ->
     case hb_maps:get(<<"mode">>, Request, <<"shallow">>, Opts) of
         <<"blocks">> -> {ok, blocks};
+        <<"block-index">> -> {ok, block_index};
         <<"shallow">> -> {ok, shallow};
         <<"deep">> -> {ok, deep};
         <<"full">> -> {ok, full};
@@ -117,8 +122,12 @@ normalize_height(_Key, Height, Tip) ->
     end.
 
 latest_height(Request, Opts) ->
+    Path = case request_mode(Request, Opts) of
+        {ok, block_index} -> <<?ARWEAVE_DEVICE/binary, "/status/height">>;
+        _ -> <<?ARWEAVE_DEVICE/binary, "/current/height">>
+    end,
     case hb_ao:resolve(
-        #{ <<"path">> => <<?ARWEAVE_DEVICE/binary, "/current/height">>,
+        #{ <<"path">> => Path,
             <<"include-proofs">> => hb_maps:get(<<"include-proofs">>, Request, true, Opts) },
         Opts
     ) of
@@ -126,6 +135,10 @@ latest_height(Request, Opts) ->
         {error, Reason} -> {error, Reason}
     end.
 
+index_range(Request, _IncludePending, From, To, block_index, Opts) ->
+    hb_ao:resolve(
+        Request#{ <<"path">> => <<?ARWEAVE_DEVICE/binary, "/block-index">>,
+            <<"from">> => From, <<"to">> => To }, Opts);
 index_range(Request, _IncludePending, From, To, blocks, Opts) ->
     fetch_blocks(Request, From, To, blocks,
         Opts#{ <<"arweave-index-blocks">> => true });
@@ -226,10 +239,15 @@ fetch_block_header(Height, Request, Opts) ->
         hb_ao:resolve(
             #{ <<"path">> => <<?ARWEAVE_DEVICE/binary, "/block">>,
                 <<"block">> => Height,
-                <<"include-proofs">> => hb_maps:get(<<"include-proofs">>, Request, true, Opts) },
+                <<"include-proofs">> => hb_maps:get(<<"include-proofs">>, Request, true, Opts),
+                <<"include-block-index">> => include_block_index(Request, Opts) },
             Opts
         )
     end).
+
+%% @doc Existing modes optionally index the headers they already fetch.
+include_block_index(Request, Opts) ->
+    hb_util:bool(hb_maps:get(<<"include-block-index">>, Request, false, Opts)).
 
 %% @doc Classify transactions as indexed or not-indexed.
 classify_txs(TXIDs, Opts) ->
@@ -363,7 +381,19 @@ write_block_index(Height, IndexMode, Opts) ->
         Opts
     ).
 
-is_block_indexed(Height, blocks, Req, Opts) ->
+is_block_indexed(Height, Mode, Req, Opts) ->
+    HasIndex = case include_block_index(Req, Opts) of
+        false -> true;
+        true ->
+            case hb_ao:resolve(#{ <<"path">> => <<?ARWEAVE_DEVICE/binary, "/blocks">>,
+                    <<"height">> => Height }, Opts) of
+                {ok, [_]} -> true;
+                _ -> false
+            end
+    end,
+    HasIndex andalso is_mode_indexed(Height, Mode, Req, Opts).
+
+is_mode_indexed(Height, blocks, Req, Opts) ->
     case hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"path">> => <<"block">>, <<"block">> => Height,
@@ -374,7 +404,7 @@ is_block_indexed(Height, blocks, Req, Opts) ->
         {ok, _} -> true;
         _ -> false
     end;
-is_block_indexed(Height, IndexMode, _Req, Opts) ->
+is_mode_indexed(Height, IndexMode, _Req, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store ->
             false;
@@ -1080,6 +1110,106 @@ observe_event(MetricName, Fun) ->
     Result.
 
 %%% Tests
+
+%% @doc Native compact imports do not populate the block-header cache, and
+%% completed ranges resume offline through both HTTP and AO-Core resolution.
+compact_block_index_test_() ->
+    {timeout, 60, fun() ->
+        Wallet = ar_wallet:new(),
+        Opts = #{
+            <<"priv-wallet">> => Wallet, <<"port">> => 0,
+            <<"store">> => [hb_test_utils:test_store(hb_store_volatile)],
+            <<"arweave-block-store">> => hb_test_utils:test_store(hb_store_lmdb),
+            <<"gateway">> => <<"http://chain-3.arweave.xyz:1984">>
+        },
+        Node = hb_http_server:start_node(Opts),
+        Path = <<"~copycat@1.0/arweave&mode=block-index&from=2003806&to=2003805">>,
+        try
+            ?assertMatch({ok, _}, hb_http:get(Node, <<"/", Path/binary>>, #{})),
+            ?assertEqual({ok, []}, hb_ao:resolve(<<"~arweave@2.9/block-heights">>, Opts)),
+            {ok, [First, Last]} = hb_ao:resolve(
+                <<"~arweave@2.9/blocks&limit=2">>, Opts),
+            ?assertEqual(2003805, hb_maps:get(<<"height">>, First)),
+            ?assertEqual(2003806, hb_maps:get(<<"height">>, Last)),
+            ?assertEqual(391614827372790, hb_maps:get(<<"weave-size">>, Last)),
+            ?assertEqual({ok, [Last]}, hb_ao:resolve(
+                <<"~arweave@2.9/blocks&weave-size=00000391614821081335",
+                    "&height=00000000000000000000">>, Opts)),
+            ?assertEqual({ok, [Last, First]}, hb_ao:resolve(
+                <<"~arweave@2.9/blocks&direction=desc&limit=2">>, Opts)),
+            Offline = Opts#{ <<"gateway">> => <<"http://127.0.0.1:1">>,
+                <<"routes">> => [] },
+            ?assertEqual({ok, 2003805}, hb_ao:resolve(
+                <<Path/binary, "&reindex=false">>, Offline)),
+            ?assertEqual({ok, 2003806}, hb_ao:resolve(
+                <<"~copycat@1.0/arweave&mode=block-index&from=2003806">>, Offline)),
+            ?assertEqual({ok, 2003805}, hb_ao:resolve(
+                <<Path/binary, "&reindex=true">>, Opts))
+        after
+            cowboy:stop_listener(hb_util:human_id(ar_wallet:to_address(Wallet)))
+        end
+    end}.
+
+%% @doc Ordered seeks retain shared boundaries, reject holes in a partial
+%% index, and follow reindexed canonical rows even when their end changes.
+block_index_boundaries_test_() ->
+    [{atom_to_list(Module), fun() -> block_index_boundaries(Module) end}
+        || Module <- [hb_store_volatile, hb_store_lmdb]].
+
+block_index_boundaries(Module) ->
+    Store = hb_test_utils:test_store(Module),
+    Blocks = hb_test_utils:test_store(Module),
+    Arweave = #{ <<"store-module">> => hb_store_arweave, <<"index-store">> => Store },
+    Opts = #{ <<"store">> => [Store], <<"arweave-block-store">> => Blocks,
+        <<"arweave-index-store">> => Arweave,
+        <<"query-arweave-remote-block-ranges">> => false,
+        <<"gateway">> => <<"http://127.0.0.1:1">>, <<"routes">> => [] },
+    Entries = [{1, 100, 100}, {2, 100, 0}, {3, 100, 0}, {4, 200, 100}, {5, 400, 100}],
+    TXs = lists:map(fun({H, _, _}) ->
+        {ok, ID} = hb_cache:write(#{ <<"test-tx">> => H }, Opts),
+        ok = hb_store_arweave:write_offset(Arweave, ID, <<"tx@1.0">>, 100, 0),
+        ID
+    end, Entries),
+    lists:foreach(
+        fun({{H, End, Size}, ID}) ->
+            block_index_header(H, End, Size, [ID], Blocks)
+        end,
+        lists:zip(Entries, TXs)
+    ),
+    ?assertEqual({ok, 1}, hb_ao:resolve(
+        <<"~copycat@1.0/arweave&mode=blocks&from=5&to=1",
+            "&include-proofs=false&include-block-index=true">>, Opts)),
+    {ok, Indexed} = hb_ao:resolve(<<"~arweave@2.9/blocks&limit=5">>, Opts),
+    ?assertEqual([1, 2, 3, 4, 5], [hb_maps:get(<<"height">>, E) || E <- Indexed]),
+    Items = lists:map(fun({Offset, Expected}) ->
+        {ok, ID} = hb_cache:write(#{ <<"test-item">> => Offset }, Opts),
+        ok = hb_store_arweave:write_offset(Arweave, ID, <<"ans104@1.0">>, Offset, 1),
+        {ID, Expected}
+    end, [{0, 1}, {99, 1}, {100, 4}, {199, 4}, {200, null}, {250, null}, {300, 5}]),
+    Expected = lists:zip(TXs, [1, 2, 3, 4, null]) ++ Items,
+    {ok, Reply} = hb_ao:resolve(#{ <<"path">> => <<"~query@1.0/graphql">>,
+        <<"method">> => <<"POST">>, <<"body">> => hb_json:encode(#{
+            <<"query">> => <<"query($ids:[ID!]) { transactions(ids:$ids,first:100) ",
+                "{ edges { node { id block { height } } } } }">>,
+            <<"variables">> => #{ <<"ids">> => [ID || {ID, _} <- Expected] }
+        }) }, Opts),
+    #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := Edges } } } =
+        hb_json:decode(hb_maps:get(<<"body">>, Reply)),
+    ?assertEqual(maps:from_list(Expected), maps:from_list([
+        {ID, case Block of null -> null; _ -> hb_maps:get(<<"height">>, Block) end}
+        || #{ <<"node">> := #{ <<"id">> := ID, <<"block">> := Block } } <- Edges])).
+
+%% @doc Cache a sparse header fixture through ordinary message/cache APIs.
+block_index_header(Height, End, Size, TXs, Store) ->
+    Opts = #{ <<"store">> => Store },
+    Hash = hb_util:encode(crypto:strong_rand_bytes(48)),
+    Block = #{ <<"height">> => Height, <<"weave_size">> => End,
+        <<"block_size">> => Size, <<"txs">> => TXs, <<"tx_root">> => <<>>,
+        <<"indep_hash">> => Hash, <<"hash">> => Hash },
+    {ok, ID} = hb_cache:write(Block, Opts),
+    hb_cache:link(ID, Hash, Opts),
+    hb_cache:link(ID, <<"~arweave@2.9/block/height/", (hb_util:bin(Height))/binary>>, Opts),
+    Block.
 
 index_ids_test_parallel() ->
     %% Test block: https://viewblock.io/arweave/block/1827942

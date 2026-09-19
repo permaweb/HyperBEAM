@@ -140,11 +140,6 @@ handle(_Base, RawReq, Opts) ->
                 ?event(graphql_validated),
                 Coerced = graphql:type_check_params(FunEnv, OpName, Vars),
                 ?event(graphql_type_checked_params),
-                QueryOpts =
-                    case selects_block(AST2) of
-                        true -> dev_query_arweave:block_opts(Opts);
-                        false -> Opts
-                    end,
                 Ctx =
                     #{
                         params => Coerced,
@@ -155,7 +150,7 @@ handle(_Base, RawReq, Opts) ->
                                 ?DEFAULT_QUERY_TIMEOUT,
                                 Opts
                             ),
-                        opts => QueryOpts,
+                        opts => Opts#{ <<"query-arweave-blocks">> => selects_block(AST2) },
                         req => Req
                     },
                 ?event(graphql_context_created),
@@ -181,8 +176,7 @@ handle(_Base, RawReq, Opts) ->
             end
     end.
 
-%% @doc Find block selections, including aliases and fragment definitions,
-%% so requests without block metadata do not enumerate cached block heights.
+%% @doc Recognize selected block fields, including aliases and fragments.
 selects_block(#document{ definitions = Definitions }) -> selects_block(Definitions);
 selects_block([]) -> false;
 selects_block([#field{ selection_set = Selection } = Field | Rest]) ->

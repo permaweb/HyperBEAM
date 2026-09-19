@@ -3,12 +3,21 @@
 %%%
 %%% The node(s) that are used to query data may be configured by altering the
 %%% `/arweave` route in the node's configuration message.
+%%%
+%%% `blocks&weave-size=END&height=HEIGHT' seeks the compact local block index
+%%% in `arweave-block-store', inclusively, with `limit=1&direction=asc' by
+%%% default. A height alone starts at that height's canonical entry. Results
+%%% carry `height', `weave-size', `hash' (the independent hash), and `tx-root'.
+%%% `block-index&from=HEIGHT&to=HEIGHT' imports native compact ranges in
+%%% descending order; `~copycat@1.0/arweave&mode=block-index' also resolves
+%%% tip-relative heights. A block request with `include-block-index=true'
+%%% records its compact entry alongside the fetched or cached header.
 -module(dev_arweave).
 -implements(<<"arweave@2.9">>).
 -device_libraries([lib_arweave_common]).
 -export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
--export([pending/3, block_heights/3]).
+-export([pending/3, block_heights/3, blocks/3, block_index/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
 -export([get_chunk/2]).
@@ -735,7 +744,7 @@ block(Base, RawRequest, Opts) when is_map(Base) ->
             not_found,
             Opts
         ),
-    case Block of
+    Result = case Block of
         <<"current">> -> request(<<"GET">>, <<"/block/current">>, #{}, [], Request, Opts);
         not_found -> request(<<"GET">>, <<"/block/current">>, #{}, [], Request, Opts);
         ID when ?IS_BLOCK_ID(ID) -> block({id, ID}, Request, Opts);
@@ -749,7 +758,18 @@ block(Base, RawRequest, Opts) when is_map(Base) ->
                         <<"Invalid block reference `", MaybeHeight/binary, "`">>
                     }
             end
-    end;
+    end,
+    case {Result, hb_util:bool(find_key(<<"include-block-index">>, Base, Request, Opts))} of
+        {{ok, Header}, true} ->
+            ok = dev_arweave_block_cache:index(#{
+                <<"height">> => hb_maps:get(<<"height">>, Header, not_found, Opts),
+                <<"weave-size">> => hb_maps:get(<<"weave_size">>, Header, not_found, Opts),
+                <<"hash">> => hb_maps:get(<<"indep_hash">>, Header, not_found, Opts),
+                <<"tx-root">> => hb_maps:get(<<"tx_root">>, Header, not_found, Opts)
+            }, Opts);
+        _ -> ok
+    end,
+    Result;
 block({id, ID}, Req, Opts) ->
     case read_cached_block(ID, Req, Opts) of
         {ok, Block} ->
@@ -801,6 +821,66 @@ block({height, Height}, Req, Opts) ->
 %% @doc List the block heights available in the block cache.
 block_heights(_Base, _Request, Opts) ->
     dev_arweave_block_cache:heights(Opts).
+
+%% @doc Seek the local compact block index by `weave-size' and `height'.
+%% Bounds are inclusive; `limit' defaults to one and `direction' to ascending.
+%% Omitting `weave-size' starts at the given height's canonical row.
+blocks(_Base, Request, Opts) ->
+    dev_arweave_block_cache:blocks(Request, Opts).
+
+%% @doc Import native compact entries in descending height order. An omitted
+%% `to' stops at the first indexed height; bounded runs honor `reindex'.
+block_index(_Base, Request, Opts) ->
+    From = hb_util:int(hb_maps:get(<<"from">>, Request, 0, Opts)),
+    To = case hb_maps:get(<<"to">>, Request, undefined, Opts) of
+        undefined -> undefined;
+        Height -> hb_util:int(Height)
+    end,
+    import_block_index(Request, From, To, Opts).
+
+%% @doc Arweave serves at most 10,000 compact entries per native range.
+import_block_index(_Req, Current, To, _Opts) when is_integer(To), Current < To ->
+    {ok, To};
+import_block_index(_Req, Current, undefined, _Opts) when Current < 0 ->
+    {ok, 0};
+import_block_index(Req, Current, To, Opts) ->
+    Reindex = hb_util:bool(hb_maps:get(<<"reindex">>, Req, true, Opts)),
+    case {dev_arweave_block_cache:indexed(Current, Opts), To, Reindex} of
+        {{ok, _}, undefined, _} -> {ok, Current};
+        {{ok, _}, _, false} -> import_block_index(Req, Current - 1, To, Opts);
+        _ ->
+            Lower = max(max(0, Current - 9999),
+                case To of undefined -> 0; _ -> To end),
+            maybe
+                {ok, Entries} ?= request(<<"GET">>,
+                    <<"/block_index/", (hb_util:bin(Lower))/binary,
+                        "/", (hb_util:bin(Current))/binary>>,
+                    #{ <<"x-block-format">> => <<"1">>, <<"route-by">> => Current }, Opts),
+                true ?= length(Entries) =:= Current - Lower + 1 orelse
+                    {error, 'invalid-block-index-range'},
+                store_block_index(Entries, Req, Current, To, Opts)
+            end
+    end.
+
+%% @doc Height is inferred from the native index's descending range order.
+store_block_index([], Req, Current, To, Opts) ->
+    import_block_index(Req, Current, To, Opts);
+store_block_index([Entry | Rest], Req, Height, To, Opts) ->
+    Reindex = hb_util:bool(hb_maps:get(<<"reindex">>, Req, true, Opts)),
+    case {dev_arweave_block_cache:indexed(Height, Opts), To, Reindex} of
+        {{ok, _}, undefined, _} -> {ok, Height};
+        {{ok, _}, _, false} -> store_block_index(Rest, Req, Height - 1, To, Opts);
+        _ ->
+            maybe
+                ok ?= dev_arweave_block_cache:index(#{
+                    <<"height">> => Height,
+                    <<"weave-size">> => hb_maps:get(<<"weave_size">>, Entry, not_found, Opts),
+                    <<"hash">> => hb_maps:get(<<"hash">>, Entry, not_found, Opts),
+                    <<"tx-root">> => hb_maps:get(<<"tx_root">>, Entry, not_found, Opts)
+                }, Opts),
+                store_block_index(Rest, Req, Height - 1, To, Opts)
+            end
+    end.
 
 %% @doc Bypass stored headers for refreshes or when required proofs are absent.
 read_cached_block(Block, Req, Opts) ->
@@ -979,6 +1059,10 @@ to_message(Path = <<"/tx">>, <<"POST">>, {ok, Response}, LogExtra, _Req, _Opts) 
 to_message(Path = <<"/tx/pending">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     {ok, hb_json:decode(Body)};
+to_message(Path = <<"/block_index/", _/binary>>, <<"GET">>,
+        {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    {ok, hb_json:decode(Body)};
 to_message(Path = <<"/unconfirmed_tx/", ID/binary>>, <<"GET">>, Result, LogExtra, Req, Opts) ->
     to_tx_message(pending, ID, Path, Result, LogExtra, Req, Opts);
 to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, Result, LogExtra, Req, Opts) ->
@@ -1139,6 +1223,41 @@ event_request(Path, Method, Status, Extra) ->
     ?event(arweave_short, MergedTuple).
 
 %%% Tests
+
+%% @doc Reindexing selects the current hash and end at a height, without
+%% promoting a compact entry into a complete cached header.
+block_index_reindex_test() ->
+    Store = hb_test_utils:test_store(hb_store_lmdb),
+    Opts = #{ <<"store">> => [hb_test_utils:test_store(hb_store_volatile)],
+        <<"arweave-block-store">> => Store },
+    Hash = hb_util:encode(crypto:strong_rand_bytes(48)),
+    Entry = #{ <<"hash">> => Hash, <<"weave_size">> => <<"100">>, <<"tx_root">> => <<>> },
+    Header = #{ <<"indep_hash">> => Hash, <<"height">> => 4,
+        <<"weave_size">> => 100, <<"block_size">> => 100 },
+    {ok, ID} = hb_cache:write(Header, #{ <<"store">> => Store }),
+    hb_cache:link(ID, Hash, #{ <<"store">> => Store }),
+    hb_cache:link(ID, <<"~arweave@2.9/block/height/4">>, #{ <<"store">> => Store }),
+    ?assertEqual({ok, 4}, store_block_index([Entry], #{}, 4, 4, Opts)),
+    NewHash = hb_util:encode(crypto:strong_rand_bytes(48)),
+    New = Entry#{ <<"hash">> := NewHash, <<"weave_size">> := <<"101">> },
+    ?assertEqual({ok, 4}, store_block_index([New], #{ <<"reindex">> => false }, 4, 4, Opts)),
+    {ok, [Old]} = hb_ao:resolve(<<"~arweave@2.9/blocks&height=4">>, Opts),
+    ?assertEqual(Hash, hb_maps:get(<<"hash">>, Old)),
+    ?assertEqual({ok, 4}, store_block_index([New], #{}, 4, 4, Opts)),
+    {ok, [Updated]} = hb_ao:resolve(<<"~arweave@2.9/blocks&weave-size=0&limit=10">>, Opts),
+    ?assertEqual(NewHash, hb_maps:get(<<"hash">>, Updated)),
+    ?assertEqual(101, hb_maps:get(<<"weave-size">>, Updated)),
+    ?assertEqual({error, not_found}, hb_ao:resolve(#{
+        <<"path">> => <<"~arweave@2.9/block">>, <<"block">> => 4,
+        <<"include-proofs">> => false,
+        <<"cache-control">> => [<<"only-if-cached">>] }, Opts)),
+    % An unbounded run stops at the first completed height inside its batch.
+    ?assertEqual({ok, 4}, store_block_index([New, New, Entry], #{}, 5, undefined, Opts)),
+    ?assertEqual({ok, []}, hb_ao:resolve(<<"~arweave@2.9/blocks&height=3">>, Opts)),
+    ?assertEqual({ok, 3}, store_block_index([New, New, Entry],
+        #{ <<"reindex">> => false }, 5, 3, Opts)),
+    {ok, [Resumed]} = hb_ao:resolve(<<"~arweave@2.9/blocks&height=3">>, Opts),
+    ?assertEqual(Hash, hb_maps:get(<<"hash">>, Resumed)).
 
 %% @doc Proof-free headers stay isolated, satisfy metadata queries offline,
 %% and cannot satisfy a request for proofs until the full block is fetched.
