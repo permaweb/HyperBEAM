@@ -560,7 +560,15 @@ next_keys(Direction, [{Group, Pages} | Rest], Cursor, Exclusive, Opts) ->
     maybe
         {ok, Key, Read} ?=
             next_key(Direction, Group, Pages, Cursor, Exclusive, Opts),
-        {ok, Others} ?= next_keys(Direction, Rest, Cursor, Exclusive, Opts),
+        % No intersection precedes this offset. IDs may still be unrestricted.
+        {From, Exclude} =
+            case {maps:get(<<"offset">>, Key), maps:get(<<"offset">>, Cursor)} of
+                {At, Prev} when Direction =:= asc, At > Prev;
+                        Direction =:= desc, At < Prev ->
+                    {cursor(At), false};
+                _ -> {Cursor, Exclusive}
+            end,
+        {ok, Others} ?= next_keys(Direction, Rest, From, Exclude, Opts),
         {ok, [{Group, Key, Read} | Others]}
     end.
 
@@ -1004,9 +1012,9 @@ weave_order_test() ->
     ?assertEqual(
         lists:reverse(Shared), matches(Mixed, Desc, MixedOpts)
     ),
-    ?assertEqual(Shared, matches(Asymmetric, Asc, MixedOpts)),
+    ?assertEqual(Shared, matches(Asymmetric, Asc#{ <<"from">> => 0 }, MixedOpts)),
     ?assertEqual(
-        lists:reverse(Shared), matches(Asymmetric, Desc, MixedOpts)
+        lists:reverse(Shared), matches(Asymmetric, Desc#{ <<"from">> => 7 }, MixedOpts)
     ),
     ?assertEqual(Shared, matches(Mixed, Asc#{ <<"predicates">> => [N([0, 1])] }, MixedOpts)),
     ?assertEqual(
