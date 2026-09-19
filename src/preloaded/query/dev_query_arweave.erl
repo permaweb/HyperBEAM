@@ -554,6 +554,15 @@ match_block(Match, Opts) ->
 
 %% @doc Reuse prepared results and lazily share fallback heights within a page.
 resolve_match_block(#{ <<"block-result">> := Result }, Opts) -> {Result, Opts};
+resolve_match_block(Match = #{ <<"offset">> := Offset },
+        Opts = #{ <<"query-block">> := Block }) when is_integer(Offset), Offset >= 0 ->
+    End = hb_util:int(hb_maps:get(<<"weave_size">>, Block, 0, Opts)),
+    Start = End - hb_util:int(hb_maps:get(<<"block_size">>, Block, 0, Opts)),
+    case Start =< Offset andalso Offset =< End
+            andalso block_contains(Match, Block, End, Opts) of
+        true -> {{ok, Block}, Opts};
+        false -> resolve_match_block(Match, maps:remove(<<"query-block">>, Opts))
+    end;
 resolve_match_block(Match = #{ <<"offset">> := Offset }, Opts)
         when is_integer(Offset), Offset >= 0 ->
     From = case hb_maps:get(<<"commitment-device">>, Match, <<>>, Opts) of
@@ -578,7 +587,8 @@ resolve_match_block(Match = #{ <<"offset">> := Offset }, Opts)
 resolve_match_block(_Match, Opts) -> {{ok, null}, Opts}.
 
 %% @doc Prepare only requested block metadata, listing fallback heights at
-%% most once for the batch. Results stay with the match in request-private data.
+%% most once for the batch, reusing the preceding block when it contains the
+%% next match. Results stay with the match in request-private data.
 prepare_blocks(Matches, Needed, Opts) ->
     lists:mapfoldl(
         fun(Match, QueryOpts) ->
@@ -586,7 +596,11 @@ prepare_blocks(Matches, Needed, Opts) ->
                 false -> {Match, QueryOpts};
                 true ->
                     {Result, NextOpts} = resolve_match_block(Match, QueryOpts),
-                    {Match#{ <<"block-result">> => Result }, NextOpts}
+                    Reuse = case Result of
+                        {ok, Block} when Block =/= null -> NextOpts#{ <<"query-block">> => Block };
+                        _ -> NextOpts
+                    end,
+                    {Match#{ <<"block-result">> => Result }, Reuse}
             end
         end,
         Opts,
