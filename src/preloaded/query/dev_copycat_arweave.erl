@@ -22,17 +22,14 @@
 %% @doc Fetch blocks from an Arweave node between a given range, or from the
 %% latest known block towards the Genesis block. If no range is provided, we
 %% fetch blocks from the latest known block towards the Genesis block.
-arweave(_Base, Request, RawOpts) ->
-    Opts = RawOpts#{ <<"include-proofs">> =>
-        hb_util:bool(hb_maps:get(<<"include-proofs">>, Request,
-            hb_opts:get(include_proofs, true, RawOpts), RawOpts)) },
+arweave(_Base, Request, Opts) ->
     case request_mode(Request, Opts) of
         {ok, list} ->
             case parse_range(Request, Opts) of
                 {error, unavailable} ->
                     {error, unavailable};
                 {ok, {_IncludePending, From, To}} ->
-                    list_index(From, To, Opts)
+                    list_index(Request, From, To, Opts)
             end;
         {ok, IndexMode} ->
             % Reading the tip must not mark it complete before a blocks run.
@@ -68,7 +65,7 @@ parse_range(Request, Opts) ->
     FromArg = hb_maps:find(<<"from">>, Request, Opts),
     ToArg = hb_maps:find(<<"to">>, Request, Opts),
     maybe
-        {ok, Tip} ?= range_tip(FromArg, ToArg, Opts),
+        {ok, Tip} ?= range_tip(FromArg, ToArg, Request, Opts),
         {ok, IncludePendingFrom, From} ?= from_height(FromArg, Tip),
         {ok, IncludePendingTo, To} ?= to_height(ToArg, Tip),
         case From < 0 orelse (is_integer(To) andalso To < 0) of
@@ -87,9 +84,9 @@ parse_range(Request, Opts) ->
             {error, unavailable}
     end.
 
-range_tip(FromArg, ToArg, Opts) ->
+range_tip(FromArg, ToArg, Request, Opts) ->
     case needs_tip(FromArg, true) orelse needs_tip(ToArg, false) of
-        true -> latest_height(Opts);
+        true -> latest_height(Request, Opts);
         false -> {ok, undefined}
     end.
 
@@ -119,10 +116,10 @@ normalize_height(_Key, Height, Tip) ->
         false -> {ok, false, RequestedHeight}
     end.
 
-latest_height(Opts) ->
+latest_height(Request, Opts) ->
     case hb_ao:resolve(
         #{ <<"path">> => <<?ARWEAVE_DEVICE/binary, "/current/height">>,
-            <<"include-proofs">> => hb_opts:get(include_proofs, true, Opts) },
+            <<"include-proofs">> => hb_maps:get(<<"include-proofs">>, Request, true, Opts) },
         Opts
     ) of
         {ok, ResolvedHeight} -> {ok, hb_util:int(ResolvedHeight)};
@@ -177,15 +174,15 @@ is_tx_indexed(TXID, Opts) ->
 
 %% @doc List indexed blocks and transactions in the given range.
 %% Returns JSON with block heights as keys, each containing indexed and not-indexed lists.
-list_index(From, undefined, Opts) ->
-    list_index(From, 0, Opts);
-list_index(From, To, _Opts) when From < To ->
+list_index(Request, From, undefined, Opts) ->
+    list_index(Request, From, 0, Opts);
+list_index(_Request, From, To, _Opts) when From < To ->
     {ok, #{
         <<"content-type">> => <<"application/json">>,
         <<"body">> => hb_json:encode(#{})
     }};
-list_index(From, To, Opts) ->
-    Result = list_index_blocks(From, To, Opts, #{}),
+list_index(Request, From, To, Opts) ->
+    Result = list_index_blocks(Request, From, To, Opts, #{}),
     JSON = hb_json:encode(Result),
     {ok, #{
         <<"content-type">> => <<"application/json">>,
@@ -193,21 +190,21 @@ list_index(From, To, Opts) ->
     }}.
 
 %% @doc Iterate through blocks and check index status for each transaction.
-list_index_blocks(Current, To, _Opts, Acc) when Current < To ->
+list_index_blocks(_Request, Current, To, _Opts, Acc) when Current < To ->
     Acc;
-list_index_blocks(Current, To, Opts, Acc) ->
-    case fetch_block_header(Current, Opts) of
+list_index_blocks(Request, Current, To, Opts, Acc) ->
+    case fetch_block_header(Current, Request, Opts) of
         {ok, Block} ->
             TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
             case TXIDs of
                 [] ->
-                    list_index_blocks(Current - 1, To, Opts, Acc);
+                    list_index_blocks(Request, Current - 1, To, Opts, Acc);
                 _ ->
                     {IndexedTXs, NotIndexedTXs} = classify_txs(TXIDs, Opts),
                     case IndexedTXs of
                         [] ->
                             % Do not include blocks with no locally indexed TXs.
-                            list_index_blocks(Current - 1, To, Opts, Acc);
+                            list_index_blocks(Request, Current - 1, To, Opts, Acc);
                         _ ->
                             BlockKey = hb_util:bin(Current),
                             NewAcc = Acc#{
@@ -216,20 +213,20 @@ list_index_blocks(Current, To, Opts, Acc) ->
                                     <<"not-indexed">> => NotIndexedTXs
                                 }
                             },
-                            list_index_blocks(Current - 1, To, Opts, NewAcc)
+                            list_index_blocks(Request, Current - 1, To, Opts, NewAcc)
                     end
             end;
         {error, _} ->
-            list_index_blocks(Current - 1, To, Opts, Acc)
+            list_index_blocks(Request, Current - 1, To, Opts, Acc)
     end.
 
-fetch_block_header(Height, Opts) ->
+fetch_block_header(Height, Request, Opts) ->
     ?event(debug_copycat, {fetching_block, Height}),
     observe_event(<<"block_header">>, fun() ->
         hb_ao:resolve(
             #{ <<"path">> => <<?ARWEAVE_DEVICE/binary, "/block">>,
                 <<"block">> => Height,
-                <<"include-proofs">> => hb_opts:get(include_proofs, true, Opts) },
+                <<"include-proofs">> => hb_maps:get(<<"include-proofs">>, Request, true, Opts) },
             Opts
         )
     end).
@@ -262,11 +259,11 @@ fetch_blocks(Req, Current, To, _IndexMode, _Opts) when is_integer(To), Current <
 fetch_blocks(_Req, Current, undefined, _IndexMode, _Opts) when Current < 0 ->
     {ok, 0};
 fetch_blocks(Req, Current, undefined, IndexMode, Opts) ->
-    case is_block_indexed(Current, IndexMode, Opts) of
+    case is_block_indexed(Current, IndexMode, Req, Opts) of
         true ->
             stop_at_indexed_block(Req, Current);
         false ->
-            BlockRes = fetch_block_header(Current, Opts),
+            BlockRes = fetch_block_header(Current, Req, Opts),
             case IndexMode =:= shallow andalso is_already_indexed(BlockRes, Opts) of
                 true ->
                     stop_at_indexed_block(Req, Current);
@@ -280,9 +277,9 @@ fetch_blocks(Req, Current, undefined, IndexMode, Opts) ->
 fetch_blocks(Req, Current, To, IndexMode, Opts) ->
     % Unless `reindex' is set (the default), skip blocks already indexed at
     % this mode, so overlapping ranges from different callers are not re-fetched.
-    (reindex(Req, Opts) orelse not is_block_indexed(Current, IndexMode, Opts))
+    (reindex(Req, Opts) orelse not is_block_indexed(Current, IndexMode, Req, Opts))
         andalso observe_event(<<"block_indexed">>, fun() ->
-            process_block(fetch_block_header(Current, Opts), Current, To, IndexMode, Opts)
+            process_block(fetch_block_header(Current, Req, Opts), Current, To, IndexMode, Opts)
         end),
     fetch_blocks(Req, Current - 1, To, IndexMode, Opts).
 
@@ -366,18 +363,18 @@ write_block_index(Height, IndexMode, Opts) ->
         Opts
     ).
 
-is_block_indexed(Height, blocks, Opts) ->
+is_block_indexed(Height, blocks, Req, Opts) ->
     case hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"path">> => <<"block">>, <<"block">> => Height,
-            <<"include-proofs">> => hb_opts:get(include_proofs, true, Opts),
+            <<"include-proofs">> => hb_maps:get(<<"include-proofs">>, Req, true, Opts),
             <<"cache-control">> => [<<"only-if-cached">>] },
         Opts
     ) of
         {ok, _} -> true;
         _ -> false
     end;
-is_block_indexed(Height, IndexMode, Opts) ->
+is_block_indexed(Height, IndexMode, _Req, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store ->
             false;
@@ -1454,6 +1451,7 @@ proof_free_blocks_test_() ->
             <<"port">> => 0,
             <<"store">> => [hb_test_utils:test_store(hb_store_volatile)],
             <<"arweave-block-store">> => hb_test_utils:test_store(hb_store_volatile),
+            <<"include-proofs">> => false,
             <<"gateway">> => <<"http://chain-3.arweave.xyz:1984">>,
             <<"arweave-index-blocks">> => false,
             <<"query-arweave-remote-block-ranges">> => false
@@ -1574,7 +1572,7 @@ auto_stop_partial_index_test_parallel() ->
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     IndexedBlock = 1826700,
     HigherBlock = IndexedBlock + 1,
-    {ok, BlockData} = fetch_block_header(IndexedBlock, Opts),
+    {ok, BlockData} = fetch_block_header(IndexedBlock, #{}, Opts),
     [OneTXID | _] = hb_maps:get(<<"txs">>, BlockData, [], Opts),
     ok = hb_store_arweave:write_offset(
         StoreOpts, OneTXID, <<"tx@1.0">>, 0, 0),
@@ -1690,7 +1688,7 @@ negative_resolved_height_test_parallel() ->
 
 negative_from_index_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    {ok, Tip} = latest_height(Opts),
+    {ok, Tip} = latest_height(#{}, Opts),
     StopBlock = 1827942,
     StartBlock = 1827943,
     OffsetFromTip = Tip - StartBlock,
@@ -1789,7 +1787,7 @@ assert_item_read(ItemID, Opts) ->
     Item.
 
 has_any_indexed_tx(Height, Opts) ->
-    case fetch_block_header(Height, Opts) of
+    case fetch_block_header(Height, #{}, Opts) of
         {ok, Block} ->
             TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
             lists:any(fun(TXID) -> is_tx_indexed(TXID, Opts) end, TXIDs);
@@ -2208,7 +2206,7 @@ list_item_full_mode_test() ->
         <<"~copycat@1.0/arweave&from=2003013&to=2003013&mode=full">>,
         Opts
     ),
-    ?assert(is_block_indexed(2003013, full, Opts)).
+    ?assert(is_block_indexed(2003013, full, #{}, Opts)).
 
 small_block_full_mode_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),

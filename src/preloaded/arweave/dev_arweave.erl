@@ -141,17 +141,11 @@ get_tx(Base, Request, Opts) ->
             request(
                 <<"GET">>,
                 <<"/tx/", TXID/binary>>,
-                Opts#{
-                    <<"exclude-data">> =>
-                        hb_util:bool(
-                            find_key(
-                                <<"exclude-data">>,
-                                Base,
-                                Request,
-                                Opts
-                            )
-                        )
-                }
+                #{},
+                [],
+                #{ <<"exclude-data">> => hb_util:bool(
+                    find_key(<<"exclude-data">>, Base, Request, Opts)) },
+                Opts
             )
     end.
 
@@ -723,13 +717,13 @@ get_chunk(Offset, Opts) ->
 %% block is used. `include-proofs' defaults to true; false omits `poa' and
 %% `poa2' from the returned and cached header after fetching from Arweave.
 %% A full request refetches a cached header whose proofs are absent.
-block(Base, Request, RawOpts) when is_map(Base) ->
-    Opts = RawOpts#{ <<"include-proofs">> =>
+block(Base, RawRequest, Opts) when is_map(Base) ->
+    Request = RawRequest#{ <<"include-proofs">> =>
         hb_util:bool(
             hb_maps:get_first(
-                [{Request, <<"include-proofs">>}, {Base, <<"include-proofs">>}],
-                hb_opts:get(include_proofs, true, RawOpts),
-                RawOpts
+                [{RawRequest, <<"include-proofs">>}, {Base, <<"include-proofs">>}],
+                true,
+                Opts
             )
         ) },
     Block =
@@ -742,8 +736,8 @@ block(Base, Request, RawOpts) when is_map(Base) ->
             Opts
         ),
     case Block of
-        <<"current">> -> request(<<"GET">>, <<"/block/current">>, Opts);
-        not_found -> request(<<"GET">>, <<"/block/current">>, Opts);
+        <<"current">> -> request(<<"GET">>, <<"/block/current">>, #{}, [], Request, Opts);
+        not_found -> request(<<"GET">>, <<"/block/current">>, #{}, [], Request, Opts);
         ID when ?IS_BLOCK_ID(ID) -> block({id, ID}, Request, Opts);
         MaybeHeight ->
             try hb_util:int(MaybeHeight) of
@@ -766,10 +760,10 @@ block({id, ID}, Req, Opts) ->
         {error, not_found} when is_map(Req) ->
             case only_if_cached(Req, Opts) of
                 true -> {error, not_found};
-                false -> request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
+                false -> request(<<"GET">>, <<"/block/hash/", ID/binary>>, #{}, [], Req, Opts)
             end;
         {error, not_found} ->
-            request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
+            request(<<"GET">>, <<"/block/hash/", ID/binary>>, #{}, [], Req, Opts)
     end;
 block({height, Height}, Req, Opts) ->
     case read_cached_block(Height, Req, Opts) of
@@ -787,6 +781,8 @@ block({height, Height}, Req, Opts) ->
                         <<"/block/height/",
                             (hb_util:bin(Height))/binary>>,
                         #{ <<"route-by">> => Height },
+                        [],
+                        Req,
                         Opts
                     )
             end;
@@ -796,6 +792,8 @@ block({height, Height}, Req, Opts) ->
                 <<"/block/height/",
                     (hb_util:bin(Height))/binary>>,
                 #{ <<"route-by">> => Height },
+                [],
+                Req,
                 Opts
             )
     end.
@@ -810,17 +808,17 @@ read_cached_block(Block, Req, Opts) ->
         false ?= lists:member(
             <<"no-cache">>, hb_maps:get(<<"cache-control">>, Req, [], Opts)),
         {ok, Cached} ?= dev_arweave_block_cache:read(Block, Opts),
-        false ?= hb_opts:get(include_proofs, true, Opts)
+        false ?= hb_maps:get(<<"include-proofs">>, Req, true, Opts)
             andalso not hb_maps:is_key(<<"poa">>, Cached, Opts),
-        {ok, block_proofs(Cached, Opts)}
+        {ok, block_proofs(Cached, Req, Opts)}
     else
         true -> {error, not_found};
         Error -> Error
     end.
 
 %% @doc Remove proof payloads without loading their cached links.
-block_proofs(Block, Opts) ->
-    case hb_opts:get(include_proofs, true, Opts) of
+block_proofs(Block, Req, Opts) ->
+    case hb_maps:get(<<"include-proofs">>, Req, true, Opts) of
         true -> Block;
         false ->
             hb_maps:without(
@@ -873,7 +871,7 @@ pending(Base, Request, Opts) ->
                     request(
                         <<"GET">>,
                         <<"/unconfirmed_tx/", TXID/binary>>,
-                        Opts#{ <<"exclude-data">> => ExcludeData }
+                        #{}, [], #{ <<"exclude-data">> => ExcludeData }, Opts
                     );
                 {ok, RawOffset} ->
                     Offset = hb_util:int(RawOffset),
@@ -906,12 +904,15 @@ find_key(Key, Base, Request, Opts) ->
 %% @doc Make a request to the Arweave node and parse the response into an
 %% AO-Core message. Most Arweave API responses are in JSON format, but without
 %% a `content-type' header. Subsequently, we parse the response manually and
-%% pass it back as a message.
+%% pass it back as a message. `Req' controls response conversion only; `Extra'
+%% supplies the upstream HTTP fields.
 request(Method, Path, Opts) ->
     request(Method, Path, #{}, [], Opts).
 request(Method, Path, Extra, Opts) ->
     request(Method, Path, Extra, [], Opts).
 request(Method, Path, Extra, LogExtra, Opts) ->
+    request(Method, Path, Extra, LogExtra, #{}, Opts).
+request(Method, Path, Extra, LogExtra, Req, Opts) ->
     ?event(debug_arweave, {request,
         {method, Method}, {path, {explicit, Path}}, {log_extra, LogExtra}}),
     Res =
@@ -924,7 +925,7 @@ request(Method, Path, Extra, LogExtra, Opts) ->
                 <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
             }
         ),
-    to_message(Path, Method, best_response(Res), LogExtra, Opts).
+    to_message(Path, Method, best_response(Res), LogExtra, Req, Opts).
 
 %% @doc Select the best response from a list of responses by sorting them
 %% ascending by HTTP status code. Returns the first (best) response tuple.
@@ -951,41 +952,41 @@ response_status(_Response) ->
     999.
 
 %% @doc Transform a response from the Arweave node into an AO-Core message.
-to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Opts) ->
+to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Req, _Opts) ->
     event_request(Path, Method, 404, LogExtra),
     {error, not_found};
-to_message(Path = <<"/tx/", _/binary>>, <<"GET">>, {error, #{ <<"status">> := 422 }}, LogExtra, _Opts) ->
+to_message(Path = <<"/tx/", _/binary>>, <<"GET">>, {error, #{ <<"status">> := 422 }}, LogExtra, _Req, _Opts) ->
     event_request(Path, <<"GET">>, 422, LogExtra),
     {failure, <<"Arweave peer could not process the request.">>};
-to_message(Path, Method, {error, Response}, LogExtra, _Opts) when is_map(Response) ->
+to_message(Path, Method, {error, Response}, LogExtra, _Req, _Opts) when is_map(Response) ->
     Status = maps:get(<<"status">>, Response, client_error),
     event_request(Path, Method, Status, LogExtra),
     {error, Response};
-to_message(Path, Method, {error, Response}, LogExtra, _Opts) ->
+to_message(Path, Method, {error, Response}, LogExtra, _Req, _Opts) ->
     event_request(Path, Method, client_error, LogExtra),
     {error, Response};
-to_message(Path, Method, {failure, Response}, LogExtra, _Opts) when is_map(Response) ->
+to_message(Path, Method, {failure, Response}, LogExtra, _Req, _Opts) when is_map(Response) ->
     Status = maps:get(<<"status">>, Response, server_error),
     event_request(Path, Method, Status, LogExtra),
     {error, server_error};
-to_message(Path, Method, {failure, _Response}, LogExtra, _Opts) ->
+to_message(Path, Method, {failure, _Response}, LogExtra, _Req, _Opts) ->
     event_request(Path, Method, server_error, LogExtra),
     {error, server_error};
-to_message(Path = <<"/tx">>, <<"POST">>, {ok, Response}, LogExtra, _Opts) ->
+to_message(Path = <<"/tx">>, <<"POST">>, {ok, Response}, LogExtra, _Req, _Opts) ->
     Status = maps:get(<<"status">>, Response, 200),
     event_request(Path, <<"POST">>, Status, LogExtra),
     {ok, Response};
-to_message(Path = <<"/tx/pending">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
+to_message(Path = <<"/tx/pending">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     {ok, hb_json:decode(Body)};
-to_message(Path = <<"/unconfirmed_tx/", ID/binary>>, <<"GET">>, Result, LogExtra, Opts) ->
-    to_tx_message(pending, ID, Path, Result, LogExtra, Opts);
-to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, Result, LogExtra, Opts) ->
-    to_tx_message(tx, TXID, Path, Result, LogExtra, Opts);
-to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
+to_message(Path = <<"/unconfirmed_tx/", ID/binary>>, <<"GET">>, Result, LogExtra, Req, Opts) ->
+    to_tx_message(pending, ID, Path, Result, LogExtra, Req, Opts);
+to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, Result, LogExtra, Req, Opts) ->
+    to_tx_message(tx, TXID, Path, Result, LogExtra, Req, Opts);
+to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     {ok, Body};
-to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, Response}, LogExtra, Opts) ->
+to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, Response}, LogExtra, _Req, Opts) ->
     ContentLength = hb_maps:get(
         <<"Content-Length">>,
         Response,
@@ -1000,7 +1001,7 @@ to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, Response}, LogExtra, Op
             event_request(Path, <<"GET">>, server_error, LogExtra),
             {error, server_error}
     end;
-to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
+to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Req, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     Decoded =
         hb_message:convert(
@@ -1014,7 +1015,7 @@ to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
             },
             Opts
         ),
-    Block = block_proofs(Decoded, Opts),
+    Block = block_proofs(Decoded, Req, Opts),
     CacheRes =
         case hb_opts:get(arweave_index_blocks, true, Opts) of
             true -> dev_arweave_block_cache:write(Block, Opts);
@@ -1031,13 +1032,13 @@ to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
         }
     ),
     {ok, Block};
-to_message(Path = <<"/price/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
+to_message(Path = <<"/price/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     {ok, hb_util:int(Body)};
-to_message(Path = <<"/tx_anchor">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
+to_message(Path = <<"/tx_anchor">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     {ok, hb_util:decode(Body)};
-to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
+to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     % All other responses that are `OK' status are converted from JSON to an
     % AO-Core message.
@@ -1062,7 +1063,7 @@ to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
 
 %% @doc Generic handler for parsing a TX response from the Arweave node,
 %% including optionally adding the data payload if appropriate.
-to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
+to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Req, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
     ?event(debug_arweave,
@@ -1076,7 +1077,7 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
         }
     ),
     {ok, Data} =
-        case hb_opts:get(exclude_data, false, Opts) of
+        case hb_maps:get(<<"exclude-data">>, Req, false, Opts) of
             true -> {ok, ?DEFAULT_DATA};
             false ->
                 DataRes =
@@ -1154,6 +1155,7 @@ include_proofs(Height) ->
     Opts = #{
         <<"store">> => [Ambient],
         <<"arweave-block-store">> => [Blocks],
+        <<"include-proofs">> => false,
         <<"gateway">> => <<"http://chain-3.arweave.xyz:1984">>,
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
     },
@@ -1207,7 +1209,8 @@ include_proofs(Height) ->
 
 unprocessable_transaction_test() ->
     Wallet = ar_wallet:new(),
-    Opts = #{ <<"exclude-data">> => true, <<"store">> => [] },
+    Req = #{ <<"exclude-data">> => true },
+    Opts = #{ <<"store">> => [] },
     lists:foreach(
         fun(Value) ->
             TX = ar_tx:sign(#tx{
@@ -1221,7 +1224,7 @@ unprocessable_transaction_test() ->
             Path = <<"/tx/", ID/binary>>,
             Response = {ok, #{ <<"body">> =>
                 hb_json:encode(ar_tx:tx_to_json_struct(TX)) }},
-            Result = to_tx_message(tx, ID, Path, Response, [], Opts),
+            Result = to_tx_message(tx, ID, Path, Response, [], Req, Opts),
             case Value of
                 <<"12345">> ->
                     {ok, Message} = Result,
@@ -1231,7 +1234,7 @@ unprocessable_transaction_test() ->
                     ?assertEqual(
                         {error, <<"Received invalid transaction.">>},
                         to_tx_message(tx, hb_util:human_id(<<0:256>>),
-                            Path, Response, [], Opts)
+                            Path, Response, [], Req, Opts)
                     )
             end
         end,
@@ -1240,7 +1243,7 @@ unprocessable_transaction_test() ->
     ?assertMatch(
         {failure, _},
         to_message(<<"/tx/test">>, <<"GET">>,
-            {error, #{ <<"status">> => 422 }}, [], Opts)
+            {error, #{ <<"status">> => 422 }}, [], Req, Opts)
     ).
 
 %% @doc A fixed bad interior offset from a live TX is rejected by
@@ -1406,7 +1409,7 @@ best_response_non_map_error_round_trips_test_parallel() ->
         },
     ?assertEqual(
         {error, FailedConnect},
-        to_message(<<"/tx">>, <<"GET">>, {error, FailedConnect}, [], #{})
+        to_message(<<"/tx">>, <<"GET">>, {error, FailedConnect}, [], #{}, #{})
     ).
 
 empty_raw_response_test() ->
@@ -1417,6 +1420,7 @@ empty_raw_response_test() ->
             <<"GET">>,
             {ok, #{ <<"Content-Length">> => <<"0">> }},
             [],
+            #{},
             #{}
         )
     ).
