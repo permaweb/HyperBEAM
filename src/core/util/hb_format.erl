@@ -507,7 +507,7 @@ maybe_short(X, Opts, _Indent) ->
     SimpleFmt =
         case is_binary(X) of
             true -> binary(X, Opts);
-            false -> io_lib:format("~p", [X])
+            false -> io_lib:format("~p", [X], [{chars_limit, MaxLen + 1}])
         end,
     case is_multiline(SimpleFmt) orelse (lists:flatlength(SimpleFmt) > MaxLen) of
         true -> error;
