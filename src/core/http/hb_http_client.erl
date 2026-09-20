@@ -100,13 +100,11 @@ httpc_req(Args, Opts) ->
     ?event({httpc_req, {priv_args, Args}}),
     case parse_peer(Peer, Opts) of
         {error, _} = Err -> Err;
-        {ok, {Host, Port}} ->
-            Scheme = case Port of
-                443 -> "https";
-                _ -> "http"
-            end,
+        {ok, {Scheme, Host, Port}} ->
             ?event(debug_http_client, {httpc_req, {explicit, Args}}),
-            URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
+            URL = binary_to_list(iolist_to_binary(
+                [Scheme, "://", Host, ":", integer_to_binary(Port), Path]
+            )),
             FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
             HeaderKV =
                 [
@@ -175,11 +173,7 @@ hackney_req(Args, Opts) ->
     ?event({hackney_req, {priv_args, Args}}),
     case parse_peer(Peer, Opts) of
         {error, _} = Err -> Err;
-        {ok, {Host, Port}} ->
-            Scheme = case Port of
-                443 -> <<"https">>;
-                _ -> <<"http">>
-            end,
+        {ok, {Scheme, Host, Port}} ->
             URL = <<Scheme/binary, "://",
                 (hb_util:bin(Host))/binary, ":",
                 (integer_to_binary(Port))/binary,
@@ -367,10 +361,11 @@ terminate(_Reason, _State) ->
 open_connection(#{ peer := Peer }, Opts) ->
     case parse_peer(Peer, Opts) of
         {error, _} = Err -> Err;
-        {ok, {Host, Port}} -> open_connection_gun(Host, Port, Peer, Opts)
+        {ok, {Scheme, Host, Port}} ->
+            open_connection_gun(Scheme, Host, Port, Peer, Opts)
     end.
 
-open_connection_gun(Host, Port, Peer, Opts) ->
+open_connection_gun(Scheme, Host, Port, Peer, Opts) ->
     ?event(http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
     BaseGunOpts =
         #{
@@ -389,12 +384,13 @@ open_connection_gun(Host, Port, Peer, Opts) ->
                     http_client_connect_timeout,
                     ?DEFAULT_CONNECT_TIMEOUT,
                     Opts
-                )
+                ),
+            tls_opts => client_tls_options(Scheme, Opts)
         },
     Transport =
-        case Port of
-            443 -> tls;
-            _ -> tcp
+        case Scheme of
+            <<"https">> -> tls;
+            <<"http">> -> tcp
         end,
     DefaultProto =
         case hb_features:http3() of
@@ -405,8 +401,8 @@ open_connection_gun(Host, Port, Peer, Opts) ->
     GunOpts =
         case Proto = hb_opts:get(protocol, DefaultProto, Opts) of
             http3 -> BaseGunOpts#{protocols => [http3], transport => quic};
-            http2 -> BaseGunOpts#{protocols => [http2]};
-            http1 -> BaseGunOpts#{protocols => [http]}
+            http2 -> BaseGunOpts#{protocols => [http2], transport => Transport};
+            http1 -> BaseGunOpts#{protocols => [http], transport => Transport}
         end,
     ?event(http_outbound,
         {gun_open,
@@ -419,20 +415,35 @@ open_connection_gun(Host, Port, Peer, Opts) ->
 	gun:open(Host, Port, GunOpts).
 
 parse_peer(Peer, Opts) ->
-    Parsed = uri_string:parse(Peer),
-    case Parsed of
-        #{ host := Host, port := Port } ->
-            {ok, {hb_util:list(Host), Port}};
-        URI = #{ host := Host } ->
-            {ok, {
-                hb_util:list(Host),
-                case hb_maps:get(scheme, URI, undefined, Opts) of
-                    <<"https">> -> 443;
-                    _ -> hb_opts:get(port, 8734, Opts)
-                end
-            }};
-        _ ->
-            {error, {bad_peer, Peer}}
+    try
+        URI = #{host := Host} = uri_string:parse(Peer),
+        DefaultScheme = case maps:get(port, URI, undefined) of
+            443 -> <<"https">>;
+            _ -> <<"http">>
+        end,
+        Scheme = hb_util:to_lower(
+            hb_util:bin(maps:get(scheme, URI, DefaultScheme))
+        ),
+        true = Scheme =:= <<"http">> orelse Scheme =:= <<"https">>,
+        DefaultPort = case Scheme of
+            <<"https">> -> 443;
+            <<"http">> -> hb_opts:get(port, 8734, Opts)
+        end,
+        {ok, {Scheme, hb_util:list(Host), maps:get(port, URI, DefaultPort)}}
+    catch
+        _:_ -> {error, {bad_peer, Peer}}
+    end.
+
+client_tls_options(<<"http">>, _Opts) ->
+    [];
+client_tls_options(<<"https">>, Opts) ->
+    case hb_opts:get(http_client_tls_ca, not_found, Opts) of
+        not_found -> [];
+        CertificateAuthorities ->
+            [
+                {verify, verify_peer},
+                {cacerts, CertificateAuthorities}
+            ]
     end.
 
 do_gun_request(PID, Args, Opts) ->
@@ -517,6 +528,9 @@ await_response(Args, Opts) ->
 							{error, too_much_data}
 					end
 			end;
+		{data, fin, Data}
+                when Limit =/= infinity, Counter + byte_size(Data) > Limit ->
+            {error, too_much_data};
 		{data, fin, Data} ->
 			FinData = iolist_to_binary([Acc | Data]),
 			download_metric(FinData, Opts),
