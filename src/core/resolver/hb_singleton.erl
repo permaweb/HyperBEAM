@@ -339,7 +339,7 @@ parse_part(Part, Opts) ->
     case maybe_subpath(Part, Opts) of
         {resolve, Subpath} -> {resolve, Subpath};
         Part ->
-            case part([$&, $~, $+, $ , $=], Part) of
+            case part([$&, $~, $+, $=], Part) of
                 {no_match, PartKey, <<>>} when ?IS_ID(PartKey) ->
                     PartKey;
                 {no_match, PartKey, <<>>} ->
@@ -718,6 +718,12 @@ typed_key_test() ->
     ?assertEqual(123, hb_maps:get(<<"test-key">>, Msg2, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Res, not_found)).
 
+query_string_plus_value_decodes_to_space_test() ->
+    Msgs = from(<<"/a?key=8+8">>, #{}),
+    ?assertEqual(2, length(Msgs)),
+    [_, Msg] = Msgs,
+    ?assertEqual(<<"8 8">>, hb_maps:get(<<"key">>, Msg)).
+
 subpath_in_key_test() ->
     Req = #{
         <<"path">> => <<"/a/b/c">>,
@@ -741,6 +747,12 @@ subpath_in_key_test() ->
     ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Res, not_found)).
 
 %%% Advanced path syntax tests
+
+path_with_space_test() ->
+    ?assertEqual(
+        [#{}, #{ <<"path">> => <<"foo bar">> }],
+        from(<<"/foo%20bar">>, #{})
+    ).
 
 subpath_in_path_test() ->
     Req = #{
