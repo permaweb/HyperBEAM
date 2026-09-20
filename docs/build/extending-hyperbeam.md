@@ -74,7 +74,7 @@ Then iterate with:
 rebar3 device package    # build _hb_device_*.beam-archive.zip
 rebar3 device verify     # check archive invariants
 rebar3 device test       # run dev_<root> EUnit against a fresh store
-rebar3 eunit-all         # run core EUnit plus packaged-device EUnit
+ulimit -n 65536 && rebar3 eunit-all # run core plus packaged-device EUnit
 rebar3 device publish    # sign and upload to Arweave
 ```
 
