@@ -132,6 +132,14 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 %% internal module-loading path.
 message_to_device(Msg, Opts) ->
     DevID = hb_maps:get(<<"device">>, Msg, ?DEFAULT_DEVICE, Opts),
+    case hb_opts:get(<<"admissible-devices">>, all, Opts) of
+        all -> ok;
+        DevIDs when is_list(DevIDs) ->
+            case lists:member(DevID, DevIDs) of
+                true -> ok;
+                false -> throw({error, {device_not_admissible, DevID}})
+            end
+    end,
     case hb_device_load:reference(DevID, Opts) of
         {error, Reason} -> throw({error, {device_not_loadable, DevID, Reason}});
         {ok, DevMod} -> DevMod

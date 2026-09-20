@@ -39,10 +39,10 @@ function ao_resolve()
     return res
 end
 
-function ao_relay()
+function ao_meta()
     local status, res =
         ao.resolve({
-            path = "/~relay@1.0/call?relay-path=http://localhost:10000/hello"
+            path = "/~meta@1.0/info"
         })
     return status, res
 end
