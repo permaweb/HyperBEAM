@@ -42,6 +42,14 @@ compute_group(Base, Req, Opts) ->
     end.
 
 %% @doc Return `true' if the requested compute result is already cached.
+compute_cached(ProcID, RawSlot, Opts) when is_map(RawSlot) ->
+    %% Defensively unwrap the AO-Core message envelope when the v0.9 HTTP
+    %% resolve path delivers RawSlot wrapped instead of as a bare binary.
+    %% The slot id lives at the `body' key; everything else is unchanged.
+    case maps:find(<<"body">>, RawSlot) of
+        {ok, Body} -> compute_cached(ProcID, Body, Opts);
+        error -> false
+    end;
 compute_cached(ProcID, not_found, Opts) ->
     case dev_process_cache:latest(ProcID, Opts) of
         {ok, _Slot, _Msg} -> true;
