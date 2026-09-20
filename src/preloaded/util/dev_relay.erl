@@ -19,6 +19,7 @@
 %%% to the node's routing table.
 -export([request/3]).
 -include("include/hb.hrl").
+-include("include/hb_opts.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Execute a `call' request using a node's routes.
@@ -136,7 +137,7 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
     ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
     true = hb_message:verify(TargetMod5),
     ?event(debug_relay, {relay_call, {verified, true}}),
-    Client = hb_opts:get(relay_http_client, Opts),
+    Client = hb_opts:get(relay_http_client, hb_opts:get(http_client, ?DEFAULT_HTTP_CLIENT, Opts), Opts),
     % Let `hb_http:request/2' handle finding the peer and dispatching the
     % request, unless the peer is explicitly given.
     HTTPOpts = Opts#{ <<"http-client">> => Client, <<"http-only-result">> => false },
