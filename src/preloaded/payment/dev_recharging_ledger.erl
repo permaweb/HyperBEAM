@@ -1,0 +1,1194 @@
+%%% @doc A P4-compatible ledger with balances that recharge over time.
+%%%
+%%% Accounts accrue units continuously up to a configured cap. `p4@1.0' can
+%%% query the current effective balance and charge metered usage against it.
+%%% Balances are integer ledger units. Operators should choose units fine-grained
+%%% enough for their pricing and recharge policy.
+%%% Defaults provide a 24-hour bucket that recharges at 1 unit per second.
+%%% An optional `recharging-ledger-rates' message can provide account-specific
+%%% recharge rates.
+%%% An optional `recharging-ledger-grace' allows small post-metering negative
+%%% balance drift without making that grace appear as spendable balance.
+%%% Optional `recharging-ledger-fallbacks' ledger messages can cover requests
+%%% when this ledger cannot.
+-module(dev_recharging_ledger).
+-export([balance/3, charge/3, estimate/3]).
+-include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
+
+-define(LOOKUP_TIMEOUT, 5000).
+-define(DEFAULT_RATE_LOOKUP_TIMEOUT, 1000).
+-define(DEFAULT_MAX, 86_400).
+-define(DEFAULT_RECHARGE, 1).
+-define(DEFAULT_PERIOD, 1).
+-define(DEFAULT_GRACE, 3_600).
+-define(DEFAULT_RATE_CACHE_TTL, 600).
+
+account_id(Address) ->
+    hb_util:human_id(Address).
+
+%% @doc Get the current effective balance for a P4 account. P4 supplies the
+%% `target' key during pre-request checks and the signed `request' key when its
+%% balance endpoint delegates to the ledger. This function normalizes that
+%% account to the key used by the ledger server, then asks the server for a
+%% read-only balance. The server returns `infinity' for exempt accounts, the
+%% configured max balance for accounts it has not seen before, or the stored
+%% balance plus elapsed recharge for existing accounts.
+balance(Base, Req, Opts) ->
+    case balance_account(Req, Opts) of
+        {ok, AccountID} ->
+            maybe_fallback_balance(Base, Req, get_balance(AccountID, Opts), Opts);
+        {error, Error} -> {error, Error}
+    end.
+
+%% @doc Charge metered usage against a P4 account. The payer is derived from the
+%% signed original `request', matching `simple-pay@1.0'. The charge succeeds
+%% only when the current effective balance can cover the quantity, plus any
+%% configured negative-balance grace.
+charge(Base, Req, Opts) ->
+    case charge_account(Req, Opts) of
+        {ok, AccountID} ->
+            case hb_util:safe_int(hb_ao:get(<<"quantity">>, Req, 0, Opts)) of
+                {ok, Quantity} ->
+                    maybe_fallback_charge(
+                        Base,
+                        Req,
+                        charge_balance(AccountID, Quantity, Opts),
+                        Opts
+                    );
+                {error, _} ->
+                    {error, #{
+                        <<"status">> => 400,
+                        <<"body">> => <<"Invalid charge quantity.">>
+                    }}
+            end;
+        {error, Error} ->
+            {error, Error}
+    end.
+
+balance_account(Req, Opts) ->
+    case hb_ao:get(<<"target">>, Req, not_found, Opts) of
+        not_found ->
+            request_account(
+                hb_ao:get(
+                    <<"request">>,
+                    Req,
+                    not_found,
+                    Opts#{ <<"hashpath">> => ignore }
+                ),
+                Opts
+            );
+        Target ->
+            {ok, account_id(Target)}
+    end.
+
+request_account(not_found, _Opts) ->
+    request_signer_account(
+        not_found,
+        _Opts,
+        <<"Balance request must include target or signed request.">>,
+        <<"Balance request has no signer.">>,
+        <<"Balance request has multiple signers.">>
+    );
+%% @doc A nested `request' may carry the account as an explicit `target' key
+%% (P4 nests the original request when delegating `/~p4@1.0/balance', so an
+%% unsigned `?target=<addr>' balance query - e.g. from hyperbalance - arrives
+%% as `request.target'). Prefer that nested target, then fall back to the
+%% request signer. This matches `ao-payment@1.0' balance resolution.
+request_account(Request, Opts) ->
+    case hb_ao:get(<<"target">>, Request, not_found, Opts) of
+        not_found ->
+            request_signer_account(
+                Request,
+                Opts,
+                <<"Balance request must include target or signed request.">>,
+                <<"Balance request has no signer.">>,
+                <<"Balance request has multiple signers.">>
+            );
+        Target ->
+            {ok, account_id(Target)}
+    end.
+
+request_signer_account(not_found, _Opts, Missing, _NoSigner, _Multiple) ->
+    {error, #{
+        <<"status">> => 400,
+        <<"body">> => Missing
+    }};
+request_signer_account(Request, Opts, _Missing, NoSigner, Multiple) ->
+    case hb_message:signers(Request, Opts) of
+        [Signer] ->
+            {ok, account_id(Signer)};
+        [] ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> => NoSigner
+            }};
+        _ ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> => Multiple
+            }}
+    end.
+
+charge_account(Req, Opts) ->
+    request_signer_account(
+        hb_ao:get(
+            <<"request">>,
+            Req,
+            not_found,
+            Opts#{ <<"hashpath">> => ignore }
+        ),
+        Opts,
+        <<"Charge request must include signed request.">>,
+        <<"Charge request has no signer.">>,
+        <<"Charge request has multiple signers.">>
+    ).
+
+get_balance(AccountID, Opts) ->
+    PID = ensure_server_started(Opts),
+    PID ! {balance, self(), AccountID, maybe_resolve_recharge(AccountID, Opts)},
+    receive
+        {balance, Balance} ->
+            Balance
+    after ?LOOKUP_TIMEOUT ->
+        ?event(warning, {recharging_ledger_timeout, restarting}),
+        hb_name:unregister(server_id(Opts)),
+        get_balance(AccountID, Opts)
+    end.
+
+charge_balance(_AccountID, Quantity, _Opts) when Quantity < 0 ->
+    {error, #{
+        <<"status">> => 400,
+        <<"body">> => <<"Charge quantity must be non-negative.">>
+    }};
+charge_balance(AccountID, Quantity, Opts) ->
+    PID = ensure_server_started(Opts),
+    PID ! {charge, self(), AccountID, Quantity, maybe_resolve_recharge(AccountID, Opts)},
+    receive
+        {charged, Result} ->
+            Result
+    after ?LOOKUP_TIMEOUT ->
+        ?event(warning, {recharging_ledger_timeout, restarting}),
+        hb_name:unregister(server_id(Opts)),
+        charge_balance(AccountID, Quantity, Opts)
+    end.
+
+maybe_fallback_balance(Base, Req, Balance, Opts) ->
+    {ok, fallback_balance(fallback_ledgers(Base, Opts), Req, Balance, Opts)}.
+
+maybe_fallback_charge(Base, Req, Error = {error, #{ <<"status">> := 402 }}, Opts) ->
+    fallback_charge(fallback_ledgers(Base, Opts), Req, Error, Opts);
+maybe_fallback_charge(_Base, _Req, Result, _Opts) ->
+    Result.
+
+fallback_ledgers(Base, Opts) ->
+    case hb_util:int(maps:get(<<"recharging-ledger-fallback-depth">>, Base, 0)) of
+        0 -> configured_fallbacks(Base, Opts);
+        _ ->
+            []
+    end.
+
+configured_fallbacks(Base, Opts) ->
+    normalize_fallbacks(
+        hb_maps:get(
+            <<"recharging-ledger-fallbacks">>,
+            Base,
+            hb_opts:get(recharging_ledger_fallbacks, undefined, Opts),
+            Opts
+        ),
+        Opts
+    ).
+
+normalize_fallbacks(undefined, _Opts) ->
+    [];
+normalize_fallbacks(Fallbacks, _Opts) when is_list(Fallbacks) ->
+    Fallbacks;
+normalize_fallbacks(Fallbacks, Opts) when is_map(Fallbacks) ->
+    case hb_util:is_ordered_list(Fallbacks, Opts) of
+        true -> hb_util:message_to_ordered_list(Fallbacks, Opts);
+        false -> []
+    end;
+normalize_fallbacks(_Fallbacks, _Opts) ->
+    [].
+
+fallback_balance([], _Req, Balance, _Opts) ->
+    Balance;
+fallback_balance([Fallback | Rest], Req, Balance, Opts) ->
+    case resolve_fallback(Fallback, Req#{ <<"path">> => <<"balance">> }, Opts) of
+        {ok, FallbackBalance} ->
+            fallback_balance(Rest, Req, max_balance(Balance, FallbackBalance), Opts);
+        {error, _} ->
+            fallback_balance(Rest, Req, Balance, Opts)
+    end.
+
+fallback_charge([], _Req, Error, _Opts) ->
+    Error;
+fallback_charge([Fallback | Rest], Req, _Error, Opts) ->
+    case resolve_fallback(Fallback, Req#{ <<"path">> => <<"charge">> }, Opts) of
+        FallbackError = {error, #{ <<"status">> := 402 }} ->
+            fallback_charge(Rest, Req, FallbackError, Opts);
+        Result ->
+            Result
+    end.
+
+resolve_fallback(Fallback, Req, Opts) ->
+    hb_ao:resolve(
+        Fallback#{ <<"recharging-ledger-fallback-depth">> => 1 },
+        Req,
+        Opts
+    ).
+
+max_balance(infinity, _Fallback) -> infinity;
+max_balance(_Balance, infinity) -> infinity;
+max_balance(<<"infinity">>, _Fallback) -> <<"infinity">>;
+max_balance(_Balance, <<"infinity">>) -> <<"infinity">>;
+max_balance(true, _Fallback) -> true;
+max_balance(_Balance, true) -> true;
+max_balance(Balance, Fallback) -> max(hb_util:int(Balance), hb_util:int(Fallback)).
+
+%% @doc Resolve the account's recharge rate in the *caller's* process rather than
+%% the singleton ledger server, so a slow (possibly HTTP) rates provider can never
+%% block the server loop or trip its lookup timeout. A no-op when no provider is
+%% configured, in which case the server falls back to the default recharge.
+maybe_resolve_recharge(AccountID, Opts) ->
+    case hb_opts:get(recharging_ledger_rates, undefined, Opts) of
+        undefined ->
+            Opts;
+        RatesMessage ->
+            DefaultRecharge =
+                hb_opts:get(recharging_ledger_recharge, ?DEFAULT_RECHARGE, Opts),
+            Opts#{
+                <<"recharging-ledger-resolved-recharge">> =>
+                    resolve_recharge(AccountID, RatesMessage, DefaultRecharge, Opts)
+            }
+    end.
+
+%% @doc Return the account's recharge rate, served from the optional rates cache
+%% when a fresh entry exists, otherwise resolved via the provider and cached. The
+%% cache backend is a normal `hb_store' read from `recharging-ledger-rates-cache-store'. 
+%% It defaults to `[]', which `hb_store' treats as no viable store, so caching is opt-in 
+%% and a no-op -- behavior-identical to no cache -- when unset.
+resolve_recharge(AccountID, RatesMessage, DefaultRecharge, Opts) ->
+    case cached_recharge(AccountID, Opts) of
+        {ok, Rate} ->
+            Rate;
+        miss ->
+            Rate = rate_lookup(AccountID, RatesMessage, DefaultRecharge, Opts),
+            cache_recharge(AccountID, Rate, Opts),
+            Rate
+    end.
+
+%% @doc Return `{ok, Rate}' for a cached entry younger than the configured
+%% liveness window, or `miss'. A missing store, missing entry, undecodable value
+%% or stale timestamp all collapse to `miss'.
+cached_recharge(AccountID, Opts) ->
+    case hb_store:read(rates_cache_store(Opts), rates_cache_key(AccountID), Opts) of
+        {ok, Bin} ->
+            case rates_cache_decode(Bin) of
+                {Rate, FetchedAt} ->
+                    TTL =
+                        hb_opts:get(
+                            recharging_ledger_rates_cache_ttl,
+                            ?DEFAULT_RATE_CACHE_TTL,
+                            Opts
+                        ),
+                    case (erlang:system_time(second) - FetchedAt) < TTL of
+                        true -> {ok, Rate};
+                        false -> miss
+                    end;
+                error ->
+                    miss
+            end;
+        _ ->
+            miss
+    end.
+
+cache_recharge(AccountID, Rate, Opts) ->
+    hb_store:write(
+        rates_cache_store(Opts),
+        #{
+            rates_cache_key(AccountID) =>
+                term_to_binary({Rate, erlang:system_time(second)})
+        },
+        Opts
+    ),
+    ok.
+
+rates_cache_store(Opts) ->
+    hb_opts:get(recharging_ledger_rates_cache_store, [], Opts).
+
+rates_cache_key(AccountID) ->
+    <<"recharging-ledger-rates/", AccountID/binary>>.
+
+rates_cache_decode(Bin) ->
+    try binary_to_term(Bin) of
+        {Rate, FetchedAt} when is_integer(Rate), is_integer(FetchedAt) ->
+            {Rate, FetchedAt};
+        _ ->
+            error
+    catch _:_ ->
+        error
+    end.
+
+server_id(Opts) ->
+    PrivWallet = hb_opts:get(priv_wallet, undefined, Opts),
+    {?MODULE, account_id(PrivWallet)}.
+
+ensure_server_started(Opts) ->
+    ServerID = server_id(Opts),
+    hb_name:singleton(
+        ServerID,
+        fun() -> start_server(ServerID, Opts) end
+    ).
+
+start_server(ServerID, Opts) ->
+    Max = hb_opts:get(recharging_ledger_max, ?DEFAULT_MAX, Opts),
+    Recharge =
+        hb_opts:get(
+            recharging_ledger_recharge,
+            ?DEFAULT_RECHARGE,
+            Opts
+        ),
+    Period = hb_opts:get(recharging_ledger_period, ?DEFAULT_PERIOD, Opts),
+    Grace = hb_opts:get(recharging_ledger_grace, ?DEFAULT_GRACE, Opts),
+    RatesMessage = hb_opts:get(recharging_ledger_rates, undefined, Opts),
+    Exempt = hb_opts:get(recharging_ledger_exempt, [], Opts),
+    ?event(
+        recharging_ledger,
+        {started_recharging_ledger,
+            {server_id, ServerID},
+            {max, Max},
+            {recharge, Recharge},
+            {period, Period},
+            {grace, Grace},
+            {rates, RatesMessage},
+            {exempt, Exempt}
+        }
+    ),
+    server_loop(
+        #{
+            max => Max,
+            recharge => Recharge,
+            period => Period,
+            grace => Grace,
+            rates => RatesMessage,
+            accounts => #{ account_id(Account) => infinity || Account <- Exempt }
+        }
+    ).
+
+server_loop(State) ->
+    receive
+        {balance, PID, AccountID, Opts} ->
+            PID ! {balance, account_balance(AccountID, State, Opts)},
+            server_loop(State);
+        {charge, PID, AccountID, Quantity, Opts} ->
+            {Result, NewState} =
+                apply_charge(
+                    AccountID,
+                    Quantity,
+                    State,
+                    erlang:system_time(millisecond),
+                    Opts
+                ),
+            PID ! {charged, Result},
+            server_loop(NewState)
+    end.
+
+apply_charge(
+        AccountID,
+        Quantity,
+        State = #{ accounts := Accounts },
+        Now,
+        Opts
+    ) ->
+    Grace = maps:get(grace, State, ?DEFAULT_GRACE),
+    case account_balance(AccountID, State, Now, Opts) of
+        infinity ->
+            {{ok, true}, State};
+        Balance when Balance - Quantity >= -Grace ->
+            {{ok, true},
+                State#{
+                    accounts =>
+                        Accounts#{
+                            AccountID =>
+                                #{
+                                    balance => Balance - Quantity,
+                                    last => Now
+                                }
+                        }
+                }};
+        _Balance ->
+            {{error, #{
+                <<"status">> => 402,
+                <<"body">> => <<"Insufficient recharging ledger balance.">>
+            }}, State}
+    end.
+
+account_balance(AccountID, State, Opts) ->
+    account_balance(AccountID, State, erlang:system_time(millisecond), Opts).
+account_balance(
+        AccountID,
+        State = #{ max := Max, recharge := Recharge, period := Period, accounts := Accounts },
+        Time,
+        Opts
+    ) ->
+    case maps:get(AccountID, Accounts, not_found) of
+        infinity -> infinity;
+        not_found -> Max;
+        #{ balance := Balance, last := LastInteraction } ->
+            case Balance >= Max orelse Time =:= LastInteraction orelse
+                    (
+                        Recharge =:= 0 andalso
+                        maps:get(rates, State, undefined) =:= undefined
+                    )
+            of
+                true ->
+                    min(Max, Balance);
+                false ->
+                    AccountRecharge = account_recharge(AccountID, Recharge, State, Opts),
+                    PeriodMs = Period * 1000,
+                    Elapsed = Time - LastInteraction,
+                    RechargedSinceLast = (Elapsed * AccountRecharge) div PeriodMs,
+                    min(Max, Balance + RechargedSinceLast)
+            end
+    end.
+
+account_recharge(AccountID, DefaultRecharge, State, Opts) ->
+    case maps:get(rates, State, undefined) of
+        undefined -> DefaultRecharge;
+        RatesMessage ->
+            %% `maybe_resolve_recharge/2' runs the (possibly HTTP) provider
+            %% lookup in the caller's process and passes the result down, so the
+            %% ledger server never blocks here. Fall back to a direct lookup when
+            %% it is absent (e.g. tests calling `account_balance/4' directly).
+            case hb_opts:get(recharging_ledger_resolved_recharge, not_resolved, Opts) of
+                not_resolved ->
+                    rate_lookup(AccountID, RatesMessage, DefaultRecharge, Opts);
+                Resolved ->
+                    Resolved
+            end
+    end.
+
+rate_lookup(AccountID, RatesMessage, DefaultRecharge, Opts) ->
+    rate_lookup(
+        fun() ->
+            hb_ao:raw(
+                RatesMessage,
+                #{ <<"path">> => AccountID },
+                rate_lookup_opts(Opts)
+            )
+        end,
+        DefaultRecharge
+    ).
+
+rate_lookup(Fun, DefaultRecharge) ->
+    try rate_result(Fun(), DefaultRecharge)
+    catch _:_ ->
+        DefaultRecharge
+    end.
+
+rate_lookup_opts(Opts) ->
+    %% Bound HTTP-backed rates providers below the ledger request timeout.
+    Timeout = rates_timeout(Opts),
+    Opts#{
+        <<"http-client-connect-timeout">> =>
+            rate_lookup_timeout(<<"http-client-connect-timeout">>, Timeout, Opts),
+        <<"http-client-hackney-checkout-timeout">> =>
+            rate_lookup_timeout(<<"http-client-hackney-checkout-timeout">>, Timeout, Opts),
+        <<"http-client-hackney-recv-timeout">> =>
+            rate_lookup_timeout(<<"http-client-hackney-recv-timeout">>, Timeout, Opts)
+    }.
+
+rate_lookup_timeout(Key, Timeout, Opts) ->
+    case hb_util:safe_int(hb_opts:get(Key, Timeout, Opts)) of
+        {ok, Existing} when Existing > 0 -> min(Timeout, Existing);
+        _ -> Timeout
+    end.
+
+rates_timeout(Opts) ->
+    Raw = hb_opts:get(
+        recharging_ledger_rates_timeout,
+        ?DEFAULT_RATE_LOOKUP_TIMEOUT,
+        Opts
+    ),
+    case hb_util:safe_int(Raw) of
+        {ok, Timeout} when Timeout > 0 ->
+            min(?LOOKUP_TIMEOUT - 1, Timeout);
+        _ ->
+            ?DEFAULT_RATE_LOOKUP_TIMEOUT
+    end.
+
+rate_result({ok, Result}, DefaultRecharge) ->
+    rate_result(Result, DefaultRecharge);
+rate_result(Result, DefaultRecharge) ->
+    case hb_util:safe_int(Result) of
+        {ok, Recharge} when Recharge >= 0 -> Recharge;
+        _ -> DefaultRecharge
+    end.
+
+estimate(_Base, _Req, Opts) ->
+    {ok, hb_opts:get(recharging_ledger_price, 1, Opts)}.
+
+%%% Tests
+
+signed_charge_req(Wallet, Quantity, Opts) ->
+    signed_charge_req(
+        Wallet,
+        hb_util:human_id(ar_wallet:to_address(Wallet)),
+        Quantity,
+        Opts
+    ).
+
+signed_charge_req(Wallet, Account, Quantity, Opts) ->
+    Request =
+        hb_message:commit(
+            #{ <<"path">> => <<"/greeting">> },
+            #{ <<"priv-wallet">> => Wallet }
+        ),
+    hb_message:commit(
+        #{
+            <<"account">> => Account,
+            <<"quantity">> => Quantity,
+            <<"request">> => Request
+        },
+        Opts
+    ).
+
+balance_new_target_returns_max_test() ->
+    Target = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100
+    },
+    ?assertEqual(
+        {ok, 100},
+        balance(#{}, #{ <<"target">> => Target }, Opts)
+    ).
+
+default_bucket_is_one_day_at_one_unit_per_second_test() ->
+    Account = <<"account">>,
+    State = #{
+        max => ?DEFAULT_MAX,
+        recharge => ?DEFAULT_RECHARGE,
+        period => ?DEFAULT_PERIOD,
+        accounts => #{ Account => #{ balance => 0, last => 0 } }
+    },
+    ?assertEqual(86_400, account_balance(<<"new">>, State, 0, #{})),
+    ?assertEqual(1, account_balance(Account, State, 1000, #{})).
+
+estimate_uses_configured_price_test() ->
+    ?assertEqual(
+        {ok, 123},
+        estimate(#{}, #{}, #{ <<"recharging-ledger-price">> => 123 })
+    ).
+
+charge_new_account_deducts_units_test() ->
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    ?assertEqual(
+        {ok, true},
+        charge(#{}, signed_charge_req(Wallet, 25, Opts), Opts)
+    ),
+    ?assertEqual(
+        {ok, 75},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+p4_balance_request_uses_signed_request_signer_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    {ok, true} =
+        charge(#{}, signed_charge_req(Wallet, 25, Opts), Opts),
+    Request =
+        hb_message:commit(
+            #{ <<"path">> => <<"/greeting">> },
+            #{ <<"priv-wallet">> => Wallet }
+        ),
+    ?assertEqual(
+        {ok, 75},
+        balance(#{}, #{ <<"request">> => Request }, Opts)
+    ).
+
+balance_request_without_signer_returns_400_test() ->
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        balance(#{}, #{ <<"request">> => #{ <<"path">> => <<"/greeting">> } }, Opts)
+    ).
+
+charge_without_signed_request_returns_400_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts)
+    ),
+    ?assertEqual(
+        {ok, 100},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+insufficient_balance_returns_402_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 0
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 402 }},
+        charge(#{}, signed_charge_req(Wallet, 25, Opts), Opts)
+    ).
+
+insufficient_balance_does_not_mutate_balance_test() ->
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 0
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 402 }},
+        charge(#{}, signed_charge_req(Wallet, 25, Opts), Opts)
+    ),
+    ?assertEqual(
+        {ok, 10},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+fallbacks_balance_returns_max_balance_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    Fallbacks = [
+        #{
+            <<"device">> => #{
+                balance => fun(_Base, _Req, _Opts) -> {ok, 25} end
+            }
+        },
+        #{
+            <<"device">> => #{
+                balance => fun(_Base, _Req, _Opts) -> {ok, 18} end
+            }
+        }
+    ],
+    ?assertEqual(
+        {ok, 25},
+        balance(
+            #{ <<"recharging-ledger-fallbacks">> => Fallbacks },
+            #{ <<"target">> => Account },
+            Opts
+        )
+    ).
+
+fallback_survives_leaked_depth_in_opts_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-fallback-depth">> => 1
+    },
+    Fallback = #{
+        <<"device">> => #{
+            balance => fun(_Base, _Req, _Opts) -> {ok, 25} end
+        }
+    },
+    ?assertEqual(
+        {ok, 25},
+        balance(
+            #{ <<"recharging-ledger-fallbacks">> => [Fallback] },
+            #{ <<"target">> => Account },
+            Opts
+        )
+    ).
+
+fallback_charge_runs_only_on_402_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 0
+    },
+    Fallback = #{
+        <<"device">> => #{
+            charge => fun(_Base, FallbackReq, FallbackOpts) ->
+                {ok, hb_ao:get(<<"quantity">>, FallbackReq, undefined, FallbackOpts)}
+            end
+        }
+    },
+    Base = #{ <<"recharging-ledger-fallbacks">> => [Fallback] },
+    ?assertEqual({ok, 25}, charge(Base, signed_charge_req(Wallet, 25, Opts), Opts)),
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        charge(Base, signed_charge_req(Wallet, -1, Opts), Opts)
+    ).
+
+fallback_charge_tries_next_fallback_after_402_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 0
+    },
+    Fallbacks = [
+        #{
+            <<"device">> => #{
+                charge => fun(_Base, _Req, _Opts) ->
+                    {error, #{ <<"status">> => 402, <<"body">> => <<"empty">> }}
+                end
+            }
+        },
+        #{
+            <<"device">> => #{
+                charge => fun(_Base, FallbackReq, FallbackOpts) ->
+                    {ok, hb_ao:get(<<"quantity">>, FallbackReq, undefined, FallbackOpts)}
+                end
+            }
+        }
+    ],
+    ?assertEqual(
+        {ok, 25},
+        charge(
+            #{ <<"recharging-ledger-fallbacks">> => Fallbacks },
+            signed_charge_req(Wallet, 25, Opts),
+            Opts
+        )
+    ).
+
+grace_allows_small_negative_balance_test() ->
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 10
+    },
+    ?assertEqual(
+        {ok, true},
+        charge(#{}, signed_charge_req(Wallet, 105, Opts), Opts)
+    ),
+    ?assertEqual(
+        {ok, -5},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+grace_rejects_beyond_negative_limit_test() ->
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 10
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 402 }},
+        charge(#{}, signed_charge_req(Wallet, 111, Opts), Opts)
+    ),
+    ?assertEqual(
+        {ok, 100},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+negative_quantity_returns_400_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 10
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        charge(#{}, signed_charge_req(Wallet, -1, Opts), Opts)
+    ).
+
+invalid_quantity_returns_400_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 10
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        charge(#{}, signed_charge_req(Wallet, <<"bad">>, Opts), Opts)
+    ).
+
+exempt_account_returns_infinity_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 100,
+        <<"recharging-ledger-exempt">> => [Account]
+    },
+    ?assertEqual(
+        {ok, infinity},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+exempt_account_charge_does_not_mutate_balance_test() ->
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 100,
+        <<"recharging-ledger-exempt">> => [Account]
+    },
+    {ok, true} =
+        charge(
+            #{},
+            signed_charge_req(Wallet, 1000, Opts),
+            Opts
+        ),
+    ?assertEqual(
+        {ok, infinity},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+recharge_restores_balance_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        accounts => #{ Account => #{ balance => 20, last => 0 } }
+    },
+    ?assertEqual(25, account_balance(Account, State, 500, #{})).
+
+recharge_restores_negative_balance_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        accounts => #{ Account => #{ balance => -5, last => 0 } }
+    },
+    ?assertEqual(0, account_balance(Account, State, 500, #{})).
+
+recharge_caps_at_max_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        accounts => #{ Account => #{ balance => 95, last => 0 } }
+    },
+    ?assertEqual(100, account_balance(Account, State, 1000, #{})).
+
+rates_message_overrides_default_recharge_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        rates => #{ Account => 20 },
+        accounts => #{ Account => #{ balance => 20, last => 0 } }
+    },
+    ?assertEqual(30, account_balance(Account, State, 500, #{})).
+
+rates_message_missing_account_uses_default_recharge_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        rates => #{ <<"other-account">> => 20 },
+        accounts => #{ Account => #{ balance => 20, last => 0 } }
+    },
+    ?assertEqual(25, account_balance(Account, State, 500, #{})).
+
+rates_message_invalid_account_rate_uses_default_recharge_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        rates => #{ Account => <<"bad">> },
+        accounts => #{ Account => #{ balance => 20, last => 0 } }
+    },
+    ?assertEqual(25, account_balance(Account, State, 500, #{})).
+
+rates_provider_error_uses_default_recharge_test() ->
+    ?assertEqual(
+        10,
+        rate_lookup(
+            fun() -> error(provider_down) end,
+            10
+        )
+    ).
+
+rates_cache_serves_within_ttl_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"recharging-ledger-rates">> => #{ Account => 5 },
+        <<"recharging-ledger-rates-cache-store">> => hb_test_utils:test_store(),
+        <<"recharging-ledger-rates-cache-ttl">> => 600
+    },
+    ?assertEqual(5, resolved_rate(Account, Opts)),
+    ?assertEqual(
+        5,
+        resolved_rate(
+            Account,
+            Opts#{ <<"recharging-ledger-rates">> => #{ Account => 9 } }
+        )
+    ).
+
+rates_cache_disabled_by_default_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{ <<"recharging-ledger-rates">> => #{ Account => 5 } },
+    ?assertEqual(5, resolved_rate(Account, Opts)),
+    ?assertEqual(
+        9,
+        resolved_rate(
+            Account,
+            Opts#{ <<"recharging-ledger-rates">> => #{ Account => 9 } }
+        )
+    ).
+
+rates_cache_expires_after_ttl_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"recharging-ledger-rates">> => #{ Account => 5 },
+        <<"recharging-ledger-rates-cache-store">> => hb_test_utils:test_store(),
+        <<"recharging-ledger-rates-cache-ttl">> => 0
+    },
+    ?assertEqual(5, resolved_rate(Account, Opts)),
+    ?assertEqual(
+        9,
+        resolved_rate(
+            Account,
+            Opts#{ <<"recharging-ledger-rates">> => #{ Account => 9 } }
+        )
+    ).
+
+resolved_rate(Account, Opts) ->
+    maps:get(
+        <<"recharging-ledger-resolved-recharge">>,
+        maybe_resolve_recharge(Account, Opts)
+    ).
+
+rates_timeout_is_configurable_test() ->
+    Opts =
+        rate_lookup_opts(#{
+            <<"recharging-ledger-rates-timeout">> => <<"250">>,
+            <<"http-client-connect-timeout">> => 100
+        }),
+    ?assertEqual(100, maps:get(<<"http-client-connect-timeout">>, Opts)),
+    ?assertEqual(250, maps:get(<<"http-client-hackney-recv-timeout">>, Opts)).
+
+p4_metering_bundler_charges_recharging_ledger_bytes_test() ->
+    HostWallet = ar_wallet:new(),
+    Wallet = ar_wallet:new(),
+    Rate = 2,
+    Item =
+        hb_message:commit(
+            #{
+                <<"data">> => <<"metered-recharging-ledger-bundler-item">>,
+                <<"test">> => <<"p4-recharging-ledger-metering">>
+            },
+            #{ <<"priv-wallet">> => ar_wallet:new() }
+        ),
+    {ServerHandle, GatewayOpts} =
+        hb_mock_server:start_arweave_gateway(
+            #{
+                price => {200, <<"12345">>},
+                tx_anchor => {200, hb_util:encode(rand:bytes(32))}
+            }
+        ),
+    Processor = #{
+        <<"device">> => <<"p4@1.0">>,
+        <<"ledger-device">> => <<"recharging-ledger@1.0">>,
+        <<"pricing-device">> => <<"metering@1.0">>
+    },
+    BaseOpts =
+        GatewayOpts#{
+            <<"priv-wallet">> => HostWallet,
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"metering-rates">> => #{
+                <<"arweave-bytes">> => Rate,
+                <<"beam-reductions">> => 0
+            },
+            <<"operator">> => ar_wallet:to_address(HostWallet),
+            <<"recharging-ledger-recharge">> => 0,
+            <<"on">> => #{
+                <<"request">> => Processor,
+                <<"response">> => Processor
+            }
+        },
+    ItemSize =
+        byte_size(
+            ar_bundles:serialize(
+                hb_message:convert(
+                    Item,
+                    #{
+                        <<"device">> => <<"ans104@1.0">>,
+                        <<"bundle">> => true
+                    },
+                    <<"structured@1.0">>,
+                    BaseOpts
+                )
+            )
+        ),
+    Opts =
+        BaseOpts#{
+            <<"recharging-ledger-max">> => (ItemSize * Rate) + 50
+        },
+    try
+        Node = hb_http_server:start_node(Opts),
+        UploadReq =
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~bundler@1.0/tx">>,
+                    <<"bundler-subject">> => <<"body">>,
+                    <<"body">> => Item
+                },
+                Opts#{ <<"priv-wallet">> => Wallet }
+            ),
+        ?assertMatch({ok, _}, hb_http:post(Node, UploadReq, Opts)),
+        [_] = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        {ok, Balance} =
+            hb_http:get(
+                Node,
+                hb_message:commit(
+                    #{ <<"path">> => <<"/~p4@1.0/balance">> },
+                    #{ <<"priv-wallet">> => Wallet }
+                ),
+                #{ <<"priv-wallet">> => Wallet }
+            ),
+        ?assertEqual(50, Balance)
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+p4_charges_recharging_ledger_simple_pay_test() ->
+    HostWallet = ar_wallet:new(),
+    OperatorWallet = ar_wallet:new(),
+    ClientWallet = ar_wallet:new(),
+    Processor = #{
+        <<"device">> => <<"p4@1.0">>,
+        <<"pricing-device">> => <<"simple-pay@1.0">>,
+        <<"ledger-device">> => <<"recharging-ledger@1.0">>
+    },
+    Opts = #{
+        <<"priv-wallet">> => HostWallet,
+        <<"operator">> => ar_wallet:to_address(OperatorWallet),
+        <<"simple-pay-price">> => 0,
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"router-opts">> => #{
+            <<"offered">> => [
+                #{
+                    <<"template">> => <<"/greeting">>,
+                    <<"price">> => 3
+                }
+            ]
+        },
+        <<"on">> => #{
+            <<"request">> => Processor,
+            <<"response">> => Processor
+        }
+    },
+    Node = hb_http_server:start_node(Opts),
+    Req =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"/greeting">>,
+                <<"greeting">> => <<"Hello from P4">>
+            },
+            #{ <<"priv-wallet">> => ClientWallet }
+        ),
+    ?assertEqual({ok, <<"Hello from P4">>}, hb_http:get(Node, Req, #{})),
+    {ok, Balance} =
+        hb_http:get(
+            Node,
+            hb_message:commit(
+                #{ <<"path">> => <<"/~p4@1.0/balance">> },
+                #{ <<"priv-wallet">> => ClientWallet }
+            ),
+            #{ <<"priv-wallet">> => ClientWallet }
+        ),
+    ?assertEqual(7, Balance).
+
+%% @doc With `p4-commit-charge' disabled, p4 sends the ledger an uncommitted charge.
+%% A local ledger re-derives the payer from the signed `request', so the charge
+%% must deduct identically to the signed path -- proving the opt is behavior
+%% preserving for the recharging ledger (it only skips the node's charge commit).
+p4_uncommitted_charge_recharging_ledger_simple_pay_test() ->
+    HostWallet = ar_wallet:new(),
+    OperatorWallet = ar_wallet:new(),
+    ClientWallet = ar_wallet:new(),
+    Processor = #{
+        <<"device">> => <<"p4@1.0">>,
+        <<"pricing-device">> => <<"simple-pay@1.0">>,
+        <<"ledger-device">> => <<"recharging-ledger@1.0">>
+    },
+    Opts = #{
+        <<"priv-wallet">> => HostWallet,
+        <<"operator">> => ar_wallet:to_address(OperatorWallet),
+        <<"p4-commit-charge">> => false,
+        <<"simple-pay-price">> => 0,
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"router-opts">> => #{
+            <<"offered">> => [
+                #{
+                    <<"template">> => <<"/greeting">>,
+                    <<"price">> => 3
+                }
+            ]
+        },
+        <<"on">> => #{
+            <<"request">> => Processor,
+            <<"response">> => Processor
+        }
+    },
+    Node = hb_http_server:start_node(Opts),
+    Req =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"/greeting">>,
+                <<"greeting">> => <<"Hello from P4">>
+            },
+            #{ <<"priv-wallet">> => ClientWallet }
+        ),
+    ?assertEqual({ok, <<"Hello from P4">>}, hb_http:get(Node, Req, #{})),
+    {ok, Balance} =
+        hb_http:get(
+            Node,
+            hb_message:commit(
+                #{ <<"path">> => <<"/~p4@1.0/balance">> },
+                #{ <<"priv-wallet">> => ClientWallet }
+            ),
+            #{ <<"priv-wallet">> => ClientWallet }
+        ),
+    ?assertEqual(7, Balance).
