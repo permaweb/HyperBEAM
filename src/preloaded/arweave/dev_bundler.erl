@@ -278,11 +278,92 @@ server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
 add_to_queue(Item, BundledSize, Waiter, State = #state{
         queue = Queue,
         bytes = Bytes,
+        bundles = Bundles,
         dispatch_ref = DispatchRef
     }, Opts) ->
-    NewQueue = [{Item, BundledSize, Waiter} | Queue],
+    ItemID = hb_message:id(Item, signed, Opts),
+    case find_item(ItemID, Queue, Bundles, Opts) of
+        {queue, NewQueue} ->
+            State#state{queue = add_waiter(NewQueue, ItemID, Waiter, Opts)};
+        {bundle, BundleID} ->
+            Bundle = maps:get(BundleID, Bundles),
+            Bundle1 = Bundle#bundle{
+                waiters = add_waiter(Bundle#bundle.waiters, Waiter)
+            },
+            State#state{bundles = maps:put(BundleID, Bundle1, Bundles)};
+        not_found ->
+            queue_item(
+                Item,
+                BundledSize,
+                Waiter,
+                State,
+                Queue,
+                Bytes,
+                DispatchRef,
+                Opts
+            )
+    end.
+
+%% @doc Find an item already queued or assigned to an in-progress bundle.
+find_item(ItemID, Queue, Bundles, Opts) ->
+    case lists:any(
+            fun({Item, _, _}) ->
+                hb_message:id(Item, signed, Opts) =:= ItemID
+            end,
+            Queue
+        ) of
+        true ->
+            {queue, Queue};
+        false ->
+            maps:fold(
+                fun(BundleID, #bundle{items = Items}, not_found) ->
+                    case lists:any(
+                            fun(Item) ->
+                                hb_message:id(Item, signed, Opts) =:= ItemID
+                            end,
+                            Items
+                        ) of
+                        true -> {bundle, BundleID};
+                        false -> not_found
+                    end;
+                   (_, _, Found) ->
+                    Found
+                end,
+                not_found,
+                Bundles
+            )
+    end.
+
+%% @doc Add a caller waiting for an item in the queue.
+add_waiter(Queue, ItemID, Waiter, Opts) ->
+    lists:map(
+        fun({Item, Size, Waiters}) ->
+            case hb_message:id(Item, signed, Opts) of
+                ItemID -> {Item, Size, add_waiter(Waiters, Waiter)};
+                _ -> {Item, Size, Waiters}
+            end
+        end,
+        Queue
+    ).
+
+%% @doc Add a caller to a list of bundle waiters.
+add_waiter(Waiters, undefined) -> Waiters;
+add_waiter(Waiters, Waiter) -> [Waiter | Waiters].
+
+%% @doc Add a unique item to the queue.
+queue_item(
+        Item,
+        BundledSize,
+        Waiter,
+        State,
+        Queue,
+        Bytes,
+        DispatchRef,
+        Opts
+    ) ->
+    NewQueue = [{Item, BundledSize, add_waiter([], Waiter)} | Queue],
     NewBytes = Bytes + BundledSize,
-    ?event(bundler_short, {queueing_item, 
+    ?event(bundler_short, {queueing_item,
         {id, {explicit, hb_message:id(Item, signed, Opts)}},
         {size, BundledSize},
         {queue_size, length(NewQueue)},
@@ -362,7 +443,7 @@ create_bundle(QueuedItems, State = #state{bundles = Bundles, opts = Opts}) ->
         status = initializing,
         tx = undefined,
         proofs = #{},
-        waiters = Waiters,
+        waiters = lists:append(Waiters),
         start_time = erlang:timestamp()
     },
     State1 = State#state{
@@ -658,6 +739,40 @@ recover_bundle(CommittedTX, Items, State = #state{opts = Opts}) ->
 
 bundle_count_test_parallel() ->
     test_bundle(#{ <<"bundler-max-items">> => 3 }).
+
+duplicate_item_test_parallel() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    try
+        ClientOpts = #{},
+        Node = hb_http_server:start_node(NodeOpts#{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 2
+        }),
+        Item1 = new_data_item(1, 10),
+        ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
+        ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
+        Item2 = new_data_item(2, 10),
+        ?assertMatch({ok, _}, post_data_item(Node, Item2, ClientOpts)),
+        [TX] = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        Proofs = hb_mock_server:get_requests(chunk, 1, ServerHandle),
+        assert_bundle(
+            Node,
+            [Item1, Item2],
+            Anchor,
+            Price,
+            TX,
+            Proofs,
+            ClientOpts
+        )
+    after
+        stop_test_servers(ServerHandle, NodeOpts)
+    end.
 
 bundle_size_test_parallel() ->
     test_bundle(#{ <<"bundler-max-size">> => floor(3.6 * ?DATA_CHUNK_SIZE) }).
