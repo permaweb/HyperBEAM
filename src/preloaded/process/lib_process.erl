@@ -8,7 +8,14 @@
     process_id/3,
     set_results/3,
     ensure_process_key/2,
-    default_device/3
+    default_device/3,
+    %% Cross-package process helpers — see bottom of module.
+    cache_write/4,
+    cache_latest/2,
+    cache_latest/3,
+    cache_latest/4,
+    cache_path/3,
+    assignments_to_aos2/4
 ]).
 
 %% @doc Returns the process ID of the current process.
@@ -148,3 +155,207 @@ default_device(Base, Key, Opts) ->
 default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
 default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
 default_device_index(<<"push">>) -> <<"push@1.0">>.
+
+%%% --------------------------------------------------------------------
+%%% Cross-package process helpers.
+%%%
+%%% A `lib_*' module declared via `-device_libraries' is compiled into every
+%%% package that declares it. The device packager (`hb_device_rename') only
+%%% rewrites calls to modules in the calling package's rename map, so a direct
+%%% call to a device root in another package is emitted bare and will not
+%%% resolve. A shared `lib_*' module is in every declaring package's map, so
+%%% routing cross-package functionality through it keeps the calls resolvable in
+%%% any package.
+%%%
+%%% The helpers below are the cross-package entry points to the process-package
+%%% cache and scheduler-format functionality that the vm-package devices
+%%% (`dev_genesis_wasm', `dev_delegated_compute') rely on. They depend only on
+%%% the core `hb_*'/`ar_*' modules, which are never renamed, so they resolve in
+%%% whichever package they are compiled into.
+%%%
+%%% Exports for these are declared in the module's top `-export' block: the Forge
+%%% device compiler rejects `-export' attributes placed after function definitions.
+%%% --------------------------------------------------------------------
+
+%% @doc Write a process computation result to the cache. Canonical home of the
+%% process-result cache writer; `dev_process_cache:write/4' delegates here so the
+%% logic is shared (and resolvable) across the process and vm device packages.
+cache_write(ProcID, Slot, Msg, Opts) ->
+    % Write the item to the cache in the root of the store.
+    {ok, Root} = hb_cache:write(hb_private:reset(Msg), Opts),
+    % Link the item to the path in the store by slot number.
+    SlotNumPath = cache_path(ProcID, Slot, Opts),
+    hb_cache:link(Root, SlotNumPath, Opts),
+    % Link the item to the message ID path in the store.
+    MsgIDPath =
+        cache_path(
+            ProcID,
+            ID = hb_message:id(Msg, uncommitted, Opts),
+            Opts
+        ),
+    ?event(
+        {linking_id,
+            {proc_id, ProcID},
+            {slot, Slot},
+            {id, ID},
+            {path, MsgIDPath}
+        }
+    ),
+    hb_cache:link(Root, MsgIDPath, Opts),
+    % Return the slot number path.
+    {ok, SlotNumPath}.
+
+%% @doc Retrieve the latest slot for a given process. Optionally state a limit
+%% on the slot number to search for, as well as a required path that the slot
+%% must have. Canonical home; `dev_process_cache:latest/_' delegates here.
+cache_latest(ProcID, Opts) -> cache_latest(ProcID, [], Opts).
+cache_latest(ProcID, RequiredPath, Opts) ->
+    cache_latest(ProcID, RequiredPath, undefined, Opts).
+cache_latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
+    Scope = hb_opts:get(process_cache_scope, local, RawOpts),
+    % Normalize the store descriptor to a list of stores.
+    UnscopedStore =
+        case hb_opts:get(store, no_viable_store, RawOpts) of
+            StoreMsg when is_map(StoreMsg) -> [StoreMsg];
+            Other -> Other
+        end,
+    % Apply the scope to the store and update the options message.
+    ScopedStore = hb_store:scope(UnscopedStore, Scope),
+    Opts = RawOpts#{ <<"store">> => ScopedStore },
+    % Convert the required path to a list of _binary_ keys.
+    RequiredPath =
+        case RawRequiredPath of
+            undefined -> [];
+            [] -> [];
+            _ -> hb_path:term_to_path_parts(RawRequiredPath, Opts)
+        end,
+    ?event({required_path_converted, {proc_id, ProcID}, {required_path, RequiredPath}}),
+    Path = cache_path(ProcID, slot_root, Opts),
+    AllSlots = hb_cache:list_numbered(Path, Opts),
+    ?event({all_slots, {proc_id, ProcID}, {slots, AllSlots}}),
+    CappedSlots =
+        case Limit of
+            undefined -> AllSlots;
+            _ -> lists:filter(fun(Slot) -> Slot =< Limit end, AllSlots)
+        end,
+    ?event(
+        {finding_latest_slot,
+            {proc_id, hb_util:human_id(ProcID)},
+            {limit, Limit},
+            {path, Path},
+            {slots_in_range, CappedSlots}
+        }
+    ),
+    % Find the highest slot that has the necessary path.
+    BestSlot =
+        cache_first_with_path(
+            ProcID, RequiredPath, lists:reverse(lists:sort(CappedSlots)), Opts),
+    case BestSlot of
+        {failure, _} = Failure -> Failure;
+        {error, _} = Error -> Error;
+        not_found -> {error, not_found};
+        SlotNum ->
+            {ok, Msg} = hb_cache:read(cache_path(ProcID, SlotNum, Opts), Opts),
+            {ok, SlotNum, Msg}
+    end.
+
+cache_path(ProcID, Ref, Opts) -> cache_path(ProcID, Ref, [], Opts).
+cache_path(ProcID, Ref, PathSuffix, _Opts) ->
+    hb_path:to_binary(
+        [<<"computed">>, hb_util:human_id(ProcID)] ++
+        case Ref of
+            Int when is_integer(Int) -> ["slot", integer_to_binary(Int)];
+            root -> [];
+            slot_root -> ["slot"];
+            _ -> [Ref]
+        end ++ PathSuffix
+    ).
+
+cache_first_with_path(ProcID, RequiredPath, Slots, Opts) ->
+    cache_first_with_path(
+        ProcID, RequiredPath, Slots, Opts,
+        hb_opts:get(store, no_viable_store, Opts)
+    ).
+cache_first_with_path(_ProcID, _Required, [], _Opts, _Store) -> not_found;
+cache_first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts, Store) ->
+    RawPath = cache_path(ProcID, Slot, RequiredPath, Opts),
+    ?event({trying_slot, {slot, Slot}, {path, RawPath}}),
+    case hb_store:read(Store, RawPath, Opts) of
+        {error, not_found} ->
+            cache_first_with_path(ProcID, RequiredPath, Rest, Opts, Store);
+        {failure, _} = Failure -> Failure;
+        {error, _} = Error -> Error;
+        _ -> Slot
+    end.
+
+%% @doc Return legacy net-SU compatible AOS2 results for a set of assignments.
+%% Canonical home; `dev_scheduler_formats:assignments_to_aos2/4' delegates here.
+assignments_to_aos2(ProcID, Assignments, More, RawOpts) when is_map(Assignments) ->
+    assignments_to_aos2(
+        ProcID,
+        hb_util:message_to_ordered_list(Assignments),
+        More,
+        format_opts(RawOpts)
+    );
+assignments_to_aos2(ProcID, Assignments, More, RawOpts) ->
+    Opts = format_opts(RawOpts),
+    {Timestamp, Height, Hash} = ar_timestamp:get(),
+    BodyStruct =
+        #{
+            <<"page_info">> =>
+                #{
+                    <<"process">> => hb_util:human_id(ProcID),
+                    <<"has_next_page">> => More,
+                    <<"timestamp">> => list_to_binary(integer_to_list(Timestamp)),
+                    <<"block-height">> => list_to_binary(integer_to_list(Height)),
+                    <<"block-hash">> => hb_util:human_id(Hash)
+                },
+            <<"edges">> =>
+                lists:map(
+                    fun(Assignment) ->
+                        #{
+                            <<"cursor">> => assignment_cursor(Assignment, Opts),
+                            <<"node">> => assignment_to_aos2(Assignment, Opts)
+                        }
+                    end,
+                    Assignments
+                )
+        },
+    Encoded = hb_json:encode(BodyStruct),
+    ?event({body_struct, BodyStruct}),
+    ?event({encoded, {explicit, Encoded}}),
+    {ok, #{
+        <<"content-type">> => <<"application/json">>,
+        <<"body">> => Encoded
+    }}.
+
+assignment_cursor(Assignment, RawOpts) ->
+    hb_ao:get(<<"slot">>, Assignment, format_opts(RawOpts)).
+
+assignment_to_aos2(Assignment, RawOpts) ->
+    Opts = format_opts(RawOpts),
+    Message = hb_ao:get(<<"body">>, Assignment, Opts),
+    AssignmentWithoutBody = hb_maps:without([<<"body">>], Assignment, Opts),
+    {ok, MessageStruct} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"json-iface@1.0">> },
+            #{ <<"path">> => <<"to">>, <<"message">> => Message },
+            Opts
+        ),
+    {ok, AssignmentStruct} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"json-iface@1.0">> },
+            #{ <<"path">> => <<"to">>, <<"message">> => AssignmentWithoutBody },
+            Opts
+        ),
+    #{
+        <<"message">> => MessageStruct,
+        <<"assignment">> => AssignmentStruct
+    }.
+
+format_opts(Opts) ->
+    Opts#{
+        <<"hashpath">> => ignore,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"await-inprogress">> => false
+    }.

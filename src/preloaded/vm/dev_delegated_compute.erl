@@ -83,7 +83,7 @@ do_compute(ProcID, Req, Opts) ->
     ?event({do_compute_msg, {req, Req}}),
     Slot = hb_ao:get(<<"slot">>, Req, Opts),
     {ok, AOS2 = #{ <<"body">> := Body }} =
-        dev_scheduler_formats:assignments_to_aos2(
+        lib_process:assignments_to_aos2(
             ProcID,
             #{
                 Slot => Req
