@@ -4,7 +4,8 @@
 %%% An important characteristic of these functions is that they are atomic:
 %%% There can only ever be one registrant for a given name at a time.
 -module(hb_name).
--export([start/0, register/1, register/2, unregister/1, lookup/1, all/0]).
+-export([start/0, register/1, register/2]).
+-export([unregister/1, unregister/2, lookup/1, all/0]).
 -export([singleton/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -57,6 +58,22 @@ unregister(Name) when is_atom(Name) ->
 unregister(Name) ->
     start(),
     ets:delete(?NAME_TABLE, Name),
+    ok.
+
+%% @doc Unregister a name only when it is owned by the expected process.
+unregister(Name, Pid) when is_atom(Name) ->
+    case whereis(Name) of
+        Pid ->
+            catch erlang:unregister(Name),
+            ok;
+        _ ->
+            start(),
+            ets:delete_object(?NAME_TABLE, {Name, Pid}),
+            ok
+    end;
+unregister(Name, Pid) ->
+    start(),
+    ets:delete_object(?NAME_TABLE, {Name, Pid}),
     ok.
 
 %% @doc Atomic singleton lookup/spawn+register operation.
@@ -117,7 +134,7 @@ ets_lookup(Name) ->
             case is_process_alive(Pid) of
                 true -> Pid;
                 false -> 
-                    ets:delete(?NAME_TABLE, Name),
+                    ets:delete_object(?NAME_TABLE, {Name, Pid}),
                     undefined
             end;
         [] -> undefined
@@ -157,6 +174,21 @@ atom_test() ->
 
 term_test() ->
     basic_test({term, os:timestamp()}).
+
+owner_unregister_test() ->
+    Name = {owner_unregister_test, make_ref()},
+    First = spawn(fun() -> receive stop -> ok end end),
+    Second = spawn(fun() -> receive stop -> ok end end),
+    ?assertEqual(ok, hb_name:register(Name, First)),
+    ?assertEqual(ok, hb_name:unregister(Name, Second)),
+    ?assertEqual(First, hb_name:lookup(Name)),
+    ?assertEqual(ok, hb_name:unregister(Name, First)),
+    ?assertEqual(ok, hb_name:register(Name, Second)),
+    ?assertEqual(ok, hb_name:unregister(Name, First)),
+    ?assertEqual(Second, hb_name:lookup(Name)),
+    hb_name:unregister(Name),
+    First ! stop,
+    Second ! stop.
 
 singleton_returns_spawned_pid_test() ->
     Name = {singleton, os:timestamp()},
