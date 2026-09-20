@@ -307,14 +307,23 @@ add_to_queue(Item, BundledSize, Waiter, State = #state{
 
 %% @doc Dispatch the queue if it is ready.
 %% Only dispatches up to max_items at a time to respect the limit.
-maybe_dispatch(State = #state{queue = Q, max_items = MaxItems}) ->
+maybe_dispatch(State = #state{queue = Q, max_items = MaxItems,
+                              dispatch_ref = DispatchRef}) ->
     case dispatchable(State) of
         true ->
+            %% Threshold dispatch supersedes any pending max-delay timer;
+            %% leaving it active would let it fire on a later, partial
+            %% queue and produce an undersized bundle.
+            case is_reference(DispatchRef) of
+                true  -> erlang:cancel_timer(DispatchRef);
+                false -> ok
+            end,
             {ToDispatch, Remaining} = split_queue(Q, MaxItems),
             State1 = create_bundle(ToDispatch, State),
             NewState = State1#state{
                 queue = Remaining,
-                bytes = queue_bytes(Remaining)
+                bytes = queue_bytes(Remaining),
+                dispatch_ref = undefined
             },
             maybe_dispatch(NewState);
         false -> State

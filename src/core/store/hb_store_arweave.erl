@@ -305,7 +305,7 @@ load_tx(ID, relative, _Length, Opts) ->
 load_tx(ID, StartOffset, Length, Opts) ->
     hb_prometheus:measure_and_report(
         fun() ->
-            {ok, StructuredTXHeader} = hb_ao:resolve(
+            case hb_ao:resolve(
                 #{ <<"device">> => <<"arweave@2.9">> },
                 #{
                     <<"path">> => <<"tx">>,
@@ -313,38 +313,51 @@ load_tx(ID, StartOffset, Length, Opts) ->
                     <<"exclude-data">> => true
                 },
                 Opts
-            ),
-            TXHeader =
-                hb_message:convert(
-                    StructuredTXHeader,
-                    <<"tx@1.0">>,
-                    <<"structured@1.0">>,
-                    Opts
-                ),
-            case Length of
-                0 ->
-                    {ok, hb_message:convert(
-                        TXHeader,
-                        <<"structured@1.0">>,
-                        <<"tx@1.0">>,
-                        Opts)};
-                _ ->
-                    case read_chunks(StartOffset, Length, Opts) of
-                        {ok, Data} ->
-                            {ok, hb_message:convert(
-                                TXHeader#tx{data = Data},
-                                <<"structured@1.0">>,
-                                <<"tx@1.0">>,
-                                Opts
-                            )};
-                        {error, Reason} ->
-                            {error, Reason}
-                    end
+            ) of
+                {ok, StructuredTXHeader} ->
+                    load_tx_with_header(
+                        StructuredTXHeader, StartOffset, Length, Opts);
+                {error, _} = HeaderErr ->
+                    %% Stale offset index (reorg, forgotten peer, etc.) —
+                    %% do_read's outer case matches only {ok, _} / {error, _};
+                    %% normalize bare not_found to that shape so the caller's
+                    %% "not_found" branch fires instead of a case_clause crash.
+                    HeaderErr;
+                not_found ->
+                    {error, not_found}
             end
         end,
         hb_store_arweave_chunk_fetch_duration_seconds,
         [load_tx]
     ).
+
+load_tx_with_header(StructuredTXHeader, StartOffset, Length, Opts) ->
+    TXHeader =
+        hb_message:convert(
+            StructuredTXHeader,
+            <<"tx@1.0">>,
+            <<"structured@1.0">>,
+            Opts
+        ),
+    case Length of
+        0 ->
+            {ok, hb_message:convert(
+                TXHeader,
+                <<"structured@1.0">>,
+                <<"tx@1.0">>,
+                Opts)};
+        _ ->
+            case read_chunks(StartOffset, Length, Opts) of
+                {ok, Data} ->
+                    {ok, hb_message:convert(
+                        TXHeader#tx{data = Data},
+                        <<"structured@1.0">>,
+                        <<"tx@1.0">>,
+                        Opts)};
+                {error, Reason} ->
+                    {error, Reason}
+            end
+    end.
 
 %% @doc Read the chunks from the given start offset and length using the 
 %% `~arweave@2.9` device.
