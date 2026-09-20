@@ -56,22 +56,32 @@ parse_range(Request, Opts) ->
     ToArg = hb_maps:find(<<"to">>, Request, Opts),
     maybe
         {ok, Tip} ?= range_tip(FromArg, ToArg, Opts),
-        {ok, IncludePendingFrom, From} ?= from_height(FromArg, Tip),
-        {ok, IncludePendingTo, To} ?= to_height(ToArg, Tip),
-        case From < 0 orelse (is_integer(To) andalso To < 0) of
-            true ->
-                ?event(copycat_short,
-                    {height_resolved_negative,
-                        {from, From}, {to, To}}),
-                {error, unavailable};
-            false ->
-                {ok, {IncludePendingFrom orelse IncludePendingTo, From, To}}
-        end
+        {ok, Range} ?= parse_range_with_tip(FromArg, ToArg, Tip),
+        {ok, Range}
     else
         {error, Reason} ->
             ?event(copycat_short,
                 {latest_height_failed, {reason, Reason}}),
             {error, unavailable}
+    end.
+
+%% @doc Parse normalized range arguments relative to a fixed tip.
+parse_range_with_tip(FromArg, ToArg, Tip) ->
+    {ok, ShouldIncludePendingFrom, From} = from_height(FromArg, Tip),
+    {ok, ShouldIncludePendingTo, To} = to_height(ToArg, Tip),
+    case From < 0 orelse (is_integer(To) andalso To < 0) of
+        true ->
+            ?event(copycat_short,
+                {height_resolved_negative,
+                    {from, From}, {to, To}}),
+            {error, unavailable};
+        false ->
+            {ok,
+                {
+                    ShouldIncludePendingFrom orelse ShouldIncludePendingTo,
+                    From,
+                    To
+                }}
     end.
 
 range_tip(FromArg, ToArg, Opts) ->
@@ -1386,28 +1396,27 @@ auto_stop_partial_index_test_parallel() ->
     ok.
 
 negative_parse_range_test_parallel() ->
-    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    {ok, Tip} =
-        hb_ao:resolve(
-            <<?ARWEAVE_DEVICE/binary, "/current/height">>,
-            Opts
-        ),
+    Tip = 2_000_768,
     {ok, {false, NegativeFrom, UndefinedTo}} =
-        parse_range(#{ <<"from">> => <<"-3">> }, Opts),
-    ?assertEqual(hb_util:int(Tip) - 3, NegativeFrom),
+        parse_range_with_tip({ok, <<"-3">>}, error, Tip),
+    ?assertEqual(Tip - 3, NegativeFrom),
     ?assertEqual(undefined, UndefinedTo),
     {ok, {false, PositiveFrom, NegativeTo}} =
-        parse_range(#{ <<"from">> => <<"10">>, <<"to">> => <<"-3">> }, Opts),
+        parse_range_with_tip({ok, <<"10">>}, {ok, <<"-3">>}, Tip),
     ?assertEqual(10, PositiveFrom),
-    ?assertEqual(hb_util:int(Tip) - 3, NegativeTo),
+    ?assertEqual(Tip - 3, NegativeTo),
     {ok, {true, DefaultPendingFrom, DefaultNegativeTo}} =
-        parse_range(#{ <<"to">> => <<"-3">> }, Opts),
-    ?assertEqual(hb_util:int(Tip), DefaultPendingFrom),
-    ?assertEqual(hb_util:int(Tip) - 3, DefaultNegativeTo),
+        parse_range_with_tip(error, {ok, <<"-3">>}, Tip),
+    ?assertEqual(Tip, DefaultPendingFrom),
+    ?assertEqual(Tip - 3, DefaultNegativeTo),
     {ok, {true, PendingFrom, PendingTo}} =
-        parse_range(#{ <<"from">> => <<"pending">>, <<"to">> => <<"pending">> }, Opts),
-    ?assertEqual(hb_util:int(Tip), PendingFrom),
-    ?assertEqual(hb_util:int(Tip) + 1, PendingTo),
+        parse_range_with_tip(
+            {ok, <<"pending">>},
+            {ok, <<"pending">>},
+            Tip
+        ),
+    ?assertEqual(Tip, PendingFrom),
+    ?assertEqual(Tip + 1, PendingTo),
     ok.
 
 latest_height_failure_test_parallel() ->
