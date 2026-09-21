@@ -352,18 +352,6 @@ message_reserved_key_test() ->
     ?assertNot(is_reserved(Trie, <<"commit">>, #{})),
     ?assertNot(is_reserved(Msg, <<"alice">>, #{})).
 
-trie_keys_skip_reserved_keys_test() ->
-    Trie =
-        #{
-            <<"device">> => <<"trie@1.0">>,
-            <<"node-value">> => ignored,
-            <<"get">> => ignored,
-            <<"set">> => ignored,
-            <<"keys">> => ignored,
-            <<"alice">> => 1
-        },
-    ?assertEqual([<<>>, <<"alice">>], lists:sort(hb_ao:keys(Trie, #{}))).
-
 test_device_function_keys_are_reserved_test_parallel() ->
     TestDevice = #{ <<"device">> => <<"test-device@1.0">> },
     ?assert(is_reserved(TestDevice, <<"test-func">>, #{})),

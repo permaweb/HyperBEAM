@@ -31,7 +31,6 @@ info() ->
             <<"node-value">>,
             <<"device">>,
             <<"commitments">>,
-            <<"priv">>,
             <<"hashpath">>
         ]
     }.
@@ -253,6 +252,7 @@ edges(TrieNode, Opts) ->
         Key
     ||
         Key <- hb_maps:keys(TrieNode, Opts),
+        not hb_private:is_private(Key),
         not hb_device:is_reserved(?MODULE, TrieNode, Key, Opts)
     ].
 
@@ -309,6 +309,20 @@ verify_nodes(TrieNode, Opts) ->
             EdgeLabel <- EdgeLabels
         ],
     lists:all(fun(X) -> X =:= true end, [ThisNode] ++ ChildResults).
+
+trie_keys_skip_reserved_keys_test() ->
+    Trie =
+        #{
+            <<"device">> => <<"trie@1.0">>,
+            <<"node-value">> => ignored,
+            <<"get">> => ignored,
+            <<"set">> => ignored,
+            <<"keys">> => ignored,
+            <<"priv">> => ignored,
+            <<"priv-cache">> => ignored,
+            <<"alice">> => 1
+        },
+    ?assertEqual([<<>>, <<"alice">>], lists:sort(hb_ao:keys(Trie, #{}))).
 
 node_count_forwards_test() ->
     Opts = test_opts(),
