@@ -1,9 +1,10 @@
 %%% @doc A lightweight in-memory HyperBEAM store backed by a single ETS
 %%% `ordered_set`. The store is volatile: it does not persist data to disk
-%%% ever, and -- critically -- can be configured to expire all data
-%%% periodically. This is useful for testing and as a short-term in-memory
-%%% cache, not for instances where an `ok` from the `write` function should
-%%% imply data persistence.
+%%% ever, and -- critically -- can be configured to reset all data
+%%% periodically or when its stored binary data exceeds a maximum size. Size
+%%% checks run periodically and default to every ten seconds. This is useful for
+%%% testing and as a short-term in-memory cache, not for instances where an `ok`
+%%% from the `write` function should imply data persistence.
 %%%
 %%% Each entry is stored as `{Path, {raw, Bin} | {link, Target} | group}`.
 %%% Group membership is discovered by a lexicographic range scan over the
@@ -18,6 +19,7 @@
 
 -define(ROOT_GROUP, <<"/">>).
 -define(MAX_REDIRECTS, 32).
+-define(DEFAULT_SIZE_CHECK_INTERVAL_MS, 10_000).
 
 %% @doc Start the ETS-backed store and return the store instance message.
 start(StoreOpts = #{ <<"name">> := Name }, _Req, _Opts) ->
@@ -33,6 +35,7 @@ start(StoreOpts = #{ <<"name">> := Name }, _Req, _Opts) ->
             ]),
             Parent ! {ok, #{ <<"pid">> => self(), <<"ets-table">> => Table }},
             maybe_start_ttl_timer(StoreOpts, self()),
+            maybe_start_size_timer(StoreOpts, self()),
             owner_loop(StoreOpts)
         end
     ),
@@ -55,6 +58,10 @@ owner_loop(StoreOpts) ->
             reset_store(StoreOpts),
             maybe_start_ttl_timer(StoreOpts, self()),
             owner_loop(StoreOpts);
+        check_size ->
+            maybe_reset_by_size(StoreOpts),
+            maybe_start_size_timer(StoreOpts, self()),
+            owner_loop(StoreOpts);
         _ ->
             owner_loop(StoreOpts)
     end.
@@ -69,6 +76,20 @@ maybe_start_ttl_timer(StoreOpts, PID) ->
             end;
         MaxTTLMs ->
             timer:send_after(hb_util:int(MaxTTLMs), PID, reset)
+    end.
+
+%% @doc Schedule periodic byte-size checks when a maximum is configured.
+maybe_start_size_timer(StoreOpts, PID) ->
+    case maps:get(<<"max-size">>, StoreOpts, infinity) of
+        infinity ->
+            skip;
+        _ ->
+            Interval = maps:get(
+                <<"max-size-check-interval-ms">>,
+                StoreOpts,
+                ?DEFAULT_SIZE_CHECK_INTERVAL_MS
+            ),
+            timer:send_after(hb_util:int(Interval), PID, check_size)
     end.
 
 %% @doc Stop the ETS owner process (which also drops the table).
@@ -242,6 +263,32 @@ put_entry(Opts, RawKey, Entry) ->
     ets:insert(Table, {Key, Entry}),
     ok.
 
+%% @doc Reset the store when its stored binary data exceeds `max-size` bytes.
+maybe_reset_by_size(Opts) ->
+    case maps:get(<<"max-size">>, Opts, infinity) of
+        infinity ->
+            ok;
+        RawMaxSize ->
+            case store_size(table(Opts)) > hb_util:int(RawMaxSize) of
+                true -> reset_store(Opts);
+                false -> ok
+            end
+    end.
+
+%% @doc Return the bytes held in binary keys and raw/link values.
+store_size(Table) ->
+    ets:foldl(
+        fun({Key, {raw, Value}}, Size) ->
+                Size + byte_size(Key) + byte_size(Value);
+           ({Key, {link, Target}}, Size) ->
+                Size + byte_size(Key) + byte_size(Target);
+           ({Key, group}, Size) ->
+                Size + byte_size(Key)
+        end,
+        0,
+        Table
+    ).
+
 table(Opts) ->
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
     Table.
@@ -398,6 +445,62 @@ max_ttl_test() ->
     ?assertEqual({ok, <<"c">>}, hb_store:read(StoreOpts, <<"a">>, #{})),
     timer:sleep(200),
     ?assertEqual({error, not_found}, hb_store:read(StoreOpts, <<"a">>, #{})),
+    ok = hb_store:stop(StoreOpts).
+
+max_size_test() ->
+    StoreOpts =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-max-size-test">>,
+            <<"max-size">> => 3,
+            <<"max-size-check-interval-ms">> => 10
+        },
+    ok = hb_store:start(StoreOpts),
+    ok = hb_store:write(StoreOpts, #{ <<"a">> => <<"b">> }, #{}),
+    ?assertEqual({ok, <<"b">>}, hb_store:read(StoreOpts, <<"a">>, #{})),
+    timer:sleep(20),
+    ?assertEqual({ok, <<"b">>}, hb_store:read(StoreOpts, <<"a">>, #{})),
+    ok = hb_store:write(StoreOpts, #{ <<"c">> => <<"def">> }, #{}),
+    ?assert(
+        hb_util:wait_until(
+            fun() ->
+                hb_store:read(StoreOpts, <<"a">>, #{}) =:=
+                    {error, not_found}
+            end,
+            1000
+        )
+    ),
+    ?assertEqual({error, not_found}, hb_store:read(StoreOpts, <<"c">>, #{})),
+    ok = hb_store:stop(StoreOpts).
+
+max_size_batch_test() ->
+    StoreOpts =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-max-size-batch-test">>,
+            <<"max-size">> => 3,
+            <<"max-size-check-interval-ms">> => 60_000
+        },
+    ok = hb_store:start(StoreOpts),
+    ok = hb_store:write(
+        StoreOpts,
+        #{ <<"a">> => <<"b">>, <<"c">> => <<"d">> },
+        #{}
+    ),
+    ?assertEqual({ok, <<"b">>}, hb_store:read(StoreOpts, <<"a">>, #{})),
+    ?assertEqual({ok, <<"d">>}, hb_store:read(StoreOpts, <<"c">>, #{})),
+    #{ <<"pid">> := PID } = hb_store:find(StoreOpts),
+    PID ! check_size,
+    ?assert(
+        hb_util:wait_until(
+            fun() ->
+                hb_store:read(StoreOpts, <<"a">>, #{}) =:=
+                    {error, not_found}
+            end,
+            1000
+        )
+    ),
+    ?assertEqual({error, not_found}, hb_store:read(StoreOpts, <<"c">>, #{})),
     ok = hb_store:stop(StoreOpts).
 
 empty_root_reports_not_found_test() ->
