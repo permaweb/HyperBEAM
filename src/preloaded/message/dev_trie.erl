@@ -79,10 +79,16 @@ get(TrieNode, Req, Opts) ->
         {ok, Key} -> retrieve(TrieNode, Key, Opts)
     end.
 
-%% @doc Set keys and their values in the trie.
+%% @doc Set reachable data keys in the trie, excluding reserved and private keys.
 set(Trie, Req, Opts) ->
     Insertable = hb_maps:without([<<"path">>], Req, Opts),
-    KeyVals = hb_maps:to_list(Insertable, Opts),
+    KeyVals = lists:filter(
+        fun({Key, _Val}) ->
+            not hb_private:is_private(Key) andalso
+                not hb_device:is_reserved(?MODULE, Trie, Key, Opts)
+        end,
+        hb_maps:to_list(Insertable, Opts)
+    ),
     {ok, do_set(Trie, KeyVals, Opts)}.
 do_set(Trie, [], Opts) ->
     Uncommitted = hb_message:uncommitted_deep(Trie, Opts),
@@ -394,6 +400,66 @@ trie_keys_skip_reserved_keys_test() ->
         },
     ?assertEqual([<<>>, <<"alice">>], lists:sort(hb_ao:keys(Trie, #{}))).
 
+path_and_prefixed_keys_test() ->
+    Opts = test_opts(),
+    {ok, Trie} =
+        hb_ao:resolve(
+            #{<<"device">> => <<"trie@1.0">>},
+            #{
+                <<"path">> => <<"set">>,
+                <<"a_device">> => 1,
+                <<"a_path">> => 2,
+                <<"device-name">> => 3,
+                <<"pathable">> => 4
+            },
+            Opts
+        ),
+    ?assertEqual(<<"trie@1.0">>, hb_maps:get(<<"device">>, Trie, Opts)),
+    ?assertEqual(error, hb_maps:find(<<"path">>, Trie, Opts)),
+    ?assertEqual({ok, 1}, hb_maps:find(<<"a_device">>, Trie, Opts)),
+    ?assertEqual({ok, 2}, hb_maps:find(<<"a_path">>, Trie, Opts)),
+    ?assertEqual({ok, 3}, hb_maps:find(<<"device-name">>, Trie, Opts)),
+    ?assertEqual({ok, 4}, hb_maps:find(<<"pathable">>, Trie, Opts)),
+    ?assertEqual(
+        [<<"a_device">>, <<"a_path">>, <<"device-name">>, <<"pathable">>],
+        lists:sort(hb_ao:keys(Trie, Opts))
+    ),
+    ?assertEqual(1, hb_ao:get(<<"a_device">>, Trie, Opts)),
+    ?assertEqual(2, hb_ao:get(<<"a_path">>, Trie, Opts)),
+    ?assertEqual(3, hb_ao:get(<<"device-name">>, Trie, Opts)),
+    ?assertEqual(4, hb_ao:get(<<"pathable">>, Trie, Opts)).
+
+unreachable_keys_ignored_test() ->
+    Opts = test_opts(),
+    Trie = #{<<"device">> => <<"trie@1.0">>},
+    lists:foreach(
+        fun({Key, Val}) ->
+            {ok, UpdatedTrie} = hb_ao:resolve(
+                Trie,
+                #{<<"path">> => <<"set">>, <<"alice">> => 1, Key => Val},
+                Opts
+            ),
+            ?assertEqual([<<"alice">>], hb_ao:keys(UpdatedTrie, Opts)),
+            ?assertEqual(1, hb_ao:get(<<"alice">>, UpdatedTrie, Opts)),
+            % Check physical absence too: keys() hides unreachable trie edges.
+            % Message metadata may still contain these four keys legitimately.
+            case lists:member(
+                Key,
+                [<<"device">>, <<"commitments">>, <<"hashpath">>, <<"priv">>]
+            ) of
+                true -> ok;
+                false -> ?assertEqual(error, hb_maps:find(Key, UpdatedTrie, Opts))
+            end
+        end,
+        [
+            {<<"get">>, 2}, {<<"set">>, 2}, {<<"keys">>, 2},
+            {<<"node-value">>, 2},
+            {<<"device">>, <<"message@1.0">>},
+            {<<"commitments">>, #{}}, {<<"hashpath">>, <<>>},
+            {<<"priv">>, #{}}, {<<"priv-cache">>, 2}, {<<"priv-x">>, 2}
+        ]
+    ).
+
 deep_trie_keys_filter_private_full_paths_test() ->
     Trie =
         #{
@@ -451,9 +517,13 @@ reserved_prefix_collision_test() ->
             #{<<"setable">> => 1},
             Opts
         ),
-    Trie = hb_ao:set(TrieWithSetable, #{<<"set">> => 2}, Opts),
-    ?assertEqual([<<"setable">>], hb_ao:keys(Trie, Opts)),
-    ?assertEqual(1, hb_ao:get(<<"setable">>, Trie, Opts)).
+    Trie = hb_ao:set(TrieWithSetable, #{<<"setother">> => 2}, Opts),
+    ?assertEqual(
+        [<<"setable">>, <<"setother">>],
+        lists:sort(hb_ao:keys(Trie, Opts))
+    ),
+    ?assertEqual(1, hb_ao:get(<<"setable">>, Trie, Opts)),
+    ?assertEqual(2, hb_ao:get(<<"setother">>, Trie, Opts)).
 
 node_count_forwards_test() ->
     Opts = test_opts(),
