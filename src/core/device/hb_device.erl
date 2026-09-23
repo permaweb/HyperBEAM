@@ -333,12 +333,11 @@ do_is_direct_key_access(Dev, NormKey, Opts) ->
         _ -> false
     end.
 
-explicit_reserved_key_test() ->
-    Trie = #{ <<"device">> => <<"trie@1.0">> },
-    ?assert(is_reserved(Trie, <<"node-value">>, #{})),
-    ?assert(is_reserved(<<"trie@1.0">>, Trie, <<"node-value">>, #{})),
-    ?assert(is_reserved(Trie, <<"Node-Value">>, #{})),
-    ?assertNot(is_reserved(Trie, <<"alice">>, #{})).
+reserved_info_key_test() ->
+    Info = #{reserved => [<<"custom-key">>]},
+    ?assert(is_reserved_key(Info, <<"custom-key">>, #{})),
+    ?assert(is_reserved_key(Info, <<"Custom-Key">>, #{})),
+    ?assertNot(is_reserved_key(Info, <<"alice">>, #{})).
 
 message_reserved_key_test() ->
     Msg = #{ <<"device">> => <<"message@1.0">> },
