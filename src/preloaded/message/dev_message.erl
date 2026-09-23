@@ -1,11 +1,11 @@
 %%% @doc The identity device: For non-reserved keys, it simply returns a key 
 %%% from the message as it is found in the message's underlying Erlang map. 
 %%% Private keys (`priv[.*]') are not included.
-%%% Reserved keys are: `id', `commitments', `committers', `keys', `path', 
-%%% `set', `remove', `get', and `verify'. Their function comments describe the 
-%%% behaviour of the device when these keys are set.
+%%% The device explicitly reserves the non-function keys `commitments' and
+%%% `path'. Keys backed by direct device functions are also reserved by
+%%% `hb_device'.
 -module(dev_message).
-%%% Base AO-Core reserved keys:
+%%% Base AO-Core device functions:
 -export([info/0, keys/1, keys/2]).
 -export([set/3, set_path/3, remove/3, get/3, get/4]).
 %%% Commitment-specific keys:
@@ -18,8 +18,8 @@
 -define(DEFAULT_ID_DEVICE, <<"httpsig@1.0">>).
 -define(DEFAULT_ATT_DEVICE, <<"httpsig@1.0">>).
 
-%% The list of keys that are exported by this device.
--define(DEVICE_KEYS, [
+%% The message control and commitment keys that `set/3' does not write.
+-define(SET_PROTECTED_KEYS, [
     <<"id">>,
     <<"commitments">>,
     <<"committers">>,
@@ -30,10 +30,12 @@
     <<"verify">>
 ]).
 
-%% @doc Return the info for the identity device.
+%% @doc Return the info for the identity device. Direct function keys are
+%% reserved automatically by `hb_device', so only non-function keys are listed.
 info() ->
     #{
-        default => fun dev_message:get/4
+        default => fun dev_message:get/4,
+        reserved => [<<"commitments">>, <<"path">>]
     }.
 
 %% @doc Generate an index page for a message, in the event that the `body' and
@@ -613,12 +615,12 @@ commitment_ids_from_committers(CommitterAddrs, Commitments, Opts) ->
 %% them in the message, overwriting any existing values.
 set(Base, NewValuesMsg, Opts) ->
     OriginalPriv = hb_private:from_message(Base),
-	% Filter keys that are in the default device (this one).
+	% Filter keys that `set/3' must not write.
     {ok, NewValuesKeys} = keys(NewValuesMsg, Opts),
 	KeysToSet =
 		lists:filter(
 			fun(Key) ->
-				not lists:member(Key, ?DEVICE_KEYS ++ [<<"set-mode">>]) andalso
+				not lists:member(Key, ?SET_PROTECTED_KEYS ++ [<<"set-mode">>]) andalso
 					(hb_maps:get(Key, NewValuesMsg, undefined, Opts) =/= undefined)
 			end,
 			NewValuesKeys
