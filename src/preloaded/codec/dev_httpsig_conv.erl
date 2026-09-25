@@ -166,9 +166,19 @@ body_to_parts(ContentType, Body, _Opts) ->
         case ContentType of
             undefined -> [];
             _ ->
-                {item, {_, _XT}, XParams} =
-                    hb_structured_fields:parse_item(ContentType),
-                XParams
+                % The only thing we need from the content type here is its
+                % `boundary' parameter, if it has one. A content type is not
+                % guaranteed to be a parsable structured-field item, though:
+                % cached Arweave manifests carry
+                % `application/x.arweave-manifest json', whose space ends the
+                % token early and leaves a remainder. Failing to parse means
+                % `no parameters', not `this response is unreadable' -- the
+                % latter takes down every read of the message over HTTP,
+                % including a peer's `hb_store_remote_node' read.
+                try hb_structured_fields:parse_item(ContentType) of
+                    {item, {_, _XT}, XParams} -> XParams
+                catch _:_ -> []
+                end
         end,
     case lists:keyfind(<<"boundary">>, 1, Params) of
         false ->
@@ -924,3 +934,27 @@ nested_content_disposition_roundtrip_test() ->
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, #{}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, #{}),
     ?assertEqual(Msg, Decoded).
+
+%% @doc Cached Arweave manifests carry the content type
+%% `application/x.arweave-manifest json': GraphQL gateways form-decode tag
+%% values, so the `+' of `application/x.arweave-manifest+json' reaches the
+%% cache as a space. Such a content type is not a parsable structured-field
+%% item, and a message carrying one still has to decode -- it simply has no
+%% multipart boundary.
+unparsable_content_type_roundtrip_test() ->
+    Msg = #{
+        <<"content-type">> => <<"application/x.arweave-manifest json">>,
+        <<"data">> => <<"{\"manifest\":\"arweave/paths\"}">>
+    },
+    Encoded = hb_message:convert(Msg, <<"httpsig@1.0">>, <<"structured@1.0">>, #{}),
+    ?event({encoded, Encoded}),
+    Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
+    ?event({decoded, Decoded}),
+    ?assertEqual(
+        <<"application/x.arweave-manifest json">>,
+        maps:get(<<"content-type">>, Decoded, not_found)
+    ),
+    ?assertEqual(
+        maps:get(<<"data">>, Msg),
+        maps:get(<<"data">>, Decoded, not_found)
+    ).
