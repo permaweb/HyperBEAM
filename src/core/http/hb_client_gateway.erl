@@ -413,8 +413,18 @@ result_to_message(ExpectedID, Item, Opts) ->
     TX =
         ar_tx:reset_ids(#tx {
             format = ans104,
+            % GraphQL hands the anchor back base64url-encoded, exactly as it
+            % does `target' and `owner/key' -- both of which are decoded here.
+            % Left encoded, a non-empty anchor reaches ar_bundles as 43 bytes,
+            % `enforce_valid_tx' accepts only 0 or 32, and the whole gateway
+            % read throws `{invalid_field, anchor, ...}': the data has already
+            % been fetched, but the node answers 500 instead of serving it.
             anchor =
-                normalize_null(hb_maps:get(<<"anchor">>, Item, not_found, GQLOpts)),
+                decode_or_null(
+                    normalize_null(
+                        hb_maps:get(<<"anchor">>, Item, not_found, GQLOpts)
+                    )
+                ),
             signature = Signature,
             signature_type = SignatureType,
             target =
@@ -689,3 +699,17 @@ ao_dataitem_test() ->
     ?event(gateway, {l2_dataitem, Res}),
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"Hello World">>, Data).
+
+%% @doc Test an L1 transaction that carries a non-empty anchor. GraphQL
+%% returns the anchor base64url-encoded, while `ar_bundles:enforce_valid_tx/1'
+%% accepts an anchor of 0 or 32 bytes -- an encoded 32-byte anchor is 43 --
+%% so the field has to be decoded before the TX is rebuilt.
+l1_transaction_with_anchor_test() ->
+    _Node = hb_http_server:start_node(#{}),
+    {ok, Res} = read(<<"rW1l6JFGTYOXp6mLCDx2Ekz2HUS4Ec26JUh2fBodtDY">>, #{}),
+    ?event(gateway, {l1_transaction_with_anchor, Res}),
+    ?assertEqual(
+        <<"OVFjSmw3aC9BVDFrV0pHZnF4Q1owK09JYWljT0g1T3g">>,
+        maps:get(<<"anchor">>, Res)
+    ),
+    ?assertEqual(745, byte_size(maps:get(<<"data">>, Res))).
