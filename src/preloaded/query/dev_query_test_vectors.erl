@@ -1529,6 +1529,46 @@ transaction_query_full_test_parallel() ->
         Res
     ).
 
+%% @doc Unsigned results keep a mixed page's non-null owner and signature fields.
+transactions_unsigned_owner_test_parallel() ->
+    Opts = #{
+        <<"priv-wallet">> => Wallet = ar_wallet:new(),
+        <<"store">> => [hb_test_utils:test_store(hb_store_volatile)]
+    },
+    Node = hb_http_server:start_node(Opts),
+    Unsigned = #{
+        <<"type">> => <<"Device-Specification">>,
+        <<"body">> => <<"unsigned specification">>
+    },
+    Signed = hb_message:commit(Unsigned, Opts,
+        #{ <<"commitment-device">> => <<"ans104@1.0">> }),
+    IDs = [begin
+        {ok, _} = hb_cache:write(Msg, Opts),
+        hb_message:id(Msg, all, Opts)
+    end || Msg <- [Unsigned, Signed]],
+    Result = post_graphql(Node,
+        <<"query($ids: [ID!]) { transactions(ids: $ids) {",
+            " edges { node { id owner { address key } signature } } } }">>,
+        #{ <<"ids">> => IDs }, #{}, Opts),
+    ?assertNot(maps:is_key(<<"errors">>, Result)),
+    #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := Edges }}} = Result,
+    Nodes = maps:from_list([{maps:get(<<"id">>, N), N}
+        || #{ <<"node">> := N } <- Edges]),
+    [UnsignedID, SignedID] = IDs,
+    ?assertEqual(lists:sort(IDs), lists:sort(maps:keys(Nodes))),
+    ?assertMatch(#{
+        <<"owner">> := #{ <<"address">> := <<>>, <<"key">> := <<>> },
+        <<"signature">> := <<>>
+    }, maps:get(UnsignedID, Nodes)),
+    #{ <<"owner">> := Owner, <<"signature">> := Signature } =
+        maps:get(SignedID, Nodes),
+    ?assertEqual(#{
+        <<"address">> => hb:address(Wallet),
+        <<"key">> => hb_util:encode(ar_wallet:to_pubkey(Wallet))
+    }, Owner),
+    ?assertEqual(hb_maps:get(<<"signature">>,
+        hb_maps:get(SignedID, hb_maps:get(<<"commitments">>, Signed))), Signature).
+
 %% @doc Preserve original tags, or exclude native fields from normalized keys.
 transaction_tags_exclude_fields_test_parallel() ->
     Wallet = ar_wallet:new(),
