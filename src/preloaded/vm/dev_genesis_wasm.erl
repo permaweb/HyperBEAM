@@ -159,28 +159,21 @@ do_compute(State, Req, Opts) ->
             ),
             {error, State};
         {skip, ExitState} ->
+            % The CU needs a signed message at every slot. A skipped slot
+            % sends its assignment as that message, the same on every node.
+            % The CU drops the repeated message itself if it has `from-process'.
             ReqWithoutCommitments = hb_message:uncommitted_deep(Req, Opts),
             Req2 =
-                hb_message:commit(
-                    ReqWithoutCommitments#{
-                        <<"path">> => 
-                            hb_maps:get(<<"path">>, Req, <<"compute">>, Opts),
-                        <<"slot">> =>
-                            hb_maps:get(<<"slot">>, Req, -1, Opts),
-                        <<"skip">> => true,
-                        <<"original-assignment-id">> => 
-                            hb_message:id(Req, signed, Opts),
-                        <<"body">> => 
-                            hb_message:commit(
-                                #{
-                                    <<"timestamp">> => 
-                                        os:system_time(millisecond)
-                                },
-                                Opts
-                            )
-                    },
-                    Opts
-                ),
+                ReqWithoutCommitments#{
+                    <<"path">> =>
+                        hb_maps:get(<<"path">>, Req, <<"compute">>, Opts),
+                    <<"slot">> =>
+                        hb_maps:get(<<"slot">>, Req, -1, Opts),
+                    <<"skip">> => true,
+                    <<"original-assignment-id">> =>
+                        hb_message:id(Req, signed, Opts),
+                    <<"body">> => Req
+                },
             ?event(dedup_short,
                 {skip,
                     {cause, dedup},
