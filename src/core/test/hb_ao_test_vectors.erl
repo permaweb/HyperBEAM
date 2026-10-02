@@ -1142,8 +1142,8 @@ start_as_with_parameters_test(Opts) ->
         <<"device">> => <<"test-device@1.0">>,
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
-    ?assertEqual(
-        {ok, <<"GOOD FUNCTION">>},
+    ?assertMatch(
+        {ok, #{ <<"test_key">> := <<"MESSAGE">> }},
         hb_ao:resolve_many(
             [
                 {as, <<"message@1.0">>, Msg},

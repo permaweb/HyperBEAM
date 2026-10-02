@@ -839,20 +839,25 @@ subresolve_loaded(Base, DevID, Req, Opts) ->
                     hb_maps:without(?TEMP_OPTS, Opts, Opts)
                 )
         end,
-    % With no path, set the request keys on the base. If they are the same
-    % message, only the device may have changed above. With a path, apply the
-    % request without changing the base.
+    % With no path, set the request keys on the base, but not a device in place
+    % of the one set above. If they are the same message, its keys are already
+    % present. With a path, apply the request without changing the base.
     case hb_path:from_message(request, Req, Opts) of
         undefined when Base =:= Req ->
-            {ok, set(Base2, hb_maps:with([<<"device">>], Req, Opts), Opts)};
+            {ok, Base2};
         undefined ->
+            ReqKeys =
+                case DevID of
+                    undefined -> hb_maps:without([<<"path">>], Req, Opts);
+                    _ -> hb_maps:without([<<"path">>, <<"device">>], Req, Opts)
+                end,
             Base3 =
-                case map_size(hb_maps:without([<<"path">>], Req, Opts)) of
+                case map_size(ReqKeys) of
                     0 -> Base2;
                     _ ->
                         set(
 							Base2,
-							set(Req, <<"path">>, unset, Opts),
+							ReqKeys,
 							Opts#{ <<"force-message">> => false }
 						)
                 end,
