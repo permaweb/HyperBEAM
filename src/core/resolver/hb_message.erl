@@ -1014,19 +1014,21 @@ minimize(Map, ExtraKeys) ->
 %% be regenerated.
 normalize(Map, Opts) when is_map(Map) orelse is_list(Map) ->
     NormalizedMap = hb_ao:normalize_keys(Map, Opts),
-    FilteredMap = filter_default_keys(NormalizedMap),
+    FilteredMap = filter_default_keys(NormalizedMap, Opts),
     hb_maps:with(matchable_keys(FilteredMap), FilteredMap);
 normalize(Other, _Opts) ->
     Other.
 
 %% @doc Remove keys from a map that have the default values found in the tx
-%% record.
-filter_default_keys(Map) ->
+%% record. A value given as a link is loaded before it is compared.
+filter_default_keys(Map) -> filter_default_keys(Map, #{}).
+filter_default_keys(Map, Opts) ->
     DefaultsMap = default_tx_message(),
     maps:filter(
         fun(Key, Value) ->
             case hb_maps:find(hb_ao:normalize_key(Key), DefaultsMap) of
-                {ok, Value} -> false;
+                {ok, Default} ->
+                    hb_cache:ensure_loaded(Value, Opts) =/= Default;
                 _ -> true
             end
         end,
