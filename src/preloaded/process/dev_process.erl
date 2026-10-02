@@ -837,31 +837,9 @@ ensure_loaded(Base, Req, Opts) ->
                     % the public component of a message) into memory.
                     % Do not update the hashpath while we do this, and remove
                     % the snapshot key after we have normalized the message.
-                    Process = 
-                        hb_maps:get(
-                            <<"process">>,
-                            SnapshotMsg,
-                            undefined,
-                            Opts
-                        ),
-                    #{ <<"commitments">> := HmacCommits} =
-                        hb_message:with_commitments(
-                            #{ <<"type">> => <<"hmac-sha256">>},
-                            Process,
-                            Opts
-                        ),
-                    #{ <<"commitments">> := SignCommits } =
-                        hb_message:with_commitments(ProcID, Process, Opts),
-                    UpdateProcess =
-                        hb_maps:put(
-                            <<"commitments">>,
-                            hb_maps:merge(HmacCommits, SignCommits),
-                            Process,
-                            Opts
-                        ),
                     SnapshotReq =
                         hb_private:set(
-                            SnapshotMsg#{ <<"process">> => UpdateProcess },
+                            SnapshotMsg,
                             <<"initialized">>,
                             <<"true">>,
                             Opts
