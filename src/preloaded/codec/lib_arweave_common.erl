@@ -712,14 +712,23 @@ holds_signed_values(Commitment, OriginalTags, TABM, Opts) ->
         holds_tags(OriginalTags, maps:keys(Fields), TABM, Opts).
 
 %% @doc Check that a message holds the values of its commitment's tags. A tag
-%% with the name of a field is skipped: decoding takes the field's value.
+%% with the name of a field is skipped: decoding takes the field's value. So is
+%% a tag with the name of a nested message, such as a list bundle's tag `1':
+%% decoding takes the item in the data.
 holds_tags([], _FieldKeys, _TABM, _Opts) ->
     true;
 holds_tags(OriginalTags, FieldKeys, TABM, Opts) ->
     Tags = deduplicating_from_list(OriginalTags, Opts),
+    Nested =
+        maps:keys(
+            maps:filter(
+                fun(_Key, Value) -> is_map(Value) orelse ?IS_LINK(Value) end,
+                TABM
+            )
+        ),
     Keys =
         hb_util:list_without(
-            FieldKeys,
+            FieldKeys ++ Nested,
             tag_keys(#tx{ tags = OriginalTags }, Opts)
         ),
     holds(maps:with(Keys, Tags), TABM, Opts).
