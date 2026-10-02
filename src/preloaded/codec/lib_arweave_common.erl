@@ -380,7 +380,7 @@ with_commitments(
         Tags, Base, CommittedKeys, Opts) ->
     case Item#tx.signature of
         ?DEFAULT_SIG ->
-            case normal_tags(BaseFields, Item#tx.tags) of
+            case normal_tags(BaseFields, Item) of
                 true -> Base;
                 false ->
                     with_unsigned_commitment(
@@ -470,11 +470,13 @@ bundle_commitment_key(Tags, Opts) ->
 
 %% @doc Check whether every tag name is a key as `structured@1.0' reads it, and
 %% no name repeats. Other tags need `original-tags' to keep their bytes and
-%% order.
-normal_tags(BaseFields, Tags) ->
+%% order. The tags of a list bundle need them too: without its tags, a message
+%% of its items encodes as a map bundle.
+normal_tags(BaseFields, Item = #tx{ tags = Tags }) ->
     ReservedFields = [<<"ao-data-key">>, <<"ao-types">>, <<"data">> | BaseFields],
     Keys = [Key || {Key, _} <- Tags],
-    length(Keys) =:= length(lists:usort(Keys)) andalso
+    ar_tx:type(Item) =/= list andalso
+        length(Keys) =:= length(lists:usort(Keys)) andalso
         lists:all(
             fun({Key, _}) ->
                 normalize_key(Key) =:= Key andalso
@@ -487,7 +489,7 @@ normal_tags(BaseFields, Tags) ->
 %% @doc Return the original tags of an item if it is applicable. Otherwise,
 %% return `undefined'.
 original_tags(BaseFields, Item, _Opts) ->
-    case normal_tags(BaseFields, Item#tx.tags) of
+    case normal_tags(BaseFields, Item) of
         true -> unset;
         false -> encoded_tags_to_map(Item#tx.tags)
     end.
