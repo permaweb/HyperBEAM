@@ -3,7 +3,7 @@
 %%% `offset', `id' and `commitment-device', not the indexed messages themselves.
 %%% `offset' is a weave byte position, `-1' for an unknown position, or
 %%% `infinity' for a pending position. `id' identifies a signed commitment;
-%%% `commitment-device' names its device. Unknown IDs and devices are empty
+%%% `commitment-device' is its device. Unknown IDs and devices are empty
 %%% binaries. Store pipelines supply this representation independently of
 %%% how a store encodes its entries.
 %%%
@@ -57,10 +57,10 @@
 %%%
 %%% Indexed pairs comprise the body's public fields without its commitments,
 %%% plus values computed with only the indexed ID's commitment present.
-%%% `match-paths' maps names to paths resolved on the
+%%% `match-paths' maps each name to a path resolved on the
 %%% body; `match-all-paths' indexes each list element under its configured name
-%%% (a non-list result contributes one value). Successfully resolved names
-%%% replace the corresponding body fields. Node options take precedence over
+%%% (a non-list result contributes one value). A name that resolves replaces
+%%% the body field of the same name. Node options take precedence over
 %%% the handler's configuration. Defaults are an empty `match-paths' and a
 %%% `match-all-paths' message mapping `committer' to `committers~message@1.0'.
 %%% Computations use raw AO-Core resolution: `KEY~DEVICE' selects a device;
@@ -72,10 +72,13 @@
 %%% setting, a locally supplied `store' takes its place; with neither local
 %%% option, the global `match-index' applies. The selected value may be a store
 %%% message or list, `false' for no index, or `true' to use the node's `store'.
-%%% Each alternative names a group `~match@1.0/<normalized-name>=<value-path>'.
-%%% The value path is a binary's hashpath or a nested message's uncommitted ID.
-%%% Writes have empty values and entry keys with an additional `path' naming
-%%% the group. `hb_store' applies prefix handling and `to-key' to these keys.
+%%% The group of each alternative is
+%%% `~match@1.0/<normalized-name>=<value-path>', with the name escaped as a
+%%% single path component. The value path is a binary's hashpath or a nested
+%%% message's uncommitted ID.
+%%% Writes have empty values and entry keys with an additional `path' that
+%%% holds the group. `hb_store' applies prefix handling and `to-key' to these
+%%% keys.
 %%% The encoder also receives binary group paths and pathless entry messages
 %%% for list bounds. List results pass through `from-key' to become entries.
 %%% A `from-list' pipeline can decode the entire batch instead, using `entries'
@@ -182,7 +185,7 @@ store(Opts) ->
 group(Name, Value, Opts) ->
     <<
         ?PREFIX/binary,
-        (hb_ao:normalize_key(Name))/binary, "=",
+        (hb_escape:encode_path_component(hb_ao:normalize_key(Name)))/binary, "=",
         (value_path(Value, Opts))/binary
     >>.
 
@@ -771,7 +774,10 @@ row(#{ <<"offset">> := Offset }, {_, _, OffsetBits}) ->
         _ -> <<Max:OffsetBits>>
     end;
 row(Body, {KeyBits, ValueBits, _OffsetBits}) ->
-    [Name, ValuePath] = binary:split(Body, <<"=">>),
+    % A value path holds no `=', so the name ends at the last one.
+    {At, 1} = lists:last(binary:matches(Body, <<"=">>)),
+    <<Escaped:At/binary, "=", ValuePath/binary>> = Body,
+    Name = hb_escape:decode_path_component(Escaped),
     <<KeyHash:KeyBits/bitstring, _/bitstring>> =
         crypto:hash(sha256, <<?PREFIX/binary, Name/binary>>),
     <<ValueHash:ValueBits/bitstring, _/bitstring>> = hb_util:decode(ValuePath),
