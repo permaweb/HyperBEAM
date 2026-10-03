@@ -104,14 +104,14 @@ read_offset_path(StoreOpts = #{ <<"index-store">> := IndexStore }, Path) ->
     end.
 
 %% @doc Find the offset of a message from the nodes serving the `~arweave@2.9'
-%% routes, adding it to the local index so that they are asked once per message.
-%% The response gives the start of the item alongside the lengths of its header
-%% and data segments: an item with no header inside the weave's data tree is a
-%% transaction, one with a header is an ANS-104 item, and the two lengths sum to
-%% the span that the loader reads. Pending transactions report offsets relative
-%% to themselves, so only confirmed items are indexed.
+%% routes. The response gives the start of the item alongside the lengths of its
+%% header and data segments: an item with no header inside the weave's data tree
+%% is a transaction, one with a header is an ANS-104 item, and the two lengths
+%% sum to the span that the loader reads. Pending transactions report offsets
+%% relative to themselves, so only confirmed items are found. The offset is not
+%% added to the local index here: `do_read/3' adds it once a read at it succeeds.
 read_remote_offset(
-        StoreOpts = #{ <<"index-store">> := _, <<"remote-index">> := true },
+        #{ <<"index-store">> := _, <<"remote-index">> := true },
         ID,
         Opts
     ) ->
@@ -136,14 +136,21 @@ read_remote_offset(
                     0 -> <<"tx@1.0">>;
                     _ -> <<"ans104@1.0">>
                 end,
-            write_offset(
-                StoreOpts,
-                ID,
-                CodecName,
-                StartOffset,
-                HeaderLength + DataLength
-            ),
-            read_index_offset(StoreOpts, ID);
+            % Give the offset as the local index would give it once stored.
+            {Version, CodecName, StartOffset, Length} =
+                hb_store_arweave_offset:decode(
+                    hb_store_arweave_offset:encode(
+                        CodecName,
+                        StartOffset,
+                        HeaderLength + DataLength
+                    )
+                ),
+            {ok, #{
+                <<"version">> => Version,
+                <<"codec">> => CodecName,
+                <<"start">> => StartOffset,
+                <<"length">> => Length
+            }};
         _ ->
             not_found
     end;
@@ -195,6 +202,7 @@ do_read(StoreOpts, ID, Opts) ->
                 end,
             case Loaded of
                 {ok, Message} ->
+                    keep_offset(StoreOpts, ID, CodecName, StartOffset, Length),
                     hb_store_remote_node:maybe_cache(StoreOpts, Message),
                     ?event(
                         arweave_offsets,
@@ -231,6 +239,16 @@ do_read(StoreOpts, ID, Opts) ->
                 {miss, {id, {explicit, ID}}}
             ),
             not_found
+    end.
+
+%% @doc Add the offset that a read succeeded at to the local index, unless the
+%% index holds it already. Offsets from the `remote-index' nodes enter the index
+%% only here, so a read that fails at one leaves no entry, and the next read
+%% asks the nodes again.
+keep_offset(StoreOpts, ID, CodecName, StartOffset, Length) ->
+    case read_index_offset(StoreOpts, ID) of
+        not_found -> write_offset(StoreOpts, ID, CodecName, StartOffset, Length);
+        _ -> ok
     end.
 
 %% @doc Load an ANS-104 item from the given start offset and length.
@@ -547,7 +565,7 @@ write_read_fake_bundle_tx_test() ->
 
 %% @doc A node with no offset index of its own finds the offsets of an Arweave
 %% transaction and an ANS-104 item from its routes, serving the item over HTTP
-%% and retaining both offsets for subsequent reads.
+%% and retaining each offset once a read at it succeeds.
 remote_index_test() ->
     Local =
         #{
@@ -562,7 +580,10 @@ remote_index_test() ->
         {ok, #{ <<"codec">> := <<"tx@1.0">>, <<"length">> := 8387 }},
         read_offset(Store, TXID, #{})
     ),
-    % The offset is retained, so the routes are asked once per message.
+    % The offset is retained once a read at it succeeds, so the routes are
+    % asked once per message.
+    ?assertEqual(not_found, read_offset(Local, TXID, #{})),
+    ?assertMatch({ok, _}, read(Store, #{ <<"read">> => TXID }, #{})),
     ?assertMatch({ok, #{ <<"length">> := 8387 }}, read_offset(Local, TXID, #{})),
     Node = hb_http_server:start_node(#{ <<"store">> => [Store] }),
     {ok, Msg} = hb_http:get(Node, <<"/", ItemID/binary>>, #{}),
