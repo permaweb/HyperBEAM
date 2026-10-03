@@ -352,7 +352,8 @@ get_raw(Base, Request, Opts) ->
         } ->
         ?event(debug_raw, {raw_header,
             {header, Header}}),
-        case parse_range_params(Request, Opts) of
+        case parse_range_params(Request, FullContentLength, Opts) of
+            Err = {error, _} -> Err;
             {ok, StartRange, EndRange} ->
                 RangeLength = (EndRange - StartRange) + 1,
                 {ok, Data} =
@@ -396,16 +397,47 @@ get_raw(Base, Request, Opts) ->
             end
     end.
 
-%% @doc Extract the start and end range from a request.
-parse_range_params(<<"bytes=", ByteDescriptor/binary>>, Opts) ->
-    parse_range_params(<<"bytes ", ByteDescriptor/binary>>, Opts);
-parse_range_params(<<"bytes ", ByteDescriptor/binary>>, _Opts) ->
+%% @doc Extract the start and end of the range a request asks for from an item
+%% of `Length' bytes: `bytes=A-B', `bytes=A-' (to the end) or `bytes=-N' (the
+%% last `N' bytes), as RFC 9110 (section 14.1.2) defines them. The end is at
+%% most the item's last byte. A range that does not parse, or that holds no
+%% byte of the item, returns a 416 error.
+parse_range_params(<<"bytes=", ByteDescriptor/binary>>, Length, Opts) ->
+    parse_range_params(<<"bytes ", ByteDescriptor/binary>>, Length, Opts);
+parse_range_params(<<"bytes ", ByteDescriptor/binary>>, Length, _Opts) ->
     [ByteRange|_] = binary:split(ByteDescriptor, <<"/">>),
-    [Start, End] = binary:split(ByteRange, <<"-">>),
-    {ok, hb_util:int(Start), hb_util:int(End)};
-parse_range_params(Msg, Opts) ->
+    Match =
+        re:run(
+            ByteRange,
+            <<"\\A([0-9]*)-([0-9]*)\\z">>,
+            [{capture, all_but_first, binary}]
+        ),
+    Range =
+        case Match of
+            {match, [<<>>, Suffix]} when Suffix =/= <<>> ->
+                {max(Length - hb_util:int(Suffix), 0), Length - 1};
+            {match, [Start, <<>>]} when Start =/= <<>> ->
+                {hb_util:int(Start), Length - 1};
+            {match, [Start, End]} when Start =/= <<>> ->
+                {hb_util:int(Start), min(hb_util:int(End), Length - 1)};
+            _ ->
+                invalid
+        end,
+    case Range of
+        {First, Last} when First =< Last -> {ok, First, Last};
+        _ ->
+            {error,
+                #{
+                    <<"status">> => 416,
+                    <<"content-range">> =>
+                        <<"bytes */", (hb_util:bin(Length))/binary>>,
+                    <<"body">> => <<"Range not satisfiable.">>
+                }
+            }
+    end;
+parse_range_params(Msg, Length, Opts) ->
     case hb_ao:resolve(Msg, <<"range">>, Opts#{ <<"hashpath">> => ignore }) of
-        {ok, Str} -> parse_range_params(Str, Opts);
+        {ok, Str} -> parse_range_params(Str, Length, Opts);
         _ -> false
     end.
 
