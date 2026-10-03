@@ -1332,7 +1332,11 @@ device_set(Msg, Key, Value, Mode, Opts) ->
         {device_set_result, Res},
         Opts
     ),
-    Res.
+    % A set on a list gives a list while its keys stay numbered from 1.
+    case is_list(Msg) andalso hb_util:is_ordered_list(Res, Opts) of
+        true -> hb_util:message_to_ordered_list(Res, Opts);
+        false -> Res
+    end.
 
 %% @doc Remove a key from a message, using its underlying device.
 remove(Msg, Key) -> remove(Msg, Key, #{}).

@@ -455,6 +455,13 @@ deep_merge(Map1, Map2, Opts) when is_map(Map1), is_map(Map2) ->
 deep_set(_Path, undefined, Msg, _Opts) -> Msg;
 deep_set(Path, Value, Msg, Opts) when not is_list(Path) ->
     deep_set(hb_path:term_to_path_parts(Path, Opts), Value, Msg, Opts);
+deep_set(Path, Value, List, Opts) when is_list(List) ->
+    % A set in a list gives a list while its keys stay numbered from 1.
+    Set = deep_set(Path, Value, list_to_numbered_message(List), Opts),
+    case is_ordered_list(Set, Opts) of
+        true -> message_to_ordered_list(Set, Opts);
+        false -> Set
+    end;
 deep_set([Key], unset, Msg, Opts) ->
     hb_maps:remove(Key, Msg, Opts);
 deep_set([Key], Value, Msg, Opts) ->
@@ -468,7 +475,7 @@ deep_set([Key], Value, Msg, Opts) ->
 deep_set([Key|Rest], Value, Map, Opts) ->
     SubMap =
         case hb_maps:get(Key, Map, #{}, Opts) of
-            Existing when is_map(Existing) -> Existing;
+            Existing when is_map(Existing); is_list(Existing) -> Existing;
             _ -> #{}
         end,
     hb_maps:put(Key, deep_set(Rest, Value, SubMap, Opts), Map, Opts).
