@@ -209,7 +209,8 @@ stub(Base, _Req, _Opts) ->
     {ok, [0], Base}.
 
 %% @doc Synchonously monitor the WASM executor for a call result and any
-%% imports that need to be handled.
+%% imports that need to be handled. An import that raises stops the executor,
+%% and its exception is raised to the caller.
 monitor_call(WASM, ImportFun, StateMsg, Opts) ->
     receive
         {execution_result, Result} ->
@@ -231,20 +232,16 @@ monitor_call(WASM, ImportFun, StateMsg, Opts) ->
                     ),
                 ?event({import_ret, Module, Func, {args, Args}, {res, Res}}),
                 dispatch_response(WASM, Res),
-                monitor_call(WASM, ImportFun, StateReq, Opts)
+                StateReq
+            of
+                NextState -> monitor_call(WASM, ImportFun, NextState, Opts)
             catch
                 Err:Reason:Stack ->
-                    % Signal the WASM executor to stop.
+                    % The executor waits for the import's response: stop it.
+                    % A stopped executor sends no further messages.
                     ?event({import_error, Err, Reason, Stack}),
                     stop(WASM),
-                    % The driver is going to send us an error message, so we 
-                    % need to clear it from the mailbox, even if we already 
-                    % know that the import failed.
-                    receive
-                        {error, _} -> ok
-                    %after 0 -> ok
-                    end,
-                    {error, Err, Reason, Stack, StateMsg}
+                    erlang:raise(Err, Reason, Stack)
             end;
         {error, Error} ->
             ?event({wasm_error, Error}),
