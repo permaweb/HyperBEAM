@@ -1048,15 +1048,21 @@ store_block_index([Entry | Rest], Req, Height, To, Opts) ->
     end.
 
 %% @doc Bypass stored headers for refreshes or when required proofs are absent.
+%% Only the request's `cache-control' applies, read as `hb_cache_control' reads
+%% it: `no-cache' in the options skips the resolver's cache, not this one.
 read_cached_block(Block, Req, Opts) ->
     maybe
-        false ?= lists:member(
-            <<"no-cache">>, hb_maps:get(<<"cache-control">>, Req, [], Opts)),
+        #{ <<"lookup">> := true } ?=
+            hb_cache_control:derive_cache_settings(
+                [Req],
+                Opts#{ <<"cache-control">> => [] }
+            ),
         {ok, Cached} ?= dev_arweave_block_cache:read(Block, Opts),
         false ?= hb_maps:get(<<"include-proofs">>, Req, true, Opts)
             andalso not hb_maps:is_key(<<"poa">>, Cached, Opts),
         {ok, block_proofs(Cached, Req, Opts)}
     else
+        #{ <<"lookup">> := false } -> {error, not_found};
         true -> {error, not_found};
         Error -> Error
     end.
@@ -1110,11 +1116,17 @@ requested_block(<<"hash/", ID/binary>>, Block, Opts) ->
 requested_block(<<"current">>, _Block, _Opts) ->
     true.
 
-%% @doc Return whether the request only permits cached values.
+%% @doc Return whether the request only permits cached values. Only the
+%% request's `cache-control' applies, as in `read_cached_block/3'.
 only_if_cached(Req, Opts) ->
-    lists:member(
+    hb_maps:get(
         <<"only-if-cached">>,
-        hb_maps:get(<<"cache-control">>, Req, [], Opts)
+        hb_cache_control:derive_cache_settings(
+            [Req],
+            Opts#{ <<"cache-control">> => [] }
+        ),
+        false,
+        Opts
     ).
 
 %% @doc Retrieve the current block information from Arweave.
