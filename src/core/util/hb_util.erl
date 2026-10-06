@@ -277,11 +277,11 @@ native_id(Wallet = {_Priv, _Pub}) ->
 %% @doc Convert a native binary ID to a human readable ID. If the ID is already
 %% a human readable ID, it is returned as is. If it is an ethereum address, it
 %% is returned as is.
+human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
+    encode(Bin);
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) > 3
         andalso binary_part(Bin, 0, 3) == <<"ao:">> ->
     Bin;
-human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
-    encode(Bin);
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 44 ->
     Bin;
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
@@ -983,6 +983,18 @@ atom_to_dashed_binary(Key) when is_atom(Key) ->
     hb_util_string:dash_chars(atom_to_binary(Key)).
 
 %% Tests
+
+%% @doc `ao:' IDs pass `?IS_ID' and are their own native and human form; a
+%% 32-byte native ID whose bytes happen to start with `ao:' is still encoded.
+ao_id_test_parallel() ->
+    ?assert(?IS_ID(<<"ao:x">>)),
+    ?assertNot(?IS_ID(<<"ao:">>)),
+    ?assertNot(?IS_ID(<<"not-an-id">>)),
+    ?assertEqual(<<"ao:x">>, native_id(<<"ao:x">>)),
+    ?assertEqual(<<"ao:x">>, human_id(<<"ao:x">>)),
+    Native = <<"ao:", 0:(29 * 8)>>,
+    ?assertEqual(encode(Native), human_id(Native)),
+    ?assertEqual(43, byte_size(human_id(Native))).
 
 atom_to_dashed_binary_test_parallel() ->
     ?assertEqual(atom_to_dashed_binary(atom_1), <<"atom-1">>).

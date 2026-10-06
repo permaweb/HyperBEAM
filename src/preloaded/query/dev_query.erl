@@ -365,6 +365,19 @@ return_types_test() ->
             Opts
         )
     ),
+    % A spec that matches nothing is `false' as a boolean and `not_found'
+    % otherwise.
+    ?assertEqual(
+        {ok, false},
+        hb_ao:resolve(
+            <<"~query@1.0/basic=no-such-value&return=boolean">>,
+            Opts
+        )
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_ao:resolve(<<"~query@1.0/basic=no-such-value">>, Opts)
+    ),
     ok.
 
 http_test() ->

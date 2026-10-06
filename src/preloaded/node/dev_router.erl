@@ -1525,6 +1525,15 @@ weighted_random_strategy_test_parallel() ->
     ?assert(ProportionOfFirstHost < 0.05),
     ?assert(ProportionOfFirstHost >= 0.0001).
 
+%% @doc An `ao:' ID has no 256-bit native form, so it lands on the ring at
+%% the hash of its bytes, exactly where a non-ID binary of the same bytes does.
+route_hash_ao_id_test_parallel() ->
+    ID = <<"ao:0123456789abcdef0123456789abcdef:1">>,
+    ?assertEqual(
+        route_hash_int(hb_crypto:sha256(ID), #{}),
+        route_hash_int(ID, #{})
+    ).
+
 shuffled_strategy_test_parallel() ->
     Opts = #{},
     Nodes =
