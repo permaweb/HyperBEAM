@@ -87,6 +87,11 @@
 %%%                         store sees.
 %%%     `[to|from]-value`:  An AO-Core path, resolved in `raw' mode with a
 %%%                         successful result as the `Base/body`.
+%%%     `min-value-size`,
+%%%     `max-value-size`:   Admit only the `Value`s of a `write` whose byte
+%%%                         size lies within the bounds, both inclusive. The
+%%%                         store is invoked with those alone; the others are
+%%%                         offered to the next store in the list.
 %%% '''
 -module(hb_store).
 -export([behavior_info/1]).
@@ -485,6 +490,9 @@ do_call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args, 
             Result;
         {composite, _} = Result ->
             Result;
+        {partial, Unadmitted} ->
+            [_, Opts] = Args,
+            do_call_function(Rest, Function, [Unadmitted, Opts], Failure, Error);
         {failure, _} = Result ->
             do_call_function(
                 Rest,
@@ -511,10 +519,61 @@ do_call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args, 
 
 %% @doc Invoke a store function through the normalization pipeline its store
 %% message describes: the request's keys and values are normalized to the
-%% store, and its answer's from it. A request the store does not admit is
-%% `not_found' for that store alone, and an answer that fails its
-%% normalization is an error: both move the manager on to the next store.
-invoke(Mod, Store, Function, Args = [Req, Opts]) ->
+%% store, and its answer's from it. A write to a store with size bounds
+%% carries only the values the store admits; once they are written, the rest
+%% are `{partial, Rest}' for the manager to offer down the list. A request
+%% the store admits nothing of is `not_found' for that store alone, and an
+%% answer that fails its normalization is an error: both move the manager on
+%% to the next store.
+invoke(Mod, Store, write, [Req, Opts]) when is_map(Req) ->
+    case admitted_sizes(Store, Req) of
+        {Admitted, Rest} when map_size(Admitted) == 0, map_size(Rest) > 0 ->
+            {error, not_found};
+        {Admitted, Rest} when map_size(Rest) == 0 ->
+            invoke_whole(Mod, Store, write, [Admitted, Opts]);
+        {Admitted, Rest} ->
+            case invoke_whole(Mod, Store, write, [Admitted, Opts]) of
+                ok -> {partial, Rest};
+                {ok, _} -> {partial, Rest};
+                Result -> Result
+            end
+    end;
+invoke(Mod, Store, Function, Args) ->
+    invoke_whole(Mod, Store, Function, Args).
+
+%% @doc Split a write's values into those a store admits by size and those it
+%% does not. A store with a `min-value-size' or `max-value-size', both
+%% inclusive, admits the binaries within them and every term that is not a
+%% binary; a store without either admits them all.
+admitted_sizes(Store, Req) ->
+    case is_map_key(<<"min-value-size">>, Store) orelse
+            is_map_key(<<"max-value-size">>, Store) of
+        false ->
+            {Req, #{}};
+        true ->
+            Min = size_bound(<<"min-value-size">>, Store, 0),
+            Max = size_bound(<<"max-value-size">>, Store, infinity),
+            Admits =
+                fun(_Path, Value) when is_binary(Value) ->
+                        byte_size(Value) >= Min andalso byte_size(Value) =< Max;
+                   (_Path, _Value) ->
+                        true
+                end,
+            {
+                maps:filter(Admits, Req),
+                maps:filter(fun(Path, Value) -> not Admits(Path, Value) end, Req)
+            }
+    end.
+
+%% @doc A size bound of a store message as an integer, or its default.
+size_bound(Key, Store, Default) ->
+    case maps:get(Key, Store, Default) of
+        Default -> Default;
+        Bound -> hb_util:int(Bound)
+    end.
+
+%% @doc Invoke a store function with a request the store admits in full.
+invoke_whole(Mod, Store, Function, Args = [Req, Opts]) ->
     case has_processing_pipeline(Store) of
         false ->
             apply_store_function(Mod, Store, Function, Args);
@@ -1424,6 +1483,51 @@ prefix_pipeline_stop_test() ->
     after 1000 ->
         ?assert(false)
     end.
+
+%% @doc Test that a store with size bounds takes only the values of a write
+%% within them, that the rest reach the next store in the same call, and
+%% that a value no store admits is `not_found'.
+size_bounds_test() ->
+    Small =
+        (hb_test_utils:test_store(hb_store_fs, <<"size-small">>))#{
+            <<"max-value-size">> => 4
+        },
+    Large =
+        (hb_test_utils:test_store(hb_store_fs, <<"size-large">>))#{
+            <<"min-value-size">> => 5
+        },
+    StoreList = [Small, Large],
+    start(StoreList),
+    ?event(testing, {size_bounds_test_started}),
+    % One write carrying both sizes lands each value in its own store, and
+    % either reads back through the list.
+    Mixed = #{ <<"short">> => <<"abcd">>, <<"long">> => <<"abcdefgh">> },
+    ?assertEqual(ok, write(StoreList, Mixed, #{})),
+    ?assertEqual({ok, <<"abcd">>}, read([Small], <<"short">>, #{})),
+    ?assertEqual({error, not_found}, read([Large], <<"short">>, #{})),
+    ?assertEqual({ok, <<"abcdefgh">>}, read([Large], <<"long">>, #{})),
+    ?assertEqual({error, not_found}, read([Small], <<"long">>, #{})),
+    ?assertEqual({ok, <<"abcdefgh">>}, read(StoreList, <<"long">>, #{})),
+    % A value outside every store's bounds is written nowhere.
+    ?assertEqual(
+        {error, not_found},
+        write([Small], write_req(<<"over">>, <<"abcdefgh">>), #{})
+    ),
+    ?assertEqual(
+        {error, not_found},
+        write([Large], write_req(<<"under">>, <<"abcd">>), #{})
+    ),
+    % A write of nothing is the store's to answer, bounds or not.
+    Unbounded = maps:remove(<<"max-value-size">>, Small),
+    ?assertEqual(write([Unbounded], #{}, #{}), write([Small], #{}, #{})),
+    % A bound from a configuration file arrives as a binary.
+    Textual = Small#{ <<"max-value-size">> => <<"4">> },
+    ?assertEqual(ok, write([Textual], write_req(<<"text">>, <<"abcd">>), #{})),
+    ?assertEqual(
+        {error, not_found},
+        write([Textual], write_req(<<"text">>, <<"abcde">>), #{})
+    ),
+    ?event(testing, {size_bounds_passed}).
 
 %% @doc Test that `to-key' and `to-value' rewrite a request's paths and
 %% values ahead of the store -- for writes and reads alike -- and that
