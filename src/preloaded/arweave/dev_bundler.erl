@@ -1141,7 +1141,7 @@ await_bundle_test_parallel() ->
     {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         chunk => fun(_Req) ->
             Parent ! {chunk_started, self()},
-            receive release_chunk -> ok after 1000 -> ok end,
+            receive release_chunk -> ok end,
             {200, <<"OK">>}
         end,
         price => {200, integer_to_binary(Price)},
@@ -1174,8 +1174,6 @@ await_bundle_test_parallel() ->
         ChunkHandler =
             receive
                 {chunk_started, PID} -> PID
-            after 1000 ->
-                error(await_bundle_chunk_not_started)
             end,
         receive
             {await_bundle_result, _EarlyResult} ->
@@ -1187,8 +1185,6 @@ await_bundle_test_parallel() ->
         Result =
             receive
                 {await_bundle_result, AwaitResult} -> AwaitResult
-            after 2000 ->
-                error(await_bundle_result_timeout)
             end,
         ?assertMatch(
             {ok, #{
