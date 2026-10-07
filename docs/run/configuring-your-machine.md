@@ -32,12 +32,14 @@ store/1/name: /tmp/store
 
 store/2/ao-types: store-module=atom
 store/2/store-module: hb_store_s3
+store/2/name: cache-s3
 store/2/bucket: hb-s3
-store/2/priv_access_key_id: minioadmin
-store/2/priv_secret_access_key: minioadmin
 store/2/endpoint: http://localhost:9000
-store/2/force_path_style: true
 store/2/region: us-east-1
+
+% Credentials live in the node's private element, under the store's name
+priv/cache-s3/access-key-id: minioadmin
+priv/cache-s3/secret-access-key: minioadmin
 ```
 
 Below is a reference of commonly used configuration keys. Remember that `config.flat` only supports the following value types (Atoms, Strings, Integers, Booleans, Maps and List).

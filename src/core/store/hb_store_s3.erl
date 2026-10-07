@@ -3,15 +3,15 @@
 %%% base64url SHA-256 of the bytes: every other path, and every link, group,
 %%% list and match, answers `not_found' without a request. Bytes are checked
 %%% against their key before a write is sent and after a read is received,
-%%% an object the bucket already holds is trusted and not sent again, and
-%%% each object is one request, buffered whole in memory. `hb_cache' keeps
+%%% an object the bucket holds with the MD5 of the bytes as its `ETag' is not
+%%% sent again while any other object under the key is replaced, and each
+%%% object is one request, buffered whole in memory. `hb_cache' keeps
 %%% values under 60 bytes inline under other keys, so a `min-value-size' of
 %%% at least 60 keeps everything but blobs away from this store.
 %%%
-%%% Store message keys: `name', `bucket', `region' (default `us-east-1') and
-%%% `endpoint' (`scheme://host[:port]', default
-%%% `https://s3.<region>.amazonaws.com'; `https' must use port 443 and
-%%% `http' must not). Objects are addressed path-style, `/<bucket>/<key>'.
+%%% Store message keys: `name', `bucket', `endpoint' (`scheme://host[:port]';
+%%% `https' must use port 443 and `http' must not) and `region' (default
+%%% `us-east-1'). Objects are addressed path-style, `/<bucket>/<key>'.
 %%% The credentials are not in the store message: they are the
 %%% `access-key-id' and `secret-access-key' under the store's `name' in the
 %%% private element (`priv') of the node message.
@@ -79,14 +79,28 @@ put_all(Store, [{Path, Bin} | Rest], NodeOpts) ->
         put_all(Store, Rest, NodeOpts)
     end.
 
-%% @doc A `HEAD' of the object and, unless the bucket answers that it holds
-%% one, its `PUT'. A `HEAD' the service refuses (S3 answers 403 for a missing
-%% key without `s3:ListBucket') leads to the `PUT' as well.
+%% @doc A `HEAD' of the object and, unless the bucket holds one with the MD5
+%% of the bytes as its `ETag', the `PUT', which also replaces an object the
+%% key does not belong to. A `HEAD' the service refuses (S3 answers 403 for
+%% a missing key without `s3:ListBucket') leads to the `PUT' as well.
 put_unless_held(Store, Path, Bin, NodeOpts) ->
     case request(Store, <<"HEAD">>, Path, <<>>, NodeOpts) of
+        {ok, Headers} ->
+            case held(Headers, Bin) of
+                true -> {ok, held};
+                false -> request(Store, <<"PUT">>, Path, Bin, NodeOpts)
+            end;
         {error, _} -> request(Store, <<"PUT">>, Path, Bin, NodeOpts);
-        Result -> Result
+        Failure -> Failure
     end.
+
+%% @doc Whether a `HEAD' answer names an object with the MD5 of the bytes as
+%% its `ETag', which S3 reports for a single-part upload without SSE-KMS or
+%% SSE-C; any other `ETag' leads to the `PUT'. Header names arrive as the
+%% service sent them.
+held(Headers, Bin) ->
+    ETag = <<$", (hex(crypto:hash(md5, Bin)))/binary, $">>,
+    [ETag] == [V || {K, V} <- Headers, hb_util:to_lower(K) == <<"etag">>].
 
 %% @doc Check that bytes hash to the key that their `data/<hash>' path names.
 verify(<<"data/", Hash/binary>> = Path, Bin) ->
@@ -125,14 +139,14 @@ type(Store, #{ <<"type">> := Key }, NodeOpts) ->
 
 %% @doc Sign a request for one object and send it through the hackney
 %% client, which retries nothing: `hb_store' does. A store without
-%% credentials or a bucket, or whose endpoint is refused, is a typed error
-%% and nothing is sent. Events name the method and path only, never the
-%% store or its credentials.
+%% credentials, a bucket or an endpoint, or whose endpoint is refused, is a
+%% typed error and nothing is sent. Events name the method and path only,
+%% never the store or its credentials.
 request(Store, Method, Path, Body, NodeOpts) ->
     maybe
         {ok, {KeyID, Secret}} ?= credentials(Store, NodeOpts),
         {ok, Region} ?= find(<<"region">>, Store, <<"us-east-1">>),
-        {ok, {Peer, Host, Base}} ?= endpoint(Store, Region),
+        {ok, {Peer, Host, Base}} ?= endpoint(Store),
         URIPath = <<Base/binary, "/", Path/binary>>,
         % The client adds a `content-type' to a PUT, so one is given to sign.
         Headers = #{
@@ -144,6 +158,7 @@ request(Store, Method, Path, Body, NodeOpts) ->
         Authorization = sign(Method, URIPath, Headers, {KeyID, Secret, Region}),
         ?event(store_s3, {request, {method, Method}, {path, Path}}),
         result(
+            Method,
             hb_http_client:request(
                 #{
                     peer => Peer,
@@ -162,24 +177,29 @@ request(Store, Method, Path, Body, NodeOpts) ->
         )
     end.
 
-%% @doc Map an HTTP answer to a store result: the body of a 2xx, `not_found'
-%% for a 404, a typed error for any other status below 500, and a failure,
-%% which `hb_store' retries, for a 5xx answer or a transport error. A 404
-%% whose body names a missing bucket, which a `GET' or `PUT' carries and a
-%% `HEAD' does not, is reported in an error event before it is a miss.
-result({ok, Status, _Headers, Body}) when Status >= 200, Status < 300 ->
+%% @doc Map an HTTP answer to a store result: the headers of a 2xx to a
+%% `HEAD' and the body of any other 2xx, `not_found' for a 404, a typed
+%% error for any other status below 500, and a failure, which `hb_store'
+%% retries, for a 5xx answer or a transport error. A 404 whose body names a
+%% missing bucket, which a `GET' or `PUT' carries and a `HEAD' does not, is
+%% reported in an error event before it is a miss.
+result(<<"HEAD">>, {ok, Status, Headers, _Body})
+        when Status >= 200, Status < 300 ->
+    {ok, Headers};
+result(_Method, {ok, Status, _Headers, Body})
+        when Status >= 200, Status < 300 ->
     {ok, Body};
-result({ok, 404, _Headers, Body}) ->
+result(_Method, {ok, 404, _Headers, Body}) ->
     case binary:match(Body, <<"<Code>NoSuchBucket</Code>">>) of
         nomatch -> ok;
         _ -> ?event(error, {no_such_bucket, {answer, Body}})
     end,
     {error, not_found};
-result({ok, Status, _Headers, Body}) when Status < 500 ->
+result(_Method, {ok, Status, _Headers, Body}) when Status < 500 ->
     {error, #{ <<"status">> => Status, <<"body">> => Body }};
-result({ok, Status, _Headers, Body}) ->
+result(_Method, {ok, Status, _Headers, Body}) ->
     {failure, #{ <<"status">> => Status, <<"body">> => Body }};
-result({error, Reason}) ->
+result(_Method, {error, Reason}) ->
     {failure, Reason}.
 
 %% @doc The key ID and secret the store signs with: those under the store's
@@ -212,12 +232,11 @@ find(Key, Msg, Default) ->
 %% must use port 443 and `http' must not: any other pairing is refused rather
 %% than sent over the wrong transport, as is any endpoint that is not of the
 %% form `scheme://host[:port]'.
-endpoint(Store, Region) ->
-    AWS = <<"https://s3.", Region/binary, ".amazonaws.com">>,
-    Raw = maps:get(<<"endpoint">>, Store, AWS),
+endpoint(Store) ->
+    Raw = maps:get(<<"endpoint">>, Store, undefined),
     maybe
         {ok, Bucket} ?= find(<<"bucket">>, Store),
-        true ?= is_binary(Raw),
+        {ok, _} ?= find(<<"endpoint">>, Store),
         #{ scheme := Scheme, host := <<_, _/binary>> = Host } = URI ?=
             uri_string:parse(Raw),
         {ok, Default} ?=
@@ -325,30 +344,46 @@ sigv4_test() ->
         aws_example(<<"PUT">>, <<"/test$file.text">>, Body, Extra)
     ).
 
-%% @doc Each class of HTTP answer maps to its store result: a 404 is
-%% `not_found', also when S3 names a missing bucket in it, and a 5xx answer
-%% or transport error is a failure.
+%% @doc Each class of HTTP answer maps to its store result: a `HEAD' yields
+%% its headers, a 404 is `not_found', also when S3 names a missing bucket in
+%% it, and a 5xx answer or transport error is a failure.
 result_test() ->
-    Of = fun(Status) -> result({ok, Status, [], <<"b">>}) end,
+    Of = fun(Status) -> result(<<"GET">>, {ok, Status, [], <<"b">>}) end,
     NoBucket = <<"<Error><Code>NoSuchBucket</Code></Error>">>,
+    Headers = [{<<"ETag">>, <<"e">>}],
     ?assertEqual({ok, <<"b">>}, Of(200)),
+    ?assertEqual({ok, Headers}, result(<<"HEAD">>, {ok, 200, Headers, <<>>})),
     ?assertEqual({error, not_found}, Of(404)),
-    ?assertEqual({error, not_found}, result({ok, 404, [], NoBucket})),
+    ?assertEqual(
+        {error, not_found},
+        result(<<"GET">>, {ok, 404, [], NoBucket})
+    ),
     ?assertMatch({error, #{ <<"status">> := 403, <<"body">> := _ }}, Of(403)),
     ?assertMatch({failure, #{ <<"status">> := 503 }}, Of(503)),
-    ?assertEqual({failure, timeout}, result({error, timeout})).
+    ?assertEqual({failure, timeout}, result(<<"GET">>, {error, timeout})).
+
+%% @doc An object is held when its `ETag', under any header-name case, is the
+%% quoted MD5 of the bytes; a different, unquoted or absent `ETag' is not.
+held_test() ->
+    MD5 = <<$", (hex(crypto:hash(md5, <<"x">>)))/binary, $">>,
+    ?assert(held([{<<"ETag">>, MD5}], <<"x">>)),
+    ?assert(held([{<<"etag">>, MD5}, {<<"Date">>, <<"d">>}], <<"x">>)),
+    ?assertNot(held([{<<"ETag">>, MD5}], <<"y">>)),
+    ?assertNot(held([{<<"ETag">>, binary:part(MD5, 1, 32)}], <<"x">>)),
+    ?assertNot(held([{<<"ETag">>, <<"\"abc-2\"">>}], <<"x">>)),
+    ?assertNot(held([], <<"x">>)).
 
 %% @doc The peer, signed host and base path of each endpoint form, and the
-%% endpoints refused: a transport the port would not get, a prefix, no scheme.
+%% endpoints refused: a transport the port would not get, a prefix, no
+%% scheme, none at all.
 endpoint_test() ->
     Store = #{ <<"bucket">> => <<"b">> },
-    Of = fun(Opts) -> endpoint(maps:merge(Store, Opts), <<"us-east-1">>) end,
-    At = fun(Endpoint) -> Of(#{ <<"endpoint">> => Endpoint }) end,
+    At = fun(Endpoint) -> endpoint(Store#{ <<"endpoint">> => Endpoint }) end,
     Refused = fun(Endpoint) -> {error, {unsupported_endpoint, Endpoint}} end,
     AWS = <<"s3.eu-west-1.amazonaws.com">>,
     ?assertEqual(
         {ok, {<<"https://", AWS/binary, ":443">>, AWS, <<"/b">>}},
-        endpoint(Store, <<"eu-west-1">>)
+        At(<<"https://", AWS/binary>>)
     ),
     ?assertEqual(
         {ok, {<<"http://localhost:9000">>, <<"localhost:9000">>, <<"/b">>}},
@@ -356,9 +391,11 @@ endpoint_test() ->
     ),
     lists:foreach(
         fun(Endpoint) -> ?assertEqual(Refused(Endpoint), At(Endpoint)) end,
-        [<<"https://h:9443">>, <<"http://h:443">>, <<"http://h/p">>, <<"h">>, 1]
+        [<<"https://h:9443">>, <<"http://h:443">>, <<"http://h/p">>, <<"h">>]
     ),
-    ?assertEqual({error, {missing, <<"bucket">>}}, endpoint(#{}, <<"r">>)).
+    ?assertEqual({error, {missing, <<"endpoint">>}}, At(1)),
+    ?assertEqual({error, {missing, <<"endpoint">>}}, endpoint(Store)),
+    ?assertEqual({error, {missing, <<"bucket">>}}, endpoint(#{})).
 
 %% @doc A store whose endpoint is a closed port. Any request it sent would be
 %% a failure, so any other answer shows that none was sent.
@@ -439,7 +476,7 @@ refusal_test() ->
             ?assertEqual(Missing, Read(maps:remove(Key, Store))),
             ?assertEqual(Missing, Read(Store#{ Key => not_a_binary }))
         end,
-        [<<"name">>, <<"bucket">>]
+        [<<"name">>, <<"bucket">>, <<"endpoint">>]
     ),
     ?assertMatch({error, {missing, _}}, Read(Store#{ <<"region">> => 1 })),
     ?assertEqual(
@@ -480,7 +517,8 @@ live_test_() ->
 %% credentials the service refuses are a typed error. Bytes stored under a
 %% key they do not hash to (sent with the store's own signed request, past
 %% the write check) are refused by a read, and a write of the right bytes to
-%% that key changes nothing: an object the bucket already holds is not sent.
+%% that key replaces them, after which the read succeeds. An object already
+%% in the bucket is held: its `ETag' is the MD5 of its bytes.
 live_object(Store, Opts) ->
     #{ <<"priv">> := #{ <<"s3-live">> := Credentials } } = Opts,
     BadSecret = Credentials#{ <<"secret-access-key">> => <<"no">> },
@@ -492,6 +530,7 @@ live_object(Store, Opts) ->
     Taken = data_path_of(Small),
     Refused = {error, {hash_mismatch, Taken}},
     ?assertEqual(ok, hb_store:write(Store, #{ Path => Bin }, Opts)),
+    ?assertEqual({ok, held}, put_unless_held(Store, Path, Bin, Opts)),
     ?assertEqual({ok, Bin}, hb_store:read(Store, Path, Opts)),
     ?assertEqual({ok, simple}, hb_store:type(Store, Path, Opts)),
     ?assertEqual({error, not_found}, hb_store:read(Store, Taken, Opts)),
@@ -504,7 +543,7 @@ live_object(Store, Opts) ->
     ?assertMatch({ok, _}, request(Store, <<"PUT">>, Taken, <<"bad">>, Opts)),
     ?assertEqual(Refused, hb_store:read(Store, Taken, Opts)),
     ?assertEqual(ok, hb_store:write(Store, #{ Taken => Small }, Opts)),
-    ?assertEqual(Refused, hb_store:read(Store, Taken, Opts)).
+    ?assertEqual({ok, Small}, hb_store:read(Store, Taken, Opts)).
 
 %% @doc Write a message through `hb_cache' on a size-bounded local store and
 %% a real bucket: the large value lands in the bucket alone and reads back.
