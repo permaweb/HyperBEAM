@@ -76,6 +76,7 @@ request(State, Raw, NodeMsg) ->
         {true, true} ->
             PricingMsg = State#{ <<"device">> => PricingDevice },
             LedgerMsg = State#{ <<"device">> => LedgerDevice },
+            Signers = hb_message:signers(Request, NodeMsg),
             PricingReq = #{
                 <<"path">> => <<"estimate">>,
                 <<"request">> => Request,
@@ -94,6 +95,14 @@ request(State, Raw, NodeMsg) ->
                     % The device has estimated the cost of the request to be
                     % zero, so we proceed.
                     {ok, Raw#{ <<"body">> => Messages }};
+                {ok, _} when length(Signers) > 1 ->
+                    % The request has multiple signers, so there is no single
+                    % account to charge. We don't proceed.
+                    {error, #{
+                        <<"status">> => 422,
+                        <<"body">> =>
+                            <<"Cannot charge a request with multiple signers.">>
+                    }};
                 {ok, Price} ->
                     % The device has estimated the cost of the request. We check
                     % the user's balance to see if they have enough funds to
@@ -101,10 +110,9 @@ request(State, Raw, NodeMsg) ->
                     BalanceReq = #{
                         <<"path">> => <<"balance">>,
                         <<"target">> =>
-                            case hb_message:signers(Request, NodeMsg) of
+                            case Signers of
                                 [Signer] -> Signer;
-                                [] -> <<"unknown">>;
-                                Multiple -> Multiple
+                                [] -> <<"unknown">>
                             end,
                         <<"request">> => Request
                     },
@@ -513,6 +521,18 @@ non_chargable_route_test() ->
                 BadSignedReq3,
                 #{ <<"priv-wallet">> => Wallet },
                 #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true }
+            ),
+            #{}
+        )
+    ),
+    % A request signed by two wallets has no single account to charge.
+    ?assertMatch(
+        {error, #{ <<"status">> := 422 }},
+        hb_http:get(
+            Node,
+            hb_message:commit(
+                BadSignedReq3,
+                #{ <<"priv-wallet">> => ar_wallet:new() }
             ),
             #{}
         )
