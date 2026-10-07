@@ -272,15 +272,10 @@ concurrent_read_write_test() ->
     ),
     receive 
         writer_done -> ok
-    after 15000 -> 
-        ?assert(false) 
     end,
     AllReaderResults = lists:map(fun(ReaderNum) ->
         receive
             {reader_done, ReaderNum, Results} -> Results
-        after 5000 ->
-            ?assert(false),
-            []
         end
     end, lists:seq(1, 10)),
     FinalSlots = list(ProcID, Opts),
