@@ -290,9 +290,10 @@ from_body_part(InlinedKey, Part, Opts) ->
             % in the multipart body
             throw({error, no_content_disposition_in_multipart, Headers});
         RawDisposition when is_binary(RawDisposition) ->
-            % Extract the name 
-            {item, {_, Disposition}, DispositionParams} =
-                hb_structured_fields:parse_item(RawDisposition),
+            % Extract the name. A `content-disposition' is not a structured
+            % field: browsers write its values in UTF-8.
+            {Disposition, DispositionParams} =
+                cow_multipart:parse_content_disposition(RawDisposition),
             {ok, PartName} =
                 case Disposition of
                     <<"inline">> ->
@@ -301,7 +302,7 @@ from_body_part(InlinedKey, Part, Opts) ->
                         % Otherwise, we need to extract the name of the part
                         % from the Content-Disposition parameters
                         case lists:keyfind(<<"name">>, 1, DispositionParams) of
-                            {_, {_type, PN}} -> {ok, PN};
+                            {_, PN} -> {ok, PN};
                             false -> no_part_name_found
                         end
                 end,
@@ -1250,6 +1251,21 @@ nested_content_disposition_roundtrip_test() ->
         Msg,
         hb_message:convert(
             Encoded#{ <<"body">> => Capitalised },
+            <<"structured@1.0">>,
+            Codec,
+            #{}
+        )
+    ),
+    % A browser writes the `filename' of a file in UTF-8.
+    ?assertEqual(
+        #{ <<"a">> => <<"x">> },
+        hb_message:convert(
+            #{
+                <<"content-type">> => <<"multipart/form-data; boundary=b">>,
+                <<"body">> =>
+                    <<"--b\r\ncontent-disposition: form-data; name=\"a\"; "
+                        "filename=\"", 195, 169, "\"\r\n\r\nx\r\n--b--\r\n">>
+            },
             <<"structured@1.0">>,
             Codec,
             #{}
