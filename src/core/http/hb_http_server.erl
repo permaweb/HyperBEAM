@@ -247,7 +247,12 @@ apply_static_template(Body, [{Key, Value} | Rest]) ->
         Rest
     ).
 
-%% @doc The HTML of a template value.
+%% @doc Convert a template value to HTML text. A list of `{Term, Description}'
+%% pairs gives the terms and descriptions of a definition list. A link gives
+%% its URI. Any other value that is not a literal, such as a message, is
+%% printed by `hb_format:term/1', which removes the private keys of a message.
+template_html([]) ->
+    <<>>;
 template_html([{_, _} | _] = Pairs) ->
     <<
         <<"<dt>", (template_html(Term))/binary, "</dt>",
@@ -255,8 +260,12 @@ template_html([{_, _} | _] = Pairs) ->
     ||
         {Term, Description} <- Pairs
     >>;
+template_html({link, URI, _}) ->
+    template_html(URI);
+template_html(Value) when is_binary(Value); is_number(Value); is_atom(Value) ->
+    escape_html(hb_util:bin(Value));
 template_html(Value) ->
-    escape_html(hb_util:bin(Value)).
+    escape_html(hb_util:bin(hb_format:term(Value))).
 
 %% @doc Escape the characters that HTML reads as markup.
 escape_html(Bin) ->
@@ -2215,6 +2224,7 @@ ingress_request(Node, Codec, Msg, Opts) ->
 %% resource pages, with the corresponding HTTP status.
 client_error_pages_test() ->
     Node = start_node(isolated_test_opts()),
+    Link = <<"ao:", (hb_util:human_id(crypto:strong_rand_bytes(32)))/binary>>,
     lists:foreach(
         fun({Path, Status, Title}) ->
             {ok, {{_, Status, _}, Headers, Body}} = httpc:request(
@@ -2230,7 +2240,9 @@ client_error_pages_test() ->
         end,
         [
             {<<"/~cache@1.0/write">>, 403, <<"Access denied.">>},
-            {<<"/~cache@1.0/read?read=missing">>, 404, <<"Page cannot be found.">>}
+            {<<"/~cache@1.0/read?read=missing">>, 404, <<"Page cannot be found.">>},
+            % A link in the error is printed as its URI.
+            {<<"/x?x=", Link/binary>>, 404, <<"<dd>", Link/binary, "</dd>">>}
         ]
     ).
 
