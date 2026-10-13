@@ -283,6 +283,8 @@ raw_default_message() ->
         % Map of device name/spec ID -> trusted implementation ID,
         % loaded without a signer check.
         <<"trusted-devices">> => #{},
+        % Exact device references to refuse, including trusted and cached devices.
+        <<"exclude-devices">> => [],
         % What should the node do if a client error occurs?
         <<"client-error-strategy">> => throw,
         % HTTP client request options
