@@ -138,7 +138,11 @@ test_modules(
                 ModuleNames,
                 TestSpecs
             ),
-            Res = eunit:test(timeout_tests(RecordTests, Args), eunit_opts(Args)),
+            Res =
+                eunit:test(
+                    spawn_tests(timeout_tests(RecordTests, Args)),
+                    eunit_opts(Args)
+                ),
             print_record_reports(RecordCtx),
             Res
         after restore_test_env(Env)
@@ -305,6 +309,12 @@ timeout_tests(Tests, #{ <<"timeout">> := Timeout })
     [{timeout, Timeout, Test} || Test <- Tests];
 timeout_tests(_Tests, #{ <<"timeout">> := Timeout }) ->
     error({invalid_timeout, Timeout}).
+
+%% @doc Run each top-level EUnit descriptor in its own process. A descriptor
+%% is one module, or one test that `--test' names. A test that times out
+%% cancels only the rest of its own descriptor.
+spawn_tests(Tests) ->
+    [{spawn, Test} || Test <- Tests].
 
 %% @doc EUnit options, preserving the historical timeout multiplier by default.
 eunit_opts(#{ <<"timeout-multiplier">> := Multiplier })
