@@ -713,7 +713,9 @@ with_relevant_commitments(Base, Req, Opts) ->
 %% the returned list will be the union of the two lists. In each case, they
 %% may specify `all' or `none' for each group. `any' selects every
 %% commitment, as `all' does. If no specifiers are provided,
-%% the default is `all' for commitments -- also implying `all' for committers.
+%% the default is `none' for both commitments and committers. With `none' for
+%% both, the returned list holds the unsigned commitments of the default
+%% commitment device, if there are any.
 commitment_ids_from_request(Base, Req, Opts) ->
     Commitments = maps:get(<<"commitments">>, Base, #{}),
     ReqCommitters =
