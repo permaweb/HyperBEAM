@@ -496,7 +496,10 @@ confirmed_tip(Opts) ->
     maybe
         {ok, Height} ?=
             hb_ao:resolve(
-                <<?ARWEAVE_DEVICE/binary, "/current/height">>,
+                #{
+                    <<"path">> => <<?ARWEAVE_DEVICE/binary, "/current/height">>,
+                    <<"include-proofs">> => false
+                },
                 no_result_cache(Opts)
             ),
         Depth =
@@ -532,6 +535,7 @@ fetch_block_remote(Height, Attempts, Opts) ->
         #{
             <<"path">> => <<?ARWEAVE_DEVICE/binary, "/block">>,
             <<"block">> => Height,
+            <<"include-proofs">> => false,
             <<"cache-control">> => [<<"no-cache">>]
         },
         FetchOpts
@@ -1198,9 +1202,11 @@ block_cache_refresh_test_() ->
             }),
             Height = 2003806,
             Req = #{ <<"path">> => <<"~arweave@2.9/block">>,
-                <<"block">> => Height },
+                <<"block">> => Height, <<"include-proofs">> => false },
             try
                 {ok, Canonical} = fetch_block(Height, Opts),
+                ?assertNot(hb_maps:is_key(<<"poa">>, Canonical, Opts)),
+                ?assertNot(hb_maps:is_key(<<"poa2">>, Canonical, Opts)),
                 Orphan = Canonical#{ <<"indep-hash">> =>
                     <<"kOJgXHI4xd7gTjHGg5j9OimYygCIGyGrenmcGimIeR3jxBLZKXA9V2TKxP7J1V2v">> },
                 ?assertNotEqual(Orphan, Canonical),
@@ -1232,7 +1238,15 @@ block_cache_refresh_test_() ->
                 ?assertEqual({error, not_found}, hb_ao:resolve(
                     Req#{ <<"cache-control">> =>
                         [<<"no-cache">>, <<"only-if-cached">>] }, Offline
-                ))
+                )),
+                {ok, Confirmed} = confirmed_tip(Opts),
+                {ok, Tip} = hb_cache:read(
+                    [<<"~arweave@2.9/block/height">>,
+                        Confirmed + ?DEFAULT_CONFIRMATION_DEPTH],
+                    BlockOpts
+                ),
+                ?assertNot(hb_maps:is_key(<<"poa">>, Tip, BlockOpts)),
+                ?assertNot(hb_maps:is_key(<<"poa2">>, Tip, BlockOpts))
             after
                 lists:foreach(fun hb_store:stop/1, Stores)
             end
