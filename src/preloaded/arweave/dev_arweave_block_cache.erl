@@ -1,7 +1,7 @@
 %%% @doc A module that performs caching operations for the Arweave device, 
 %%% focused on ensuring that block metadata is queriable via pseudo-paths.
 %%% `arweave-block-store' selects the store for headers, their height/hash
-%%% aliases, and the compact block index, defaulting to the node's `store'.
+%%% aliases, and the compact block index, defaulting to the node's local stores.
 %%% The index's physical group is `~arweave@2.9/blocks', with ordered children
 %%% `weave-size=PADDEDEND&height=PADDEDHEIGHT'. Each value is a compact JSON
 %%% pair of independent hash and TX root. A separate height pointer selects
@@ -173,5 +173,11 @@ index_key(End, Height) ->
 
 %% @doc Select the block cache's store without changing other node options.
 opts(Opts) ->
-    Opts#{ <<"store">> =>
-        hb_opts:get(arweave_block_store, hb_opts:get(store, [], Opts), Opts) }.
+    Opts#{
+        <<"store">> =>
+            hb_opts:get(
+                arweave_block_store,
+                hb_opts:get(store, [], hb_store:scope(Opts, local)),
+                Opts
+            )
+    }.

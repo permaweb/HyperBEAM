@@ -1552,6 +1552,9 @@ block_index_reindex_test() ->
     hb_cache:link(ID, Hash, #{ <<"store">> => Store }),
     hb_cache:link(ID, <<"~arweave@2.9/block/height/4">>, #{ <<"store">> => Store }),
     ?assertEqual({ok, 4}, store_block_index([Entry], #{}, 4, 4, Opts)),
+    % The node does not read its block index from a store of remote scope.
+    ?assertEqual({ok, []}, hb_ao:resolve(<<"~arweave@2.9/blocks&height=4">>,
+        #{ <<"store">> => [Store#{ <<"scope">> => remote }] })),
     NewHash = hb_util:encode(crypto:strong_rand_bytes(48)),
     New = Entry#{ <<"hash">> := NewHash, <<"weave_size">> := <<"101">> },
     ?assertEqual({ok, 4}, store_block_index([New], #{ <<"reindex">> => false }, 4, 4, Opts)),
