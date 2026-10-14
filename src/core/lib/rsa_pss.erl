@@ -179,11 +179,11 @@ verify_legacy({digest, Digest}, DigestType, Signature, PublicKey=#'RSAPublicKey'
 
 %% @private
 dp(B, #'RSAPrivateKey'{modulus=N, privateExponent=E}) ->
-    crypto:mod_pow(B, E, N).
+    crypto:mod_pow(B, binary:encode_unsigned(E), binary:encode_unsigned(N)).
 
 %% @private
 ep(B, #'RSAPublicKey'{modulus=N, publicExponent=E}) ->
-    crypto:mod_pow(B, E, N).
+    crypto:mod_pow(B, binary:encode_unsigned(E), binary:encode_unsigned(N)).
 
 %% @private
 int_to_bit_size(I) ->
