@@ -374,6 +374,10 @@ exceptions() ->
         }
     ].
 
+%% @doc Return the vectors whose message is posted with a link. The node that
+%% receives one holds the link, and not the message that it links to.
+posted_links() -> ["explicit link"].
+
 typed() ->
     #{
         <<"integer">> => 42,
@@ -440,7 +444,7 @@ suite(Messages, Paths, Transports, Store, Full) ->
                                     hb_cache:read(ID, ClientOpts)
                                 ),
                                 exercise(
-                                    Path,
+                                    read_path(Name, Path),
                                     {Host, PrimaryOpts},
                                     {ID, Source},
                                     Expected,
@@ -499,6 +503,15 @@ selected(false, MessageIndex, PathIndex, TransportIndex, Store) ->
                     rem length(stores()),
                 stores()
             ).
+
+%% @doc Return the path that a case reads its message over. A message that is
+%% posted with a link is read back from the node that holds the link.
+read_path(Name, post) ->
+    case lists:member(Name, posted_links()) of
+        true -> post_link;
+        false -> post
+    end;
+read_path(_Name, Path) -> Path.
 
 excluded(Name, #{ codec := Codec, bundle := Bundle }) ->
     lists:any(
@@ -587,6 +600,27 @@ exercise(direct, {Host, _}, {ID, _}, Expected, Transport, ClientOpts) ->
     Actual = download(Host, ID, Expected, Transport, ClientOpts),
     validate(Expected, Actual, ClientOpts),
     check_wire(Host, wire_request(ID, Transport), Transport);
+exercise(link, {Host, _}, {ID, _}, Expected, Transport, ClientOpts) ->
+    % The node holds the link, and not the message that it links to. It
+    % cannot bundle that message, and its reply without a bundle holds the
+    % link.
+    Request = (headers(Transport))#{ <<"path">> => <<"/", ID/binary>> },
+    case maps:get(bundle, Transport) of
+        true ->
+            ?assertMatch(
+                {error, #{ <<"status">> := 404 }},
+                hb_http:get(Host, Request, ClientOpts)
+            );
+        false ->
+            {ok, Received} = hb_http:get(Host, Request, ClientOpts),
+            ?assertEqual(true, hb_message:deep_verify(Received, ClientOpts)),
+            identities(
+                Expected,
+                payload(Expected, Received, ClientOpts),
+                ClientOpts
+            ),
+            check_wire(Host, wire_request(ID, Transport), Transport)
+    end;
 exercise(remote, {Host, _}, {ID, _}, Expected, Transport, ClientOpts) ->
     Store = maps:get(<<"store">>, ClientOpts),
     Remote =
@@ -618,8 +652,8 @@ exercise(remote, {Host, _}, {ID, _}, Expected, Transport, ClientOpts) ->
         },
         Transport
     );
-exercise(post, {_, PrimaryOpts}, {ID, Source} = Message, Expected, Transport,
-        ClientOpts) ->
+exercise(Path, {_, PrimaryOpts}, {ID, Source} = Message, Expected, Transport,
+        ClientOpts) when Path == post; Path == post_link ->
     #{ <<"store-module">> := Store } = maps:get(<<"store">>, PrimaryOpts),
     PostOpts =
         (options(Store))#{
@@ -658,7 +692,7 @@ exercise(post, {_, PrimaryOpts}, {ID, Source} = Message, Expected, Transport,
             end,
             ?assertEqual({error, not_found}, hb_cache:read(ID, ClientOpts)),
             exercise(
-                direct,
+                case Path of post -> direct; post_link -> link end,
                 {PostHost, NodeOpts},
                 Message,
                 Expected,
@@ -871,6 +905,9 @@ content(Value) -> Value.
 %% @doc Check the signed and unsigned IDs of a message and of each message it
 %% holds, so that a message without commitments cannot pass by verifying
 %% nothing.
+identities(Expected, {link, URI, _}, Opts) ->
+    % A link is `ao:' followed by the ID of the message.
+    ?assertEqual(<<"ao:", (hb_message:id(Expected, all, Opts))/binary>>, URI);
 identities(Expected, Actual, Opts) when is_map(Expected) ->
     ?assertEqual(signed_ids(Expected), signed_ids(Actual)),
     lists:foreach(
