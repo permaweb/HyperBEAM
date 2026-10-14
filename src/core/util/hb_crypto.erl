@@ -11,7 +11,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Add a new ID to the end of a SHA-256 hash chain.
-sha256_chain(ID1, ID2) when ?IS_ID(ID1) ->
+sha256_chain(ID1, ID2) when byte_size(ID1) =:= 32 ->
     sha256(<<ID1:32/binary, ID2/binary>>);
 sha256_chain(ID1, ID2) ->
     throw({cannot_chain_bad_ids, ID1, ID2}).
@@ -63,6 +63,8 @@ sha256_chain_test() ->
     ID3 = sha256_chain(ID1, ID2),
     HashBase = << ID1/binary, ID2/binary >>,
     ?assertEqual(ID3, crypto:hash(sha256, HashBase)),
+    % Only a 32-byte first ID can be chained.
+    ?assertThrow({cannot_chain_bad_ids, _, _}, sha256_chain(<<1:336>>, ID2)),
     % Basic entropy check.
     Avg = count_zeroes(ID3) / 256,
     ?assert(Avg > 0.4),
