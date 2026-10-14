@@ -137,8 +137,9 @@ merging the decoded result into the process state.
        stripped) request to the CU's `/dry-run?process-id=<process-id>` endpoint.
   3. From the relay's response, extract the response **`body`** as the CU's raw
      JSON result string (§5.4). A relay error (transport, routing, or an
-     `error`/`failure`-tagged result) MUST propagate as an error (§8) — the device
-     MUST NOT fabricate a result.
+     `error`/`failure`-tagged result), or a body that is not a result (§5.4),
+     MUST be returned as `{failure, _}` (§8) — the device MUST NOT fabricate a
+     result.
   4. Decode the raw JSON result into an AO **results message** using
      `json-iface@1.0`’s `from` mapping (the AOS2 result → `{outbox, patches,
      data}` conversion). Also retain the **raw decoded JSON** value (the parsed
@@ -156,8 +157,8 @@ merging the decoded result into the process state.
      leading-slash key would not match a later `results` read), and MUST write
      `results` **before** `results/raw` so the deep-set does not clobber the parent.
   6. Return the updated base message.
-- **Returns:** `{ok, Base'}` with the result merged under the output-prefix; or an
-  error (§8) on a relay/decoder failure.
+- **Returns:** `{ok, Base'}` with the result merged under the output-prefix; or
+  `{failure, _}` (§8) on a relay error or a body that is not a result.
 - **Side effects:** **one outbound HTTP request** to the remote CU (via the relay)
   — the device's defining side effect. No cache or store write of its own; the
   result is returned in the message for the orchestrator to persist.
@@ -300,8 +301,15 @@ the `process-id` query parameter.
   - A success response is the relay's `{ok, ResponseMessage}`; the CU's raw JSON
     result is the response message's **`body`** value (a JSON string). The
     remaining response metadata is not used.
-  - A relay result tagged **`error`** or **`failure`** is extracted as
-    `{error, <Reason>}` and propagated (§8).
+  - The body is a **result** only if it decodes to a JSON object that holds an
+    `Output`, `Messages` or `Error` key (compared case-sensitively). Any other
+    body, such as `{}` or `{"error": "process not found"}`, means that the CU
+    did not compute the message, and the device returns `{failure, #{ "status"
+    => 502, "reason" => "Delegated compute answer is not a result.", "body" =>
+    <body> }}` (§8). An `Error` in a result is the process's own error, the same
+    on every node, and is decoded and merged as any other result.
+  - A relay result tagged **`error`** or **`failure`** is returned as
+    `{failure, <Reason>}` (§8).
 - **Decoding.** The raw JSON result string is converted into the AO **results
   message** (`{outbox, patches, data}`) using `json-iface@1.0`’s **`from`**
   mapping (AOS2 result → results message; the device does not re-implement that
@@ -388,6 +396,10 @@ by this device.
   (errors abort, no fabricated result — §8). `snapshot` is **failure-soft**: a
   relay failure is reported inside an `ok` message (`"No checkpoint produced."`)
   rather than as an error, so an absent checkpoint does not abort the caller.
+  When the CU does not compute the message, `compute` returns `{failure, _}`:
+  the outcome depends on the CU that this node uses, not on the process, so
+  `process@1.0` stores nothing for the slot, and a later `compute` of the slot
+  calls the CU again.
 
 ## 8. Errors
 
@@ -396,12 +408,13 @@ by this device.
 | `compute`/`snapshot` (NOT `normalize` — its `/state` load derives no id) : process definition present but **does not verify** | hard failure (raised/thrown). The shared derivation throws the **underscored** atom **`process_not_verified`** (often `{process_not_verified, <Process>}`), per the platform thrown-atom convention — *not* a hyphenated wire form. No relay is issued. |
 | `compute`/`snapshot`: process definition verifies but has **no signers** | hard failure (raised/thrown), the **underscored** atom **`process_has_no_signers`**. No relay is issued. |
 | `compute`: the derivation returns the `not_found` sentinel (no process identity on the base) **and** the request has no `process-id` | failure deriving the process id (a missing-key failure on `process-id`); no relay is issued. (Note §5.1: a normal signed base derives or throws — it does not reach this row.) |
-| `compute`: the relay returns a transport/routing error, or a result whose status-tag is `error`/`failure` | `{error, <Reason>}` — the underlying relay/CU error is **propagated unchanged** (no result merged). The relay tags its result by HTTP status (via `relay@1.0`'s status→atom mapping: 2xx → `ok`/`created`, 4xx → `error`, ≥5xx → `failure`); this device treats `error`/`failure` as the propagated `{error, _}` and any 2xx tag as success. "Propagated unchanged" and "extracted as `{error, _}`" (§5.4) describe the **same** outcome — the relay's own error term is returned as-is, the device adds nothing. |
-| `compute`: the CU's JSON result is **unparseable** | the error surfaced by `json-iface@1.0`’s `from` mapping (an `invalid-json-message-input`-style error) — propagated. **NOTE:** a CU body with an explicit `{ ok:false, error:E }` shape is **NOT** turned into an error by `from` — its generic object-mapping path yields a (possibly empty) results message that the device merges as a **success**. This device does not special-case `ok:false`; surfacing such a soft error is the caller's/wrapper's concern. |
+| `compute`: the relay returns a transport/routing error, or a result whose status-tag is `error`/`failure` | `{failure, <Reason>}` — the relay's own reason is returned **unchanged** under the `failure` tag (no result merged). The relay tags its result by HTTP status (via `relay@1.0`'s status→atom mapping: 2xx → `ok`/`created`, 4xx → `error`, ≥5xx → `failure`); this device returns an `error` or a `failure` tag as `{failure, _}`, and takes an `ok` answer as success only if its body is a result (§5.4). `process@1.0` stores nothing for a slot whose `compute` returns `{failure, _}`, so a later `compute` of the slot calls the CU again. |
+| `compute`: the relay answers `ok` with a body that is not a result (§5.4), such as `{}`, `{"error": "process not found"}` or `{"ok": false, "error": E}` | `{failure, #{ "status" => 502, "reason" => "Delegated compute answer is not a result.", "body" => <body> }}` — no result merged, and nothing is stored for the slot, as above. |
+| `compute`: the CU's body is **not JSON** | hard failure (raised): the JSON decode of the body raises, and no result is merged. |
 | `snapshot`: the relay fails for any reason | **not** an error — returns `{ok, #{ "error" => "No checkpoint produced.", "error-details" => <E> }}`. |
 
-The device defines no error atom of its own for the relay/decoder failures: it
-propagates whatever `relay@1.0` or `json-iface@1.0` produced. The
+The device's only failure of its own is the `502` for a body that is not a
+result; for a relay failure it returns the reason that `relay@1.0` produced. The
 `process-not-verified` / `process-has-no-signers` failures originate in the
 process-id derivation shared with other process-execution devices.
 
@@ -460,8 +473,9 @@ An implementation MUST exhibit all of the following:
    state-load, snapshot) carries `cache-control: [no-store, no-cache]` and ignores
    the hashpath.
 7. **Result extraction.** The CU's raw JSON result is taken from the relay
-   response's `body`; a relay result tagged `error`/`failure` is propagated as
-   `{error, _}` and no result is merged.
+   response's `body`; a relay result tagged `error`/`failure`, or a body that
+   holds no `Output`, `Messages` or `Error` key, is returned as `{failure, _}`
+   and no result is merged.
 8. **Result mapping.** The raw JSON result is converted to a results message via
    `json-iface@1.0`’s `from` mapping, and both the results message and the raw
    parsed JSON are merged into the base as `<output-prefix>/results` and
@@ -478,8 +492,8 @@ An implementation MUST exhibit all of the following:
     `{ok, #{ "error" => "No checkpoint produced.", "error-details" => <E> }}`
     rather than an error.
 12. **No local state / no fabrication.** The device keeps no process state of its
-    own; on a `compute` relay/decoder failure it propagates the error and merges
-    no result (it never invents a default result).
+    own; on a `compute` relay/decoder failure it merges no result (it never
+    invents a default result).
 13. **Trust boundary.** The device performs no independent verification of the
     CU's returned result; a conforming implementation accepts the decoded
     `results` as-is (the determinism/trust caveat, §7).

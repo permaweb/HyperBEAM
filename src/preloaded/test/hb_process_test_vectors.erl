@@ -596,7 +596,27 @@ error_slot_is_skipped_test_parallel() ->
     {ok, ErrSlot} =
         hb_ao:resolve(Base, #{ <<"path">> => <<"compute">>, <<"slot">> => 2 }, Opts),
     ?assertEqual(<<"error">>, hb_ao:get(<<"results/type">>, ErrSlot, Opts)),
-    ?assertEqual(2, hb_ao:get(<<"count">>, ErrSlot, Opts)).
+    ?assertEqual(2, hb_ao:get(<<"count">>, ErrSlot, Opts)),
+    % A compute server that does not answer is a failure of this node, not an
+    % error of the process, so the slot is not stored.
+    Delegated =
+        hb_message:commit(
+            hb_maps:merge(
+                hb_message:uncommitted(base_process(Opts), Opts),
+                #{ <<"execution-device">> => <<"delegated-compute@1.0">> },
+                Opts
+            ),
+            Opts
+        ),
+    schedule_test_message(Delegated, <<"one">>, Opts),
+    ?assertMatch(
+        {failure, _},
+        hb_ao:resolve(
+            Delegated,
+            #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
+            Opts#{ <<"delegated-compute-peer">> => <<"http://localhost:1">> }
+        )
+    ).
 
 prior_results_accessible_test_parallel_() ->
     {timeout, 30, fun() ->
