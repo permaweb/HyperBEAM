@@ -216,8 +216,12 @@ ensure_server(Opts) ->
         PID when is_pid(PID) -> PID;
         undefined ->
             ItemIDs = dev_bundler_cache:list_item_ids(Opts),
-            % The server signs bundles with the node key.
-            ServerOpts = hb_http_server:with_node_committer(Opts),
+            % Bundles use the configured identity, or the node key by default.
+            {ok, ServerOpts} =
+                case hb_opts:get(bundler_identity, not_found, Opts) of
+                    not_found -> {ok, hb_http_server:with_node_committer(Opts)};
+                    Identity -> hb_opts:as(Identity, Opts)
+                end,
             hb_name:singleton(Name, fun() -> init(ItemIDs, ServerOpts) end)
     end.
 
@@ -1078,6 +1082,7 @@ recover_respects_max_items_test_parallel() ->
 complete_task_sequence_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
+    Zone = ar_wallet:new(),
     {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
@@ -1085,6 +1090,9 @@ complete_task_sequence_test_parallel() ->
     try
         Opts = NodeOpts#{
             <<"priv-wallet">> => ar_wallet:new(),
+            <<"identities">> =>
+                #{ <<"zone">> => #{ <<"priv-wallet">> => Zone } },
+            <<"bundler-identity">> => <<"zone">>,
             <<"store">> => hb_test_utils:test_store(),
             <<"bundler-max-items">> => 2,
             <<"retry-base-delay-ms">> => 100,
@@ -1104,6 +1112,11 @@ complete_task_sequence_test_parallel() ->
         State = get_state(Opts),
         ?assertNotEqual(undefined, State),
         ?assertNotEqual(timeout, State),
+        % The server signs bundles with the wallet of the configured identity.
+        ?assertEqual(
+            hb_opts:address(#{ <<"priv-wallet">> => Zone }),
+            hb_opts:address(State#state.opts)
+        ),
         Workers = State#state.workers,
         IdleWorkers = [
             PID
