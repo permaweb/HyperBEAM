@@ -182,11 +182,15 @@ resolve({many, Msgs}, ExecState, ExecOpts) ->
             {[<<"error">>, Error], ExecState}
     end.
 
-%% @doc A wrapper for `hb_ao''s `get' functionality.
+%% @doc A wrapper for `hb_ao''s `get' functionality. A key that the message
+%% does not have gives Lua's `nil'.
 get([Key, Base], ExecState, ExecOpts) ->
     ?event({ao_core_get, {base, Base}, {key, Key}}),
     NewRes =
-        committers(Key, hb_ao:get(convert_as(Key), convert_as(Base), ExecOpts)),
+        committers(
+            Key,
+            hb_ao:get(convert_as(Key), convert_as(Base), nil, ExecOpts)
+        ),
     ?event({ao_core_get_result, {result, NewRes}}),
     {[NewRes], ExecState}.
 
@@ -203,7 +207,10 @@ convert_as([<<"as">>, Device, RawMsg]) ->
 convert_as(Other) ->
     Other.
 
-%% @doc Wrapper for `hb_ao''s `set' functionality.
+%% @doc Wrapper for `hb_ao''s `set' functionality. Setting a key to Lua's `nil'
+%% removes it.
+set([Base, Key, nil], ExecState, ExecOpts) ->
+    set([Base, Key, unset], ExecState, ExecOpts);
 set([Base, Key, Value], ExecState, ExecOpts) ->
     ?event({ao_core_set, {base, Base}, {key, Key}, {value, Value}}),
     NewRes = hb_ao:set(Base, Key, Value, ExecOpts),

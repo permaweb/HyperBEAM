@@ -541,6 +541,8 @@ do_encode(List, Opts) when is_list(List) ->
         lists:map(fun(V) -> do_encode(V, Opts) end, List),
         Opts
     );
+% Luerl holds Lua's `nil' as the atom `nil'.
+do_encode(nil, _Opts) -> nil;
 do_encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
     hb_util:bin(Atom);
 do_encode(Other, _Opts) ->
@@ -947,7 +949,9 @@ ao_core_resolution_from_lua_test() ->
         <<"parameters">> => []
     },
     {ok, Res} = hb_ao:resolve(Base, <<"ao_resolve">>, #{}),
-    ?assertEqual(<<"Hello, AO world!">>, Res).
+    ?assertEqual(<<"Hello, AO world!">>, Res),
+    % A key that `ao.set' sets to `nil' is removed, and `ao.get' gives `nil'.
+    ?assertEqual({ok, <<"nil">>}, hb_ao:resolve(Base, <<"ao_set_nil">>, #{})).
 
 %% @doc Benchmark the performance of Lua executions.
 direct_benchmark_test() ->

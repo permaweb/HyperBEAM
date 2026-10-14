@@ -174,3 +174,9 @@ end
 function ao_set_float_key()
     return { pcall(ao.set, {}, { [1.5] = "x" }) }
 end
+--- @function ao_set_nil
+--- @return the type of what `ao.get` gives for a key that `ao.set` sets to
+--- nil
+function ao_set_nil()
+    return type(ao.get("a", ao.set({ a = 1 }, "a", nil)))
+end
