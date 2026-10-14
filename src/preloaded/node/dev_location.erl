@@ -538,6 +538,8 @@ unsigned_get_node_is_idempotent_test() ->
     FirstLocation = hb_ao:get(<<"body">>, FirstRes, FirstRes, #{}),
     Address = hb_test_utils:committer(Wallet),
     {ok, CachedAfterFirst} = dev_location_cache:read(Address, Opts),
+    % The cached record keeps the signature of the node that signed it.
+    ?assertEqual([Address], hb_message:signers(CachedAfterFirst, Opts)),
     timer:sleep(10),
     {ok, SecondRes} = hb_http:get(Node, <<"/~location@1.0/node">>, #{}),
     SecondLocation = hb_ao:get(<<"body">>, SecondRes, SecondRes, #{}),

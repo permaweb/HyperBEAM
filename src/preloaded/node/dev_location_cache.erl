@@ -21,7 +21,8 @@ opts(Opts) ->
     }.
 
 %% @doc Read the latest known scheduler location for a committer, given in any
-%% form that `hb_committer:uri/2' reads.
+%% form that `hb_committer:uri/2' reads. Its path links to the record's signed
+%% ID, so the record is read with its commitments.
 read(Address, RawOpts) ->
     Opts = opts(RawOpts),
     Res =
@@ -53,11 +54,11 @@ write(LocationMsg, RawOpts) ->
         }
     ),
     case hb_cache:write(LocationMsg, Opts) of
-        {ok, RootPath} ->
+        {ok, _UnsignedID} ->
             lists:foreach(
                 fun(Signer) ->
                     ok = hb_cache:link(
-                        RootPath,
+                        hb_message:id(LocationMsg, signed, Opts),
                         hb_path:to_binary([
                             ?LOCATION_CACHE_PREFIX,
                             Signer
