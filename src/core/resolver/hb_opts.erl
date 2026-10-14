@@ -347,19 +347,11 @@ raw_default_message() ->
                 <<"template">> => <<"/state.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
-            % GraphQL: race all gateways, take the first 200.
+            % GraphQL: send queries to the default gateway.
             #{
                 <<"template">> => <<"/graphql">>,
                 <<"nodes">> =>
                     [
-                        #{
-                            <<"prefix">> => <<"https://ao-search-gateway.goldsky.com">>,
-                            <<"opts">> => ?DEFAULT_HTTP_OPTS
-                        },
-                        #{
-                            <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
-                            <<"opts">> => ?DEFAULT_HTTP_OPTS
-                        },
                         #{
                             <<"prefix">> => ?DEFAULT_GATEWAY,
                             <<"opts">> => ?DEFAULT_HTTP_OPTS

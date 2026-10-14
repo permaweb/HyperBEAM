@@ -37,10 +37,6 @@ rebar3 shell --eval "
 			<<\"nodes\">> =>
 				[
 					#{
-						<<\"prefix\">> => <<\"https://arweave-search.goldsky.com\">>,
-						<<\"opts\">> => #{ http_client => httpc }
-					},
-					#{
 						<<\"prefix\">> => <<\"https://arweave.net\">>,
 						<<\"opts\">> => #{ http_client => gun }
 					}
