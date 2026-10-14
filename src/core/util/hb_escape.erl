@@ -55,11 +55,16 @@ decode_path_component(Key) ->
         <<"%25">>, <<"%">>, [global]
     ).
 
-encode_header(<<>>) -> <<>>;
-encode_header(<<$\\, Rest/binary>>) -> <<"\\\\", (encode_header(Rest))/binary>>;
-encode_header(<<$\r, Rest/binary>>) -> <<"\\r", (encode_header(Rest))/binary>>;
-encode_header(<<$\n, Rest/binary>>) -> <<"\\n", (encode_header(Rest))/binary>>;
-encode_header(<<C, Rest/binary>>) -> <<C, (encode_header(Rest))/binary>>.
+%% @doc Escape backslashes before adding escapes for carriage returns and
+%% newlines. Each pass copies the binary at most once.
+encode_header(Bin) ->
+    binary:replace(
+        binary:replace(
+            binary:replace(Bin, <<"\\">>, <<"\\\\">>, [global]),
+            <<"\r">>, <<"\\r">>, [global]
+        ),
+        <<"\n">>, <<"\\n">>, [global]
+    ).
 
 decode_header(<<>>) -> <<>>;
 decode_header(<<$\\, $\\, Rest/binary>>) -> <<$\\, (decode_header(Rest))/binary>>;
@@ -140,6 +145,15 @@ hex_value(C) when C >= $A, C =< $F ->
     C - $A + 10.
 
 %%% Tests
+
+%% @doc Header escaping preserves every byte and distinguishes literal escapes.
+header_escape_test() ->
+    ?assertEqual(<<"\\\\r\\r\\\\n\\n">>, encode_header(<<"\\r\r\\n\n">>)),
+    Bytes = list_to_binary(lists:seq(0, 255)),
+    lists:foreach(
+        fun(Bin) -> ?assertEqual(Bin, decode_header(encode_header(Bin))) end,
+        [<<>>, Bytes, <<Bytes/binary, Bytes/binary>>]
+    ).
 
 escape_unescape_identity_test() ->
     % Test that unescape(escape(X)) == X for various inputs
