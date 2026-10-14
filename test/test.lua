@@ -168,3 +168,9 @@ function ao_get_as_missing()
     return ao.get("data", {"as", "message@1.0",
         "ao:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"})
 end
+--- @function ao_set_float_key
+--- @return the values of `pcall` of a library call whose argument has a key
+--- with no normalized form, a bad argument of the script
+function ao_set_float_key()
+    return { pcall(ao.set, {}, { [1.5] = "x" }) }
+end

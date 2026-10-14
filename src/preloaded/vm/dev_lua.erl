@@ -710,6 +710,11 @@ error_response_test() ->
         {error, <<"Very bad, but Lua caught it.">>},
         hb_ao:resolve(Base, <<"error_response">>, #{})
     ),
+    % A key with no normalized form is a bad argument, which `pcall' catches.
+    ?assertEqual(
+        {ok, [false, <<"bad argument table,table to 'set'">>]},
+        hb_ao:resolve(Base, <<"ao_set_float_key">>, #{})
+    ),
     % An exception inside the library call into the node -- here, reading a
     % message this node does not have -- depends on this node, so it is a
     % failure, not a result of the computation.

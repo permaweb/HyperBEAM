@@ -100,17 +100,30 @@ set_functions(Base, State, Opts) ->
                             % private data of the Lua state.
                             ImportOpts =
                                 luerl:get_private(<<"node-message">>, ImportState),
-                            % Decode the arguments from the Lua environment.
+                            % Decode the arguments from the Lua environment. A
+                            % table key that `hb_ao:normalize_key/2' has no
+                            % clause for, such as `1.5', is a bad argument,
+                            % which `pcall' catches. Other errors can depend on
+                            % this node, and are raised.
                             Args =
-                                lists:map(
-                                    fun(Arg) ->
-                                        dev_lua:decode(
-                                            luerl:decode(Arg, ImportState),
-                                            ImportOpts
+                                try
+                                    lists:map(
+                                        fun(Arg) ->
+                                            dev_lua:decode(
+                                                luerl:decode(Arg, ImportState),
+                                                ImportOpts
+                                            )
+                                        end,
+                                        RawArgs
+                                    )
+                                catch
+                                    error:function_clause ->
+                                        luerl_lib:badarg_error(
+                                            FuncName,
+                                            RawArgs,
+                                            ImportState
                                         )
-                                    end,
-                                    RawArgs
-                                ),
+                                end,
                             % Call the function with the decoded arguments.
                             {Res, ResState} =
                                 Func(
