@@ -793,6 +793,10 @@ calculate_all_ids(Msg, UncommittedID, Opts) ->
 %% follow the `ao:' and `ni:' references that the cache writes (see
 %% `lookup/5'). An ID that contains an `ao://' path is read by
 %% `read_commitments_path/2'.
+%% A literal value read by its path below a message, such as `<ID>/count',
+%% is returned in the encoding that the store holds: an integer `1337' reads
+%% as `<<"1337">>'. The types of a message's keys are stored in its
+%% `ao-types', so they are applied only when the whole message is read.
 read(<<"ni:", _/binary>> = Name, Opts) ->
     do_read(Name, Opts);
 read(ID, Opts) when ?IS_ID(ID) ->
