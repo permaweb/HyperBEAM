@@ -647,29 +647,32 @@ l1_transaction_test() ->
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"Hello World">>, Data).
 
-%% @doc Test l2 message from graphql. The gateway index leaves out the item's
-%% anchor, so explicit trust is needed to serve it uncommitted.
+%% @doc Test l2 message from graphql. The gateway serves the item's anchor, so
+%% the item verifies and is served with its owner's commitment.
 l2_dataitem_test() ->
     _Node = hb_http_server:start_node(#{}),
-    {ok, Res} = read(
-        <<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>,
-        #{ <<"ans104-trust-gql">> => true }
-    ),
+    {ok, Res} = read(<<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>, #{}),
     ?event(gateway, {l2_dataitem, Res}),
-    ?assertEqual([], hb_message:signers(Res, #{})),
-    ?assertNot(maps:is_key(<<"commitments">>, Res)),
+    ?assert(hb_message:verify(Res, all, #{})),
+    ?assertEqual(
+        [?ARWEAVE_COMMITTER(<<"vh-NTHVvlKZqRxc8LyyTNok65yQ55a_PJ1zWLb9G2JI">>)],
+        hb_message:signers(Res, #{})
+    ),
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"Hello World">>, Data).
 
-%% @doc ed25519 L2 Transaction test. The gateway index leaves out the item's
-%% anchor, so explicit trust is needed to serve it uncommitted.
+%% @doc ed25519 L2 Transaction test. The gateway serves the item's anchor, so
+%% the item verifies and is served with its owner's commitment.
 l2_dataitem_ed25519_test() ->
     _Node = hb_http_server:start_node(#{}),
     ID = <<"AwrAs-HaBlc8xeI8sw6Wpbi7A0weQWeXYwW20CpX5oM">>,
-    {ok, Res} = read(ID, #{ <<"ans104-trust-gql">> => true }),
+    {ok, Res} = read(ID, #{}),
     ?event(gateway, {l2_dataitem, Res}),
-    ?assertEqual([], hb_message:signers(Res, #{})),
-    ?assertNot(maps:is_key(<<"commitments">>, Res)),
+    ?assert(hb_message:verify(Res, all, #{})),
+    ?assertEqual(
+        [?ARWEAVE_COMMITTER(<<"ejhYD9Cw9VCsVik6yGLoclo3CLRvAITHTZamLY_6ro4">>)],
+        hb_message:signers(Res, #{})
+    ),
     %% Check Data
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"{\"displayName\":\"Test Hub\",\"description\":\"This is a test hub created in the test suite\",\"externalurl\":\"\",\"image\":\"\"}">>, Data).
@@ -687,8 +690,8 @@ ao_dataitem_test() ->
 
 %% @doc An index that serves an item's anchor lets the item verify against its
 %% real signature, so it is served with its commitment. With the anchor left
-%% out, as arweave.net and goldsky serve bundled items, the signature cannot be
-%% verified: the item is refused unless the node explicitly trusts the index.
+%% out, the signature cannot be verified: the item is refused unless the node
+%% explicitly trusts the index.
 anchor_verification_test() ->
     {ok, Bin} = file:read_file(<<"test/arbundles.js/ans104-item-ed25519.bin">>),
     TX = ar_bundles:deserialize(Bin),
