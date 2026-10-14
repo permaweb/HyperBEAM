@@ -203,12 +203,27 @@ handle(_Base, RawReq, Opts) ->
             catch
                 throw:Error:Stacktrace ->
                     ?event({graphql_error, {error, Error}, {trace, Stacktrace}}),
-                    {error, Error}
+                    query_error(Error, Opts)
             end;
         {error, Error} ->
             ?event({graphql_error, {error, Error}}),
-            {error, Error}
+            query_error(Error, Opts)
     end.
+
+%% @doc Return parsing and validation failures in the GraphQL response format.
+query_error(Error, Opts) ->
+    Errors =
+        case Error of
+            {error, Details} -> graphql:format_errors(#{}, Details);
+            {_Phase, {_Line, Module, Reason}} ->
+                [#{ message => iolist_to_binary(Module:format_error(Reason)) }]
+        end,
+    {error, #{
+        <<"status">> => 400,
+        <<"content-type">> => <<"application/json">>,
+        <<"body">> =>
+            hb_json:encode(typed_binaries(#{ errors => Errors }, Opts))
+    }}.
 
 %% @doc The variables of a request under the names the document declares: the
 %% request has them lowercase, and GraphQL variable names are case-sensitive.
@@ -408,6 +423,32 @@ test_query(Node, Query, Variables, OperationName, Opts) ->
     hb_json:decode(hb_maps:get(<<"body">>, Res, <<>>, Opts)).
 
 %%% Tests
+
+graphql_request_errors_test() ->
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()],
+        <<"priv-wallet">> => ar_wallet:new(), <<"port">> => 0 },
+    Node = hb_http_server:start_node(Opts),
+    try
+        lists:foreach(
+            fun(Query) ->
+                {ok, 400, Headers, Body} = hackney:request(
+                    post,
+                    <<Node/binary, "/~query@1.0/graphql">>,
+                    [{<<"content-type">>, <<"application/json">>}],
+                    hb_json:encode(#{ <<"query">> => Query }),
+                    [with_body]
+                ),
+                ?assertEqual(<<"application/json">>,
+                    proplists:get_value(<<"content-type">>, Headers)),
+                #{ <<"errors">> := [#{ <<"message">> := Message }] } =
+                    hb_json:decode(Body),
+                ?assert(byte_size(Message) > 0)
+            end,
+            [<<"{ notAField }">>, <<"query {">>, <<"{ ? }">>]
+        )
+    after
+        cowboy:stop_listener(hb_opts:address(Opts))
+    end.
 
 lookup_test() ->
     {ok, Opts, #{ <<"nested">> := NestedID }} = dev_query:test_setup(),
