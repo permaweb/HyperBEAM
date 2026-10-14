@@ -548,13 +548,20 @@ do_encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)
 do_encode(Other, _Opts) ->
     Other.
 
-%% @doc Encode a value of a message for Lua. The Arweave committer of a
-%% commitment is given as its address.
+%% @doc Encode a value of a message for Lua. Lua sees only the signed
+%% commitments of a message: each node makes its own unsigned commitments, so
+%% a script that read them could compute differently on two nodes. The Arweave
+%% committer of a commitment is given as its address.
 encode_value(<<"commitments">>, Commitments, Opts) when is_map(Commitments) ->
-    do_encode(
-        map_committers(fun hb_util:committer_address/1, Commitments),
-        Opts
-    );
+    Signed =
+        hb_maps:filter(
+            fun(_ID, Commitment) ->
+                hb_maps:is_key(<<"committer">>, Commitment, Opts)
+            end,
+            Commitments,
+            Opts
+        ),
+    do_encode(map_committers(fun hb_util:committer_address/1, Signed), Opts);
 encode_value(_Key, Value, Opts) ->
     do_encode(Value, Opts).
 
@@ -656,6 +663,8 @@ post_invocation_message_validation_test() ->
     ?assertEqual(<<"test-value-1">>, hb_ao:get(<<"test-key">>, ReadMsg, Opts)),
     ?assert(length(hb_message:signers(Res, Opts)) == 0),
     ?assert(hb_message:verify(Res, all, Opts)),
+    % Lua sees the signed commitment of the base alone.
+    ?assertEqual({ok, 1}, hb_ao:resolve(Base, <<"commitment_count">>, Opts)),
     % A `committer' key outside of a commitment is not converted.
     Bare = #{ <<"committer">> => <<"bare">> },
     ?assertEqual(Bare, decode(encode(Bare, Opts), Opts)).

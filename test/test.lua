@@ -180,3 +180,11 @@ end
 function ao_set_nil()
     return type(ao.get("a", ao.set({ a = 1 }, "a", nil)))
 end
+--- @function commitment_count
+--- @return the number of commitments of the message that the function is
+--- called on
+function commitment_count(base)
+    local count = 0
+    for _ in pairs(base.commitments or {}) do count = count + 1 end
+    return count
+end
