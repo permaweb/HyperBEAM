@@ -119,9 +119,22 @@ bind_secret(Secret, Base, Opts) ->
 store_secret(Secret, Msg, Opts) ->
     CookieAddr = hb_util:secret_key_to_committer(Secret),
     % Create the cookie parameters, using the name as the key and the secret as
-    % the value.
+    % the value. The secret is a credential: page scripts may not read its
+    % cookie, and browsers send it only over HTTPS, from this site's pages.
     {ok, Cookies} = dev_cookie:extract(Msg, #{}, Opts),
-    NewCookies = Cookies#{ secret_ref(CookieAddr) => Secret },
+    NewCookies =
+        Cookies#{
+            secret_ref(CookieAddr) =>
+                #{
+                    <<"value">> => Secret,
+                    <<"attributes">> =>
+                        #{
+                            <<"path">> => <<"/">>,
+                            <<"samesite">> => <<"strict">>
+                        },
+                    <<"flags">> => [<<"httponly">>, <<"secure">>]
+                }
+        },
     {ok, WithCookie} = dev_cookie:store(Msg, NewCookies, Opts),
     {ok, WithCookie}.
 
@@ -236,6 +249,13 @@ commit_verify_test() ->
     % The bound message records the committer and carries no commitment.
     #{ <<"committer">> := Committer } = Bound,
     ?assertEqual([], hb_message:signers(Bound, #{})),
+    % Page scripts, other sites and plain HTTP do not get the secret's cookie.
+    {ok, #{ <<"set-cookie">> := [SetCookie] }} =
+        dev_cookie:to(Bound, #{ <<"format">> => <<"set-cookie">> }, #{}),
+    ?assertMatch(
+        [_, <<"path=/; samesite=strict; httponly; secure">>],
+        binary:split(SetCookie, <<"\"; ">>)
+    ),
     Stored = hb_private:reset(Bound),
     VerifyReq = apply_cookie(#{ <<"path">> => <<"verify">> }, Bound, #{}),
     ?assertEqual({ok, true}, hb_ao:resolve(Stored, VerifyReq, #{})),
