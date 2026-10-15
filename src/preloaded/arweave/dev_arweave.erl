@@ -27,10 +27,20 @@
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
 
 %% @doc Route unknown keys through offset resolution first, then fall back to
-%% the message device for direct key access.
+%% the message device for direct key access. The exported helper functions are
+%% not keys of the device.
 device_info() ->
     #{
-        excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>],
+        excludes =>
+            [
+                <<"keys">>,
+                <<"set">>,
+                <<"set-path">>,
+                <<"remove">>,
+                <<"post-tx-header">>,
+                <<"post-chunk">>,
+                <<"get-chunk">>
+            ],
         default => fun dev_arweave_offset:get/4
     }.
 
@@ -2435,7 +2445,17 @@ get_bad_tx_test_parallel() ->
     Node = hb_http_server:start_node(),
     Path = <<"/~arweave@2.9/tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
-    ?assertEqual({error, not_found}, Res).
+    ?assertEqual({error, not_found}, Res),
+    % The exported helper functions are not keys of the device.
+    lists:foreach(
+        fun(Key) ->
+            ?assertEqual(
+                {error, not_found},
+                hb_http:get(Node, <<"/~arweave@2.9/", Key/binary>>, #{})
+            )
+        end,
+        [<<"post-tx-header">>, <<"get-chunk">>, <<"post-chunk">>]
+    ).
 
 %% @doc Chunk reads check the received bytes and proof before returning a range.
 chunk_proof_test_() ->
