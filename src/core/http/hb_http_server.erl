@@ -2068,7 +2068,7 @@ ingress_request(Node, Codec, Msg, Opts) ->
     hb_http_client:request(
         #{
             peer => Node,
-            path => <<"/body">>,
+            path => <<"//body">>,
             method => <<"POST">>,
             headers => Headers#{ <<"codec-device">> => Codec },
             body => Body
@@ -2259,7 +2259,7 @@ query_overrides_header_test() ->
         hb_http:get(
             Node,
             #{
-                <<"path">> => <<"/accept?accept=from-query">>,
+                <<"path">> => <<"//accept?accept=from-query">>,
                 <<"accept">> => <<"from-header">>,
                 <<"accept-bundle">> => false
             },
@@ -2281,7 +2281,7 @@ signed_request_query_riders_test() ->
     % A query key that the request does not carry is added to it.
     ?assertEqual(
         {ok, <<"1">>},
-        hb_http:request(<<"GET">>, Node, <<"/y?y=1">>, Signed, Opts)
+        hb_http:request(<<"GET">>, Node, <<"//y?y=1">>, Signed, Opts)
     ),
     % The same key sent as an uncommitted header is dropped.
     ?assertMatch(
@@ -2289,7 +2289,7 @@ signed_request_query_riders_test() ->
         hb_http:request(
             <<"GET">>,
             Node,
-            <<"/y">>,
+            <<"//y">>,
             Signed#{ <<"y">> => <<"7">> },
             Opts
         )
@@ -2298,11 +2298,11 @@ signed_request_query_riders_test() ->
     % and the signature, verified over the signed value, holds.
     ?assertEqual(
         {ok, <<"test">>},
-        hb_http:request(<<"GET">>, Node, <<"/x?x=test">>, Signed, Opts)
+        hb_http:request(<<"GET">>, Node, <<"//x?x=test">>, Signed, Opts)
     ),
     % A query key is lowercase, so one that differs only in case replaces it
     % too.
     ?assertEqual(
         {ok, <<"test">>},
-        hb_http:request(<<"GET">>, Node, <<"/x?X=test">>, Signed, Opts)
+        hb_http:request(<<"GET">>, Node, <<"//x?X=test">>, Signed, Opts)
     ).

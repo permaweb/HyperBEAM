@@ -963,7 +963,7 @@ multipart_header_bytes_roundtrip_test() ->
         <<"priv-wallet">> => ar_wallet:new(), <<"store">> => hb_test_utils:test_store()
     }),
     ?assertEqual({ok, Value}, hb_http:post(Node,
-        <<"/nested/value">>, Signed, Opts)).
+        <<"//nested/value">>, Signed, Opts)).
 
 %% @doc Multipart parts distinguish an absent body from an empty binary body,
 %% including when the empty value is covered by a nested commitment.
@@ -1238,7 +1238,7 @@ reserved_header_keys_test_() ->
             Msg =
                 hb_message:commit(
                     #{
-                        <<"path">> => <<"/", Key/binary>>,
+                        <<"path">> => <<"//", Key/binary>>,
                         <<"note">> => <<"kept">>,
                         <<"body">> => <<"hello">>,
                         Key => Value

@@ -612,7 +612,7 @@ modify_request_test() ->
                         }
                 }
         }),
-    {ok, Res} = hb_http:get(Node, <<"/added">>, #{}),
+    {ok, Res} = hb_http:get(Node, <<"//added">>, #{}),
     ?assertEqual(<<"value">>, Res).
 
 %% @doc Test that version information is available and returned correctly.

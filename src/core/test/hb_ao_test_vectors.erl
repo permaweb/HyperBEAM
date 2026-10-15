@@ -1175,6 +1175,18 @@ load_as_test(Opts) ->
             ],
             Opts
         )
+    ),
+    % An `as' of the `ao:' URI of the message loads it as the ID does.
+    ?assertEqual(
+        {ok, <<"MESSAGE">>},
+        hb_ao:resolve_many(
+            [
+                {as, <<"message@1.0">>, <<"ao:", ID/binary>>},
+                <<"test_func">>,
+                <<"test_key">>
+            ],
+            Opts
+        )
     ).
 
 as_path_test(Opts) ->

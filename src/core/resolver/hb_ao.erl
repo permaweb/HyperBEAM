@@ -303,6 +303,13 @@ resolve_stage(1, Base, Link, Opts) when ?IS_LINK(Link) ->
     % continue with the resolution.
     ?event_debug(debug_ao_core, {stage, 1, resolve_req_link, {link, Link}}, Opts),
     resolve_stage(1, Base, hb_cache:ensure_loaded(Link, Opts), Opts);
+resolve_stage(1, {as, DevID, <<"ao:", _/binary>> = URI}, Req, Opts) ->
+    % If the first message is an `as' of an `ao:' URI, we should load the
+    % message and set the device of the `as' on it.
+    maybe
+        {ok, Base} ?= hb_uri:from(URI, Opts),
+        resolve_stage(1, set(Base, <<"device">>, DevID, Opts), Req, Opts)
+    end;
 resolve_stage(1, {as, DevID, Ref}, Req, Opts) when ?IS_ID(Ref) ->
     % Normalize `as' requests with a raw ID as the path.
     resolve_stage(1, {as, DevID, #{ <<"path">> => Ref }}, Req, Opts);

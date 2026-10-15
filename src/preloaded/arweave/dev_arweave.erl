@@ -1673,7 +1673,7 @@ post_tx_json_request(Server, ClientOpts) ->
         Server,
         #{
             <<"device">> => <<"arweave@2.9">>,
-            <<"path">> => <<"/tx?codec-device=tx@1.0">>,
+            <<"path">> => <<"//tx?codec-device=tx@1.0">>,
             <<"content-type">> => <<"application/json">>,
             <<"body">> => Serialized
         },

@@ -494,7 +494,7 @@ commit_request_test() ->
         hb_http:get(
             Node,
             #{
-                <<"path">> => <<"test-key">>,
+                <<"path">> => <<"//test-key">>,
                 <<"test-key">> => <<"value">>
             },
             #{}

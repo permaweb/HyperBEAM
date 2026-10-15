@@ -817,7 +817,7 @@ test_wallet_generate_and_verify(GeneratePath, ExpectedName, CommitParams) ->
         maps:merge(
             #{
                 <<"device">> => <<"secret@1.0">>,
-                <<"path">> => <<"commit">>,
+                <<"path">> => <<"//commit">>,
                 <<"body">> => <<"Test message">>,
                 <<"priv">> => Priv
             },
@@ -928,7 +928,7 @@ commit_with_cookie_wallet_test() ->
     % Use the cookie to sign a message (no wallet parameter needed).
     TestMessage = #{
         <<"device">> => <<"secret@1.0">>,
-        <<"path">> => <<"commit">>,
+        <<"path">> => <<"//commit">>,
         <<"body">> => <<"Test data">>,
         <<"priv">> => Priv
     },
@@ -1042,7 +1042,7 @@ export_non_volatile_wallet_test() ->
                 Node,
                 #{
                     <<"device">> => <<"secret@1.0">>,
-                    <<"path">> => <<"export/1">>,
+                    <<"path">> => <<"//export/1">>,
                     <<"priv">> => Priv
                 },
                 #{}
@@ -1375,7 +1375,7 @@ stored_access_control_verifies_test() ->
     SignRequest =
         #{
             <<"device">> => <<"secret@1.0">>,
-            <<"path">> => <<"commit">>,
+            <<"path">> => <<"//commit">>,
             <<"keyids">> => [KeyID],
             <<"body">> => <<"Test message">>
         },

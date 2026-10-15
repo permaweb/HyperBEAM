@@ -142,13 +142,25 @@ request(HookMsg, HookReq, Opts) ->
 %% @doc After finding a hit for a named message, we should ensure that it is the
 %% base message for the evaluation. If it is already present in the request,
 %% however, we should not add it twice. Instead, we must add the version that
-%% is loaded (if applicable).
+%% is loaded (if applicable). A key in the first path part, alone or with a
+%% device, which the parser gives as an `ao:' URI, is read from the named
+%% message.
 %% 
 %% Eg:
 %%      base32IDA.hyperbeam/ -> [IDA]
+%%      base32IDA.hyperbeam/key/xyz -> [IDA, key, xyz]
+%%      base32IDA.hyperbeam/key~dev/xyz -> [IDA, key~dev, xyz]
 %%      base32IDA.hyperbeam/base64urlIDA/xyz -> [IDA, xyz]
 %%      base32IDA.hyperbeam/base64urlIDB/xyz -> [IDA, IDB, xyz]
 maybe_append_named_message(ResolvedMsg, [], _Opts) -> [ResolvedMsg];
+maybe_append_named_message(ResolvedMsg, [<<"ao:", Key/binary>>|ReqMsgsRest], _Opts) ->
+    [ResolvedMsg, #{ <<"path">> => Key }|ReqMsgsRest];
+maybe_append_named_message(
+    ResolvedMsg,
+    [{as, Dev, <<"ao:", Key/binary>>}|ReqMsgsRest],
+    _Opts
+) ->
+    [ResolvedMsg, {as, Dev, #{ <<"path">> => Key }}|ReqMsgsRest];
 maybe_append_named_message(ResolvedMsg, OldReq = [OldBase|ReqMsgsRest], Opts) ->
     case permissive_id(OldBase, Opts) == permissive_id(ResolvedMsg, Opts) of
         true when is_map(OldBase) or is_list(OldBase) -> OldReq;

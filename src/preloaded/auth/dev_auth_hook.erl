@@ -483,7 +483,7 @@ cookie_test() ->
         hb_http:get(
             Node,
             #{
-                <<"path">> => <<"commitments">>,
+                <<"path">> => <<"//commitments">>,
                 <<"body">> => <<"Test data">>
             },
             #{}
@@ -508,7 +508,7 @@ cookie_test() ->
         hb_http:get(
             Node,
             #{
-                <<"path">> => <<"/commitments">>,
+                <<"path">> => <<"//commitments">>,
                 <<"body">> => <<"Test data2">>,
                 <<"priv">> => CookiePriv
             },
@@ -525,7 +525,7 @@ cookie_test() ->
         hb_http:get(
             Node,
             #{
-                <<"path">> => <<"commitments">>,
+                <<"path">> => <<"//commitments">>,
                 <<"body">> => <<"Test data">>,
                 <<"accept">> => <<"application/ans104">>
             },
@@ -562,7 +562,7 @@ http_auth_test() ->
         hb_http:get(
             Node,
             #{
-                <<"path">> => <<"commitments">>,
+                <<"path">> => <<"//commitments">>,
                 <<"body">> => <<"Test data">>
             },
             #{}
@@ -578,7 +578,7 @@ http_auth_test() ->
         hb_http:get(
             Node,
             #{
-                <<"path">> => <<"commitments">>,
+                <<"path">> => <<"//commitments">>,
                 <<"body">> => <<"Test data">>,
                 <<"authorization">> => AuthStr
             },
@@ -600,7 +600,7 @@ http_auth_test() ->
         hb_http:get(
             Node,
             #{
-                <<"path">> => <<"commitments">>,
+                <<"path">> => <<"//commitments">>,
                 <<"body">> => <<"Test data2">>,
                 <<"authorization">> => AuthStr
             },
@@ -708,7 +708,7 @@ when_test() ->
         hb_http:get(
             Node,
             #{
-                <<"path">> => <<"commitments">>,
+                <<"path">> => <<"//commitments">>,
                 <<"body">> => <<"Test data">>,
                 <<"authorization">> => AuthStr
             },
@@ -738,7 +738,7 @@ store_hook_signed_test() ->
         hb_http:post(
             Node,
             #{
-                <<"path">> => <<"/id?committers=all&!">>,
+                <<"path">> => <<"//id?committers=all&!">>,
                 <<"authorization">> => AuthStr,
                 <<"stored-key">> => <<"stored-value">>
             },

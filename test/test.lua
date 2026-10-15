@@ -33,7 +33,7 @@ end
 function ao_resolve()
     local status, res =
         ao.resolve({
-            path = "/hello",
+            path = "//hello",
             hello = "Hello, AO world!"
         })
     return res

@@ -1065,8 +1065,8 @@ snapshot_excludes_node_wallet_test() ->
         hb_http:get(
             Node,
             <<
-                "/init~lua@5.3a&module=", ModuleID/binary,
-                "/hello~lua@5.3a/snapshot~lua@5.3a/body"
+                "/~lua@5.3a&module=", ModuleID/binary,
+                "/init/hello~lua@5.3a/snapshot~lua@5.3a/body"
             >>,
             #{}
         ),

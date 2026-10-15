@@ -643,7 +643,7 @@ relay_schedule_ans104_test() ->
                 <<"on">> => #{
                     <<"start">> => #{
                         <<"device">> => <<"location@1.0">>,
-                        <<"path">> => <<"node">>,
+                        <<"path">> => <<"//node">>,
                         <<"method">> => <<"POST">>,
                         <<"target">> => <<"self">>,
                         <<"require-codec">> => <<"ans104@1.0">>,
@@ -700,7 +700,7 @@ relay_schedule_ans104_test() ->
             <<"routes">> =>
                 [
                     #{
-                        <<"template">> => <<"^/push">>,
+                        <<"template">> => <<"^//push">>,
                         <<"strategy">> => <<"Nearest">>,
                         <<"nodes">> => [
                             #{
@@ -762,7 +762,7 @@ relay_schedule_ans104_test() ->
         hb_http:post(
             Relay,
             Process#{
-                <<"path">> => <<"push">>,
+                <<"path">> => <<"//push">>,
                 <<"codec-device">> => <<"ans104@1.0">>
             },
             ClientOpts

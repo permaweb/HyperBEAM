@@ -403,7 +403,7 @@ faff_test() ->
         )
     ),
     Req = #{
-        <<"path">> => <<"/greeting">>,
+        <<"path">> => <<"//greeting">>,
         <<"greeting">> => <<"Hello, world!">>
     },
     GoodSignedReq = hb_message:commit(Req, #{ <<"priv-wallet">> => GoodWallet }),
@@ -543,7 +543,7 @@ hyper_token_ledger() ->
         <<"ledger-",
             (integer_to_binary(erlang:unique_integer([positive])))/binary
         >>,
-    LedgerPath = <<"/", LedgerName/binary, "~node-process@1.0">>,
+    LedgerPath = <<"/~node-process@1.0/", LedgerName/binary>>,
     {ok, TokenScript} = file:read_file("scripts/hyper-token.lua"),
     {ok, ProcessScript} = file:read_file("scripts/hyper-token-p4.lua"),
     {ok, ClientScript} = file:read_file("scripts/hyper-token-p4-client.lua"),
@@ -575,7 +575,7 @@ hyper_token_ledger() ->
                 <<"p4-non-chargable-routes">> =>
                     [
                         #{
-                            <<"template">> => <<"/*~node-process@1.0/*">>
+                            <<"template">> => <<"/~node-process@1.0/*">>
                         }
                     ],
                 <<"on">> => #{
@@ -611,7 +611,7 @@ hyper_token_ledger() ->
     % To start, we attempt a request from Bob, which should fail because he
     % has no tokens.
     Req = #{
-        <<"path">> => <<"/greeting">>,
+        <<"path">> => <<"//greeting">>,
         <<"greeting">> => <<"Hello, world!">>
     },
     SignedReq = hb_message:commit(Req, #{ <<"priv-wallet">> => BobWallet }),

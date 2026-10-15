@@ -18,7 +18,7 @@ text quoted scheme varied dependencies result extension.
 
 Rootsymbol path.
 
-path -> elems : [ Part || Part <- '$1', Part =/= empty ].
+path -> elems : path_parts('$1').
 
 elems -> elem : ['$1'].
 elems -> elems '/' elem : '$1' ++ ['$3'].
@@ -129,3 +129,12 @@ claims -> equivalence : ['$1'].
 
 equivalence -> result : '$1'.
 equivalence -> extension : '$1'.
+
+Erlang code.
+
+%% A path given over HTTP starts with `/', so its first element is empty. An
+%% empty path part after that `/' is kept as `empty': it is the carried
+%% message. Every other empty element is dropped.
+path_parts([empty, empty, Part | Rest]) when Part =/= empty ->
+    [empty | path_parts([Part | Rest])];
+path_parts(Elems) -> [ Part || Part <- Elems, Part =/= empty ].

@@ -7,12 +7,6 @@
 %%%     Singleton: Message containing keys and a `path' field,
 %%%                which may also contain a query string of key-value pairs.
 %%%
-%%%     Path:
-%%%         - /Part1/Part2/.../PartN/ => [Part1, Part2, ..., PartN]
-%%%         - /ID or URI/Part2/.../PartN => [ID or URI, Part2, ..., PartN]
-%%%         - ao://ID/Part2/.../PartN => [ID, Part2, ..., PartN]
-%%%         - ao://ID1/ID2 => [ID1, {resolve, [ID2]}]
-%%%
 %%%     Part: (Key + Resolution), Device?, #{ K => V}?, Claims?
 %%%         - Part => #{ path => Part }
 %%%         - `Part&Key=Value => #{ path => Part, Key => Value }'
@@ -37,18 +31,31 @@
 %%%         - N.Key+resolve: /a/b/c => #{ Key => (resolve /a/b/c), ... }
 %%% </pre>
 %%%
-%%% A path is a list of parts, separated by `/'. The first part is the base
-%%% message, or the first request if the base is empty (see below). Each
-%%% request is applied in turn to the result of the parts before it. A
-%%% hashpath is `ao://' followed by a path, in which each request may be
-%%% followed by claims about the result of its execution. `hb_hashpath' reads
-%%% and checks these claims. For example:
+%%% A path is a list of path parts, separated by `/'. The first path part is
+%%% the base:
+%%% - A first path part without a key is the carried message: the singleton's
+%%%   other keys, with the device and keys of that part applied to it, as in
+%%%   `//a', `/~meta@1.0' and `/&k=v'.
+%%% - A first path part that is a key, alone or with a device, is read as the
+%%%   `ao:' URI of that key, upon the node that executes the path. The device
+%%%   is applied to the loaded message. An ID is its own `ao:' URI.
+%%% - A first path part with a key that sets other keys, as in `/a&k=v' and
+%%%   `/a~d@1.0&k=v', is a request upon the carried message.
+%%% Each later path part is a request, applied in turn to the result of the
+%%% parts before it. A hashpath is `ao://' followed by a path, in which each
+%%% request may be followed by claims about the result of its execution.
+%%% `hb_hashpath' reads and checks these claims. For example:
 %%% <pre>
-%%%     /a/b            => [#{}, #{ path => a }, #{ path => b }]
+%%%     //a/b           => [#{}, #{ path => a }, #{ path => b }]
+%%%     /a/b            => [ao:a, #{ path => b }]
+%%%     /a~d@1.0/b      => [{as, d@1.0, ao:a}, #{ path => b }]
+%%%     /a&k=v/b        => [#{}, #{ path => a, k => v }, #{ path => b }]
+%%%     /a~d@1.0&k=v/b  => [{as, d@1.0, #{ path => a, k => v }}, #{ path => b }]
 %%%     /~meta@1.0/info => [{as, meta@1.0, #{}}, #{ path => info }]
+%%%     /ID~d@1.0/k     => [{as, d@1.0, #{ path => ID }}, #{ path => k }]
 %%%     /ID/k=v         => [ID, #{ path => k, k => v }]
 %%%     /ID/ao:ID2      => [ID, {resolve, [ao:ID2]}]
-%%%     /a/(b/c)/d      => [#{}, #{ path => a }, (resolve /b/c), #{ path => d }]
+%%%     //a/(//b/c)/d   => [#{}, #{ path => a }, (resolve //b/c), #{ path => d }]
 %%%     ao://ID/k.ID2   => [ID, #{ path => k }], claiming that the result is ID2
 %%% </pre>
 %%%
@@ -175,8 +182,7 @@ to(Messages) ->
                 % Special case when AO-Core message contains resolve command
                 ({resolve, SubMessages0}, {Acc, Index, ScopedModifications}) ->
                     SubMessages1 = hb_maps:get(<<"path">>, to(SubMessages0)),
-                    <<"/", SubMessages2/binary>> = SubMessages1,
-                    SubMessages = <<"(", SubMessages2/binary, ")">>,
+                    SubMessages = <<"(", SubMessages1/binary, ")">>,
                     {append_path(SubMessages, Acc), Index + 1, ScopedModifications};
                 % Regular case when message is a map
                 (Message, {Acc, Index, ScopedModifications}) ->
@@ -216,7 +222,7 @@ to(Messages) ->
                         {NewMessage, Index + 1, NewScopedModifications}
 
             end,
-            {#{}, 0, #{}},
+            {base_path(Messages), 0, #{}},
             smallest(Messages)),
     MessageWithTypeAndScopes =
         hb_maps:fold(
@@ -240,14 +246,27 @@ to(Messages) ->
             Scopes),
     MessageWithTypeAndScopes.
 
+%% @doc Start the path of a singleton. A base that is a message without a
+%% path is the carried message, so the path starts with an empty path part.
+base_path([Base | _]) when is_map(Base) ->
+    case is_map_key(<<"path">>, Base) orelse smallest([Base]) =/= [Base] of
+        true -> #{};
+        false -> #{ <<"path">> => <<"/">> }
+    end;
+base_path(_) -> #{}.
+
 %% @doc Mark the messages that `to_part/1' can write in their smallest form:
-%% every request that has one, and a base that is only a device.
+%% every request that has one, a base that is only a device, and a base that
+%% is the `ao:' URI of a key, with or without a device.
 smallest([]) -> [];
 smallest([Base | Requests]) ->
     [
         case Base of
             #{ <<"device">> := _ } when map_size(Base) == 1 -> smallest_part(Base);
             {as, _, Msg} when map_size(Msg) == 0 -> smallest_part(Base);
+            {as, D, <<"ao:", Key/binary>>} ->
+                smallest_part({as, D, #{ <<"path">> => Key }});
+            <<"ao:", Key/binary>> -> smallest_part(#{ <<"path">> => Key });
             _ -> Base
         end
     |
@@ -680,11 +699,24 @@ parse_query(QStr) ->
     catch _:_ -> throw({invalid_singleton, invalid_query, QStr})
     end.
 
-%% @doc Normalize the base path.
+%% @doc Normalize the base path. A first path part without a key is the
+%% carried message, with the rest of the part applied to it. A key, alone or
+%% with a device, is read as an `ao:' URI, and an ID is its own `ao:' URI. A
+%% key that sets other keys, with or without a device, is a request upon the
+%% carried message.
 normalize_base([]) -> [];
+normalize_base([{empty, Claims} | Rest]) -> [{#{}, Claims} | Rest];
 normalize_base([First = {Base, _} | Rest]) when is_binary(Base) -> [First | Rest];
+normalize_base([{{as, Dev, Raw = #{ <<"path">> := Key }}, Claims} | Rest])
+        when map_size(Raw) == 1, Key =/= <<>>, not ?IS_ID(Key) ->
+    [{{as, Dev, <<"ao:", Key/binary>>}, Claims} | Rest];
 normalize_base([First = {{as, _, _}, _} | Rest]) -> [First | Rest];
 normalize_base([First = {{resolve, _}, _} | Rest]) -> [First | Rest];
+normalize_base([{Base = #{ <<"path">> := <<>> }, Claims} | Rest]) ->
+    [{maps:remove(<<"path">>, Base), Claims} | Rest];
+normalize_base([{Base = #{ <<"path">> := Key }, Claims} | Rest])
+        when map_size(Base) == 1 ->
+    [{<<"ao:", Key/binary>>, Claims} | Rest];
 normalize_base(Rest) -> [{#{}, []} | Rest].
 
 %% @doc Step 3: Apply types to values and remove specifiers. A link is loaded
@@ -795,6 +827,7 @@ do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
 %% 1. The key, and its value after `=' or its device after `~'
 %% 2. Inlined key-value pairs after `&'
 %% 3. The device specifier
+build_part(empty, _Opts) -> {empty, []};
 build_part({term, Term}, _Opts) -> {Term, []};
 build_part({uri, Tokens}, _Opts) -> {decode_string(text(Tokens)), []};
 build_part({subpath, {group, _, Tokens}}, Opts) ->
@@ -947,7 +980,7 @@ signed_request_steps_test() ->
 
 parse_explicit_message_test() ->
     Singleton1 = #{
-        <<"path">> => <<"/a">>,
+        <<"path">> => <<"//a">>,
         <<"a">> => <<"b">>
     },
     ?assertEqual(
@@ -956,6 +989,11 @@ parse_explicit_message_test() ->
             #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }
         ],
         from(Singleton1, #{})
+    ),
+    % A first path part that is a key is read as an `ao:' URI.
+    ?assertEqual(
+        [<<"ao:a">>, #{ <<"path">> => <<"b">>, <<"a">> => <<"b">> }],
+        from(Singleton1#{ <<"path">> => <<"/a/b">> }, #{})
     ),
     DummyID = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Singleton2 = #{
@@ -969,6 +1007,25 @@ parse_explicit_message_test() ->
     ?assertEqual(
         [DummyID, #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }],
         from(Singleton3, #{})
+    ),
+    % The other keys of the singleton are given to its requests, not to an
+    % `as' upon an ID or upon the `ao:' URI of a key.
+    ?assertEqual(
+        [
+            [
+                {as, <<"d@1.0">>, #{ <<"path">> => DummyID }},
+                #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }
+            ],
+            [
+                {as, <<"d@1.0">>, <<"ao:k">>},
+                #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }
+            ]
+        ],
+        [
+            from(Singleton3#{ <<"path">> => Path }, #{})
+        ||
+            Path <- [<<"/", DummyID/binary, "~d@1.0/a">>, <<"/k~d@1.0/a">>]
+        ]
     ),
     % After the base, a bare ID is a key.
     ?assertEqual(
@@ -1002,17 +1059,24 @@ simple_to_test() ->
         #{<<"test-key">> => <<"test-value">>},
         #{<<"path">> => <<"a">>, <<"test-key">> => <<"test-value">>}
     ],
-    Expected = #{<<"path">> => <<"/a">>, <<"test-key">> => <<"test-value">>},
+    Expected = #{<<"path">> => <<"//a">>, <<"test-key">> => <<"test-value">>},
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})),
     % A request that holds only the value of its key is written `key=value'.
     KeyValue = [#{}, #{ <<"path">> => <<"k">>, <<"k">> => <<"v">> }],
-    ?assertEqual(#{ <<"path">> => <<"/k=v">> }, to(KeyValue)),
+    ?assertEqual(#{ <<"path">> => <<"//k=v">> }, to(KeyValue)),
     ?assertEqual(KeyValue, from(to(KeyValue), #{})),
     % A message that is only a device is written `~device'.
     Device = [{as, <<"meta@1.0">>, #{}}, #{ <<"path">> => <<"info">> }],
     ?assertEqual(#{ <<"path">> => <<"/~meta@1.0/info">> }, to(Device)),
-    ?assertEqual(Device, from(to(Device), #{})).
+    ?assertEqual(Device, from(to(Device), #{})),
+    % A key in the first path part is its `ao:' URI, with or without a device.
+    Key = [<<"ao:a">>, #{ <<"path">> => <<"b">> }],
+    ?assertEqual(#{ <<"path">> => <<"/a/b">> }, to(Key)),
+    ?assertEqual(Key, from(to(Key), #{})),
+    KeyDevice = [{as, <<"d@1.0">>, <<"ao:a">>}, #{ <<"path">> => <<"b">> }],
+    ?assertEqual(#{ <<"path">> => <<"/a~d@1.0/b">> }, to(KeyDevice)),
+    ?assertEqual(KeyDevice, from(to(KeyDevice), #{})).
 
 multiple_messages_to_test() ->
     Messages =
@@ -1023,7 +1087,7 @@ multiple_messages_to_test() ->
             #{<<"path">> => <<"c">>, <<"test-key">> => <<"test-value">>}
         ],
     Expected = #{
-        <<"path">> => <<"/a/b/c">>,
+        <<"path">> => <<"//a/b/c">>,
         <<"test-key">> => <<"test-value">>
     },
     ?assertEqual(Expected, to(Messages)),
@@ -1048,7 +1112,7 @@ scoped_key_to_test() ->
         #{<<"path">> => <<"b">>, <<"test-key">> => <<"test-value">>},
         #{<<"path">> => <<"c">>}
     ],
-    Expected = #{<<"2.test-key">> => <<"test-value">>, <<"path">> => <<"/a/b/c">>},
+    Expected = #{<<"2.test-key">> => <<"test-value">>, <<"path">> => <<"//a/b/c">>},
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})).
 
@@ -1060,7 +1124,7 @@ typed_key_to_test() ->
             #{<<"path">> => <<"b">>, <<"test-key">> => 123},
             #{<<"path">> => <<"c">>}
         ],
-    Expected = #{<<"2.test-key+integer">> => <<"123">>, <<"path">> => <<"/a/b/c">>},
+    Expected = #{<<"2.test-key+integer">> => <<"123">>, <<"path">> => <<"//a/b/c">>},
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})).
 
@@ -1082,7 +1146,7 @@ subpath_in_key_to_test() ->
         },
         #{<<"path">> => <<"c">>}
     ],
-    Expected = #{<<"2.test-key+resolve">> => <<"/x/y/z">>, <<"path">> => <<"/a/b/c">>},
+    Expected = #{<<"2.test-key+resolve">> => <<"//x/y/z">>, <<"path">> => <<"//a/b/c">>},
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})).
 
@@ -1101,7 +1165,7 @@ subpath_in_path_to_test() ->
         #{<<"path">> => <<"z">>}
     ],
     Expected = #{
-        <<"path">> => <<"/a/(x/y/z)/z">>
+        <<"path">> => <<"//a/(//x/y/z)/z">>
     },
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})).
@@ -1167,7 +1231,7 @@ subpath_in_inlined_to_test() ->
 single_message_test() ->
     % This is a singleton TABM message
     Req = #{
-        <<"path">> => <<"/a">>,
+        <<"path">> => <<"//a">>,
         <<"test-key">> => <<"test-value">>
     },
     Msgs = from(Req, #{}),
@@ -1191,7 +1255,7 @@ basic_hashpath_test() ->
 
 multiple_messages_test() ->
     Req = #{
-        <<"path">> => <<"/a/b/c">>,
+        <<"path">> => <<"//a/b/c">>,
         <<"test-key">> => <<"test-value">>
     },
     Msgs = from(Req, #{}),
@@ -1206,7 +1270,7 @@ multiple_messages_test() ->
 
 scoped_key_test() ->
     Req = #{
-        <<"path">> => <<"/a/b/c">>,
+        <<"path">> => <<"//a/b/c">>,
         <<"2.test-key">> => <<"test-value">>
     },
     Msgs = from(Req, #{}),
@@ -1218,7 +1282,7 @@ scoped_key_test() ->
 
 typed_key_test() ->
     Req = #{
-        <<"path">> => <<"/a/b/c">>,
+        <<"path">> => <<"//a/b/c">>,
         <<"2.test-key+integer">> => <<"123">>
     },
     Msgs = from(Req, #{}),
@@ -1233,7 +1297,7 @@ typed_key_test() ->
 linked_key_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     {ok, ID} = hb_cache:write(<<"123">>, Opts),
-    {ok, PathID} = hb_cache:write(<<"/a">>, Opts),
+    {ok, PathID} = hb_cache:write(<<"//a">>, Opts),
     Missing =
         {link,
             <<"ao:", (hb_util:human_id(crypto:strong_rand_bytes(32)))/binary>>,
@@ -1250,8 +1314,8 @@ linked_key_test() ->
 
 subpath_in_key_test() ->
     Req = #{
-        <<"path">> => <<"/a/b/c">>,
-        <<"2.test-key+resolve">> => <<"/x/y/z">>
+        <<"path">> => <<"//a/b/c">>,
+        <<"2.test-key+resolve">> => <<"//x/y/z">>
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
@@ -1274,7 +1338,7 @@ subpath_in_key_test() ->
 
 subpath_in_path_test() ->
     Req = #{
-        <<"path">> => <<"/a/(x/y/z)/z">>
+        <<"path">> => <<"//a/(//x/y/z)/z">>
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
@@ -1296,7 +1360,7 @@ subpath_in_path_test() ->
 inlined_keys_test() ->
     Req = #{
         <<"method">> => <<"POST">>,
-        <<"path">> => <<"/a/b&k1=v1/c&k2=v2">>
+        <<"path">> => <<"//a/b&k1=v1/c&k2=v2">>
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
@@ -1309,7 +1373,7 @@ inlined_keys_test() ->
 inlined_keys_long_segment_test() ->
     Req = #{
         <<"path">> =>
-            <<"/chunk&offset=377813969707255&length=262144">>
+            <<"//chunk&offset=377813969707255&length=262144">>
     },
     Msgs = from(Req, #{}),
     ?assertEqual(2, length(Msgs)),
@@ -1323,7 +1387,7 @@ inlined_keys_long_segment_test() ->
 inlined_quoted_key_test() ->
     Req = #{
         <<"method">> => <<"POST">>,
-        <<"path">> => <<"/a/b&k1=\"v/1\"/c&k2=v2">>
+        <<"path">> => <<"//a/b&k1=\"v/1\"/c&k2=v2">>
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
@@ -1342,13 +1406,13 @@ inlined_quoted_key_test() ->
     % A value that starts with a quote, but does not end with one, keeps it.
     ?assertMatch(
         [_, #{ <<"k">> := <<"\"v">> }],
-        from(#{ <<"path">> => <<"/a&k=%22v">> }, #{})
+        from(#{ <<"path">> => <<"//a&k=%22v">> }, #{})
     ).
 
 inlined_assumed_key_test() ->
     Req = #{
         <<"method">> => <<"POST">>,
-        <<"path">> => <<"/a/b=4/c&k2=v2">>
+        <<"path">> => <<"//a/b=4/c&k2=v2">>
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
@@ -1359,7 +1423,7 @@ inlined_assumed_key_test() ->
     ?assertEqual(not_found, hb_maps:get(<<"b">>, Res, not_found)),
     ReqB = #{
         <<"method">> => <<"POST">>,
-        <<"path">> => <<"/a/b+integer=4/c&k2=v2">>
+        <<"path">> => <<"//a/b+integer=4/c&k2=v2">>
     },
     MsgsB = from(ReqB, #{}),
     [_, Msg1b, Msg2b, Msg3b] = MsgsB,
@@ -1370,7 +1434,7 @@ inlined_assumed_key_test() ->
 
 
 multiple_inlined_keys_test() ->
-    Path = <<"/a/b&k1=v1&k2=v2">>,
+    Path = <<"//a/b&k1=v1&k2=v2">>,
     Req = #{
         <<"method">> => <<"POST">>,
         <<"path">> => Path
@@ -1384,7 +1448,7 @@ multiple_inlined_keys_test() ->
     ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Msg2, not_found)).
 
 subpath_in_inlined_test() ->
-    Path = <<"/part1/part2&test=1&b=(/x/y)/part3">>,
+    Path = <<"//part1/part2&test=1&b=(//x/y)/part3">>,
     Req = #{
         <<"path">> => Path
     },
@@ -1401,7 +1465,7 @@ subpath_in_inlined_test() ->
     ?assertEqual(
         Msgs,
         from(
-            #{ <<"path">> => <<"/part1/part2&test=1&b+resolve=(/x/y)/part3">> },
+            #{ <<"path">> => <<"//part1/part2&test=1&b+resolve=(//x/y)/part3">> },
             #{}
         )
     ).
@@ -1415,12 +1479,12 @@ path_parts_test() ->
             #{ <<"path">> := <<"b">>, <<"c">> := {resolve, [_, _, _]} },
             #{ <<"path">> := <<"f">> }
         ],
-        from(<<"/a/b&c=(/d/e)/f">>, #{})
+        from(<<"//a/b&c=(//d/e)/f">>, #{})
     ),
-    ?assertMatch([#{}, #{ <<"path">> := <<"a">> }], from(<<"/a">>, #{})),
+    ?assertMatch([#{}, #{ <<"path">> := <<"a">> }], from(<<"//a">>, #{})),
     ?assertMatch(
         [#{}, #{ <<"path">> := <<"a">> }, #{ <<"path">> := <<"b">> }, _],
-        from(<<"/a/b/c">>, #{})
+        from(<<"//a/b/c">>, #{})
     ),
     ?assertMatch(
         [<<"IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q">>, #{}],
@@ -1433,11 +1497,11 @@ path_parts_test() ->
             #{ <<"path">> := <<"b">>, <<"k1">> := <<"V1">> },
             #{ <<"path">> := <<"c">>, <<"k2">> := <<"V2">> }
         ],
-        from(<<"/a/b&K1=V1/c&K2=V2">>, #{})
+        from(<<"//a/b&K1=V1/c&K2=V2">>, #{})
     ),
     ?assertMatch(
         [#{}, #{ <<"path">> := <<"a">> }, {resolve, [_, _, _, _]}, _],
-        from(<<"/a/(x/y/z)/c">>, #{})
+        from(<<"//a/(//x/y/z)/c">>, #{})
     ),
     % A path that does not follow the grammar is refused with the position of
     % the error, counted in bytes, also after a character of two bytes.

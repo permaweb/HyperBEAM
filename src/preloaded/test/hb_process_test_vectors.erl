@@ -336,7 +336,7 @@ http_wasm_process_by_id_test_parallel() ->
     InitRes =
         hb_http:post(
             Node,
-            << "/schedule" >>,
+            << "//schedule" >>,
             Proc,
             Opts
         ),
@@ -418,7 +418,7 @@ aos_state_access_via_http_test_parallel_() ->
         })),
         Proc = aos_process(Opts),
         ProcID = hb_util:human_id(hb_message:id(Proc, all, Opts)),
-        {ok, _InitRes} = hb_http:post(Node, <<"/schedule">>, Proc, Opts),
+        {ok, _InitRes} = hb_http:post(Node, <<"//schedule">>, Proc, Opts),
         Req = 
             hb_message:commit(
                 #{

@@ -1452,8 +1452,8 @@ test_cron_depth_zero_push() ->
     }),
     share_location_record(Wallet1, Node1, Node2),
     share_location_record(Wallet2, Node2, Node1),
-    {ok, _} = hb_http:post(Node1, <<"/schedule">>, Proc1, Opts),
-    {ok, _} = hb_http:post(Node2, <<"/schedule">>, Proc2, Opts),
+    {ok, _} = hb_http:post(Node1, <<"//schedule">>, Proc1, Opts),
+    {ok, _} = hb_http:post(Node2, <<"//schedule">>, Proc2, Opts),
     Trust = <<
         "ao.authorities = { \"", Address1/binary, "\",\"", Address2/binary,
         "\" }; ao.addAssignable('all', function (msg) return true end); ",

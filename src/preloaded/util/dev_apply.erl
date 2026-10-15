@@ -265,7 +265,7 @@ resolve_from_request_test() ->
             Node,
             <<"/~meta@1.0/info/debug-info~apply@1.0">>,
             #{
-                <<"debug-info">> => <<"short-trace-len">>
+                <<"debug-info">> => <<"//short-trace-len">>
             },
             #{}
         )
@@ -277,7 +277,7 @@ apply_over_http_test() ->
         hb_message:commit(
             #{
                 <<"device">> => <<"apply@1.0">>,
-                <<"user-path">> => <<"/user-request/test-key">>,
+                <<"user-path">> => <<"//user-request/test-key">>,
                 <<"user-request">> =>
                     #{
                         <<"test-key">> => <<"DATA">>
@@ -288,7 +288,7 @@ apply_over_http_test() ->
     ?assertEqual(
         {ok, <<"DATA">>},
         hb_ao:resolve(
-            Signed#{ <<"path">> => <<"/user-path">> },
+            Signed#{ <<"path">> => <<"//user-path">> },
             #{ <<"priv-wallet">> => hb:wallet() }
         )
     ),
@@ -297,7 +297,7 @@ apply_over_http_test() ->
         hb_http:request(
             <<"GET">>,
             Node,
-            <<"/user-path">>,
+            <<"//user-path">>,
             Signed,
             #{ <<"priv-wallet">> => hb:wallet() }
         )

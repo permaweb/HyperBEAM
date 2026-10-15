@@ -535,7 +535,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                 )
         },
     BinPeer = if is_binary(Peer) -> Peer; true -> list_to_binary(Peer) end,
-    BinPath = hb_path:normalize(hb_path:to_binary(Path)),
+    BinPath = request_path(Path),
     ReqBase = #{ peer => BinPeer, path => BinPath, method => Method },
     case Format of
         <<"httpsig@1.0">> ->
@@ -600,6 +600,13 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
             }
     end.
 
+%% @doc Give the request target of a path. An empty first path part (`//')
+%% is kept: it is the carried message (see `hb_singleton').
+request_path(<<"//", _/binary>> = Path) ->
+    <<"/", (hb_path:normalize(hb_path:to_binary(Path)))/binary>>;
+request_path(Path) ->
+    hb_path:normalize(hb_path:to_binary(Path)).
+
 %%% Tests
 
 test_opts() ->
@@ -613,12 +620,12 @@ isolated_test_opts() ->
 
 simple_ao_resolve_unsigned_test() ->
     URL = hb_http_server:start_node(),
-    TestMsg = #{ <<"path">> => <<"/key1">>, <<"key1">> => <<"Value1">> },
+    TestMsg = #{ <<"path">> => <<"//key1">>, <<"key1">> => <<"Value1">> },
     ?assertEqual({ok, <<"Value1">>}, post(URL, TestMsg, test_opts())),
     % The atom value of a successful result is its body, not its status.
     ?assertEqual(
         {ok, forbidden},
-        post(URL, #{ <<"path">> => <<"/key2">>, <<"key2">> => forbidden }, test_opts())
+        post(URL, #{ <<"path">> => <<"//key2">>, <<"key2">> => forbidden }, test_opts())
     ).
 
 %% @doc An empty body is preserved in signed HTTP requests and responses.
@@ -646,11 +653,11 @@ empty_body_http_test() ->
             Client
         )
     ),
-    ?assertEqual({ok, <<>>}, post(URL, <<"/body">>, Signed, Client)).
+    ?assertEqual({ok, <<>>}, post(URL, <<"//body">>, Signed, Client)).
 
 simple_ao_resolve_signed_test() ->
     URL = hb_http_server:start_node(),
-    TestMsg = #{ <<"path">> => <<"/key1">>, <<"key1">> => <<"Value1">> },
+    TestMsg = #{ <<"path">> => <<"//key1">>, <<"key1">> => <<"Value1">> },
     {ok, Res} =
         post(
             URL,
@@ -685,7 +692,7 @@ relayed_signed_request_test() ->
     ClientOpts = isolated_test_opts(),
     Request =
         hb_message:commit(
-            #{ <<"path">> => <<"/key1">>, <<"key1">> => <<"Value1">> },
+            #{ <<"path">> => <<"//key1">>, <<"key1">> => <<"Value1">> },
             ClientOpts
         ),
     ?assertEqual({ok, <<"Value1">>}, post(Router, Request, ClientOpts)),
@@ -708,7 +715,7 @@ relayed_signed_request_test() ->
     {ok, Stored} = hb_cache:read(SignedID, StoreOpts),
     Loaded = hb_cache:ensure_all_loaded(Stored, StoreOpts),
     ?assertEqual(
-        <<"/key1">>,
+        <<"//key1">>,
         hb_maps:get(<<"path">>, Loaded, not_found, StoreOpts)
     ),
     ?assert(hb_message:verify(Loaded, all, StoreOpts)),
@@ -721,18 +728,18 @@ signed_routing_fields_test() ->
     Opts = test_opts(),
     Node = hb_http_server:start_node(),
     Signed = hb_message:commit(#{
-        <<"path">> => <<"/value">>,
+        <<"path">> => <<"//value">>,
         <<"host">> => <<"application.example">>,
         <<"method">> => <<"POST">>,
         <<"value">> => <<"preserved">>
     }, Opts),
-    Route = #{ <<"uri">> => <<Node/binary, "/value">>, <<"opts">> => #{} },
+    Route = #{ <<"uri">> => <<Node/binary, "//value">>, <<"opts">> => #{} },
     lists:foreach(
         fun(Routing) ->
             {ok, _, _, _, Prepared, _} =
                 route_to_request(Signed, {ok, Routing}, Opts),
             ?assert(hb_message:verify(Prepared, all, Opts)),
-            ?assertEqual(<<"/value">>, maps:get(<<"path">>, Prepared)),
+            ?assertEqual(<<"//value">>, maps:get(<<"path">>, Prepared)),
             ?assertEqual(<<"application.example">>, maps:get(<<"host">>, Prepared))
         end,
         [Route, #{ <<"nodes">> => [Route] }]
@@ -748,7 +755,7 @@ nested_ao_resolve_test() ->
             URL,
             hb_message:commit(
                 #{
-                    <<"path">> => <<"/key1/key2/key3">>,
+                    <<"path">> => <<"//key1/key2/key3">>,
                     <<"key1">> =>
                         #{<<"key2">> =>
                             #{
@@ -768,7 +775,7 @@ wasm_compute_request(ImageFile, Func, Params, ResultPath, Opts) ->
     {ok, Bin} = file:read_file(ImageFile),
     hb_message:commit(
         #{
-            <<"path">> => <<"/init/compute/results", ResultPath/binary>>,
+            <<"path">> => <<"//init/compute/results", ResultPath/binary>>,
             <<"device">> => <<"wasm-64@1.0">>,
             <<"function">> => Func,
             <<"parameters">> => Params,
@@ -844,7 +851,7 @@ ans104_wasm_test() ->
         {ok, #{ <<"output">> := [6.0] }},
         post(
             URL,
-            Msg#{ <<"path">> => <<"/init/compute/results">> },
+            Msg#{ <<"path">> => <<"//init/compute/results">> },
             ClientOpts
         )
     ).
@@ -1009,7 +1016,7 @@ send_large_signed_request_test() ->
         {ok, 5},
         post(
             hb_http_server:start_node(),
-            <<"/node-message/short-trace-len">>,
+            <<"//node-message/short-trace-len">>,
             Req,
             #{ <<"http-client">> => gun }
         )
