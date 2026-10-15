@@ -604,7 +604,7 @@ export(Base, Request, Opts) ->
                     fun(Wallet) ->
                         Loaded = hb_cache:ensure_all_loaded(Wallet, PrivOpts),
                         ?event({exported, {priv_wallet, Loaded}}),
-                        Loaded
+                        Loaded#{ <<"cache-control">> => [<<"no-store">>] }
                     end,
                     Wallets
                 )
@@ -967,6 +967,8 @@ export_wallet_test() ->
     ?assertMatch(#{<<"wallet">> := _, <<"persist">> := <<"in-memory">>}, ExportResponse),
     ?assert(maps:is_key(<<"access-control">>, ExportResponse)),
     ?assert(maps:is_key(<<"controllers">>, ExportResponse)),
+    % The reply holds the wallet's key, so it tells caches not to store it.
+    ?assertEqual([<<"no-store">>], maps:get(<<"cache-control">>, ExportResponse)),
     % Should return the correct wallet address in the response.
     ?assertEqual(WalletAddress, maps:get(<<"address">>, ExportResponse)),
     AccessControl = maps:get(<<"access-control">>, ExportResponse),
