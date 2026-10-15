@@ -717,7 +717,7 @@ preprocess(Base, RawReq, Opts) ->
             case hb_opts:get(router_preprocess_default, <<"local">>, Opts) of
                 <<"local">> ->
                     ?event(debug_preprocess, executing_locally),
-                    {ok, #{
+                    {ok, RawReq#{
                         <<"body">> =>
                             hb_ao:get(
                                 <<"body">>,
@@ -727,7 +727,7 @@ preprocess(Base, RawReq, Opts) ->
                     }};
                 <<"error">> ->
                     ?event(debug_preprocess, preprocessor_returning_error),
-                    {ok, #{
+                    {ok, RawReq#{
                         <<"body">> =>
                             [#{
                                 <<"status">> => 404,
@@ -800,7 +800,7 @@ preprocess(Base, RawReq, Opts) ->
             % node's configuration chose.
             {
                 ok,
-                #{
+                RawReq#{
                     <<"body">> =>
                         [
                             MaybeCommit#{

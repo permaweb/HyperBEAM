@@ -683,8 +683,8 @@ handle_request(RawReq, Body, ServerID) ->
                         {req_singleton, ReqSingleton}},
                     #{}
                 ),
-                Res = resolve_request(Req, ReqSingleton, NodeMsg),
-                reply(Req, ReqSingleton, Res, NodeMsg)
+                {Request, Res} = resolve_request(Req, ReqSingleton, NodeMsg),
+                reply(Req, Request, Res, NodeMsg)
             catch
                 Type:Details:Stacktrace ->
                     handle_error(
@@ -711,23 +711,28 @@ handle_request(RawReq, Body, ServerID) ->
 %% to its messages, resolve them, and apply the `response' hook to the result.
 %% A node that is not initialized resolves only `/~meta@1.0/info', and an
 %% empty sequence of messages redirects to the node's default request.
+%% Returns the request that the `request' hook returns, with the result, so
+%% that the reply is encoded for that request. Before the hook has run, the
+%% request is the singleton.
 resolve_request(Req, Singleton, NodeMsg) ->
     maybe
         true ?=
             hb_opts:get(initialized, false, NodeMsg) =/= false orelse
                 cowboy_req:path(Req) == <<"/~meta@1.0/info">> orelse
-                {error, <<"Node must be initialized before use.">>},
+                {Singleton,
+                    {error, <<"Node must be initialized before use.">>}},
         Msgs =
             hb_hashpath:from(
                 hb_private:set(Singleton, <<"http-request">>, Singleton, NodeMsg),
                 requests,
                 NodeMsg
             ),
-        {ok, PreProcessedMsgs} ?=
-            resolve_hook(<<"request">>, Singleton, Msgs, NodeMsg),
+        {_, {ok, RequestRes = #{ <<"body">> := PreProcessedMsgs }}} ?=
+            {Singleton, resolve_hook(<<"request">>, Singleton, Msgs, NodeMsg)},
+        Request = hb_maps:get(<<"request">>, RequestRes, Singleton, NodeMsg),
         true ?=
             PreProcessedMsgs =/= [] orelse
-                {ok,
+                {Request, {ok,
                     #{
                         <<"status">> => 307,
                         <<"body">> => <<"Redirecting to default request.">>,
@@ -737,7 +742,7 @@ resolve_request(Req, Singleton, NodeMsg) ->
                             NodeMsg
                         )
                     }
-                },
+                }},
         % Resolve the request message without the node's key material, and
         % with `http_extra_opts' overriding the node defaults.
         HTTPOpts =
@@ -756,16 +761,23 @@ resolve_request(Req, Singleton, NodeMsg) ->
             ),
         % The result keeps its Erlang status unless the `response' hook returns
         % an error.
-        {ok, Body} ?=
-            resolve_hook(<<"response">>, Singleton, Res, get_opts(NodeMsg)),
-        {ErlStatus, Body}
+        {_, {ok, #{ <<"body">> := Body }}} ?=
+            {Request,
+                resolve_hook(
+                    <<"response">>,
+                    Request,
+                    Res,
+                    get_opts(NodeMsg)
+                )},
+        {Request, {ErlStatus, Body}}
     end.
 
-%% @doc Execute a hook from the node message upon the user's request. The
-%% invocation of the hook provides a request of the following form:
+%% @doc Execute a hook from the node message upon the user's request, and
+%% return its result. The invocation of the hook provides a request of the
+%% following form:
 %% <pre>
 %%      /path => request | response
-%%      /request => the original request singleton
+%%      /request => the request singleton
 %%      /body => parsed sequence of messages to process | the execution result
 %% </pre>
 resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
@@ -776,14 +788,14 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
         },
     ?event(hook, {resolve_hook, HookName, HookReq}),
     case hb_hook:on(HookName, HookReq, NodeMsg) of
-        {ok, #{ <<"body">> := ResponseBody }} ->
+        {ok, HookRes = #{ <<"body">> := ResponseBody }} ->
             ?event(hook,
                 {resolve_hook_success,
                     {name, HookName},
                     {response_body, ResponseBody}
                 }
             ),
-            {ok, ResponseBody};
+            {ok, HookRes};
         {error, _} = Error ->
             ?event(hook,
                 {resolve_hook_error,
@@ -2228,7 +2240,19 @@ accept_precedence_test() ->
     ).
 
 cors_get_test() ->
-    URL = start_node(),
+    % The node's request hook asks for the reply in `json@1.0'.
+    Hook =
+        fun(_, HookReq = #{ <<"request">> := Req }, _) ->
+            {ok, HookReq#{
+                <<"request">> => Req#{ <<"accept">> => <<"application/json">> }
+            }}
+        end,
+    URL =
+        start_node(#{
+            <<"on">> => #{
+                <<"request">> => #{ <<"device">> => #{ <<"request">> => Hook } }
+            }
+        }),
     % The CORS headers are headers of the HTTP reply, not keys of its message.
     {ok, 200, Headers, _} =
         hb_http_client:request(
@@ -2244,6 +2268,11 @@ cors_get_test() ->
     ?assertEqual(
         <<"*">>,
         proplists:get_value(<<"access-control-allow-origin">>, Headers)
+    ),
+    % The reply is encoded for the request that the request hook returns.
+    ?assertEqual(
+        <<"application/json">>,
+        proplists:get_value(<<"content-type">>, Headers)
     ).
 
 index_test() ->
