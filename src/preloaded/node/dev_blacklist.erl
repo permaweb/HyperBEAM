@@ -165,6 +165,7 @@ execute_provider(Provider, Opts) ->
     ?event({execute_provider, {provider, Provider}}),
     case hb_cache:ensure_loaded(Provider, Opts) of
         Bin when is_binary(Bin) -> hb_ao:resolve(#{ <<"path">> => Bin }, Opts);
+        Msg when is_map(Msg) -> hb_ao:resolve(Msg, Opts);
         Msgs when is_list(Msgs) -> hb_ao:resolve_many(Msgs, Opts)
     end.
 
@@ -445,6 +446,18 @@ basic_test() ->
                 <<"x">> => <<"ao:", SignedID1/binary>>
             }
         ]
+    ),
+    % A provider given as a message is read as well.
+    MsgProviderNode =
+        hb_http_server:start_node(
+            Opts1#{
+                <<"priv-wallet">> => ar_wallet:new(),
+                <<"blacklist-providers">> => [#{ <<"path">> => BlacklistID }]
+            }
+        ),
+    ?assertMatch(
+        {error, #{ <<"status">> := 451 }},
+        hb_http:get(MsgProviderNode, SignedID1, Opts1)
     ),
     ok.
 
