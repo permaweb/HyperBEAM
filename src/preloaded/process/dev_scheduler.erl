@@ -1568,6 +1568,19 @@ register_new_process_test_parallel() ->
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
     Base = hb_message:commit(test_process(Opts), Opts),
     ?event({test_registering_new_process, {msg, Base}}),
+    % A node with `scheduling-mode: disabled' starts no scheduler.
+    ?assertThrow(
+        {scheduling_disabled_on_node, _},
+        hb_ao:resolve(
+            Base,
+            #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => <<"schedule">>,
+                <<"body">> => Base
+            },
+            #{ <<"scheduling-mode">> => disabled }
+        )
+    ),
     ?assertMatch({ok, _},
         hb_ao:resolve(
             Base,
