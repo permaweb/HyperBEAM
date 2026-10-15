@@ -4,15 +4,12 @@
 -module(dev_json).
 -specification("../../../specs/json@1.0.md").
 -device_libraries([lib_arweave_common]).
--export([to/3, to_hint/3, from/3, commit/3, verify/3, committed/3, content_type/1]).
+-export([to/3, to_hint/3, from/3, commit/3, verify/3, committed/3]).
 -export([deserialize/3, serialize/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 -define(MAX_SAFE_INTEGER, 9007199254740991).
-
-%% @doc Return the content type for the codec.
-content_type(_) -> {ok, <<"application/json">>}.
 
 %% @doc Apply the bundle state of the delegated HTTPSig commitment.
 to_hint(Msg, Req, Opts) ->
@@ -115,7 +112,7 @@ safe_numbers(Value, _) -> Value.
 %% @doc Decode a JSON string to a message.
 -spec from(
     binary() | #{ _ => _ },
-    #{ 'accept-codec' => binary(), _ => _ },
+    #{ _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
 from(Map, _Req, _Opts) when is_map(Map) -> {ok, Map};
@@ -135,20 +132,16 @@ from(JSON, Req, Opts) ->
         ),
     HintedReq = hb_util:ok(to_hint(Structured, Req, Opts)),
     ?event(debug_json, {structured, Structured}, Opts),
-    case hb_maps:get(<<"accept-codec">>, HintedReq, undefined, Opts) of
-        <<"structured@1.0">> -> {ok, Structured};
-        _ ->
-            % Re-encode the structured message back to TABM for the caller.
-            TABM =
-                hb_message:convert(
-                    Structured,
-                    tabm,
-                    HintedReq#{ <<"device">> => <<"structured@1.0">> },
-                    ConvOpts
-                ),
-            ?event(debug_json, {tabm, TABM}, Opts),
-            {ok, TABM}
-    end.
+    % Re-encode the structured message back to TABM for the caller.
+    TABM =
+        hb_message:convert(
+            Structured,
+            tabm,
+            HintedReq#{ <<"device">> => <<"structured@1.0">> },
+            ConvOpts
+        ),
+    ?event(debug_json, {tabm, TABM}, Opts),
+    {ok, TABM}.
 
 %% @doc Route commitments through `httpsig@1.0'.
 -spec commit(#{ _ => _ }, #{ _ => _ }, map()) -> term().
@@ -176,10 +169,17 @@ committed(Msg, Req, Opts) when is_binary(Msg) ->
 committed(Msg, _Req, Opts) ->
     hb_message:committed(Msg, all, Opts).
 
-%% @doc Deserialize the JSON string found at the given path.
--spec deserialize(#{ _ => _ }, #{ target => binary(), _ => _ }, #{ _ => _ }) ->
+%% @doc Deserialize a JSON string to its message, a TABM with JSON's number and
+%% list types, or decode the JSON string found at the given path of a message.
+-spec deserialize(
+    binary() | #{ _ => _ },
+    #{ target => binary(), _ => _ },
+    #{ _ => _ }
+) ->
     {ok, #{ _ => _ }}
     | {error, #{ status := integer(), body := binary(), _ => _ }}.
+deserialize(JSON, _Req, _Opts) when is_binary(JSON) ->
+    {ok, json:decode(JSON)};
 deserialize(Base, Req, Opts) ->
     Payload = 
         hb_ao:get(

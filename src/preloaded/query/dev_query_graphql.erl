@@ -105,8 +105,8 @@ handle(_Base, RawReq, Opts) ->
             {ok, _} -> RawReq;
             error ->
                 % Parse the query, assuming that the request body is a JSON
-                % object with the necessary fields. Any other body carries
-                % no query.
+                % object with the necessary fields. Its fields are set over
+                % the keys of the request. Any other body carries no query.
                 Body = hb_maps:get(<<"body">>, RawReq, <<>>, Opts),
                 try hb_json:decode(Body) of
                     Object when is_map(Object) ->
@@ -118,7 +118,7 @@ handle(_Base, RawReq, Opts) ->
                                 #{},
                                 Opts
                             ),
-                        Decoded;
+                        hb_maps:merge(RawReq, Decoded, Opts);
                     _ -> #{}
                 catch error:_ -> #{}
                 end
@@ -401,7 +401,6 @@ test_query(Node, Query, Variables, OperationName, Opts) ->
             #{
                 <<"path">> => <<"~query@1.0/graphql">>,
                 <<"content-type">> => <<"application/json">>,
-                <<"codec-device">> => <<"json@1.0">>,
                 <<"body">> => hb_json:encode(UnencodedPayload)
             },
             Opts
@@ -504,7 +503,6 @@ lookup_with_vars_test() ->
         #{
             <<"path">> => <<"~query@1.0/graphql">>,
             <<"content-type">> => <<"application/json">>,
-            <<"codec-device">> => <<"json@1.0">>,
             <<"body">> =>
                 hb_json:encode(#{
                     <<"query">> => 
@@ -573,7 +571,6 @@ lookup_without_opname_test() ->
             #{
                 <<"path">> => <<"~query@1.0/graphql">>,
                 <<"content-type">> => <<"application/json">>,
-                <<"codec-device">> => <<"json@1.0">>,
                 <<"body">> =>
                     hb_json:encode(#{
                         <<"query">> => 

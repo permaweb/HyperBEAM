@@ -256,9 +256,14 @@ generate_new_location(Nonce, Base, OnlyCommitted, Opts) ->
     % Construct the new scheduler location message.
     DefaultCodec = hb_opts:get(location_codec, ?DEFAULT_CODEC, Opts),
     Codec =
-        case hb_maps:get(<<"require-codec">>, Base, not_found, Opts) of
+        case hb_maps:get(<<"commitment-device">>, Base, not_found, Opts) of
             not_found ->
-                hb_maps:get(<<"require-codec">>, OnlyCommitted, DefaultCodec, Opts);
+                hb_maps:get(
+                    <<"commitment-device">>,
+                    OnlyCommitted,
+                    DefaultCodec,
+                    Opts
+                );
             CodecValue ->
                 CodecValue
         end,
@@ -271,8 +276,7 @@ generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
             <<"type">> => <<"location">>,
             <<"url">> => URL,
             <<"nonce">> => Nonce,
-            <<"time-to-live">> => TTL,
-            <<"codec-device">> => Codec
+            <<"time-to-live">> => TTL
         },
     Signed = hb_message:commit(NewSchedulerLocation, Opts, Codec),
     dev_location_cache:write(Signed, Opts),
@@ -459,12 +463,18 @@ register_scheduler_test() ->
                 <<"url">> => <<"https://hyperbeam-test-ignore.com">>,
                 <<"method">> => <<"POST">>,
                 <<"nonce">> => 1,
-                <<"require-codec">> => <<"ans104@1.0">>
+                <<"commitment-device">> => <<"ans104@1.0">>
             },
             Opts
         ),
     {ok, Res} = hb_http:post(Node, Base, Opts),
-    ?assertMatch(#{ <<"url">> := Location } when is_binary(Location), Res).
+    ?assertMatch(#{ <<"url">> := Location } when is_binary(Location), Res),
+    ?assert(
+        lists:member(
+            <<"ans104@1.0">>,
+            hb_message:commitment_devices(Res, Opts)
+        )
+    ).
 
 %% @doc Test that unsigned GET calls to `node' return the same location record
 %% once one has been generated.
@@ -520,7 +530,7 @@ register_location_on_boot_test() ->
                         <<"path">> => <<"node">>,
                         <<"method">> => <<"POST">>,
                         <<"target">> => <<"self">>,
-                        <<"require-codec">> => <<"ans104@1.0">>,
+                        <<"commitment-device">> => <<"ans104@1.0">>,
                         <<"url">> => <<"https://hyperbeam-test-ignore.com">>,
                         <<"hook">> => #{
                             <<"result">> => <<"ignore">>,

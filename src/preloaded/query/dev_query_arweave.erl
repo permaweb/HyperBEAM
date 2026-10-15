@@ -467,7 +467,7 @@ indexed_l1_size(ID, Opts) ->
         no_store -> null;
         Store ->
             case hb_store_arweave:read_offset(Store, ID, Opts) of
-                {ok, #{ <<"codec-device">> := <<"tx@1.0">>,
+                {ok, #{ <<"codec">> := <<"tx@1.0">>,
                     <<"length">> := Length }} -> Length;
                 _ -> null
             end
@@ -1573,7 +1573,7 @@ annotate_offsets([ID|IDs], StoreOpts, Ordinals, Opts) ->
                         <<"id">> => ID,
                         <<"offset">> => StartOffset,
                         <<"commitment-device">> =>
-                            hb_maps:get(<<"codec-device">>, Location, <<>>, Opts),
+                            hb_maps:get(<<"codec">>, Location, <<>>, Opts),
                         <<"length">> => Length
                     }
                 };

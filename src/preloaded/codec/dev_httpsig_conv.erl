@@ -244,6 +244,15 @@ boundary(_ContentType) -> false.
 is_multipart(<<"content-type">>, <<"multipart/", _/binary>>) -> true;
 is_multipart(_Key, _Value) -> false.
 
+%% @doc Check whether a key is `content-type' and its value has the form
+%% `application/x.ao.<name>', which gives the codec of an HTTP message (see
+%% `hb_http'). A value of the form `application/<name>' is also the type of a
+%% document, such as `application/json', so it is not carried in a body part: a
+%% stored document is served as itself.
+is_codec_media_type(<<"content-type">>, Value) when is_binary(Value) ->
+    string:prefix(string:lowercase(Value), <<"application/x.ao.">>) =/= nomatch;
+is_codec_media_type(_Key, _Value) -> false.
+
 %% @doc Parse a single part of a multipart body into a TABM.
 from_body_part(InlinedKey, Part, Opts) ->
     % Extract the Headers block and Body. Only split on the FIRST double CRLF
@@ -477,6 +486,7 @@ uncovered_body_keys(TABM, Commitments, Opts) ->
         Key == <<"body">> orelse Key == InlineKey orelse
             lists:member(Key, ?RESERVED_HEADERS) orelse
             is_multipart(Key, Value) orelse
+            is_codec_media_type(Key, Value) orelse
             default_where(Value) == body
     ].
 
@@ -501,10 +511,13 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
                     % header is carried in a body part. A `multipart/'
                     % `content-type' of the message is also carried in a body
                     % part, because the decoder parses such a header for the
-                    % `boundary' of the body.
+                    % `boundary' of the body. So is a `content-type' of the
+                    % form `application/x.ao.<name>', because a receiver reads
+                    % such a header as the codec of the whole body.
                     Where =
                         case lists:member(Key, ?RESERVED_HEADERS) orelse
-                                is_multipart(Key, Value) of
+                                is_multipart(Key, Value) orelse
+                                is_codec_media_type(Key, Value) of
                             true -> #{ where => body };
                             false -> #{}
                         end,
@@ -1080,7 +1093,26 @@ multipart_content_type_test() ->
             all,
             Opts
         )
-    ).
+    ),
+    % A message's own `content-type' of the form `application/x.ao.<name>' is
+    % carried in a body part, and one of the form `application/<name>' is the
+    % `content-type' of the HTTP message.
+    ContentType =
+        fun(Type) ->
+            maps:get(
+                <<"content-type">>,
+                hb_message:convert(
+                    #{ <<"content-type">> => Type, <<"body">> => <<"{}">> },
+                    <<"httpsig@1.0">>,
+                    Opts
+                )
+            )
+        end,
+    ?assertMatch(
+        <<"multipart/form-data", _/binary>>,
+        ContentType(<<"application/x.ao.json">>)
+    ),
+    ?assertEqual(<<"application/json">>, ContentType(<<"application/json">>)).
 
 group_maps_test() ->
    Map = #{

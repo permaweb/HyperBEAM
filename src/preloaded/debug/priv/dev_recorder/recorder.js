@@ -34,7 +34,6 @@
   const clearFilterValue = "Clear";
   const hopHeaders = new Set([
     "cache-control",
-    "codec-device",
     "content-digest",
     "content-length",
     "content-type",

@@ -4,7 +4,7 @@ const { ArweaveSigner, createData } = require("@dha-team/arbundles");
 
 // Configuration
 const BUNDLER_URL = process.env.BUNDLER_URL || "http://localhost:8734";
-const ENDPOINT_PATH = process.env.ENDPOINT_PATH || "/~bundler@1.0/item?codec-device=ans104@1.0";
+const ENDPOINT_PATH = process.env.ENDPOINT_PATH || "/~bundler@1.0/item";
 const DEFAULT_WALLET = "../../hyperbeam-key.json";
 const CONCURRENT_UPLOADS = 100; // Number of parallel uploads
 
@@ -73,7 +73,7 @@ async function performanceTest(walletPath, itemCount, bytesPerItem = 0) {
         const response = await fetch(endpoint, {
           method: "POST",
           headers: {
-            "Content-Type": "application/octet-stream",
+            "Content-Type": "application/ans104",
           },
           body: item.getRaw(),
         });
@@ -150,18 +150,14 @@ if (require.main === module) {
     console.error("");
     console.error("Environment variables:");
     console.error("  BUNDLER_URL      - Gateway base URL (default: http://localhost:8734)");
-    console.error("  ENDPOINT_PATH    - Path appended to gateway (default: /~bundler@1.0/item?codec-device=ans104@1.0)");
+    console.error("  ENDPOINT_PATH    - Path appended to gateway (default: /~bundler@1.0/item)");
     console.error("");
     console.error("Examples:");
     console.error("  node upload-items.js 100");
     console.error("  node upload-items.js 100 1024");
     console.error("  node upload-items.js /path/to/wallet.json 100 1024");
     console.error("  BUNDLER_URL=https://forward.computer node upload-items.js 100");
-    console.error("  BUNDLER_URL=https://forward.computer ENDPOINT_PATH='/~bundler@1.0/tx?codec-device=ans104@1.0' node upload-items.js 1");
-    console.error("");
-    console.error("Note: when posting raw ANS-104 bytes, ENDPOINT_PATH must include");
-    console.error("      ?codec-device=ans104@1.0 — otherwise the server will reject");
-    console.error("      the body as 'unsigned-item' (no signers visible).");
+    console.error("  BUNDLER_URL=https://forward.computer ENDPOINT_PATH='/~bundler@1.0/tx' node upload-items.js 1");
     process.exit(1);
   }
 

@@ -8,8 +8,8 @@
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#accept_to_codec-2">accept_to_codec/2</a></td><td>Calculate the codec name to use for a reply given its initiating Cowboy
-request, the parsed TABM request, and the response message.</td></tr><tr><td valign="top"><a href="#add_cors_headers-2">add_cors_headers/2*</a></td><td>Add permissive CORS headers to a message, if the message has not already
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#accept_to_codec-2">accept_to_codec/2</a></td><td>Find the codec of the reply to a request from its <code>accept</code>, read as RFC
+9110 gives.</td></tr><tr><td valign="top"><a href="#add_cors_headers-2">add_cors_headers/2*</a></td><td>Add permissive CORS headers to a message, if the message has not already
 specified CORS headers.</td></tr><tr><td valign="top"><a href="#allowed_status-2">allowed_status/2*</a></td><td>Check if a status is allowed, according to the configuration.</td></tr><tr><td valign="top"><a href="#ans104_wasm_test-0">ans104_wasm_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#codec_to_content_type-2">codec_to_content_type/2*</a></td><td>Call the <code>content-type</code> key on a message with the given codec, using
 a fast-path for options that are not needed for this one-time lookup.</td></tr><tr><td valign="top"><a href="#cors_get_test-0">cors_get_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#default_codec-1">default_codec/1*</a></td><td>Return the default codec for the given options.</td></tr><tr><td valign="top"><a href="#empty_inbox-1">empty_inbox/1*</a></td><td>Empty the inbox of the current process for all messages with the given
 reference.</td></tr><tr><td valign="top"><a href="#encode_reply-3">encode_reply/3*</a></td><td>Generate the headers and body for a HTTP response message.</td></tr><tr><td valign="top"><a href="#get-2">get/2</a></td><td>Gets a URL via HTTP and returns the resulting message in deserialized
@@ -32,14 +32,14 @@ number of responses have been gathered.</td></tr><tr><td valign="top"><a href="#
 
 `accept_to_codec(TABMReq, Opts) -> any()`
 
-Calculate the codec name to use for a reply given its initiating Cowboy
-request, the parsed TABM request, and the response message. The precidence
-order for finding the codec is:
-1. The `accept-codec` field in the message
-2. The `accept` field in the request headers
-3. The default codec
-Options can be specified in mime-type format (`application/*`) or in
-AO device format (`device@1.0`).
+Find the codec of the reply to a request from its `accept`, read as RFC
+9110 gives, and the `content-type` of a reply in that codec. The media ranges
+are taken in order of preference, by q-value and then by their order, and the
+first that the node can serve gives the codec. A range of the result's own
+`content-type` gives `httpsig@1.0`, which sends the body unchanged, and a range
+that gives a codec gives that codec. Any other range, such as `*/*` and
+`text/html`, is passed over, and if no range can be served the codec is
+`httpsig@1.0`.
 
 <a name="add_cors_headers-2"></a>
 

@@ -3,15 +3,12 @@
 -module(dev_ans104).
 -specification("../../../specs/ans104@1.0.md").
 -device_libraries([lib_arweave_common]).
--export([to/3, to_hint/3, from/3, commit/3, verify/3, content_type/1]).
+-export([to/3, to_hint/3, from/3, commit/3, verify/3]).
 -export([serialize/3, deserialize/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(BASE_FIELDS, [<<"anchor">>, <<"target">>]).
-
-%% @doc Return the content type for the codec.
-content_type(_) -> {ok, <<"application/ans104">>}.
 
 %% @doc Serialize a message or TX to a binary.
 -spec serialize(binary() | #tx{} | #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->

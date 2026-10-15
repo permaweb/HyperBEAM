@@ -1255,7 +1255,6 @@ block_transaction_pages_test() ->
     Request = fun(Vars) ->
         {ok, Reply} = hb_http:post(Node, #{ <<"path">> => <<"~query@1.0/graphql">>,
             <<"content-type">> => <<"application/json">>,
-            <<"codec-device">> => <<"json@1.0">>,
             <<"body">> => hb_json:encode(#{ <<"query">> => Query,
                 <<"variables">> => Vars }) }, #{}),
         hb_json:decode(hb_maps:get(<<"body">>, Reply))

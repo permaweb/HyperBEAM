@@ -3,24 +3,55 @@
 %%% response in message form. Inbound requests and their replies are handled by
 %%% `hb_http_server'.
 %%%
-%%% We send a request message in the codec named by its `codec-device' key, or
-%%% in `httpsig@1.0' if it has none. We add `accept-bundle: true' to the
-%%% message, unless the caller has set it. The cookies of the message, from
-%%% `priv/cookie' and from its `cookie' and `set-cookie' keys, are sent in a
-%%% `cookie' header.
+%%% A message crosses HTTP in one of two forms. In the `httpsig@1.0' form, the
+%%% HTTP message is the message: its keys are the headers and the body, and its
+%%% commitments are in the `signature-input' and `signature' headers. In the
+%%% form of any other codec, the body holds the whole message, encoded by that
+%%% codec, and the `content-type' gives the codec. A media type of the type
+%%% `application' gives a device by its subtype:
 %%%
-%%% We read the response in the codec named by its `codec-device' header. If
-%%% the response has commitments, we keep only the keys that at least one of
-%%% them covers. For example, the `hashpath' of a computed response is kept
-%%% when the node's signature covers it. A response without commitments keeps
-%%% all of its keys. We add the HTTP status to the message as `status', if it
-%%% has no such key. The cookies that the response sets are placed in
-%%% `priv/cookie'. If `http-only-result' is set, as it is by default, we return
-%%% only the value of the key that the response's `ao-result' names.
+%%% <pre>
+%%%     application/x.ao.<name>.<major>.<minor>    <name>@<major>.<minor>
+%%%     application/x.ao.<name>.<major>            <name>@<major>.0
+%%%     application/x.ao.<name>                    <name>@1.0
+%%%     application/<name>                         <name>@1.0
+%%% </pre>
+%%%
+%%% For example, `application/x.ao.ans104' and `application/ans104' give
+%%% `ans104@1.0', `application/x.ao.arweave-block.2.9' gives
+%%% `arweave-block@2.9', and `application/x.ao.lua.5.3a' gives `lua@5.3a'. The
+%%% subtype of the last form is the name whole: `application/vnd.api+json'
+%%% gives `vnd.api+json@1.0'. A device is a codec if the node has it and it
+%%% exports the codec functions `to', `from', `serialize' and `deserialize', as
+%%% `json@1.0', `ans104@1.0', `tx@1.0' and `flat@1.0' do. The node calls only
+%%% these functions of a codec.
+%%%
+%%% We send a request message in the codec of the caller's `http-codec' option,
+%%% or in `httpsig@1.0' if it has none. A key of the message does not change the
+%%% codec. A request in another codec has `application/x.ao.<name>' as its
+%%% `content-type'. We add `accept-bundle: true' to the message, unless the
+%%% caller has set it. The cookies of the message, from `priv/cookie' and from
+%%% its `cookie' and `set-cookie' keys, are sent in a `cookie' header.
+%%%
+%%% We read the response as the node reads a request, if the request asked for
+%%% its codec. A response with a `signature-input' header is in `httpsig@1.0'
+%%% (RFC 9421), whatever its `content-type'. Otherwise, a `content-type' that
+%%% gives a codec means that the codec decodes the body alone, if a media range
+%%% of the request's `accept', or of the `accept' in the query of its path,
+%%% gives the same codec. Any other response is read by `httpsig@1.0', from its
+%%% headers and body: a JSON document that a server sends unasked keeps its
+%%% body as it is. If an `httpsig@1.0' response has commitments, we keep only
+%%% the keys that at least one of them covers. For example, the `hashpath' of a
+%%% computed response is kept when the node's signature covers it. A response
+%%% without commitments keeps all of its keys. We add the HTTP status to the
+%%% message as `status', if it has no such key. The cookies that the response
+%%% sets are placed in `priv/cookie'. If `http-only-result' is set, as it is by
+%%% default, we return only the value of the key in the response's `ao-result'.
 -module(hb_http).
 -export([start/0]).
 -export([get/2, get/3, post/3, post/4, request/2, request/4, request/5]).
 -export([message_to_request/2, status_code/2, cookie/4]).
+-export([codec/2, message_codec/2, media_type/1, encode/4, decode/3]).
 -export([only_result/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -104,12 +135,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
     ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {priv_message, RawMessage}}),
     Req =
         prepare_request(
-            hb_maps:get(
-                <<"codec-device">>,
-                RawMessage,
-                <<"httpsig@1.0">>,
-                Opts
-            ),
+            hb_opts:get(http_codec, <<"httpsig@1.0">>, Opts),
             Method,
             Peer,
             Path,
@@ -138,12 +164,20 @@ request(Method, Peer, Path, RawMessage, Opts) ->
                 },
                 Opts
             ),
-            request_response(Method, Peer, Path, Response, Duration, Opts);
+            request_response(
+                Method,
+                Peer,
+                Path,
+                RawMessage,
+                Response,
+                Duration,
+                Opts
+            );
         Error ->
             Error
     end.
 
-request_response(Method, Peer, Path, Response, Duration, Opts) ->
+request_response(Method, Peer, Path, Request, Response, Duration, Opts) ->
     {_ErlStatus, Status, RawHeaders, Body} = Response,
     Headers = [{hb_util:to_lower(Key), Value} || {Key, Value} <- RawHeaders],
     % Convert the set-cookie headers into a cookie message, if they are present.
@@ -199,26 +233,16 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
             {path, {string, Path}},
             {body_size, byte_size(Body)}
         }),
-    % Find the codec device from the headers, if set.
-    CodecDev =
-        hb_maps:get(
-            <<"codec-device">>,
-            NormHeaderMap,
-            <<"httpsig@1.0">>,
-            Opts
-        ),
+    % The `signature-input' and the `content-type' of the reply give its codec,
+    % if the request asked for that codec.
     {ResponseStatus, Msg} =
         outbound_result_to_message(
-            CodecDev,
+            reply_codec(NormHeaderMap, Path, Request, Opts),
             Status,
             NormHeaderMap,
             Body,
             Opts
         ),
-    % A reply keeps the keys that any of its commitments covers. The keys that
-    % no commitment covers, such as the reply's headers and the node's index
-    % page, are removed.
-    {ok, Committed} = hb_message:with_only_committed(Msg, any, Opts),
     % A reply in any codec keeps the `status' that it carries, and gets the
     % HTTP status as its `status' if it carries none, and the cookies that it
     % sets.
@@ -227,7 +251,7 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
             true ->
                 maps:merge(
                     #{ <<"status">> => hb_util:int(Status) },
-                    hb_maps:merge(Committed, MaybeSetCookie, Opts)
+                    hb_maps:merge(Msg, MaybeSetCookie, Opts)
                 );
             false -> Msg
         end,
@@ -307,60 +331,23 @@ set_link_stores(Msg, Stores) when is_list(Msg) ->
 set_link_stores(Value, _Stores) ->
     Value.
 
-%% @doc Convert an HTTP response to a message.
-outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
-    ?event(debug_http_outbound,
-        {result_is_ans104, {headers, Headers}, {body, Body}},
-        Opts
-    ),
-    try ar_bundles:deserialize(Body) of
-        Deserialized ->
-            {
-                hb_http_client:response_status_to_atom(Status),
-                hb_message:convert(
-                    Deserialized,
-                    <<"structured@1.0">>,
-                    <<"ans104@1.0">>,
-                    Opts
-                )
-            }
-    catch
-      _Class:ExceptionPattern:Stacktrace ->
-        % The response message had a `codec-device: ans104@1.0', but we
-        % failed to deserialize it, so we fallback to HTTPSig.
-        ?event(http_outbound,
-            {failed_to_deserialize_ans104_attempting_httpsig,
-                {headers, Headers},
-                {body, Body},
-                {error, ExceptionPattern},
-                {stacktrace, {trace, Stacktrace}}
-            },
-            Opts
-        ),
-        outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts)
-    end;
-outbound_result_to_message(<<"tx@1.0">>, Status, _Headers, Body, Opts) ->
-    {ok, TABM} = hb_ao:raw(<<"tx@1.0">>, <<"deserialize">>, Body, #{}, Opts),
-    {
-        hb_http_client:response_status_to_atom(Status),
-        hb_message:convert(TABM, <<"structured@1.0">>, tabm, Opts)
-    };
+%% @doc Convert an HTTP response to a message. An `httpsig@1.0' response keeps
+%% the keys that any of its commitments covers. The keys that no commitment
+%% covers, such as the reply's headers and the node's index page, are removed.
+%% A response in any other codec is the message that its body holds.
 outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts) ->
     ?event(debug_http_outbound, {result_is_httpsig, {body, Body}}, Opts),
-    {
-        hb_http_client:response_status_to_atom(Status),
-        http_response_to_httpsig(Headers, Body, Opts)
-    };
-outbound_result_to_message(Codec, Status, Headers, Body, Opts) ->
-    ?event(debug, {headers, Headers}),
-    {
-        hb_http_client:response_status_to_atom(Status),
-        hb_message:convert(
-            Body,
-            <<"structured@1.0">>,
-            Codec,
+    {ok, Committed} =
+        hb_message:with_only_committed(
+            http_response_to_httpsig(Headers, Body, Opts),
+            any,
             Opts
-        )
+        ),
+    {hb_http_client:response_status_to_atom(Status), Committed};
+outbound_result_to_message(Codec, Status, _Headers, Body, Opts) ->
+    {
+        hb_http_client:response_status_to_atom(Status),
+        decode(Codec, Body, Opts)
     }.
 
 %% @doc Convert a HTTP response to a httpsig message.
@@ -557,7 +544,9 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                 #{ headers => maps:merge(MaybeCookie, Headers), body => Body },
                 Opts
             );
-        <<"ans104@1.0">> ->
+        _ ->
+            % The body holds the whole message, encoded by the codec, and the
+            % `content-type' is the media type of the codec.
             ?event(debug_accept, {request_message, {message, Message}}),
             {ok, FilteredMessage} =
                 case hb_message:signers(Message, Opts) of
@@ -568,8 +557,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
             ReqBase#{
                 headers =>
                     MaybeCookie#{
-                        <<"codec-device">> => <<"ans104@1.0">>,
-                        <<"content-type">> => <<"application/ans104">>,
+                        <<"content-type">> => media_type(Format),
                         <<"accept-bundle">> =>
                             hb_util:bin(
                                 hb_ao:get(
@@ -580,23 +568,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                                 )
                             )
                     },
-                body =>
-                    ar_bundles:serialize(
-                        hb_message:convert(
-                            FilteredMessage,
-                            #{
-                                <<"device">> => <<"ans104@1.0">>,
-                                <<"bundle">> => true
-                            },
-                            Opts
-                        )
-                    )
-            };
-        _ ->
-            ReqBase#{
-                headers =>
-                    maps:merge(MaybeCookie, maps:without([<<"body">>], Message)),
-                body => maps:get(<<"body">>, Message, <<>>)
+                body => encode(Format, FilteredMessage, true, Opts)
             }
     end.
 
@@ -606,6 +578,126 @@ request_path(<<"//", _/binary>> = Path) ->
     <<"/", (hb_path:normalize(hb_path:to_binary(Path)))/binary>>;
 request_path(Path) ->
     hb_path:normalize(hb_path:to_binary(Path)).
+
+%% @doc Return the codec of an HTTP message from its fields. A message with a
+%% `signature-input' field is in `httpsig@1.0' (RFC 9421). Any other message is
+%% in the codec that its `content-type' gives, or in `httpsig@1.0' if the
+%% `content-type' gives no device that the node has. A device that is not a
+%% codec gives ``{error, 'not-codec'}''.
+message_codec(Fields, Opts) ->
+    case hb_maps:is_key(<<"signature-input">>, Fields, Opts) of
+        true -> {ok, <<"httpsig@1.0">>};
+        false ->
+            ContentType = hb_maps:get(<<"content-type">>, Fields, <<>>, Opts),
+            case codec(ContentType, Opts) of
+                {ok, Codec} -> {ok, Codec};
+                {error, 'not-codec'} -> {error, 'not-codec'};
+                {error, _} -> {ok, <<"httpsig@1.0">>}
+            end
+    end.
+
+%% @doc Return the codec of a reply: the codec that its fields give, if the
+%% request asked for it with a media range that gives the same codec, in its
+%% `accept' key or in the `accept' of the query of its path. Any other reply is
+%% in `httpsig@1.0', so a document that a server sends unasked, such as one of
+%% type `application/json', keeps its body as it is.
+reply_codec(Fields, Path, Request, Opts) ->
+    case message_codec(Fields, Opts) of
+        {ok, Codec} when Codec =/= <<"httpsig@1.0">> ->
+            {ok, _Parts, Query} = hb_singleton:from_path(Path),
+            Ranges =
+                lists:flatmap(
+                    fun(Asking) ->
+                        try cow_http_hd:parse_accept(
+                            hb_maps:get(<<"accept">>, Asking, <<>>, Opts)
+                        )
+                        catch error:_ -> []
+                        end
+                    end,
+                    [Request, Query]
+                ),
+            case
+                lists:any(
+                    fun({MediaRange, Quality, _}) ->
+                        Quality > 0 andalso
+                            codec(MediaRange, Opts) == {ok, Codec}
+                    end,
+                    Ranges
+                )
+            of
+                true -> Codec;
+                false -> <<"httpsig@1.0">>
+            end;
+        _ -> <<"httpsig@1.0">>
+    end.
+
+%% @doc Return the codec that a media type gives, by the forms in the module
+%% documentation. The device must be in the node's local stores, so that a
+%% media type never loads a device from a remote source, and it must export
+%% `to', `from', `serialize' and `deserialize'. A device without these
+%% functions returns ``{error, 'not-codec'}'', and a media type that gives no
+%% device that the node has returns any other error. A media type is a binary,
+%% or the `{Type, SubType, Params}' that `cow_http_hd' parses.
+codec(MediaType, Opts) ->
+    maybe
+        {ok, Name} ?= device_name(MediaType),
+        {ok, Device} ?=
+            hb_device_load:reference(Name, hb_store:scope(Opts, local)),
+        true ?=
+            lists:all(
+                fun(Key) ->
+                    hb_device:find_exported_function(#{}, Device, Key, 3, Opts)
+                        =/= not_found
+                end,
+                [to, from, serialize, deserialize]
+            ) orelse {error, 'not-codec'},
+        {ok, Name}
+    end.
+
+%% @doc Return the name of the device that a media type gives.
+device_name(MediaType) when is_binary(MediaType) ->
+    try device_name(cow_http_hd:parse_content_type(MediaType))
+    catch error:_ -> {error, not_found}
+    end;
+device_name({<<"application">>, <<"x.ao.", SubType/binary>>, _Params}) ->
+    case binary:split(SubType, <<".">>, [global]) of
+        [Name, Major, Minor] ->
+            {ok, <<Name/binary, "@", Major/binary, ".", Minor/binary>>};
+        [Name, Major] -> {ok, <<Name/binary, "@", Major/binary, ".0">>};
+        [Name] -> {ok, <<Name/binary, "@1.0">>};
+        _ -> {error, not_found}
+    end;
+device_name({<<"application">>, Name, _Params}) ->
+    {ok, <<Name/binary, "@1.0">>};
+device_name(_MediaType) ->
+    {error, not_found}.
+
+%% @doc Return the media type of a codec: `application/x.ao.<name>' for
+%% `<name>@1.0', and `application/x.ao.<name>.<version>' for any other version.
+media_type(Codec) ->
+    [Name, Version] = binary:split(Codec, <<"@">>),
+    MediaType = <<"application/x.ao.", Name/binary>>,
+    case Version of
+        <<"1.0">> -> MediaType;
+        _ -> <<MediaType/binary, ".", Version/binary>>
+    end.
+
+%% @doc Encode a message as the body of an HTTP message in a codec other than
+%% `httpsig@1.0': the codec's `to', then its `serialize' if `to' gives no
+%% binary.
+encode(Codec, Msg, Bundle, Opts) ->
+    Spec = #{ <<"device">> => Codec, <<"bundle">> => Bundle },
+    case hb_message:convert(Msg, Spec, <<"structured@1.0">>, Opts) of
+        Encoded when is_binary(Encoded) -> Encoded;
+        Encoded ->
+            hb_util:ok(hb_ao:raw(Codec, <<"serialize">>, Encoded, #{}, Opts))
+    end.
+
+%% @doc Decode the body of an HTTP message in a codec other than
+%% `httpsig@1.0'. The codec's `deserialize' gives the TABM of the message.
+decode(Codec, Body, Opts) ->
+    TABM = hb_util:ok(hb_ao:raw(Codec, <<"deserialize">>, Body, #{}, Opts)),
+    hb_message:convert(TABM, <<"structured@1.0">>, tabm, Opts).
 
 %%% Tests
 
@@ -626,6 +718,20 @@ simple_ao_resolve_unsigned_test() ->
     ?assertEqual(
         {ok, forbidden},
         post(URL, #{ <<"path">> => <<"//key2">>, <<"key2">> => forbidden }, test_opts())
+    ),
+    % A request in another codec carries no private key of the message.
+    #{ headers := Headers, body := Body } =
+        prepare_request(
+            <<"json@1.0">>,
+            <<"POST">>,
+            URL,
+            <<"//key1">>,
+            TestMsg#{ <<"priv">> => #{ <<"secret">> => <<"hidden">> } },
+            test_opts()
+        ),
+    ?assertEqual(
+        nomatch,
+        binary:match(term_to_binary({Headers, Body}), <<"hidden">>)
     ).
 
 %% @doc An empty body is preserved in signed HTTP requests and responses.
@@ -835,8 +941,7 @@ ans104_wasm_test() ->
     Msg =
         hb_message:commit(
             #{
-                <<"require-codec">> => <<"ans104@1.0">>,
-                <<"codec-device">> => <<"ans104@1.0">>,
+                <<"accept">> => <<"application/x.ao.ans104">>,
                 <<"device">> => <<"wasm-64@1.0">>,
                 <<"function">> => <<"fac">>,
                 <<"parameters">> => [3.0],
@@ -852,7 +957,7 @@ ans104_wasm_test() ->
         post(
             URL,
             Msg#{ <<"path">> => <<"//init/compute/results">> },
-            ClientOpts
+            ClientOpts#{ <<"http-codec">> => <<"ans104@1.0">> }
         )
     ).
 
@@ -884,8 +989,6 @@ nested_signed_bundle_over_http_test() ->
         hb_message:commit(
             #{
                 <<"accept-bundle">> => true,
-                <<"codec-device">> => <<"httpsig@1.0">>,
-                <<"require-codec">> => <<"httpsig@1.0">>,
                 <<"response">> => Inner
             },
             ClientOpts,

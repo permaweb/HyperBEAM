@@ -194,15 +194,15 @@ head_raw(Base, Request, Opts) ->
             case hb_store_arweave:read_index_offset(IndexStore, TXID) of
                 {ok,
                     #{
-                        <<"codec-device">> := CodecDevice,
+                        <<"codec">> := Codec,
                         <<"start">> := StartOffset,
                         <<"length">> := Length
                     }} ->
                         CodecFun =
-                            case CodecDevice of
+                            case Codec of
                                 <<"ans104@1.0">> -> fun head_raw_ans104/4;
                                 <<"tx@1.0">> -> fun head_raw_tx/4;
-                                _ -> throw({invalid_codec_device, CodecDevice})
+                                _ -> throw({'invalid-codec', Codec})
                             end,
                         CodecFun(TXID, StartOffset, Length, Opts);
                 not_found ->
@@ -1673,8 +1673,8 @@ post_tx_json_request(Server, ClientOpts) ->
         Server,
         #{
             <<"device">> => <<"arweave@2.9">>,
-            <<"path">> => <<"//tx?codec-device=tx@1.0">>,
-            <<"content-type">> => <<"application/json">>,
+            <<"path">> => <<"//tx">>,
+            <<"content-type">> => <<"application/tx">>,
             <<"body">> => Serialized
         },
         ClientOpts

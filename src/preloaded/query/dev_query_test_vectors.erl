@@ -93,7 +93,6 @@ post_graphql(Node, Query, Variables, Req, Opts) ->
             #{
                 <<"path">> => Path,
                 <<"content-type">> => <<"application/json">>,
-                <<"codec-device">> => <<"json@1.0">>,
                 <<"body">> =>
                     hb_json:encode(
                         #{
