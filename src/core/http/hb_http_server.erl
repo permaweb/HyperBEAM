@@ -109,6 +109,7 @@
 -export([set_default_opts/1, set_proc_server_id/1]).
 -export([static/3, static/4]).
 -export([start_node/0, start_node/1]).
+-export([resolve_request/3, error_status/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -683,7 +684,12 @@ handle_request(RawReq, Body, ServerID) ->
                         {req_singleton, ReqSingleton}},
                     #{}
                 ),
-                {Request, Res} = resolve_request(Req, ReqSingleton, NodeMsg),
+                {Request, Res} =
+                    resolve_request(
+                        cowboy_req:path(Req),
+                        ReqSingleton,
+                        NodeMsg
+                    ),
                 reply(Req, Request, Res, NodeMsg)
             catch
                 Type:Details:Stacktrace ->
@@ -714,11 +720,14 @@ handle_request(RawReq, Body, ServerID) ->
 %% Returns the request that the `request' hook returns, with the result, so
 %% that the reply is encoded for that request. Before the hook has run, the
 %% request is the singleton.
-resolve_request(Req, Singleton, NodeMsg) ->
+%% `Path' is the path of the request target, as the client sent it. A caller
+%% that does not receive the request through Cowboy must decode and verify the
+%% singleton before it calls this function.
+resolve_request(Path, Singleton, NodeMsg) ->
     maybe
         true ?=
             hb_opts:get(initialized, false, NodeMsg) =/= false orelse
-                cowboy_req:path(Req) == <<"/~meta@1.0/info">> orelse
+                Path == <<"/~meta@1.0/info">> orelse
                 {Singleton,
                     {error, <<"Node must be initialized before use.">>}},
         Msgs =
