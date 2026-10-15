@@ -14,7 +14,7 @@
 -spec serialize(binary() | #tx{} | #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
     {ok, binary()}.
 serialize(Msg, Req, Opts) when is_map(Msg) ->
-    serialize(to(Msg, Req, Opts), Req, Opts);
+    serialize(hb_message:convert(Msg, <<"ans104@1.0">>, Opts), Req, Opts);
 serialize(TX, _Req, _Opts) when is_record(TX, tx) ->
     {ok, ar_bundles:serialize(TX)}.
 
@@ -484,6 +484,11 @@ ao_data_key_test() ->
     Enc = hb_message:convert(Msg, <<"ans104@1.0">>, #{}),
     ?event({enc, Enc}),
     ?assertEqual(<<"Body value">>, Enc#tx.data),
+    % Serializing the message gives the binary of its item.
+    ?assertEqual(
+        {ok, ar_bundles:serialize(Enc)},
+        hb_ao:raw(<<"ans104@1.0">>, <<"serialize">>, Msg, #{}, #{})
+    ),
     Dec = hb_message:convert(Enc, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?event({dec, Dec}),
     ?assert(hb_message:verify(Dec, all, #{})),
