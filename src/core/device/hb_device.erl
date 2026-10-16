@@ -14,6 +14,7 @@
 %%% data in the their Erlang map representations.
 -define(MESSAGE_KEYS, [
     <<"index">>,
+    <<"info">>,
     <<"set">>,
     <<"set-path">>,
     <<"remove">>,

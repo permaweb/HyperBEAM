@@ -1129,6 +1129,10 @@ key_from_device_test() ->
     ?assertEqual(
         hb_ao:resolve(Msg, <<"with-commitments">>, NoCache),
         hb_ao:resolve(Msg, <<"with-commitments">>, #{})
+    ),
+    % The device answers the key `info': it is not read from the message.
+    ?assertNot(
+        hb_device:is_direct_key_access(#{ <<"info">> => 4 }, <<"info">>, #{})
     ).
 
 remove_test() ->
