@@ -56,10 +56,10 @@ For example:
 
 The hyperbeam environment implements AO-Core through the use of device modules. Each module in the base deployment is namespaced `dev_*`, for example `dev_scheduler`. Devices in hyperbeam can communicate the basic set of keys that they offer using the function exports. Each of these functions is interpreted as yielding the value for a key on a message containing that device, with the key's name being defined by its function name. Each of these functions may take one to three arguments of the following: `function(StateMessage, InputMessage, Environment)`. It must yield a result of the form `{Status, NewMessage}`, where `Status` is typically (but not necessarily) either `ok` or `error`. If a device does not offer one of the required functions (`ID` or `device`), the environment falls back to the underlying `message` device implementations. `tolowercase` is applied to all function names before execution, and `-` characters are replaced with `_` to allow for more readable device implementations.
 
-The special case `info/{0,1,2}` function may be implemented by the device, signalling environment requirements to hyperbeam. The `info` function can optionally take the `message` in question and the environment variables as arguments. It should return a map of environmental information of the following form:
+The special case `device_info/{0,1,2}` function may be implemented by the device, signalling environment requirements to hyperbeam. It is never a key of the device. The `device_info` function can optionally take the `message` in question and the environment variables as arguments. It should return a map of environmental information of the following form:
 
 ```
-	info([Message, [Env]]) -> #{
+	device_info([Message, [Env]]) -> #{
 		handler => Function
 		default => Function,
         exports => [Key]
@@ -74,7 +74,7 @@ If the `default` parameter is provided, the function will be used as the entrypo
 
 If the `handler` key is provided, all key resolution is routed through it instead of using Erlang functions.
 
-The `uses` info key may be optionally utilized to signal to the environment which keys the device -- or a specific key inside it -- needs in order to execute. `UseDefinition`s should be of the following form:
+The `uses` key of `device_info` may be optionally utilized to signal to the environment which keys the device -- or a specific key inside it -- needs in order to execute. `UseDefinition`s should be of the following form:
 
 ```
 	UseDefition :: [Key] |

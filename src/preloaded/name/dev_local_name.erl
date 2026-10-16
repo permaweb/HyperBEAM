@@ -2,7 +2,7 @@
 %%% the node message to store a local cache of its known names, and the typical
 %%% non-volatile storage of the node message to store the names long-term.
 -module(dev_local_name).
--export([info/1, lookup/3, register/3]).
+-export([device_info/1, lookup/3, register/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -10,7 +10,7 @@
 -define(DEV_CACHE, <<"local-name@1.0">>).
 
 %% @doc Export only the `lookup' and `register' functions.
-info(_Opts) ->
+device_info(_Opts) ->
     #{
         excludes => [<<"keys">>, <<"set">>],
         default => fun default_lookup/4

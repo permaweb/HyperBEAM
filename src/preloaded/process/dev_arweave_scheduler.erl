@@ -6,14 +6,14 @@
 -module(dev_arweave_scheduler).
 -implements(<<"arweave-scheduler@1.0">>).
 -device_libraries([lib_process]).
--export([info/0, router/4]).
+-export([device_info/0, router/4]).
 -export([schedule/3, next/3, slot/3, status/3, sync/3, checkpoint/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(MAX_ASSIGNMENT_QUERY_LEN, 1000).
 
-info() ->
+device_info() ->
     #{
         exports =>
             [

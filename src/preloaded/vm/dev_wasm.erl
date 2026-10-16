@@ -35,14 +35,15 @@
 %%% </pre>
 -module(dev_wasm).
 -implements(<<"wasm-64@1.0">>).
--export([info/2, init/3, compute/3, import/3, terminate/3, snapshot/3, normalize/3]).
+-export([device_info/2]).
+-export([init/3, compute/3, import/3, terminate/3, snapshot/3, normalize/3]).
 %%% API for other devices:
 -export([instance/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Export all functions aside the `instance/3' function.
-info(_Base, _Opts) ->
+device_info(_Base, _Opts) ->
     #{
         excludes => [instance]
     }.

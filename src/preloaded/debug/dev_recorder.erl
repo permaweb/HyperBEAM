@@ -8,7 +8,7 @@
 %%% `~recorder@1.0/maybe-append' is intended to be installed as an `on/event'
 %%% hook handler. It appends the hook request only while a flight is active.
 -module(dev_recorder).
--export([info/1, maybe_append/3, record/3, index/3]).
+-export([device_info/1, maybe_append/3, record/3, index/3]).
 -export([take_off/3, land/3, clear/0]).
 -include_lib("hb/include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -37,7 +37,7 @@
 ]).
 
 %% @doc Export the public event recording and viewer endpoints.
-info(_) ->
+device_info(_) ->
     #{
         exports => [
             <<"take-off">>,

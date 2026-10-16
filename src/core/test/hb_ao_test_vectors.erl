@@ -628,7 +628,7 @@ generate_device_with_keys_using_args() ->
 %% @doc Create a simple test device that implements the default handler.
 gen_default_device() ->
     #{
-        info =>
+        device_info =>
             fun() ->
                 #{
                     default =>
@@ -646,7 +646,7 @@ gen_default_device() ->
 %% @doc Create a simple test device that implements the handler key.
 gen_handler_device() ->
     #{
-        info =>
+        device_info =>
             fun() ->
                 #{
                     handler =>
@@ -952,11 +952,20 @@ deep_set_with_device_test(Opts) ->
 
 device_exports_test(Opts) ->
 	Msg = #{ <<"device">> => dev_message },
-	?assert(hb_device:is_exported(Msg, dev_message, info, Opts)),
 	?assert(hb_device:is_exported(Msg, dev_message, set, Opts)),
 	?assertEqual(
         not_found,
         hb_ao:get(<<"module_info">>, #{ <<"a">> => 1 }, Opts)
+    ),
+    % A device's `device_info' gives its options to the kernel. It is never a
+    % key of the device.
+    ?assertEqual(
+        not_found,
+        hb_ao:get(
+            <<"device-info">>,
+            #{ <<"device">> => #{ device_info => fun(_) -> #{} end } },
+            Opts
+        )
     ),
 	?assert(
         hb_device:is_exported(
@@ -967,15 +976,14 @@ device_exports_test(Opts) ->
         )
     ),
 	Dev = #{
-		info => fun() -> #{ exports => [set] } end,
+		device_info => fun() -> #{ exports => [set] } end,
 		set => fun(_, _) -> {ok, <<"SET">>} end
 	},
 	Req = #{ <<"device">> => Dev },
-	?assert(hb_device:is_exported(Req, Dev, info, Opts)),
 	?assert(hb_device:is_exported(Req, Dev, set, Opts)),
 	?assert(not hb_device:is_exported(Req, Dev, not_exported, Opts)),
     Dev2 = #{
-        info =>
+        device_info =>
             fun() ->
                 #{
                     exports => [test1, test2],
@@ -1008,7 +1016,7 @@ device_excludes_test(Opts) ->
     % sets excludes to [set], such that the message can be modified using the 
     % default handler.
     Dev = #{
-        <<"info">> =>
+        <<"device_info">> =>
             fun() ->
                 #{
                     excludes => [set],
@@ -1028,9 +1036,10 @@ device_inheritance_test(Opts) ->
     % precedence order of matching keys is correct:
     %     The local device > the inherited device > the global default device*
     % Note that we only fallback to the global device in this case because the
-    % inherited device does not specify a further `default' key in its `info'.
+    % inherited device does not specify a further `default' key in its
+    % `device_info'.
     Dev = #{
-        info =>
+        device_info =>
             fun() ->
                 #{
                     default => <<"test-device@1.0">>
@@ -1080,7 +1089,7 @@ denormalized_key_test(Opts) ->
         #{
             device =>
                 #{
-                    info =>
+                    device_info =>
                         fun() ->
                             #{
                                 exports => [<<"test-key">>]

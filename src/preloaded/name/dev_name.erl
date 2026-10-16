@@ -4,7 +4,7 @@
 %%% match the key against each resolver in turn, and return the value of the
 %%% first resolver that matches.
 -module(dev_name).
--export([info/1, request/3]).
+-export([device_info/1, request/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -13,7 +13,7 @@
 %% @doc Configure the `default' key to proxy to the `resolver/4' function.
 %% Exclude the `keys' and `set' keys from being processed by this device, as
 %% these are needed to modify the base message itself.
-info(_) ->
+device_info(_) ->
     #{
         default => fun resolve/4,
         excludes => [<<"committers">>, <<"keys">>, <<"set">>]
@@ -233,7 +233,7 @@ no_resolvers_test_parallel() ->
 device_resolver(Msg) ->
     #{
         <<"device">> => #{
-            info =>
+            device_info =>
                 fun() ->
                     #{
                         default =>

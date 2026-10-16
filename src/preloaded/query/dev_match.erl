@@ -119,7 +119,8 @@
 %%% `member' maps that maximum to `infinity'. The pipeline must supply any
 %%% known commitment device, for example with `/set&commitment-device=ans104@1.0'.
 -module(dev_match).
--export([info/0, all/3, index/3, locate/3, row/3, member/3, entry/3, key/3]).
+-export([device_info/0]).
+-export([all/3, index/3, locate/3, row/3, member/3, entry/3, key/3]).
 -export([entries/3, members/3, check/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -137,7 +138,7 @@
 
 %% @doc Default all non-message@1.0 and device keys to match a single key in the
 %% index.
-info() ->
+device_info() ->
     #{
         excludes => [<<"set">>, <<"remove">>, <<"id">>, <<"verify">>],
         default => fun match/4

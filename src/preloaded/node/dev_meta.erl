@@ -3,22 +3,14 @@
 %%% whether a request is signed by the node operator (`is-operator').
 -module(dev_meta).
 -device_libraries([lib_meta]).
--export([info/1, info/3, build/3, adopt_node_message/2]).
+-export([device_info/1, info/3, build/3, adopt_node_message/2]).
 -export([is_operator/3]).
 -export([is_operator/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Ensure that the helper function `adopt_node_message/2' is not exported.
-%% The naming of this method carefully avoids a clash with the exported `info/3'
-%% function. We would like the node information to be easily accessible via the
-%% `info' endpoint, but AO-Core also uses `info' as the name of the function
-%% that grants device information. The device call takes two or fewer arguments,
-%% so we are safe to use the name for both purposes in this case, as the user
-%% info call will match the three-argument version of the function. If in the
-%% future the `request' is added as an argument to AO-Core's internal `info'
-%% function, we will need to find a different approach.
-info(_) -> #{ exports => [<<"info">>, <<"build">>, <<"is-operator">>] }.
+device_info(_) -> #{ exports => [<<"info">>, <<"build">>, <<"is-operator">>] }.
 
 %% @doc Utility function for determining if a request is from the `operator' of
 %% the node.

@@ -144,12 +144,13 @@ find_execution(Groupname, _Opts) ->
     end.
 
 %% @doc Calculate the group name for a Base and Req pair. Uses the Base's
-%% `group' function if it is found in the `info', otherwise uses the default.
+%% `group' function if it is found in the `device_info', otherwise uses the
+%% default.
 group(Base, Req, Opts) ->
     Grouper =
         hb_maps:get(
             grouper,
-            hb_device:info(Base, Opts),
+            hb_device:device_info(Base, Opts),
             fun default_grouper/3,
             Opts
         ),
@@ -181,7 +182,7 @@ await(Worker, Base, Req, Opts) ->
     AwaitFun =
         hb_maps:get(
             await,
-            hb_device:info(Base, Opts),
+            hb_device:device_info(Base, Opts),
             fun default_await/5,
 			Opts
         ),
@@ -284,12 +285,12 @@ start_worker(GroupName, Msg, Opts) ->
     ),
     WorkerPID = spawn(
         fun() ->
-            % If the device's info contains a `worker' function we
+            % If the device's `device_info' contains a `worker' function we
             % use that instead of the default implementation.
             WorkerFun =
                 hb_maps:get(
                     worker,
-                    hb_device:info(Msg, Opts),
+                    hb_device:device_info(Msg, Opts),
                     Def = fun default_worker/3,
 					Opts
                 ),
@@ -409,7 +410,7 @@ worker_event(Group, Data, _, _, Opts) ->
 test_device() -> test_device(#{}).
 test_device(Base) ->
     #{
-        info =>
+        device_info =>
             fun() ->
                 hb_maps:merge(
                     #{

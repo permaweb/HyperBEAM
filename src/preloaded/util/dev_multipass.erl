@@ -2,11 +2,11 @@
 %%% reached. This is useful for certain types of stacks that need various
 %%% execution passes to be completed in sequence across devices.
 -module(dev_multipass).
--export([info/1]).
+-export([device_info/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-info(_M1) ->
+device_info(_M1) ->
     #{
         handler => fun handle/4
     }.

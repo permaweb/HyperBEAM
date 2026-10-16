@@ -1,6 +1,9 @@
 -include("ar.hrl").
 
 -define(HYPERBEAM_VERSION, <<"0.11">>).
+%% @doc The version of the AO runtime interface that this node implements. A
+%% device archive requires it as `requires-ao-runtime-version'.
+-define(AO_RUNTIME_VERSION, <<"0.11">>).
 -define(PRELOADED_INDEX_KEY, <<"~meta@1.0/preloaded-devices-index">>).
 
 %% @doc Macro for checking if a message is empty, ignoring its hashpath.

@@ -15,7 +15,7 @@
 -module(dev_arweave).
 -implements(<<"arweave@2.9">>).
 -device_libraries([lib_arweave_common]).
--export([info/0]).
+-export([device_info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3, block_heights/3, blocks/3, block_index/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
@@ -28,7 +28,7 @@
 
 %% @doc Route unknown keys through offset resolution first, then fall back to
 %% the message device for direct key access.
-info() ->
+device_info() ->
     #{
         excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>],
         default => fun dev_arweave_offset:get/4

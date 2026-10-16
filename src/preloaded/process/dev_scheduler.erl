@@ -17,7 +17,7 @@
 -module(dev_scheduler).
 -device_libraries([lib_process, lib_scheduler_formats]).
 %%% AO-Core API functions:
--export([info/0]).
+-export([device_info/0]).
 %%% Local scheduling functions:
 -export([schedule/3, router/4]).
 %%% CU-flow functions:
@@ -46,7 +46,7 @@ start() ->
 
 %% @doc This device uses a default_handler to route requests to the correct
 %% function.
-info() -> 
+device_info() -> 
     #{
         exports =>
             [

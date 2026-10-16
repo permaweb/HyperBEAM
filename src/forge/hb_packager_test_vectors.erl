@@ -370,6 +370,11 @@ archive_contains_ebin_and_priv_entries_test() ->
     Pkg = package_for_test(Group),
     Msg = hb_packager:impl_message(Pkg, <<"spec-id">>, #{}),
     ?assertEqual(false, maps:is_key(<<"requires-system-architecture">>, Msg)),
+    % Every implementation requires the AO runtime version that packaged it.
+    ?assertEqual(
+        ?AO_RUNTIME_VERSION,
+        maps:get(<<"requires-ao-runtime-version">>, Msg)
+    ),
     ArchPkg =
         hb_forge_seed:with_forge_bootstrap(
             #{

@@ -33,7 +33,8 @@
 %%% answered while the client waits for the issuer. Renewal replaces the live
 %%% certificate without closing established connections.
 -module(dev_tls).
--export([info/1, request/3, well_known/3, dns_resolve/3, csr/3, obtain/3]).
+-export([device_info/1]).
+-export([request/3, well_known/3, dns_resolve/3, csr/3, obtain/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -43,7 +44,7 @@
 -define(RENEW_RETRY_MS, 60 * 60 * 1000).
 
 %% @doc Expose the device keys while keeping certificate lifecycle helpers private.
-info(_) ->
+device_info(_) ->
     #{ exports => [
         <<"request">>, <<"well-known">>, <<"dns-resolve">>, <<"csr">>, <<"obtain">>
     ] }.

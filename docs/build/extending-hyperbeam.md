@@ -27,9 +27,9 @@ module — `dev_my_thing` → `my-thing@1.0`.
 %%% @doc One-paragraph description that becomes the device's
 %%% Device-Specification body. Markdown is fine.
 -module(dev_my_thing).
--export([info/1, do/3]).
+-export([device_info/1, do/3]).
 
-info(_Opts) ->
+device_info(_Opts) ->
     #{ exports => [<<"do">>] }.
 
 do(Base, Req, Opts) ->

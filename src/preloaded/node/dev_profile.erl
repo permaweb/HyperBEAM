@@ -6,12 +6,12 @@
 %%% If the `eval' function is instead directly invoked via Erlang, the first
 %%% argument may be a function to profile instead.
 -module(dev_profile).
--export([info/1, eval/1, eval/2, eval/3, eval_key/4]).
+-export([device_info/1, eval/1, eval/2, eval/3, eval_key/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 %% @doc Default to the `eval' function.
-info(_) ->
+device_info(_) ->
     #{
         excludes => [<<"committers">>, <<"keys">>, <<"set">>],
         default => fun eval_key/4

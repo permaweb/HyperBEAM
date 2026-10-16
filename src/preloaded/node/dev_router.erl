@@ -25,7 +25,7 @@
 %%% </pre>
 -module(dev_router).
 -device_libraries([lib_meta]).
--export([info/1, info/3, routes/3, route/2, route/3, preprocess/3]).
+-export([device_info/1, info/3, routes/3, route/2, route/3, preprocess/3]).
 -export([match/3, register/3]).
 -export([field_distance/2]).
 -include_lib("eunit/include/eunit.hrl").
@@ -33,7 +33,7 @@
 
 %% @doc Exported function for getting device info, controls which functions are
 %% exposed via the device API.
-info(_) -> 
+device_info(_) -> 
     #{
         exports =>
             [

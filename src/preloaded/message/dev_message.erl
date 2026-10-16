@@ -6,7 +6,7 @@
 %%% behaviour of the device when these keys are set.
 -module(dev_message).
 %%% Base AO-Core reserved keys:
--export([info/0, keys/1, keys/2]).
+-export([device_info/0, keys/1, keys/2]).
 -export([set/3, set_path/3, remove/3, get/4]).
 %%% Commitment-specific keys:
 -export([id/1, id/2, id/3]).
@@ -31,8 +31,8 @@
     <<"verify">>
 ]).
 
-%% @doc Return the info for the identity device.
-info() ->
+%% @doc Return the options of the identity device.
+device_info() ->
     #{
         default => fun dev_message:get/4
     }.

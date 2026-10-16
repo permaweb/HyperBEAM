@@ -1,7 +1,8 @@
 -module(dev_test).
 -implements(<<"test-device@1.0">>).
 -export([info/3]).
--export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
+-export([device_info/1]).
+-export([test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
 -export([index/3, load/3, from/3, to/3]).
 -export([vary_projection/3, vary_wildcard/3, vary_unspecified/3, vary_inspect/3]).
@@ -20,7 +21,7 @@
 
 %% @doc Exports a default_handler function that can be used to test the
 %% handler resolution mechanism.
-info(_) ->
+device_info(_) ->
 	#{
         <<"default">> => <<"message@1.0">>,
 		handlers => #{

@@ -42,50 +42,59 @@
 %%% <pre>
 %%%     DevMod:ExportedFunc : Key resolution functions. All are assumed to be
 %%%                           device keys (thus, present in every message that
-%%%                           uses it) unless specified by `DevMod:info()'.
+%%%                           uses it) unless specified by
+%%%                           `DevMod:device_info()'.
 %%%                           Each function takes a set of parameters
 %%%                           of the form `DevMod:KeyHandler(Base, Req, Opts)'.
 %%%                           Each of these arguments can be ommitted if not
 %%%                           needed. Non-exported functions are not assumed
 %%%                           to be device keys.
 %%%
-%%%     DevMod:info : Optional. Returns a map of options for the device. All 
-%%%                   options are optional and assumed to be the defaults if 
-%%%                   not specified. This function can accept a `Base' as 
-%%%                   an argument, allowing it to specify its functionality 
-%%%                   based on a specific message if appropriate.
+%%%     DevMod:device_info : Optional. Returns a map of options for the device.
+%%%                          All options are optional and assumed to be the
+%%%                          defaults if not specified. This function can
+%%%                          accept a `Base' as an argument, allowing it to
+%%%                          specify its functionality based on a specific
+%%%                          message if appropriate. It is never a key of the
+%%%                          device.
 %%% 
-%%%     info/exports : Overrides the export list of the Erlang module, such that
-%%%                   only the functions in this list are assumed to be device
-%%%                   keys. Defaults to all of the functions that DevMod 
-%%%                   exports in the Erlang environment.
+%%%     device_info/exports : Overrides the export list of the Erlang module,
+%%%                           such that only the functions in this list are
+%%%                           assumed to be device keys. Defaults to all of the
+%%%                           functions that DevMod exports in the Erlang
+%%%                           environment.
 %%%
-%%%     info/excludes : A list of keys that should not be resolved by the device,
-%%%                     despite being present in the Erlang module exports list.
+%%%     device_info/excludes : A list of keys that should not be resolved by the
+%%%                            device, despite being present in the Erlang
+%%%                            module exports list.
 %%% 
-%%%     info/handler : A function that should be used to handle _all_ keys for 
-%%%                    messages using the device.
+%%%     device_info/handler : A function that should be used to handle _all_
+%%%                           keys for messages using the device.
 %%% 
-%%%     info/default : A function that should be used to handle all keys that
-%%%                    are not explicitly implemented by the device. Defaults to
-%%%                    the `dev_message' device, which contains general keys for 
-%%%                    interacting with messages.
+%%%     device_info/default : A function that should be used to handle all keys
+%%%                           that are not explicitly implemented by the device.
+%%%                           Defaults to the `dev_message' device, which
+%%%                           contains general keys for interacting with
+%%%                           messages.
 %%% 
-%%%     info/default_mod : A different device module that should be used to
-%%%                    handle all keys that are not explicitly implemented
-%%%                    by the device. Defaults to the `dev_message' device.
+%%%     device_info/default_mod : A different device module that should be used
+%%%                               to handle all keys that are not explicitly
+%%%                               implemented by the device. Defaults to the
+%%%                               `dev_message' device.
 %%% 
-%%%     info/grouper : A function that returns the concurrency 'group' name for
-%%%                    an execution. Executions with the same group name will
-%%%                    be executed by sending a message to the associated process
-%%%                    and waiting for a response. This allows you to control 
-%%%                    concurrency of execution and to allow executions to share
-%%%                    in-memory state as applicable. Default: A derivation of
-%%%                    Base+Req. This means that concurrent calls for the same
-%%%                    output will lead to only a single execution.
+%%%     device_info/grouper : A function that returns the concurrency 'group'
+%%%                           name for an execution. Executions with the same
+%%%                           group name will be executed by sending a message
+%%%                           to the associated process and waiting for a
+%%%                           response. This allows you to control concurrency
+%%%                           of execution and to allow executions to share
+%%%                           in-memory state as applicable. Default: A
+%%%                           derivation of Base+Req. This means that concurrent
+%%%                           calls for the same output will lead to only a
+%%%                           single execution.
 %%% 
-%%%     info/worker : A function that should be run as the 'server' loop of
-%%%                   the executor for interactions using the device.
+%%%     device_info/worker : A function that should be run as the 'server' loop
+%%%                          of the executor for interactions using the device.
 %%% 
 %%% The HyperBEAM resolver also takes a number of runtime options that change
 %%% the way that the environment operates:

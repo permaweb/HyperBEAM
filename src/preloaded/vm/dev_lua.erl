@@ -1,7 +1,7 @@
 %%% @doc A device that calls a Lua module upon a request and returns the result.
 -module(dev_lua).
 -implements(<<"lua@5.3a">>).
--export([info/1, init/3, snapshot/3, normalize/3, functions/3]).
+-export([device_info/1, init/3, snapshot/3, normalize/3, functions/3]).
 %%% Public Utilities
 -export([encode/2, decode/2]).
 -export([pure_lua_process_benchmark/1]).
@@ -32,7 +32,7 @@
 %% resolved by calling the Lua function in the module of the same name.
 %% Additionally, we exclude the `keys', `set', `encode' and `decode' functions
 %% which are `message@1.0' core functions, and Lua public utility functions.
-info(Base) ->
+device_info(Base) ->
     #{
         default => fun compute/4,
         excludes =>

@@ -17,7 +17,7 @@
 %%%                                 if the record is valid and newer than the
 %%%                                 known nonce for the signer.
 -module(dev_location).
--export([info/0, read/2, node/3, known/3, all/3]).
+-export([device_info/0, read/2, node/3, known/3, all/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -25,7 +25,7 @@
 -define(DEFAULT_CODEC, <<"httpsig@1.0">>).
 
 %% @doc Handle all requests aside `known` with the `location/4' resolver.
-info() ->
+device_info() ->
     #{
         excludes => [
             <<"committers">>,

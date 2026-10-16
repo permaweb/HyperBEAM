@@ -78,7 +78,7 @@
 -module(dev_arweave_swap).
 -implements(<<"arweave-swap@1.0">>).
 %%% AO-Core API functions:
--export([info/0, compute/3, set/3]).
+-export([device_info/0, compute/3, set/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -98,12 +98,7 @@
 %% fail its slot and wedge the process permanently. There is no `excludes' list
 %% either, since an excluded `set' or `keys' would let `~message@1.0' replace the
 %% process's own state. `set' is therefore implemented here.
-%%
-%% `info' is deliberately arity 0. A device's `info' is always exported, and had
-%% it taken the base as an argument it would also answer the `info' key, so a
-%% transaction tagged `path: info' would replace the process state with this
-%% map.
-info() ->
+device_info() ->
     #{ default => fun router/4 }.
 
 %% @doc Apply any scheduled message, whatever it asked to be routed to.

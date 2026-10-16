@@ -26,7 +26,7 @@
 %%% commitment, or an empty binary when absent, as used by Arweave GraphQL.
 -module(dev_query).
 %%% Message matching API:
--export([info/1, only/3, all/3, base/3]).
+-export([device_info/1, only/3, all/3, base/3]).
 %%% GraphQL API:
 -export([graphql/3, has_results/3, recipient/3]).
 %%% Test setup:
@@ -43,7 +43,7 @@
         <<"method">>, <<"accept">>, <<"accept-bundle">>, <<"host">>]
 ).
 
-info(_Opts) ->
+device_info(_Opts) ->
     #{
         excludes => [<<"committers">>, <<"keys">>, <<"set">>],
         default => fun default/4

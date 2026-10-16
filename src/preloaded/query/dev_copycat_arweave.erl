@@ -696,7 +696,8 @@ index_pending(Request, IndexMode, Opts) ->
             Name = {copycat_pending, Store},
             Base = #{
                 <<"device">> => #{
-                    info => fun() -> #{ grouper => fun() -> Name end } end,
+                    device_info =>
+                        fun() -> #{ grouper => fun() -> Name end } end,
                     index =>
                         fun(_, #{ <<"request">> := Req, <<"mode">> := Mode,
                                 <<"options">> := IndexOpts }) ->

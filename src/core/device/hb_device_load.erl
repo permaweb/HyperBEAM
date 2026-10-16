@@ -520,7 +520,10 @@ trusted_signer_devices_test() ->
         trusted_signers(Ref, SpecID, NodeOpts)
     ).
 
-%% @doc Every `requires-*' key must match this machine's `system_info'.
+%% @doc Every `requires-*' key must match this machine:
+%% `requires-ao-runtime-version' must be the version of the AO runtime that
+%% this node implements, and every other key the value of the same name in its
+%% `system_info'.
 compatible(Msg, Opts) ->
     Failed =
         lists:filtermap(
@@ -531,7 +534,7 @@ compatible(Msg, Opts) ->
                             hb_ao:normalize_key(Key), new_atoms),
                     Want = hb_cache:ensure_loaded(Value, Opts),
                     case
-                        hb_ao:normalize_key(erlang:system_info(Prop))
+                        hb_ao:normalize_key(requirement(Prop))
                             == hb_ao:normalize_key(Want)
                     of
                         true -> false;
@@ -545,6 +548,24 @@ compatible(Msg, Opts) ->
         [] -> ok;
         _ -> {error, {failed_requirements, Failed}}
     end.
+
+%% @doc Return the value of a requirement on this machine.
+requirement(ao_runtime_version) -> ?AO_RUNTIME_VERSION;
+requirement(Prop) -> erlang:system_info(Prop).
+
+%% @doc An archive built for another AO runtime version is refused.
+requires_ao_runtime_version_test() ->
+    ?assertEqual(
+        ok,
+        compatible(
+            #{ <<"requires-ao-runtime-version">> => ?AO_RUNTIME_VERSION },
+            #{}
+        )
+    ),
+    ?assertMatch(
+        {error, {failed_requirements, [{ao_runtime_version, <<"0.10">>}]}},
+        compatible(#{ <<"requires-ao-runtime-version">> => <<"0.10">> }, #{})
+    ).
 
 %% @doc Loading a device memoises its modules' schemas in the shared store,
 %% where a process that never loaded the archive finds them.

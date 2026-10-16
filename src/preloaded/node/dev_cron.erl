@@ -1,12 +1,12 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([once/3, every/3, stop/3, report/3, info/1, info/3]).
+-export([once/3, every/3, stop/3, report/3, device_info/1, info/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
-info(_) -> 
+device_info(_) -> 
 	#{ default => fun handler/4, excludes => [<<"committers">>] }.
 
 -spec info(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->

@@ -16,13 +16,13 @@
 %%% path part that starts with `base:' or `request:' as a URI, so a key with
 %%% one of these prefixes must be given as a value: `source=request:key'.
 -module(dev_apply).
--export([info/1, pair/3, default/4]).
+-export([device_info/1, pair/3, default/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 %% @doc The device info. Forwards all keys aside `pair', `keys' and `set' are
 %% resolved with the `apply/4' function.
-info(_) ->
+device_info(_) ->
     #{
         excludes => [
             <<"committers">>,
