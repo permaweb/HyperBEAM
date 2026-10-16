@@ -792,8 +792,8 @@ do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) 
                 % messages. AO-Core will then simply set the device specifier
                 % and not execute a subresolve.
                 {
-                    hb_ao:set(RawMsg, <<"path">>, unset, Opts),
-                    hb_ao:set(RawAdditional, <<"path">>, unset, Opts)
+                    hb_maps:remove(<<"path">>, RawMsg, Opts),
+                    hb_maps:remove(<<"path">>, RawAdditional, Opts)
                 };
             _BasePath ->
                 % When we have a non-empty path, we merge the messages in
@@ -1037,6 +1037,30 @@ parse_explicit_message_test() ->
     ?assertEqual(
         [<<"ni:///sha-256;x&k=v~d@1.0">>, #{ <<"path">> => <<"a">> }],
         from(#{ <<"path">> => <<"/ni:%2f%2f%2fsha-256;x&k=v~d@1.0/a">> }, #{})
+    ).
+
+%% @doc Device fields are data while parsing, including on device-only steps.
+parse_device_fields_without_resolution_test() ->
+    Fields = #{ <<"device">> => <<"lua@5.3a">>, <<"value">> => <<"kept">> },
+    Opts = #{ <<"store">> => hb_test_utils:test_store(hb_store_lmdb) },
+    lists:foreach(
+        fun(Message) ->
+            ?assertEqual(
+                [
+                    {as, <<"meta@1.0">>, Fields},
+                    Fields#{ <<"path">> => <<"info">> }
+                ],
+                from(Message, Opts)
+            )
+        end,
+        [
+            Fields#{ <<"path">> => <<"/~meta@1.0/info">> },
+            <<"/~meta@1.0/info?device=lua@5.3a&value=kept">>
+        ]
+    ),
+    ?assertEqual(
+        [{as, <<"meta@1.0">>, Fields}, #{ <<"path">> => <<"info">> }],
+        from(<<"/~meta@1.0&device=lua@5.3a&value=kept/info">>, Opts)
     ).
 
 %%% `to/1' function tests
