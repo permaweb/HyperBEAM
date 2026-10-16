@@ -213,6 +213,20 @@ info_test() ->
     ?assertMatch(
         #{ <<"specification">> := SpecID, <<"implementations">> := [_ | _] },
         Implementations
+    ),
+    % `router@1.0' answers `info' through `message@1.0'.
+    ?assertMatch(
+        {ok,
+            #{ <<"device">> := <<"docs@1.0">>, <<"for">> := <<"router@1.0">> }
+        },
+        hb_http:get(
+            Node,
+            #{
+                <<"path">> => <<"/~router@1.0/info">>,
+                <<"accept">> => <<"application/json">>
+            },
+            #{}
+        )
     ).
 
 %% @doc A file of the package is given by its path, in either form, and a path

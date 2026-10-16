@@ -1,29 +1,13 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([once/3, every/3, stop/3, report/3, device_info/1, info/3]).
+-export([once/3, every/3, stop/3, report/3, device_info/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
 device_info(_) -> 
 	#{ default => fun handler/4, excludes => [<<"committers">>] }.
-
--spec info(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, #{ status := integer(), body := #{ _ => _ }, _ => _ }}.
-info(_Base, _Req, _Opts) ->
-	InfoBody = #{
-		<<"description">> => <<"Cron device for scheduling messages">>,
-		<<"version">> => <<"1.0">>,
-		<<"paths">> => #{
-			<<"info">> => <<"Get device info">>,
-			<<"once">> => <<"Schedule a one-time message">>,
-			<<"every">> => <<"Schedule a recurring message">>,
-			<<"report">> => <<"Get scheduled task status {task}">>,
-			<<"stop">> => <<"Stop a scheduled task {task}">>
-		}
-	},
-	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Default handler: Assume that the key is an interval descriptor.
 -spec handler(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().

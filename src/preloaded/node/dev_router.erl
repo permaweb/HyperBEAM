@@ -26,7 +26,7 @@
 -module(dev_router).
 -specification("../../../specs/router@1.0.md").
 -device_libraries([lib_meta]).
--export([device_info/1, info/3, routes/3, route/2, route/3, preprocess/3]).
+-export([device_info/1, routes/3, route/2, route/3, preprocess/3]).
 -export([match/3, register/3]).
 -export([field_distance/2]).
 -include_lib("eunit/include/eunit.hrl").
@@ -38,7 +38,6 @@ device_info(_) ->
     #{
         exports =>
             [
-                <<"info">>,
                 <<"routes">>,
                 <<"route">>,
                 <<"match">>,
@@ -46,50 +45,6 @@ device_info(_) ->
                 <<"preprocess">>
             ]
     }.
-
-%% @doc HTTP info response providing information about this device
--spec info(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
-info(_Base, _Req, _Opts) ->
-    InfoBody = #{
-        <<"description">> => <<"Router device for handling outbound message routing">>,
-        <<"version">> => <<"1.0">>,
-        <<"api">> => #{
-            <<"info">> => #{
-                <<"description">> => <<"Get device info">>
-            },
-            <<"routes">> => #{
-                <<"description">> => <<"Get or add routes">>,
-                <<"method">> => <<"GET or POST">>
-            },
-            <<"route">> => #{
-                <<"description">> => <<"Find a route for a message">>,
-                <<"required_params">> => #{
-                    <<"route-path">> => <<"Path to route">>
-                }
-            },
-            <<"match">> => #{
-                <<"description">> => <<"Match a message against available routes">>
-            },
-            <<"register">> => #{
-                <<"description">> => <<"Register a route with a remote router node">>,
-                <<"node-message">> => #{
-                    <<"routes">> => 
-                        [
-                            #{
-                                <<"registration-peer">> => <<"Location of the router peer">>,
-                                <<"prefix">> => <<"Prefix for the route">>,
-                                <<"price">> => <<"Price for the route">>,
-                                <<"template">> => <<"Template to match the route">>
-                            }
-                        ]
-                }
-            },
-            <<"preprocess">> => #{
-                <<"description">> => <<"Preprocess a request to check if it should be relayed">>
-            }
-        }
-    },
-    {ok, InfoBody}.
 
 %% @doc Register function that allows telling the current node to register
 %% a new route with a remote router node. This function should also be idempotent.
