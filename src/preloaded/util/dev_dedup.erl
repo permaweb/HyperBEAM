@@ -18,6 +18,7 @@
 %%% list of already seen items in memory, but at some point it will likely make
 %%% sense to drop them in the cache.
 -module(dev_dedup).
+-specification("../../../specs/dedup@1.0.md").
 -export([device_info/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").

@@ -2,6 +2,7 @@
 %%% reached. This is useful for certain types of stacks that need various
 %%% execution passes to be completed in sequence across devices.
 -module(dev_multipass).
+-specification("../../../specs/multipass@1.0.md").
 -export([device_info/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

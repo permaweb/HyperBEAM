@@ -2,6 +2,7 @@
 %%% the node message to store a local cache of its known names, and the typical
 %%% non-volatile storage of the node message to store the names long-term.
 -module(dev_local_name).
+-specification("../../../specs/local-name@1.0.md").
 -export([device_info/1, lookup/3, register/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

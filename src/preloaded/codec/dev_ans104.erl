@@ -1,6 +1,7 @@
 %%% @doc Codec for managing transformations from `ar_bundles'-style Arweave TX
 %%% records to and from TABMs.
 -module(dev_ans104).
+-specification("../../../specs/ans104@1.0.md").
 -device_libraries([lib_arweave_common]).
 -export([to/3, to_hint/3, from/3, commit/3, verify/3, content_type/1]).
 -export([serialize/3, deserialize/3]).

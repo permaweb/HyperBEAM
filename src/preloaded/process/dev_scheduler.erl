@@ -15,6 +15,7 @@
 %%% </pre>
 
 -module(dev_scheduler).
+-specification("../../../specs/scheduler@1.0.md").
 -device_libraries([lib_process, lib_scheduler_formats]).
 %%% AO-Core API functions:
 -export([device_info/0]).

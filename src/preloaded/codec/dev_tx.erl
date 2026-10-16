@@ -1,6 +1,7 @@
 %%% @doc Codec for managing transformations from `ar_tx'-style Arweave TX
 %%% records to and from TABMs.
 -module(dev_tx).
+-specification("../../../specs/tx@1.0.md").
 -device_libraries([lib_arweave_common]).
 -export([from/3, to/3, to_hint/3, commit/3, verify/3]).
 -export([serialize/3, deserialize/3]).

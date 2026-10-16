@@ -1,6 +1,7 @@
 %%% @doc A device that calls a Lua module upon a request and returns the result.
 -module(dev_lua).
 -implements(<<"lua@5.3a">>).
+-specification("../../../specs/lua@5.3a.md").
 -export([device_info/1, init/3, snapshot/3, normalize/3, functions/3]).
 %%% Public Utilities
 -export([encode/2, decode/2]).

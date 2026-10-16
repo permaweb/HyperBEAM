@@ -1,5 +1,6 @@
 %%% @doc Encode and decode data using the `zlib` standard library.
 -module(dev_gzip).
+-specification("../../../specs/gzip@1.0.md").
 -export([unzip/3, zip/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").

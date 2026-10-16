@@ -16,6 +16,7 @@
 %%% path part that starts with `base:' or `request:' as a URI, so a key with
 %%% one of these prefixes must be given as a value: `source=request:key'.
 -module(dev_apply).
+-specification("../../../specs/apply@1.0.md").
 -export([device_info/1, pair/3, default/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").

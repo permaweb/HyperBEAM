@@ -5,6 +5,7 @@
 %%% are found in this module, while the codec functions are relayed to the 
 %%% `dev_httpsig_conv' module.
 -module(dev_httpsig).
+-specification("../../../specs/httpsig@1.0.md").
 -device_libraries([lib_arweave_common]).
 %%% Codec API functions
 -export([to/3, to_hint/3, from/3]).

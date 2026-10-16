@@ -5,6 +5,7 @@
 %%% `path', `set', `remove', and `verify'. Their function comments describe the
 %%% behaviour of the device when these keys are set.
 -module(dev_message).
+-specification("../../../specs/message@1.0.md").
 %%% Base AO-Core reserved keys:
 -export([device_info/0, keys/1, keys/2]).
 -export([set/3, set_path/3, remove/3, get/4]).

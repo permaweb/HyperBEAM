@@ -24,6 +24,7 @@
 %%%                map or a path regex.
 %%% </pre>
 -module(dev_router).
+-specification("../../../specs/router@1.0.md").
 -device_libraries([lib_meta]).
 -export([device_info/1, info/3, routes/3, route/2, route/3, preprocess/3]).
 -export([match/3, register/3]).

@@ -13,6 +13,7 @@
 %%%     curl /~relay@.1.0/call?method=GET?0.path=https://www.arweave.net/
 %%% </pre>
 -module(dev_relay).
+-specification("../../../specs/relay@1.0.md").
 %%% Execute synchronous and asynchronous relay requests.
 -export([call/3, cast/3]).
 %%% Re-route requests that would be executed locally to other peers, according

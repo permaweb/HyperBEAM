@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const DEFAULT_NODE = 'http://localhost:8734';
+  const DEFAULT_NODE = window.location.origin;
   const MIN_RESULT_DELAY_MS = 480;
   const LOCAL_NODE_PATTERN = /http:\/\/localhost:8734|http:\/\/127\.0\.0\.1:8734|localhost:8734|127\.0\.0\.1:8734/g;
   const FORBIDDEN_HEADERS = new Set([
@@ -1055,7 +1055,8 @@
         method: request.method,
         headers,
         body: request.body && !['GET', 'HEAD'].includes(request.method) ? request.body : undefined,
-        mode: 'cors'
+        mode: 'cors',
+        credentials: 'omit'
       });
       const elapsed = Math.round(performance.now() - started);
       const text = await response.text();

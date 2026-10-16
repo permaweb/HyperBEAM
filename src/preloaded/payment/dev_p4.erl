@@ -33,6 +33,7 @@
 %%% the charge must be applied to the ledger, whereas the `pre' type is used to
 %%% check whether the charge would succeed before execution.
 -module(dev_p4).
+-specification("../../../specs/p4@1.0.md").
 -export([request/3, response/3, balance/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

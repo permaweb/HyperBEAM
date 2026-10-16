@@ -2,6 +2,7 @@
 %%% pushes the resulting messages to other processes. The `push'ing mechanism
 %%% continues until the there are no remaining messages to push.
 -module(dev_push).
+-specification("../../../specs/push@1.0.md").
 -device_libraries([lib_process]).
 %%% Public API
 -export([push/3]).

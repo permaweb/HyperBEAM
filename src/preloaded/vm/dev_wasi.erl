@@ -5,6 +5,7 @@
 %%% functions for accessing the filesystem as imported functions by WASM
 %%% modules.
 -module(dev_wasi).
+-specification("../../../specs/wasi@1.0.md").
 -export([init/3, compute/1, stdout/1]).
 -export([path_open/3, fd_write/3, fd_read/3, clock_time_get/3]).
 -include("include/hb.hrl").

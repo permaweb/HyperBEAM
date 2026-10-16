@@ -15,6 +15,7 @@
 %%% operator sets `metering-rates' in the node message as a map of resource name
 %%% to AO token units per resource unit.
 -module(dev_metering).
+-specification("../../../specs/metering@1.0.md").
 -export([device_info/1, estimate/3, price/3, is_active/0, consume/3]).
 
 -include_lib("eunit/include/eunit.hrl").

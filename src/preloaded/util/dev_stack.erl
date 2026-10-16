@@ -97,6 +97,7 @@
 %%% In this example, the `device' key is mutated a number of times, but the
 %%% resulting HashPath remains correct and verifiable.
 -module(dev_stack).
+-specification("../../../specs/stack@1.0.md").
 -export([device_info/2, router/4, prefix/3, input_prefix/3, output_prefix/3]).
 %%% Test exports
 -export([generate_append_device/1]).

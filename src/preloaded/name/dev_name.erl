@@ -4,6 +4,7 @@
 %%% match the key against each resolver in turn, and return the value of the
 %%% first resolver that matches.
 -module(dev_name).
+-specification("../../../specs/name@1.0.md").
 -export([device_info/1, request/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

@@ -33,6 +33,7 @@
 %%% 
 %%% For more details, see the HTTP Structured Fields (RFC-9651) specification.
 -module(dev_structured).
+-specification("../../../specs/structured@1.0.md").
 -export([to/3, from/3, commit/3, verify/3, encode_types/3, decode_types/3]).
 -export([encode_ao_types/2, decode_ao_types/2, is_list_from_ao_types/2]).
 -export([decode_value/3, encode_value/1]).

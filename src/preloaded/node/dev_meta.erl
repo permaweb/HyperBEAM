@@ -2,6 +2,7 @@
 %%% (`info'), gives the version and build of the node (`build'), and checks
 %%% whether a request is signed by the node operator (`is-operator').
 -module(dev_meta).
+-specification("../../../specs/meta@1.0.md").
 -device_libraries([lib_meta]).
 -export([device_info/1, info/3, build/3, adopt_node_message/2]).
 -export([is_operator/3]).
