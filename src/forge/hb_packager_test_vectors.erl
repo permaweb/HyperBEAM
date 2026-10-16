@@ -136,7 +136,7 @@ trusted_device_id_matches(Pkg, Opts, SpecIDs, ImplID) ->
         <<"trusted-device-signers">> => [Other],
         % No preloaded store holds the implementation, and a config file gives
         % the key lowercase.
-        <<"preloaded-store">> => undefined,
+        <<"preloaded-store">> => [],
         <<"trusted-devices">> => #{ hb_util:lowercase_key(SpecID) => ImplID }
     },
     {ok, Mod} = hb_device_load:reference(SpecID, IDOpts),

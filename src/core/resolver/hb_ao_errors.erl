@@ -148,7 +148,7 @@ format_type(
         [
             field(spec_key(Key), Field)
         ||
-            {Key, Field} <- lists:sort(maps:to_list(Keys))
+            Field = #{ <<"name">> := Key } <- lists:sort(Keys)
         ] ++ [ field(<<"_">>, Wildcard) || Wildcard =/= none ],
     case Fields of
         [] -> <<"#{}">>;
