@@ -116,6 +116,13 @@ and subtype of the range as its `content-type`: `accept: application/json` gives
 `content-type: application/json`. `ans104@1.0` and `tx@1.0` carry their own
 signature. `json@1.0` and `flat@1.0` carry every commitment in the message's
 `commitments` key.
+- A node with `force-signed` set signs the `hashpath` of a computed result,
+committing only that key. A node without `force-signed` signs it in the same
+way for a request whose `accept-signature` (RFC 9421) asks for it: a member
+with the inner list `("hashpath")` and the URI of the node's committer as its
+`keyid`. The field is a preference: the node ignores any other member, and a
+reply without a `hashpath`, such as a stored message, is sent as it is without
+the field.
 - If the reply has no `status` key, the client adds the HTTP status as
 `status`.
 - HyperBEAM's client, `hb_http`, sends a request in the codec of its caller's

@@ -74,7 +74,10 @@
 %%%    has `force-signed' set, we also sign the `hashpath' of the result,
 %%%    committing only that key. We do this only if the message that we send is
 %%%    the result of its hashpath, and the message has no `hashpath' key of its
-%%%    own.
+%%%    own. We sign the `hashpath' in the same way for a request whose
+%%%    `accept-signature' (RFC 9421) asks for it: a member with the inner list
+%%%    `("hashpath")' and the URI of the node's committer as its `keyid'. The
+%%%    field is a preference: we ignore any other member.
 %%% 5. A reply in `httpsig@1.0' sends the keys of the result as its headers and
 %%%    body, and the result's own `content-type' as its `content-type', so a
 %%%    stored page or image is served as itself. A `content-type' of the result
@@ -1171,7 +1174,7 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
 %% @doc Generate the headers and body for a HTTP response message.
 encode_reply(Status, TABMReq, RawMessage, Opts) ->
     {Codec, ContentType} = accept_to_codec(TABMReq, RawMessage, Opts),
-    Message = maybe_sign(RawMessage, Codec, Opts),
+    Message = maybe_sign(RawMessage, Codec, accept_signature(TABMReq, Opts)),
     % Verify the result while it is still in `structured@1.0' form, before it is
     % converted to the target wire codec, if paranoid mode enables http_result.
     hb_message:paranoid_verify(http_result, Message, Opts),
@@ -1321,6 +1324,33 @@ preferred_codec([{{Type, SubType, _} = MediaRange, _, _} | Rest], Own, Opts) ->
         {ok, Codec} -> {Codec, <<Type/binary, "/", SubType/binary>>};
         {error, _} -> preferred_codec(Rest, Own, Opts)
     end.
+
+%% @doc Return `Opts' with `force-signed' set if the request's
+%% `accept-signature' (RFC 9421) asks for the node's signature over the
+%% `hashpath' of the result, so that `maybe_sign/3' signs it. A member asks for
+%% it with the inner list `("hashpath")' and the URI of the node's committer as
+%% its `keyid'. The field is a preference: we ignore any other member, and a
+%% field that does not parse.
+accept_signature(#{ <<"accept-signature">> := Field }, Opts) ->
+    Members =
+        try hb_structured_fields:parse_dictionary(Field)
+        catch error:_ -> []
+        end,
+    KeyID = {<<"keyid">>, {string, hb_opts:committer(Opts)}},
+    case
+        [
+            Name
+        ||
+            {Name, {list, Keys, Params}} <- Members,
+            Keys == [{item, {string, <<"hashpath">>}, []}],
+            lists:member(KeyID, Params)
+        ]
+    of
+        [] -> Opts;
+        _ -> Opts#{ <<"force-signed">> => true }
+    end;
+accept_signature(_TABMReq, Opts) ->
+    Opts.
 
 %% @doc Convert a cowboy request to a normalized message. We first parse the
 %% `primitive' message from the request: A message (represented as an Erlang
@@ -1870,8 +1900,10 @@ maybe_sign_without_hashpath_test() ->
     ?assertNotEqual([], hb_message:signers(Signed, Opts)),
     ?assertEqual(Signed, maybe_sign(Signed, <<"httpsig@1.0">>, Opts)).
 
-%% @doc Test that unsigned responses get hashpath transport commitments.
-maybe_sign_unsigned_hashpath_test() ->
+%% @doc The node signs the `hashpath' of a result alone: if it has
+%% `force-signed' set, or for a request whose `accept-signature' asks for it. A
+%% result changed after its hashpath was attached is not signed.
+hashpath_signature_test() ->
     Wallet = ar_wallet:new(),
     Hashpath = hb_path:hashpath(<<"test-hashpath">>, #{}),
     Opts = #{ <<"force-signed">> => true, <<"priv-wallet">> => Wallet },
@@ -1895,6 +1927,22 @@ maybe_sign_unsigned_hashpath_test() ->
             maybe_sign(Changed, <<"httpsig@1.0">>, Opts),
             Opts
         )
+    ),
+    % A node without `force-signed' signs the `hashpath' of the reply to a
+    % request whose `accept-signature' asks for it.
+    {200, Headers, _} =
+        encode_reply(
+            200,
+            #{
+                <<"accept-signature">> =>
+                    <<"sig1=(\"hashpath\");keyid=\"", Signer/binary, "\"">>
+            },
+            Result,
+            Opts#{ <<"force-signed">> => false }
+        ),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(maps:get(<<"signature-input">>, Headers), Signer)
     ).
 
 %% @doc Every ingress codec verifies commitments and applies the node's
