@@ -1,8 +1,8 @@
 %%% @doc The identity device: For non-reserved keys, it simply returns a key 
 %%% from the message as it is found in the message's underlying Erlang map. 
 %%% Private keys (`priv[.*]') are not included.
-%%% Reserved keys are: `id', `commitments', `committers', `keys', `path', 
-%%% `set', `remove', and `verify'. Their function comments describe the 
+%%% Reserved keys are: `id', `commitments', `committers', `info', `keys',
+%%% `path', `set', `remove', and `verify'. Their function comments describe the
 %%% behaviour of the device when these keys are set.
 -module(dev_message).
 %%% Base AO-Core reserved keys:
@@ -13,7 +13,7 @@
 -export([commit/3, committed/3, committers/1, committers/2, committers/3, verify/3]).
 -export([with_commitments/3]).
 %%% Non-protocol enforced keys:
--export([index/3]).
+-export([index/3, info/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 -define(DEFAULT_ID_DEVICE, <<"httpsig@1.0">>).
@@ -70,6 +70,38 @@ index(Msg, Req, Opts) ->
                 },
                 Opts
             )
+    end.
+
+%% @doc Return the info of the device of a message, or of the device in the
+%% request's `for' key. The info is a message for the node's `docs-device', so
+%% a browser that requests it receives that device's page. It holds the schema
+%% of the device's module (`hb_types') and the device's signed specification.
+%% The info follows the implementation of the device that the node loads, so
+%% it is not stored. A device's own `info/3' answers in place of this function.
+-spec info(#{ device => _ }, #{ for => binary() }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _}.
+info(Base, Req, Opts) ->
+    For =
+        hb_maps:get(
+            <<"for">>,
+            Req,
+            hb_maps:get(<<"device">>, Base, <<"message@1.0">>, Opts),
+            Opts
+        ),
+    maybe
+        {ok, Module} ?= hb_device_load:reference(For, Opts),
+        {ok, Schema} ?= hb_device_load:schema(Module, Opts),
+        {ok, Spec} ?= hb_device_load:spec(For, Opts),
+        {ok,
+            #{
+                <<"device">> =>
+                    hb_opts:get(docs_device, <<"docs@1.0">>, Opts),
+                <<"for">> => For,
+                <<"schema">> => Schema,
+                <<"specification">> => Spec,
+                <<"cache-control">> => <<"no-store">>
+            }
+        }
     end.
 
 %% @doc Return the ID of a message, using the `committers' list if it exists.
@@ -1133,6 +1165,13 @@ key_from_device_test() ->
     % The device answers the key `info': it is not read from the message.
     ?assertNot(
         hb_device:is_direct_key_access(#{ <<"info">> => 4 }, <<"info">>, #{})
+    ),
+    % The `info' of a message is the info of its device, for `docs@1.0'.
+    ?assertMatch(
+        {ok,
+            #{ <<"device">> := <<"docs@1.0">>, <<"for">> := <<"message@1.0">> }
+        },
+        hb_ao:resolve(#{ <<"info">> => <<"literal">> }, <<"info">>, #{})
     ).
 
 remove_test() ->

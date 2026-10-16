@@ -507,6 +507,8 @@ raw_default_message() ->
                 }
             ],
         % default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
+        % The device of the `info' of a message, whose page a browser receives.
+        <<"docs-device">> => <<"docs@1.0">>,
         % Should we use the latest cached state of a process when computing?
         <<"process-now-from-cache">> => false,
         % Maximum age, in seconds, for `/now' to serve from the process cache.
