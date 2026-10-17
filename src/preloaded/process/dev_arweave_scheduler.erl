@@ -100,7 +100,18 @@ post_schedule(Base, Req, Opts) ->
         {ok, TX} ?= valid_transaction(Committed, Opts),
         Targets = dev_arweave_scheduler_sync:targets(TX),
         true ?= lists:member(ProcessID, Targets),
-        {ok, _} ?= dev_arweave:post_tx_header(TX, Opts),
+        {ok, _} ?=
+            hb_ao:raw(
+                <<"arweave@2.9">>,
+                <<"tx">>,
+                hb_message:with_commitments(
+                    #{ <<"commitment-device">> => <<"tx@1.0">> },
+                    Committed,
+                    Opts
+                ),
+                #{ <<"method">> => <<"POST">>, <<"target">> => <<"base">> },
+                Opts
+            ),
         {ok, _} = dev_arweave_scheduler_cache:write_header(Committed, Opts),
         {ok,
             #{
