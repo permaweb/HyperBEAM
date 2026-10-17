@@ -4,14 +4,6 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%%% The public, legacy Arweave GraphQL gateway used to exercise fallback
-%%% routing: a HyperBEAM node serves what it has locally, then the router falls
-%%% through to this endpoint for everything it does not. Kept behind macros so
-%%% the specific provider is named in exactly one place.
--define(LEGACY_GRAPHQL_ENDPOINT, <<"https://arweave-search.goldsky.com">>).
-%% A transaction resolvable via the legacy gateway but absent locally, used to
-%% prove the fallback returns remote results.
--define(LEGACY_GRAPHQL_TX, <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>).
 %% An opaque cursor in a legacy GraphQL gateway's own (non-native) format;
 %% HyperBEAM must reject it rather than misinterpret it (it is not native).
 -define(LEGACY_GRAPHQL_CURSOR,
@@ -1335,20 +1327,21 @@ transactions_query_legacy_cursor_test_parallel() ->
 transactions_query_gateway_fallback_test_() ->
     {timeout, 60, fun transactions_query_gateway_fallback/0}.
 transactions_query_gateway_fallback() ->
-    {ok, LocalNode, _LocalOpts, LocalID} = test_env_with_message(),
-    LegacyTX = ?LEGACY_GRAPHQL_TX,
+    {ok, LocalNode, _LocalOpts, _LocalID} = test_env_with_message(),
+    EarlierID = <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>,
+    LaterID = <<"HVr7EpRhlPkbwdnoXKHf25p7BPa0qJOs6C7XueLthA0">>,
     Opts = #{ <<"routes">> => [graphql_gateway_route(LocalNode)] },
     % The client only follows cursors; it has no knowledge of the route's
-    % fallback chain. Page 1 is served locally by HyperBEAM, page 2 by the
-    % legacy gateway -- the two backends' results arrive back to back.
+    % fallback chain. The local node has neither transaction, so the gateway
+    % answers both pages, and page 2 follows the gateway's own cursor.
     Pages =
         collect_graphql_pages(
             transactions_cursor_query(),
-            #{ <<"ids">> => [LocalID, LegacyTX], <<"first">> => 2 },
+            #{ <<"ids">> => [EarlierID, LaterID], <<"first">> => 1 },
             Opts
         ),
     ?assertEqual(
-        [LocalID, LegacyTX],
+        [LaterID, EarlierID],
         lists:append([transaction_ids(P, Opts) || P <- Pages])
     ),
     ?assertEqual(
@@ -1363,15 +1356,15 @@ graphql_gateway_route(LocalNode) ->
             [
                 % The local node is the fallback front: the route tells it to
                 % `force-next-page' so it always signals "there may be more",
-                % letting the (router-agnostic) client page on to the legacy
-                % gateway. The flag is injected here, not by the client.
+                % letting the (router-agnostic) client page on to the gateway.
+                % The flag is injected here, not by the client.
                 #{
                     <<"uri">> =>
                         << LocalNode/binary,
                             "~query@1.0/graphql?force-next-page=true" >>
                 },
                 #{
-                    <<"prefix">> => ?LEGACY_GRAPHQL_ENDPOINT,
+                    <<"prefix">> => <<"https://arweave.net">>,
                     <<"opts">> =>
                         #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                 }
