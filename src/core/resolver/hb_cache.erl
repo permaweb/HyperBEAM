@@ -1196,6 +1196,8 @@ apply_type_to_immediate(Value, _LinkOpts, _Opts) ->
 %% @doc Read and parse the ao-types for a given path if it is in the supplied
 %% list of subpaths, returning a map of keys and their types. Composite reads
 %% already return small inline `ao-types' values, so reuse them when present.
+%% An `ao-types' that does not parse is returned as a key of the message, and
+%% holds no types.
 read_ao_types(Path, Subpaths, Values, Store, Opts) ->
     ?event_debug({reading_ao_types, {path, Path}, {subpaths, {explicit, Subpaths}}}),
     case lists:member(<<"ao-types">>, Subpaths) of
@@ -1210,9 +1212,13 @@ read_ao_types(Path, Subpaths, Values, Store, Opts) ->
                     _ ->
                         hb_util:ok(store_read(TypesPath, Store, Opts))
                 end,
-            Types = structured_decode_types(TypesBin, Opts),
-            ?event_debug({parsed_ao_types, {types, Types}}),
-            {ok, types_to_implicit(Types), Types};
+            case structured_decode_types(TypesBin, Opts) of
+                {ok, Types} ->
+                    ?event_debug({parsed_ao_types, {types, Types}}),
+                    {ok, types_to_implicit(Types), Types};
+                {error, _} ->
+                    {ok, #{ <<"ao-types">> => TypesBin }, #{}}
+            end;
         false ->
             ?event_debug({no_ao_types_key_found, {path, Path}, {subpaths, Subpaths}}),
             {ok, #{}, #{}}
@@ -1231,16 +1237,14 @@ types_to_implicit(Types) ->
 
 %% @doc Decode the `ao-types' field through the structured device. An empty
 %% value is the `ao-types' of a message with no keys, and holds no types.
-structured_decode_types(<<>>, _Opts) -> #{};
+structured_decode_types(<<>>, _Opts) -> {ok, #{}};
 structured_decode_types(Types, Opts) ->
-    hb_util:ok(
-        hb_ao:raw(
-            <<"structured@1.0">>,
-            <<"decode-types">>,
-            Types,
-            #{},
-            Opts
-        )
+    hb_ao:raw(
+        <<"structured@1.0">>,
+        <<"decode-types">>,
+        Types,
+        #{},
+        Opts
     ).
 
 %% @doc Decode a value of the given type through the structured device.

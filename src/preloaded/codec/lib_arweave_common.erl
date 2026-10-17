@@ -146,30 +146,13 @@ anchor_field(Item, Prefix, _Opts) ->
 %% @doc Return a TABM of the raw tags of the item, including all metadata
 %% (e.g. `ao-type', `ao-data-key', etc.)
 tags(Item, Opts) ->
-    Tags = hb_ao:normalize_keys(
+    hb_ao:normalize_keys(
         deduplicating_from_list(Item#tx.tags, Opts),
         Opts
-    ),
-    ao_types(Tags, Opts).
+    ).
 
 %% @doc Normalize a tag name as `structured@1.0' normalizes a key.
 normalize_key(Key) -> hb_util:lowercase_key(hb_ao:normalize_key(Key)).
-
-%% @doc Ensure the encoded keys in the `ao-types' field are lowercased and
-%% normalized like the other keys in the tags field, and that the field is
-%% encoded as `structured@1.0' writes it.
-ao_types(#{ <<"ao-types">> := AoTypes } = Tags, Opts) ->
-    {ok, EncodedAOTypes} =
-        hb_ao:raw(
-            <<"structured@1.0">>,
-            <<"encode-types">>,
-            decode_types(AoTypes, Opts),
-            #{},
-            Opts
-        ),
-    Tags#{ <<"ao-types">> := EncodedAOTypes };
-ao_types(Tags, _Opts) ->
-    Tags.
 
 %% @doc Return a TABM of the keys and values found in the data field of the
 %% item.

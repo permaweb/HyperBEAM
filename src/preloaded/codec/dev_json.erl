@@ -84,9 +84,12 @@ safe_numbers(List, Opts) when is_list(List) ->
         false -> [safe_numbers(V, Opts) || V <- List]
     end;
 safe_numbers(Map, Opts) when is_map(Map) ->
-    {ok, Types} = hb_ao:raw(
-        <<"structured@1.0">>, <<"decode-types">>, Map, #{}, Opts
-    ),
+    % An `ao-types' that does not parse holds no types.
+    Types =
+        hb_util:ok_or(
+            hb_ao:raw(<<"structured@1.0">>, <<"decode-types">>, Map, #{}, Opts),
+            #{}
+        ),
     {Values, NewTypes} = maps:fold(
         fun(Key, Value, {Acc, AccTypes}) ->
             NextTypes =

@@ -267,8 +267,14 @@ decode(List, Links, Opts) when is_list(List) ->
     {ok, [ hb_util:ok(decode(Value, Links, Opts)) || Value <- List ]};
 decode(TABM0, Links, Opts) when is_map(TABM0) ->
     % `ao-types' names keys, so its names are lowercased as the keys are, and
-    % two names of one key are refused.
-    AOTypes = decode_ao_types(TABM0, Opts),
+    % two names of one key are refused. An `ao-types' that does not parse is
+    % kept as a key of the message, and no types are applied.
+    {AOTypes, TABM1} =
+        case decode_types(TABM0, #{}, Opts) of
+            {ok, Parsed} ->
+                {Parsed, maps:remove(<<"ao-types">>, decode_keys(TABM0))};
+            {error, _} -> {#{}, decode_keys(TABM0)}
+        end,
     Types =
         maps:from_list(
             [
@@ -278,7 +284,6 @@ decode(TABM0, Links, Opts) when is_map(TABM0) ->
             ]
         ),
     true = map_size(Types) == map_size(AOTypes),
-    TABM1 = decode_keys(TABM0),
     % 1. Remove 'ao-types' field
     % 2. Decode the value of each key that `ao-types' names, which holds a
     %    binary, and the other values that are links;
@@ -291,7 +296,7 @@ decode(TABM0, Links, Opts) when is_map(TABM0) ->
                     #{ Key := Encoded } = Acc,
                     Acc#{ Key := decode_value(Type, Encoded) }
             end,
-            maps:remove(<<"ao-types">>, TABM1),
+            TABM1,
             Types
         ),
     % The fold starts from the TABM, so a key that needs no decoding is not
@@ -627,9 +632,19 @@ malformed_types_return_error_test() ->
                 [Msg, #{ <<"nested">> => Msg }, [Msg]]
             )
         end,
+        [<<"float=(\"a\")">>, <<"integer=(\"a\")">>]
+    ),
+    % An `ao-types' that does not parse, such as `a="integer"', is kept as a
+    % key of the message, and no types are applied.
+    lists:foreach(
+        fun(Types) ->
+            Msg = #{ <<"ao-types">> => Types, <<"a">> => <<"text">> },
+            ?assertEqual({ok, Msg}, hb_ao:raw(
+                <<"structured@1.0">>, <<"to">>, Msg, #{}, #{}
+            ))
+        end,
         [<<"a=1.2345">>, <<"a=1">>, <<"a=?1">>,
-            <<"unknown-type=(\"a\")">>, <<"float=(\"a\")">>,
-            <<"integer=(\"a\")">>]
+            <<"unknown-type=(\"a\")">>, <<"a=\"integer\"">>]
     ),
     % `ao-types' in an encoding that `from/3' does not write: empty, a member
     % for each key, keys or types out of order, a key of two types, a space.

@@ -2148,7 +2148,7 @@ pending_range_isolates_bad_child_test() ->
         hb_store:scope(Opts, local))),
     % An item whose `ao-types' its codec refuses is skipped alone.
     Refused = ar_bundles:sign_item(
-        #tx{ tags = [{<<"ao-types">>, <<"a=\"integer\"">>}] }, ar_wallet:new()),
+        #tx{ tags = [{<<"ao-types">>, <<"integer=(\"a\")">>}] }, ar_wallet:new()),
     {undefined, Bundle} = ar_bundles:serialize_bundle(list, [Refused, Good], false),
     ?assertEqual({ok, 1}, index_full_bundle_bytes(Bundle, 0, full,
         hb_store_arweave:store_from_opts(Opts), Opts)).

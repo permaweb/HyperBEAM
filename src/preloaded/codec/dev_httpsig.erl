@@ -610,9 +610,13 @@ input_keys(RawInputs) ->
 %% its message is a list.
 with_types(Values, Keys, #{ <<"ao-types">> := Types }, Opts) ->
     % Unsigned IDs run this function, so `structured@1.0' is called raw: a
-    % resolution would read the cache and compute IDs.
-    {ok, AllTypes} =
-        hb_ao:raw(<<"structured@1.0">>, <<"decode-types">>, Types, #{}, Opts),
+    % resolution would read the cache and compute IDs. An `ao-types' that does
+    % not parse holds no types.
+    AllTypes =
+        hb_util:ok_or(
+            hb_ao:raw(<<"structured@1.0">>, <<"decode-types">>, Types, #{}, Opts),
+            #{}
+        ),
     case maps:with([<<".">> | Keys], AllTypes) of
         NoTypes when map_size(NoTypes) =:= 0 -> Values;
         AllTypes -> Values#{ <<"ao-types">> => Types };
