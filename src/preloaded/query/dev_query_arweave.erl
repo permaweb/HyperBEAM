@@ -102,6 +102,7 @@
 %%% Other unsupported fields may return a placeholder or a GraphQL type error.
 %%% Schema acceptance does not imply filter support.
 -module(dev_query_arweave).
+-device_libraries([lib_arweave_common]).
 %%% AO-Core API:
 -export([query/4]).
 -include_lib("eunit/include/eunit.hrl").
