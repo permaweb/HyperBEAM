@@ -1238,7 +1238,7 @@ block_cache_refresh_test_() ->
             end
         end}.
 
-unprocessable_header_indexing_test_() ->
+unparseable_types_header_indexing_test_() ->
     {timeout, 60,
         fun() ->
             Store = hb_test_utils:test_store(hb_store_volatile),
@@ -1250,19 +1250,21 @@ unprocessable_header_indexing_test_() ->
                 <<"arweave-scheduler-fetch-attempts">> => 1
             },
             try
+                % Each header's `ao-types' is `from-process="integer"', which
+                % does not parse. The header is read with no types applied, and
+                % its target is indexed.
                 lists:foreach(
                     fun(TXID) ->
-                        ?assertEqual({ok, []}, index_transaction(1, 0, TXID, Opts))
+                        ?assertMatch(
+                            {ok, [_ | _]},
+                            index_transaction(1, 0, TXID, Opts)
+                        )
                     end,
                     [
                         <<"gbNWU2YAM9N8sxx4CGtOcmBcwgk7h_o7zgHthnP9GW0">>,
-                        <<"lZhsB-RXx5IP04sX17LlsfbGAX-FZJ19q-iKv41gbQg">>
+                        <<"lZhsB-RXx5IP04sX17LlsfbGAX-FZJ19q-iKv41gbQg">>,
+                        <<"dZ048pvZ1Osx8Kqi90uah-z1TF7GI_1I-UGt_ujpHow">>
                     ]
-                ),
-                ?assertMatch(
-                    {ok, [_ | _]},
-                    index_transaction(1, 0,
-                        <<"dZ048pvZ1Osx8Kqi90uah-z1TF7GI_1I-UGt_ujpHow">>, Opts)
                 ),
                 ?assertEqual(
                     {error, not_found},
