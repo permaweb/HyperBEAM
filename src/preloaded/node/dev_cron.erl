@@ -59,7 +59,7 @@ once_worker(Path, Req, Opts) ->
 		Class:Reason:Stacktrace ->
 			?event(
                 cron_error,
-                {cron_every_worker_error,
+                {cron_once_worker_error,
                     {path, Path},
                     {error, Class, Reason, {trace, Stacktrace}}
                 }
@@ -149,7 +149,7 @@ stop(_Base, Req, Opts) ->
 						<<"cache-control">> => [<<"no-store">>],
 						<<"body">> => #{
 							<<"message">> => <<"Task stopped successfully">>,
-							<<"task_id">> => TaskID
+							<<"task-id">> => TaskID
 						}
 					}};
 				undefined ->
@@ -328,7 +328,11 @@ report_every_test() ->
 		hb_http:get(Node, ReportPath, #{})
 	),
 	EveryStopPath = <<"/~cron@1.0/stop=", CronTaskID/binary>>,
-	{ok, _EveryStopResult} = hb_http:get(Node, EveryStopPath, #{}),
+	% The stop reply holds the task's ID under `task-id', as the report does.
+	?assertMatch(
+		{ok, #{<<"body">> := #{<<"task-id">> := CronTaskID}}},
+		hb_http:get(Node, EveryStopPath, #{})
+	),
 	?assertMatch(
 		{ok, #{<<"task-id">> := CronTaskID, <<"active">> := false}},
 		hb_http:get(Node, ReportPath, #{})
