@@ -112,6 +112,9 @@
 %%%       that it identifies. A URI with a device is the message that the
 %%%       device is applied to. With `=' or `&key=value', a key that starts
 %%%       with a URI scheme is read as any other key.</li>
+%%%   <li>A key that is a URI in host form (see `hb_uri'): `uri-', a scheme,
+%%%       `-' and the rest, all in lowercase letters, digits and `-', is read
+%%%       as any other URI.</li>
 %%%   <li>The query of a path starts at the first `?' that is not inside a
 %%%       group.</li>
 %%%   <li>Claims are only read at the end of a part, in the order that the
@@ -1014,6 +1017,11 @@ parse_explicit_message_test() ->
     ?assertEqual(
         [{as, <<"d@1.0">>, <<"ni:///sha-256;x">>}, #{ <<"path">> => <<"a">> }],
         from(<<"/ni:%2f%2f%2fsha-256;x~d@1.0/a">>, #{})
+    ),
+    % A URI in host form is a URI too.
+    ?assertEqual(
+        [<<"uri-did-ar-x">>, #{ <<"path">> => <<"a">> }],
+        from(<<"/uri-did-ar-x/a">>, #{})
     ).
 
 %% @doc Device fields are data while parsing, including on device-only steps.
