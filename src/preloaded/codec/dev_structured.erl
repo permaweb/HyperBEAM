@@ -66,9 +66,12 @@ verify(Msg, Req, Opts) ->
     hb_ao:raw(<<"httpsig@1.0">>, <<"verify">>, Msg, Req, Opts).
 
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
+%% An integer whose magnitude is greater than the request's `max-integer' is
+%% encoded with its type, as a value of a type in `encode-types' is.
 -spec from(
     binary() | [_] | #{ _ => _ },
-    #{ 'encode-types' => [binary()], bundle => boolean(), _ => _ },
+    #{ 'encode-types' => [binary()], 'max-integer' => integer(),
+        bundle => boolean(), _ => _ },
     #{ _ => _ }
 ) -> {ok, binary() | [_] | #{ _ => _ }}.
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
@@ -120,6 +123,7 @@ from(Msg, Req, Opts) when is_map(Msg) ->
     NormKeysMap = hb_ao:normalize_keys(NormLinks, Opts),
     EncodeTypes = find_encode_types(HintedReq, Opts),
     EncodeBinaries = lists:member(<<"binary">>, EncodeTypes),
+    MaxInteger = hb_maps:get(<<"max-integer">>, HintedReq, infinity, Opts),
     {Types, Values} = lists:foldl(
         fun (Key, {Types, Values}) ->
             case hb_maps:find(Key, NormKeysMap, Opts) of
@@ -143,7 +147,7 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                         orelse is_binary(Value) ->
                     BinKey = hb_ao:normalize_key(Key),
                     ?event_debug({encode_value, Value}),
-                    case maybe_encode_value(Value, EncodeTypes) of
+                    case maybe_encode_value(Value, EncodeTypes, MaxInteger) of
                         {Type, BinValue} ->
                             {
                                 [{BinKey, Type} | Types],
@@ -496,9 +500,13 @@ is_list_from_ao_types(Types, _Opts) ->
         _ -> false
     end.
 
-%% @doc Encode a value if it is in the list of supported types. A binary that
-%% is UTF-8 text is not encoded.
-maybe_encode_value(Value, EncodeTypes) ->
+%% @doc Encode a value if it is in the list of supported types, or if it is an
+%% integer whose magnitude is greater than `MaxInteger'. Every integer is below
+%% `infinity', the default. A binary that is UTF-8 text is not encoded.
+maybe_encode_value(Value, _EncodeTypes, MaxInteger)
+        when is_integer(Value), abs(Value) > MaxInteger ->
+    encode_value(Value);
+maybe_encode_value(Value, EncodeTypes, _MaxInteger) ->
     case lists:member(type(Value), EncodeTypes) andalso not is_text(Value) of
         true -> encode_value(Value);
         false -> skip
