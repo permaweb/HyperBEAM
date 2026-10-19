@@ -50,13 +50,10 @@ normalize_value(Key, V, Mode, Opts) when is_map(V) or is_list(V) ->
     % The value is a submessage that we have in local memory.
     % We must offload it such that it is cached, and
     % referenced by a link.
-    % We start by normalizing the child message, generating
-    % its IDs by proxy. The cache writes the child as given
-    % and offloads its own submessages, so this pass only
-    % derives the ID.
-    NormChild = normalize(V, discard, Opts),
-    % Generate the ID of the normalized child message.
-    ID = hb_message:id(NormChild, all, Opts),
+    % Generate the ID of the child message as it is held, with its own
+    % submessages: `hb_message:id/3' normalizes them. The cache writes the
+    % child as given and offloads its own submessages.
+    ID = hb_message:id(V, all, Opts),
     % If we are in `offload' mode, we write the message to the
     % cache. If we are in `discard' mode, we simply drop the
     % nested message.

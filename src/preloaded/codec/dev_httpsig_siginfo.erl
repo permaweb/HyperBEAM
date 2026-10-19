@@ -355,9 +355,18 @@ decode_param(Bin) ->
 %% lists as they are, in order and percent-encoded: those devices verify them.
 to_siginfo_keys(Msg, Commitment = #{
         <<"commitment-device">> := <<"httpsig@1.0">> }, Opts) ->
+    % The commitment is encoded over the keys of the message that it lists.
+    Keys =
+        lists:map(
+            fun hb_ao:normalize_key/1,
+            hb_util:message_to_ordered_list(
+                maps:get(<<"committed">>, Commitment, []),
+                Opts
+            )
+        ),
     {ok, _EncMsg, EncComm, _} =
         dev_httpsig:normalize_for_encoding(
-            linkify(Msg, Commitment, Opts),
+            maps:with(Keys, linkify(Msg, Commitment, Opts)),
             Commitment,
             Opts
         ),

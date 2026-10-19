@@ -392,28 +392,11 @@ to_hint(Msg, Req, Opts) ->
     end.
 
 %% @doc Derive the set of keys to commit to from a `commit` request and a 
-%% base message.
+%% base message: the keys that the request lists, or every key of the message.
 keys_to_commit(_Base, #{ <<"committed">> := Explicit}, _Opts) ->
-    % Case 1: Explicitly provided keys to commit.
     hb_util:list_to_numbered_message(Explicit);
-keys_to_commit(Base = #{ <<"commitments">> := Commitments }, _Req, Opts)
-        when ?IS_EMPTY_MESSAGE(Commitments) ->
-    default_keys_to_commit(Base, Opts);
-keys_to_commit(Base, _Req, Opts) when not is_map_key(<<"commitments">>, Base) ->
-    default_keys_to_commit(Base, Opts);
 keys_to_commit(Base, _Req, Opts) ->
-    % Extract the set of committed keys from the message.
-    case hb_message:committed(Base, #{ <<"committers">> => <<"all">> }, opts(Opts)) of
-        [] ->
-            % Case 3: Default to all keys in the TABM-encoded message, aside
-            % metadata.
-            default_keys_to_commit(Base, Opts);
-        Keys ->
-            % Case 2: Replicate the raw keys that the existing commitments have
-            % used. This leads to a message whose commitments can be 'stacked'
-            % and represented together in HTTPSig format.
-            hb_util:list_to_numbered_message(Keys)
-    end.
+    default_keys_to_commit(Base, Opts).
 
 default_keys_to_commit(Base, Opts) ->
     hb_util:list_to_numbered_message(
@@ -443,7 +426,8 @@ add_content_digest(Msg, _Opts) ->
 %% normalized for encoding. The components of the signature follow the order
 %% of the keys that the commitment lists. When `Ordered' is false, as for a
 %% commitment made without a `committed' list in its request, they follow the
-%% order of the keys of the encoded message.
+%% order of the keys of the encoded message. Every key of the message is
+%% encoded: the message holds the keys of the commitment alone.
 -spec normalize_for_encoding(
     #{ _ => _ },
     #{ committed => [_], _ => _ },
@@ -454,8 +438,6 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
 normalize_for_encoding(Msg, Commitment, Ordered, Opts) ->
     % Extract the requested keys to include in the signature base.
     RawInputs = committed_keys(Commitment, Opts),
-    Inputs = input_keys(RawInputs),
-    ?event_debug({inputs, {list, Inputs}}),
     % A commitment is over every key it lists. A committed key that the
     % message lacks cannot be left out of the signature base silently: the
     % commitment would then be encoded over a message that its signature does
@@ -471,21 +453,10 @@ normalize_for_encoding(Msg, Commitment, Ordered, Opts) ->
                 }
             )
     end,
-    % Filter the message to the requested keys and their types, then encode it.
-    MsgWithOnlyInputs =
-        with_types(
-            maps:with(
-                Inputs,
-                Msg
-            ),
-            Inputs,
-            Msg,
-            Opts
-        ),
-    ?event_debug({msg_with_only_inputs, {priv_msg, maps:without([<<"commitments">>], MsgWithOnlyInputs)}}),
+    % Encode the message without its commitments.
     {ok, EncodedWithSigInfo} =
         to(
-            maps:without([<<"commitments">>], MsgWithOnlyInputs),
+            maps:without([<<"commitments">>], Msg),
             #{
                 <<"bundle">> =>
                     hb_util:atom(maps:get(<<"bundle">>, Commitment, false))
@@ -530,7 +501,7 @@ normalize_for_encoding(Msg, Commitment, Ordered, Opts) ->
                 Key =:= <<"content-digest">> orelse
                     not key_present(Key, Encoded) orelse
                     (Key =:= <<"content-type">> andalso
-                        maps:get(Key, MsgWithOnlyInputs, undefined) =/=
+                        maps:get(Key, Msg, undefined) =/=
                             maps:get(Key, Encoded, undefined))
             end,
             RawInputs
@@ -548,7 +519,7 @@ normalize_for_encoding(Msg, Commitment, Ordered, Opts) ->
         ),
     ?event_debug(debug_httpsig,
         {normalized_for_encoding,
-            {raw_inputs, Inputs},
+            {raw_inputs, RawInputs},
             {inputs_for_encoding, Components},
             {final_for_commitment_message, KeysForCommitment},
             {encoded_message, Encoded}
@@ -603,36 +574,6 @@ committed_keys(Commitment, Opts) ->
 %% against the keys of the message.
 input_keys(RawInputs) ->
     lists:map(fun hb_ao:normalize_key/1, RawInputs).
-
-%% @doc The committed values with the message's `ao-types' entries for their
-%% keys and for `.', which marks the message as a list. Whether or not a
-%% commitment lists `ao-types', it covers the types of its values and whether
-%% its message is a list.
-with_types(Values, Keys, #{ <<"ao-types">> := Types }, Opts) ->
-    % Unsigned IDs run this function, so `structured@1.0' is called raw: a
-    % resolution would read the cache and compute IDs. An `ao-types' that does
-    % not parse holds no types.
-    AllTypes =
-        hb_util:ok_or(
-            hb_ao:raw(<<"structured@1.0">>, <<"decode-types">>, Types, #{}, Opts),
-            #{}
-        ),
-    case maps:with([<<".">> | Keys], AllTypes) of
-        NoTypes when map_size(NoTypes) =:= 0 -> Values;
-        AllTypes -> Values#{ <<"ao-types">> => Types };
-        CommittedTypes ->
-            {ok, EncodedTypes} =
-                hb_ao:raw(
-                    <<"structured@1.0">>,
-                    <<"encode-types">>,
-                    CommittedTypes,
-                    #{},
-                    Opts
-                ),
-            Values#{ <<"ao-types">> => EncodedTypes }
-    end;
-with_types(Values, _Keys, _Msg, _Opts) ->
-    Values.
 
 %% @doc The keys a commitment lists that the message does not carry.
 missing_keys(Msg, Commitment, Opts) ->
@@ -966,6 +907,8 @@ committed_id_test() ->
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
     Signed = hb_message:commit(Msg, Opts),
     ?assert(hb_message:verify(Signed, all, Opts)),
+    % The type of `basic' is committed: as an atom, it does not verify.
+    ?assertNot(hb_message:verify(Signed#{ <<"basic">> => value }, all, Opts)),
     ?event_debug({signed_msg, Signed}),
     UnsignedID = hb_message:id(Signed, none),
     SignedID = hb_message:id(Signed, all),
@@ -975,11 +918,15 @@ committed_id_test() ->
     % key that is the escaped form of one of them.
     Committed =
         hb_message:commit(
-            #{ <<"a b">> => <<"1">>, <<"a%20b">> => <<"2">> },
+            #{ <<"a b">> => 1, <<"a%20b">> => <<"2">> },
             Opts,
             #{ <<"committed">> => [<<"a b">>] }
         ),
-    ?assert(hb_message:verify(Committed#{ <<"a%20b">> => <<"3">> }, all, Opts)).
+    ?assert(hb_message:verify(Committed#{ <<"a%20b">> => <<"3">> }, all, Opts)),
+    % The type of `a b' is committed: as a binary, it does not verify.
+    ?assertNot(
+        hb_message:verify(Committed#{ <<"a b">> => <<"1">> }, all, Opts)
+    ).
 
 commit_secret_key_test() ->
     Msg = #{ <<"basic">> => <<"value">> },

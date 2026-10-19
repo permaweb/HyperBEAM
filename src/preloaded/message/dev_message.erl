@@ -291,7 +291,9 @@ committers(_, _, _) ->
 
 %% @doc Commit to a message, using the `commitment-device' key to specify the
 %% device that should be used to commit to the message. If the key is not set,
-%% the default device (`httpsig@1.0') is used.
+%% the default device (`httpsig@1.0') is used. A request with a `committed'
+%% list commits those keys of the message; a request without one commits every
+%% key.
 -spec commit(
     #{ _ => _ },
     #{ 'commitment-device' => binary(), type => binary(),
@@ -331,9 +333,21 @@ commit(Self, Req, Opts) ->
             Req#{ <<"device">> => AttDev },
             CommitOpts
         ),
+    % A commitment is made over the keys that the request lists: the device
+    % is given the message with those keys alone, as `verify/3' gives it.
+    Covered =
+        case hb_maps:find(<<"committed">>, Req, Opts) of
+            {ok, _} ->
+                hb_maps:with(
+                    [<<"commitments">>, <<"priv">> | committed_keys(Req, Opts)],
+                    Base,
+                    Opts
+                );
+            error -> Base
+        end,
     Loaded =
         ensure_commitments_loaded(
-            hb_message:convert(Base, tabm, SourceSpec, CommitOpts),
+            hb_message:convert(Covered, tabm, SourceSpec, CommitOpts),
             Opts
         ),
     {ok, Committed} =
