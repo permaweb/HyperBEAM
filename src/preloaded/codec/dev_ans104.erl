@@ -164,10 +164,12 @@ do_from(RawTX, Req, Opts) ->
 %% @doc Inspect a message's ans104 commitment and, if it carries an
 %% explicit `bundle' field, mirror that value onto the request `Req'. Bundling
 %% is turned off for a message with a nested message signed by another device.
+%% The message is encoded over the keys that its commitment lists; a message
+%% without one, over all of its keys, not those of the message it is in.
 to_hint(Msg, Req, Opts) ->
     Hint =
-        case lib_arweave_common:bundle_hint(<<"ans104@1.0">>, Msg, Req, Opts) of
-            not_found -> {ok, Req};
+        case lib_arweave_common:item_hint(<<"ans104@1.0">>, Msg, Req, Opts) of
+            not_found -> {ok, maps:remove(<<"committed">>, Req)};
             Found -> Found
         end,
     lib_arweave_common:signed_children_hint(Msg, Hint, Opts).

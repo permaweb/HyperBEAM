@@ -142,8 +142,9 @@ do_from(RawTX, Req, Opts) ->
 
 %% @doc Inspect a message's tx@1.0 commitment and, if the commitment
 %% carries an explicit `bundle' field, mirror that value onto the request `Req'.
+%% The message is encoded over the keys that its commitment lists.
 to_hint(Msg, Req, Opts) ->
-    case lib_arweave_common:bundle_hint(<<"tx@1.0">>, Msg, Req, Opts) of
+    case lib_arweave_common:item_hint(<<"tx@1.0">>, Msg, Req, Opts) of
         not_found -> hb_ao:raw(<<"ans104@1.0">>, <<"to-hint">>, Msg, Req, Opts);
         Hint -> lib_arweave_common:signed_children_hint(Msg, Hint, Opts)
     end.

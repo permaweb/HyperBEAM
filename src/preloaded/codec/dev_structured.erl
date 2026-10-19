@@ -120,7 +120,8 @@ from(Msg, Req, Opts) when is_map(Msg) ->
             linkify_mode(HintedReq, Opts),
             Opts
         ),
-    NormKeysMap = hb_ao:normalize_keys(NormLinks, Opts),
+    NormKeysMap =
+        hinted_keys(hb_ao:normalize_keys(NormLinks, Opts), HintedReq, Opts),
     EncodeTypes = find_encode_types(HintedReq, Opts),
     EncodeBinaries = lists:member(<<"binary">>, EncodeTypes),
     MaxInteger = hb_maps:get(<<"max-integer">>, HintedReq, infinity, Opts),
@@ -234,6 +235,13 @@ apply_bundle_hint(Msg, Req, Opts) ->
                     Req
             end
     end.
+
+%% @doc Keep the keys of a message that the target codec's hint names, and its
+%% commitments: the codec's encoding of the message holds those keys alone.
+hinted_keys(Msg, #{ <<"committed">> := Committed }, Opts) ->
+    hb_maps:with([<<"commitments">> | Committed], Msg, Opts);
+hinted_keys(Msg, _Req, _Opts) ->
+    Msg.
 
 %% @doc Discern the linkify mode from the request and the options.
 linkify_mode(Req, Opts) ->
