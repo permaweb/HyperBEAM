@@ -1672,8 +1672,7 @@ post_tx_json_request(Server, ClientOpts) ->
     hb_http:post(
         Server,
         #{
-            <<"device">> => <<"arweave@2.9">>,
-            <<"path">> => <<"//tx">>,
+            <<"path">> => <<"/~arweave@2.9/tx">>,
             <<"content-type">> => <<"application/tx">>,
             <<"body">> => Serialized
         },

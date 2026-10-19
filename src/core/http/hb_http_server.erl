@@ -36,8 +36,7 @@
 %%%    and the caller's address in `priv/ip'. An `ao-peer-port' key is
 %%%    replaced by an `ao-peer' key, which holds the caller's address and that
 %%%    port. We remove the `content-length' key and an empty `body', unless
-%%%    they are signed. A `device' header or query parameter replaces the
-%%%    `device' of the message.
+%%%    they are signed.
 %%% 5. We verify every commitment of the request, and of the messages that it
 %%%    holds. If the node has `force-signed-requests' set, the request must
 %%%    also have a signer. If either check fails, the node replies with a 400.
@@ -1583,13 +1582,8 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
             }
     end,
     WithPrivIP = hb_private:set(WithPeer, <<"ip">>, RealIP, Opts),
-    % Add device from PrimMsg if present
-    WithDevice = case maps:get(<<"device">>, PrimMsg, not_found) of
-        not_found -> WithPrivIP;
-        Device -> WithPrivIP#{<<"device">> => Device}
-    end,
     Host = cowboy_req:host(Req),
-    WithDevice#{<<"host">> => Host}.
+    WithPrivIP#{<<"host">> => Host}.
 
 
 %% @doc Return the caller's IP address: the source address of the connection's
@@ -2369,4 +2363,24 @@ signed_request_query_riders_test() ->
     ?assertEqual(
         {ok, <<"test">>},
         hb_http:request(<<"GET">>, Node, <<"//x?X=test">>, Signed, Opts)
+    ),
+    % A `device' header does not replace the `device' of a signed message.
+    SignedDevice =
+        hb_message:commit(
+            #{ <<"device">> => <<"message@1.0">>, <<"x">> => <<"original">> },
+            Opts
+        ),
+    ?assertEqual(
+        {ok, <<"original">>},
+        hb_http:post(
+            Node,
+            #{
+                <<"path">> => <<"//x">>,
+                <<"device">> => <<"meta@1.0">>,
+                <<"content-type">> => <<"application/json">>,
+                <<"body">> =>
+                    hb_message:convert(SignedDevice, <<"json@1.0">>, Opts)
+            },
+            Opts
+        )
     ).
