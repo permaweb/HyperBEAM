@@ -139,12 +139,11 @@ message_to_device(Msg, Opts) ->
     DevID = hb_maps:get(<<"device">>, Msg, ?DEFAULT_DEVICE, Opts),
     % Refuse a device in `exclude-devices' before `hb_device_load' resolves it.
     case lists:member(DevID, hb_opts:get(exclude_devices, [], Opts)) of
-        true ->
-            throw({error, {device_not_loadable, DevID, 'device-excluded'}});
+        true -> throw({device_not_loadable, DevID, <<"device-excluded">>});
         false -> ok
     end,
     case hb_device_load:reference(DevID, Opts) of
-        {error, Reason} -> throw({error, {device_not_loadable, DevID, Reason}});
+        {error, Reason} -> throw({device_not_loadable, DevID, Reason});
         {ok, DevMod} -> DevMod
     end.
 
@@ -155,14 +154,23 @@ excluded_device_test() ->
     Msg = #{ <<"device">> => Ref },
     Opts = #{ <<"exclude-devices">> => [Ref] },
     ?assertThrow(
-        {error, {device_not_loadable, Ref, 'device-excluded'}},
+        {device_not_loadable, Ref, <<"device-excluded">>},
         message_to_device(Msg, Opts)
     ),
     ?assertThrow(
-        {error, {device_not_loadable, Ref, 'device-excluded'}},
+        {device_not_loadable, Ref, <<"device-excluded">>},
         message_to_device(Msg, Opts#{
             <<"trusted-devices">> => #{ Ref => <<0:344>> }
         })
+    ),
+    % A node replies to a request for the device with a 403.
+    ?assertMatch(
+        {error, #{ <<"status">> := 403 }},
+        hb_http:get(
+            hb_http_server:start_node(Opts),
+            <<"/~", Ref/binary, "/key">>,
+            #{}
+        )
     ).
 
 %% @doc A resolved device cannot bypass a subsequently applied exclusion.
@@ -172,11 +180,11 @@ excluded_cached_device_test() ->
     Mod = message_to_device(Msg, #{}),
     ?assertEqual(Mod, message_to_device(Msg, #{ <<"exclude-devices">> => [] })),
     ?assertThrow(
-        {error, {device_not_loadable, Ref, 'device-excluded'}},
+        {device_not_loadable, Ref, <<"device-excluded">>},
         message_to_device(Msg, #{ <<"exclude-devices">> => [Ref] })
     ),
     ?assertThrow(
-        {error, {device_not_loadable, Ref, 'device-excluded'}},
+        {device_not_loadable, Ref, <<"device-excluded">>},
         message_to_device(#{}, #{ <<"exclude-devices">> => [Ref] })
     ),
     ?assertEqual(Mod, message_to_device(#{}, #{})).

@@ -455,8 +455,9 @@ untrusted_load_device_test() ->
         <<"priv-wallet">> => UntrustedWallet
     },
     hb_store:reset(Store),
-    ?assertThrow(
-        {error, {device_not_loadable, _, _}},
+    % `exec_dummy_device' fails to match the error that the resolution returns.
+    ?assertError(
+        {badmatch, {error, #{ <<"error">> := <<"device-not-loadable">> }}},
         exec_dummy_device(Opts)
     ).
 

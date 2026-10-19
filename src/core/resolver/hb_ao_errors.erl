@@ -6,6 +6,11 @@
 %%% names the input (`base' or `request') and the key in it, and the device
 %%% and key that were being resolved, as `resolving: ~device@1.0/key'.
 %%%
+%%% A resolution that needs a device that the node cannot load returns
+%%% `device-not-loadable', with the `device', the `reason' and `resolving'. A
+%%% device in `exclude-devices' has the reason `device-excluded' and the status
+%%% 403. Any other device that cannot load has the status 404.
+%%%
 %%% `page/3' gives the fields of `~hyperbuddy@1.0''s `error.html' for an error
 %%% reply to a browser.
 -module(hb_ao_errors).
@@ -20,11 +25,14 @@
     {<<"In">>, <<"input">>},
     {<<"Expected type">>, <<"expected-type">>},
     {<<"Received">>, <<"received">>},
+    {<<"Device">>, <<"device">>},
+    {<<"Reason">>, <<"reason">>},
     {<<"Resolving">>, <<"resolving">>}
 ]).
 
-%% @doc The error that resolving `Req' on `Base' returns for a throw from the
-%% loading and varying of its inputs. Other throws are raised again.
+%% @doc The error that resolving `Req' on `Base' returns for a throw from
+%% loading a device, or from the loading and varying of its inputs. Other
+%% throws are raised again.
 from_throw({required_key_missing, Path}, _Stacktrace, Base, Req, Opts) ->
     error_message(400, <<"required-key-missing">>, Path, #{}, Base, Req, Opts);
 from_throw({invalid_type, Path, Type, Value}, _Stacktrace, Base, Req, Opts) ->
@@ -50,6 +58,27 @@ from_throw(
         <<"necessary-message-not-found">>,
         Path,
         #{ <<"missing">> => lists:last(binary:split(Missing, <<": ">>)) },
+        Base,
+        Req,
+        Opts
+    );
+from_throw(
+    {device_not_loadable, Device, Reason},
+    _Stacktrace,
+    Base,
+    Req,
+    Opts
+) ->
+    % The device is not always the base's own, so the error gives no input or
+    % key.
+    error_message(
+        case Reason of
+            <<"device-excluded">> -> 403;
+            _ -> 404
+        end,
+        <<"device-not-loadable">>,
+        <<>>,
+        #{ <<"device">> => Device, <<"reason">> => Reason },
         Base,
         Req,
         Opts

@@ -647,12 +647,10 @@ circular_name_resolution_test() ->
             <<"loaded-device-store">> => []
         },
     ?assertThrow(
-        {error,
-            {device_not_loadable,
-                <<"name@1.0">>,
-                <<"Circular device resolution detected for reference "
-                    "`name@1.0`. Check `preloaded-store` viability.">>
-            }
+        {device_not_loadable,
+            <<"name@1.0">>,
+            <<"Circular device resolution detected for reference "
+                "`name@1.0`. Check `preloaded-store` viability.">>
         },
         reference(<<"message@1.0">>, Opts)
     ).
