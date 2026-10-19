@@ -147,6 +147,32 @@ test_subdomain_matches_path_id() ->
             },
             Opts
         )
+    ),
+    % A stored address that refers to the message matches it as well.
+    Address = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    ok = hb_cache:link(ID1, Address, Opts),
+    ?assertMatch(
+        {ok, 1},
+        hb_http:get(
+            hb_http_server:start_node(Opts),
+            #{
+                <<"path">> => <<Address/binary, "/a">>,
+                <<"host">> => subdomain(Address, Opts)
+            },
+            Opts
+        )
+    ),
+    % A key in the first path part takes the keys of the request.
+    ?assertMatch(
+        {ok, #{ <<"x">> := <<"5">> }},
+        hb_http:get(
+            hb_http_server:start_node(Opts),
+            #{
+                <<"path">> => <<"set?x=5">>,
+                <<"host">> => subdomain(ID1, Opts)
+            },
+            Opts
+        )
     ).
 
 %% @doc Validate the behavior when a subdomain and primary path ID match. Both

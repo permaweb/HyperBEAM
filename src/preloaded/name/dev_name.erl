@@ -103,11 +103,18 @@ request(HookMsg, HookReq, Opts) ->
                 hb_opts:get(node_host, hb_opts:get(host, no_host, Opts), Opts)
             ),
         ok ?= reject_reserved_host_label(Name, Opts),
-        {ok, ResolvedMsg} ?= resolve(Name, HookMsg, HookReq, Opts),
+        {ok, Resolved} ?=
+            resolve(Name, HookMsg, #{ <<"load">> => false }, Opts),
+        {ok, ResolvedMsg} ?= maybe_load_resolved(Resolved, Opts),
         ModReq =
             maybe_append_named_message(
+                Resolved,
                 ResolvedMsg,
-                hb_util:ok(hb_maps:find(<<"body">>, HookReq, Opts)),
+                first_part_request(
+                    Req,
+                    hb_util:ok(hb_maps:find(<<"body">>, HookReq, Opts)),
+                    Opts
+                ),
                 Opts
             ),
         ?event(
@@ -139,12 +146,24 @@ request(HookMsg, HookReq, Opts) ->
             end
     end.
 
+%% @doc Replace a base that is not a message with the first part of the path,
+%% read as a request upon the carried message. The parser gives such a base
+%% for a first path part that is a key, an ID or a URI. The request is the one
+%% that the parser gives for that part when the path starts with an empty
+%% part.
+first_part_request(Req, [Base|ReqMsgsRest], Opts) when not is_map(Base) ->
+    Path = hb_path:normalize(hb_maps:get(<<"path">>, Req, <<"/">>, Opts)),
+    [_Carried, First|_] =
+        hb_singleton:from(Req#{ <<"path">> => <<"/", Path/binary>> }, Opts),
+    [First|ReqMsgsRest];
+first_part_request(_Req, ReqMsgs, _Opts) -> ReqMsgs.
+
 %% @doc After finding a hit for a named message, we should ensure that it is the
 %% base message for the evaluation. If it is already present in the request,
 %% however, we should not add it twice. Instead, we must add the version that
-%% is loaded (if applicable). A key in the first path part, alone or with a
-%% device, which the parser gives as an `ao:' URI, is read from the named
-%% message.
+%% is loaded (if applicable). The first request of the path is the named
+%% message if its key is the value that the name resolves to, or the ID of
+%% the message loaded from that value.
 %% 
 %% Eg:
 %%      base32IDA.hyperbeam/ -> [IDA]
@@ -152,18 +171,15 @@ request(HookMsg, HookReq, Opts) ->
 %%      base32IDA.hyperbeam/key~dev/xyz -> [IDA, key~dev, xyz]
 %%      base32IDA.hyperbeam/base64urlIDA/xyz -> [IDA, xyz]
 %%      base32IDA.hyperbeam/base64urlIDB/xyz -> [IDA, IDB, xyz]
-maybe_append_named_message(ResolvedMsg, [], _Opts) -> [ResolvedMsg];
-maybe_append_named_message(ResolvedMsg, [<<"ao:", Key/binary>>|ReqMsgsRest], _Opts) ->
-    [ResolvedMsg, #{ <<"path">> => Key }|ReqMsgsRest];
+maybe_append_named_message(_Resolved, ResolvedMsg, [], _Opts) -> [ResolvedMsg];
 maybe_append_named_message(
+    Resolved,
     ResolvedMsg,
-    [{as, Dev, <<"ao:", Key/binary>>}|ReqMsgsRest],
-    _Opts
+    [OldBase|ReqMsgsRest],
+    Opts
 ) ->
-    [ResolvedMsg, {as, Dev, #{ <<"path">> => Key }}|ReqMsgsRest];
-maybe_append_named_message(ResolvedMsg, OldReq = [OldBase|ReqMsgsRest], Opts) ->
-    case permissive_id(OldBase, Opts) == permissive_id(ResolvedMsg, Opts) of
-        true when is_map(OldBase) or is_list(OldBase) -> OldReq;
+    IDs = [Resolved, hb_message:id(ResolvedMsg, signed, Opts)],
+    case lists:member(request_key(OldBase, Opts), IDs) of
         true -> [ResolvedMsg|ReqMsgsRest];
         false ->
             case is_map(OldBase) andalso hb_maps:get(<<"path">>, OldBase, not_found, Opts) of
@@ -179,12 +195,13 @@ maybe_append_named_message(ResolvedMsg, OldReq = [OldBase|ReqMsgsRest], Opts) ->
             end
     end.
 
-%% @doc Takes a message or resolution request (`as` or `resolve`) -- whether in
-%% the form of an ID, link, or loaded map -- and returns its ID.
-permissive_id(ID, _Opts) when ?IS_ID(ID) -> ID;
-permissive_id({link, ID, _LinkOpts}, _Opts) -> ID;
-permissive_id({as, _Device, Msg}, Opts) -> permissive_id(Msg, Opts);
-permissive_id(Msg, Opts) when is_map(Msg) -> hb_message:id(Msg, signed, Opts).
+%% @doc Return the key of a request: a binary request is a key, and the key of
+%% a message is its `path'. Any other request, such as a subresolution, has no
+%% key.
+request_key(Key, _Opts) when is_binary(Key) -> Key;
+request_key(Req, Opts) when is_map(Req) ->
+    hb_maps:get(<<"path">>, Req, not_found, Opts);
+request_key(_Req, _Opts) -> not_found.
 
 %% @doc Takes a request-given host and the host value in the node message and
 %% returns only the name component of the host, if it is present. If no name is
