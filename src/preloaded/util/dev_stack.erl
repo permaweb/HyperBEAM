@@ -225,9 +225,7 @@ transform(Base, Key, Opts) ->
 				{ok, DevMsg} ->
 					% Set the:
 					% - Device key to the device we found.
-					% - Device-Stack-Previous key to the device we are replacing.
                     % - The prefixes for the device.
-                    % - The prior prefixes for later restoration.
 					?event({activating_device, DevMsg}),
 					hb_ao:raw(
                         <<"message@1.0">>,
@@ -249,26 +247,6 @@ transform(Base, Key, Opts) ->
                                     {as, <<"message@1.0">>, Base},
                                     undefined,
                                     Opts
-                                ),
-                            <<"previous-device">> =>
-                                hb_ao:get(
-                                    <<"device">>,
-                                    {as, <<"message@1.0">>, Base},
-                                    Opts
-                                ),
-                            <<"previous-input-prefix">> =>
-                                hb_ao:get(
-                                    <<"input-prefix">>,
-                                    {as, <<"message@1.0">>, Base},
-                                    undefined,
-                                    Opts
-                                ),
-                            <<"previous-output-prefix">> =>
-                                hb_ao:get(
-                                    <<"output-prefix">>,
-                                    {as, <<"message@1.0">>, Base},
-                                    undefined,
-                                    Opts
                                 )
 						},
                         Opts
@@ -285,6 +263,20 @@ resolve_fold(Base, Request, Opts) ->
 	{ok, InitDevMsg} = hb_maps:find(<<"device">>, Base, Opts),
     StartingPassValue =
         hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, Base}, unset, Opts),
+    StartingInputPrefix =
+        hb_ao:get(
+            <<"input-prefix">>,
+            {as, <<"message@1.0">>, Base},
+            unset,
+            Opts
+        ),
+    StartingOutputPrefix =
+        hb_ao:get(
+            <<"output-prefix">>,
+            {as, <<"message@1.0">>, Base},
+            unset,
+            Opts
+        ),
     PreparedMessage = hb_ao:set(Base, <<"pass">>, 1, Opts),
     case resolve_fold(PreparedMessage, Request, 1, Opts) of
         {ok, Raw} when not is_map(Raw) ->
@@ -296,22 +288,9 @@ resolve_fold(Base, Request, Opts) ->
                 Result,
                 #{
                     <<"device">> => InitDevMsg,
-                    <<"input-prefix">> =>
-                        hb_ao:get(
-                            <<"previous-input-prefix">>,
-                            {as, <<"message@1.0">>, Result},
-                            undefined,
-                            Opts
-                        ),
-                    <<"output-prefix">> =>
-                        hb_ao:get(
-                            <<"previous-output-prefix">>,
-                            {as, <<"message@1.0">>, Result},
-                            undefined,
-                            Opts
-                        ),
+                    <<"input-prefix">> => StartingInputPrefix,
+                    <<"output-prefix">> => StartingOutputPrefix,
                     <<"device-key">> => unset,
-                    <<"device-stack-previous">> => unset,
                     <<"pass">> => StartingPassValue
                 },
                 Opts
@@ -641,7 +620,12 @@ output_prefix_test() ->
     ?assertMatch(1,
         hb_ao:get(<<"out1/example">>, {as, <<"message@1.0">>, Ex2Res}, #{})),
     ?assertMatch(1,
-        hb_ao:get(<<"out2/example">>, {as, <<"message@1.0">>, Ex2Res}, #{})).
+        hb_ao:get(<<"out2/example">>, {as, <<"message@1.0">>, Ex2Res}, #{})),
+    % The fold adds only the devices' outputs to the base's keys.
+    ?assertEqual(
+        lists:sort([<<"out1">>, <<"out2">> | hb_maps:keys(Base, #{})]),
+        lists:sort(hb_ao:keys(Ex2Res, #{}))
+    ).
 
 input_and_output_prefixes_test() ->
     Base =

@@ -159,10 +159,10 @@ values are the exact binaries `Fold` and `Map` (capitalised first letter).
      keys with `{ok, not_found}`). So `<key>` never actually runs, and the whole
      path is a successful `{ok, not_found}`.
   2. If present, produce a copy of the base whose active device is the looked-up
-     device, and which additionally records (for the device to read, and for
-     later restoration): the active device's `device-key` = `<stack-name>`, the
+     device, and which additionally records (for the device to read): the
+     active device's `device-key` = `<stack-name>` and the
      `input-prefix`/`output-prefix` for that device (from `input-prefixes` /
-     `output-prefixes`, §5), and the displaced previous device/prefixes.
+     `output-prefixes`, §5).
   3. Resolve `<key>` against that copy.
 - **Returns:** the result of resolving `<key>` against the single-device view, or
   `{ok, not_found}` when `<stack-name>` is not in the stack.
@@ -189,15 +189,15 @@ continuing `2, 3, …` until a device number is absent from `device-stack`
 
 Setup (once, before the first device):
 1. Record the caller's current active device (to restore at the end).
-2. Capture the caller's incoming `pass` value (default: *unset/absent*), to
-   restore at the end.
+2. Capture the caller's incoming `pass`, `input-prefix` and `output-prefix`
+   values (default: *unset/absent*), to restore at the end.
 3. Set the state's `pass` counter to `1`.
 
 For the device at position `DevNum` (starting `DevNum = 1`):
 1. **Activate** device `DevNum`: transform the state so that device's value
    (looked up as `device-stack/<DevNum>`) is the active device, recording
-   `device-key`, the device's input/output prefixes, and the displaced previous
-   device/prefixes (as in `transform`, §4 transform step 2).
+   `device-key` and the device's input/output prefixes (as in `transform`, §4
+   transform step 2).
    - If position `DevNum` is **absent** from `device-stack`, the stack is
      **complete**: stop and return the current state (see "Finalisation").
 2. **Resolve the called key** against the activated state. Interpret the
@@ -230,10 +230,10 @@ For the device at position `DevNum` (starting `DevNum = 1`):
 Finalisation (when the sweep ends via end-of-stack or the skip signal — **not**
 for the non-message short-circuit):
 - Restore the caller's original active device.
-- Restore `input-prefix` / `output-prefix` to the displaced "previous" prefixes
-  recorded at activation.
-- Clear the per-execution activation bookkeeping (`device-key` and the
-  previous-device marker) from the returned message.
+- Restore `input-prefix` / `output-prefix` to the caller's captured incoming
+  values (absent when the caller gave none).
+- Clear the per-execution activation bookkeeping (`device-key`) from the
+  returned message.
 - Restore the `pass` counter to the caller's captured incoming value (so a stack
   that the caller invoked without a `pass` returns without one; a re-invocation
   is idempotent in `pass`).
@@ -288,7 +288,7 @@ results.
   under `input-prefix` and writes its outputs under `output-prefix`; a device
   that ignores the prefixes operates on un-prefixed keys. The stack-level
   singular `input-prefix` / `output-prefix` on the base (if present) are
-  preserved as the "previous" values and restored after the sweep. The map keys
+  preserved and restored after the sweep. The map keys
   `input-prefixes`/`output-prefixes` MAY be keyed by integer or by decimal-string
   name equivalently (the activation looks up by the device's stack-name).
 - The device emits **no** identifiers, commitments, or content-addressed values
@@ -474,7 +474,7 @@ chosen to exercise the path):
     `input-prefix`/`output-prefix` default to the empty binary and the device's
     I/O is un-prefixed. After the sweep, the stack restores the caller's original
     active device and prefixes, and the returned message does not carry the
-    per-execution activation bookkeeping (`device-key`, previous-device marker).
+    per-execution activation bookkeeping (`device-key`).
 14. **`pass` restoration / re-invocation.** A caller that invokes the stack
     without a `pass` key receives a result without a `pass` key (the stack-internal
     counter is cleaned up); invoking the returned message again with the same key
@@ -487,8 +487,7 @@ chosen to exercise the path):
 ## 11. Out of scope
 
 - The **internal representation** of the stack, the state message, the
-  bookkeeping keys (`device-key`, previous-device / previous-prefix markers), and
-  links.
+  bookkeeping keys (`device-key`), and links.
 - The **exact reason structure** of the throw-strategy raise and the
   stop-strategy `{error, …}` return (only "must fail fatally" vs "must return an
   error naming the failing position" is normative).
@@ -530,10 +529,9 @@ itself leaves under-pinned:
    than enumerating it, so two implementations on the same substrate agree but
    the set is not reproduced here.
 4. **Bookkeeping key names.** The per-execution activation bookkeeping (the
-   "previous device" marker, the `device-key`) is internal; this spec pins only
-   that it is *cleared from the returned message* and used to *restore* the prior
-   device/prefixes. The exact key names are not normative and a reimplementer MAY
-   choose its own (they are not part of the observable wire contract). The
+   `device-key`) is internal; this spec pins only that it is *cleared from the
+   returned message*. The exact key names are not normative and a reimplementer
+   MAY choose its own (they are not part of the observable wire contract). The
    reference also exposes `device-key` to the active device during its run; a
    device MAY read it to learn its own stack-name, but relying on the precise key
    name is discouraged.
