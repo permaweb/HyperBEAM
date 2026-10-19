@@ -333,17 +333,19 @@ commit(Self, Req, Opts) ->
             Req#{ <<"device">> => AttDev },
             CommitOpts
         ),
-    % A commitment is made over the keys that the request lists: the device
-    % is given the message with those keys alone, as `verify/3' gives it.
+    % A commitment is made over the keys that the request lists, else over the
+    % keys that any commitment of the message lists, else over every key of the
+    % message. The device is given the message with those keys alone, as
+    % `verify/3' gives it.
     Covered =
-        case hb_maps:find(<<"committed">>, Req, Opts) of
-            {ok, _} ->
+        case keys_to_commit(Base, Req, Opts) of
+            all -> Base;
+            Keys ->
                 hb_maps:with(
-                    [<<"commitments">>, <<"priv">> | committed_keys(Req, Opts)],
+                    [<<"commitments">>, <<"priv">> | Keys],
                     Base,
                     Opts
-                );
-            error -> Base
+                )
         end,
     Loaded =
         ensure_commitments_loaded(
@@ -369,6 +371,21 @@ committed_keys(Commitment, Opts) ->
         maps:get(<<"committed">>, Commitment, []),
         Opts
     ).
+
+%% @doc Return the keys that a commitment is made over: the keys that the
+%% request lists, else the keys that any commitment of the message lists, else
+%% `all': every key of the message.
+keys_to_commit(Base, Req, Opts) ->
+    case hb_maps:find(<<"committed">>, Req, Opts) of
+        {ok, _} -> committed_keys(Req, Opts);
+        error ->
+            Committed =
+                hb_message:committed(Base, #{ <<"ids">> => <<"any">> }, Opts),
+            case Committed of
+                [] -> all;
+                Keys -> Keys
+            end
+    end.
 
 %% @doc Verify a message. By default, all commitments are verified. The
 %% `committers' key in the request can be used to specify that only the 
