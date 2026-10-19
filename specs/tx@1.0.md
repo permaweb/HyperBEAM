@@ -418,8 +418,9 @@ is treated as RSA-typed for preimage purposes).
 #### 5.9.2 Signed commitment fields
 
 - `commitment-device` = `tx@1.0`.
-- `committer` = the signer's **address** (base64url), i.e. the SHA-256 hash of
-  the owner public key (RSA), or the address recovered from the key (ECDSA).
+- `committer` = the URI that `hb_committer:uri/2` gives for the committer of
+  the owner's key: `uri-did-ar-<L><B>` with type bits `000` for an RSA or
+  ECDSA key.
 - `committed` = the ordered committed-key list (§5.6).
 - `signature` = the signature bytes, base64url.
 - `keyid` = `publickey:` ‖ base64url(owner public key).
@@ -497,9 +498,9 @@ with **URL-safe base64 without padding** on the wire. Hex MUST NOT be used.
   yields `false`, never an exception-as-success. A signed commitment whose
   committed key values were altered will fail because the recomputed signature
   preimage — hence the ID and signature check — no longer matches.
-- The committer address is the **owner's address**, independent of the supplied
-  ID; `verify` recomputes everything from the reconstructed transaction, so a
-  forged ID or mismatched committer cannot pass.
+- The committer is the URI of the **owner's** committer (§5.9.2), independent of
+  the supplied ID; `verify` recomputes everything from the reconstructed
+  transaction, so a forged ID or mismatched committer cannot pass.
 - Private (`priv*`) keys are reset before encoding/verification and never enter
   the transaction or a commitment.
 - Denomination changes and signature types other than RSA-PSS / ECDSA are
@@ -583,7 +584,7 @@ public codec / commit / verify surface:
     the valid value, tag value survives via `original-tags`); a committed key
     missing from all three sources errors `missing-key`.
 11. A signed commitment has `commitment-device = tx@1.0`, `committer` = the
-    owner's base64url address, `signature` (base64url), `keyid =
+    URI of the owner's committer (§5.9.2), `signature` (base64url), `keyid =
     publickey:<base64url-owner>`, `type` per §5.9.1, `bundle`, the relevant
     `field-<name>` keys, and `original-tags` when applicable; an unsigned
     commitment omits `committer`/`signature`/`keyid` and uses

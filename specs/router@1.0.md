@@ -382,8 +382,9 @@ that relays it to the matched upstream, or run it locally if no route matches.
 
 - **Adding a route (no registrar)** is **operator-gated**: the POST request MUST
   carry a commitment from an address in the node's authorised set — the node
-  `operator`, plus any configured additional route-owners. The check is: at
-  least one authorised address appears among the request's committers/signers.
+  `operator`, plus any configured additional route-owners. The check is: the
+  URI that `hb_committer:uri/2` gives for at least one authorised owner appears
+  among the request's committers/signers.
   If not, the device returns `not_authorized` and the table is unchanged
   (**failure-closed**).
 - **Registrar mode** delegates the authority decision to the configured

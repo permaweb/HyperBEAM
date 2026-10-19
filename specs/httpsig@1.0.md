@@ -56,12 +56,11 @@ content digests, commitment maps, and IDs for the same input.
   - the **decoded** (AO-Core) form, stored as the commitment's `committed` key
     (e.g. `body`, `method`).
   §5.4 pins the mapping between them.
-- **keyid.** A binary identifying the key that produced a commitment, of the form
-  `<scheme>:<material>` (§5.7). For signed commitments it carries the public key;
-  for HMAC commitments it identifies the shared secret.
-- **committer.** The signer's address derived from the keyid (§5.7). Present on a
-  commitment iff the keyid scheme yields an address; absent for the constant HMAC
-  scheme.
+- **keyid.** The URI of the committer that produced a commitment (§5.7): for a
+  signed commitment, the URI that `hb_committer:uri/2` gives for the signing
+  key; for an HMAC commitment, `hmac:constant:<value>` or `hmac:secret:<ID>`.
+- **committer.** The keyid of a signed or `hmac:secret:` commitment (§5.7);
+  absent from an `hmac:constant:` commitment.
 - **Structured Fields (SF).** RFC 9651 *items*, *lists* and *dictionaries*. This
   spec writes `SF-string`, `SF-binary`, `SF-token`, `SF-integer`, `SF-list`,
   `SF-dictionary` for the RFC 9651 serialisations, pinned byte-exactly in §5.1.
@@ -119,8 +118,8 @@ This device is reached two ways:
      a. The signing key is the node's configured private wallet. If none is
         configured the request MUST fail (`no_viable_wallet`).
      b. Build the **unsigned commitment skeleton** (§5.2): `commitment-device`,
-        `type = rsa-pss-sha512`, `keyid` (the `publickey:` form, §5.7),
-        `committer` (the wallet address), and `committed` (§5.3). If the message
+        `type = rsa-pss-sha512`, `keyid` and `committer` (both the URI of the
+        wallet's committer, §5.7), and `committed` (§5.3). If the message
         carries a private `hashpath`, add it as `tag` (§5.8). If `bundle` is true,
         add `bundle = "true"`.
      c. Normalise for encoding (§5.4) to obtain the encoded message, the
@@ -134,12 +133,13 @@ This device is reached two ways:
         into the `hmac-sha256` branch). A signed message therefore always carries
         **both** a signed commitment and the content (HMAC) commitment.
   3. For **`hmac-sha256`**:
-     a. Resolve the keyid material (§5.7) to obtain `(scheme, key, keyid)` and the
-        `committer` the keyid implies (absent for the `constant` scheme).
+     a. The keyid is the URI of the request's `committer`, `hmac:constant:ao` if
+        it gives none (§5.7); the `committer` is the keyid unless it is an
+        `hmac:constant:` URI.
      b. Remove any existing HMAC commitment for the same keyid from the message.
      c. Build the unsigned commitment skeleton: `commitment-device`,
-        `type = hmac-sha256`, `keyid`, `committed` (§5.3), `committer` (only if
-        the scheme yields one), and `bundle`/`tag` as above.
+        `type = hmac-sha256`, `keyid`, `committed` (§5.3), `committer` (unless
+        the keyid is `hmac:constant:`), and `bundle`/`tag` as above.
      d. Normalise for encoding (§5.4); build the signature base (§5.5); compute
         `mac = base64url(HMAC-SHA256(key, signature-base))`.
      e. The commitment ID **is** `mac`. Insert the commitment under `mac`, with
@@ -157,10 +157,13 @@ This device is reached two ways:
 - **Behaviour:**
   1. Normalise for encoding (§5.4) and rebuild the **signature base** (§5.5) from
      the request's `committed` list, exactly as `commit` would.
-  2. Resolve the keyid material (§5.7) to `(scheme, key, keyid)`.
+  2. Read the committer from the keyid with `hb_uri` (§5.7). A keyid that is not
+     its committer's URI, or a `committer` other than the keyid (none for an
+     `hmac:constant:` keyid), gives `false`.
   3. For **`rsa-pss-sha512`**: decode `signature` from base64url and return the
      boolean result of RSA-PSS / SHA-512 verification of that signature over the
-     signature base, against the public key in `key`.
+     signature base, against the commitment's `public-key`, which must be a key
+     of the committer's address.
   4. For **`hmac-sha256`**: recompute
      `base64url(HMAC-SHA256(key, signature-base))` and return whether it is
      **byte-equal** to the commitment's `signature` value.
@@ -254,8 +257,8 @@ values are RFC 9651 Structured Fields. The serialisation MUST be exactly:
 - **SF-token:** the token bytes verbatim (no quoting).
 - **SF-binary:** `:` + **standard RFC 4648 base64** (alphabet `A–Za–z0–9+/`,
   `=`-padded) of the raw bytes + `:`. **This is the one place base64 is NOT
-  url-safe** — it is the RFC 9651 byte-sequence form. (All AO-Core IDs and
-  keyids elsewhere remain base64url.)
+  url-safe** — it is the RFC 9651 byte-sequence form. (All AO-Core IDs
+  elsewhere remain base64url; a keyid is a URI, §5.7.)
 - **SF parameters:** for each parameter in order, `;` + key + (`=` + bare-item)
   unless the value is boolean-true, in which case just `;` + key.
 - **SF-list:** members joined by `, ` (comma + single space). An *inner list*
@@ -278,7 +281,7 @@ binaries.
 | `committed` | always | the **AO-Core-form** covered-key list, as a **plain ordered Erlang/AO list of key-name binaries** (e.g. `[<<"basic">>, <<"num">>]`), in covered order (§5.4). Reading `committed` from a commitment in-memory yields this LIST — NOT a numbered message. (The numbered-message form is only how a *list* is serialised when the whole message is TABM-encoded to the wire; the commitment field itself is a list.) |
 | `signature` | always | **signed:** `base64url(signature-bytes)`. **HMAC:** the 43-char base64url MAC (equal to the commitment ID). |
 | `keyid` | always for signed; for HMAC iff a keyid was used | §5.7. |
-| `committer` | iff the keyid scheme yields an address | the signer address, 43-char base64url (§5.7). |
+| `committer` | unless the keyid is `hmac:constant:` | the keyid (§5.7). |
 | `tag` | iff committing a message with a `hashpath` | the hashpath value (§5.8). |
 | `bundle` | iff `bundle` requested | `"true"` (§5.8). |
 | `nonce`,`created`,`expires` | iff supplied by the caller | RFC 9421 signature parameters carried through (§5.8). |
@@ -420,25 +423,23 @@ pinned above) produce identical bases.
 
 ### 5.7 keyid and committer derivation
 
-A keyid is `<scheme>:<material>`. Three schemes are supported; the scheme is
-taken from the keyid prefix if present, else defaulted from the commitment
-`type`: `rsa-pss-sha512` → `publickey`, `hmac-sha256` → `constant`.
+A keyid is the URI of the commitment's committer, which `hb_uri` reads to
+verify the commitment (§4.2). Its form follows the commitment `type`:
 
-- **`publickey`** (signed commitments): `material` is the **standard base64**
-  (RFC 4648 §4, `=`-padded — NOT url-safe) of the raw public key. For RSA that is
-  the big-endian modulus bytes. The committer **address** is
-  `base64url(SHA-256(public-key))` (43 chars). *(Decoding accepts either standard
-  or url-safe base64 for robustness, but encoders MUST emit standard base64 in the
-  keyid so the byte string — and thus the signature base — is reproducible.)*
-- **`constant`** (default HMAC): `material` is a literal string; the key for the
-  HMAC **is the keyid itself** (prefix included). The default keyid when none is
-  supplied is `constant:ao`, so the default content key is the byte string
-  `constant:ao`. This scheme yields **no committer** (content commitments have no
-  signer).
-- **`secret`** (proxy / authenticated HMAC): the HMAC key is a caller-supplied
-  `secret`; the keyid is `secret:<committer>` where
-  `committer = base64url(SHA-256(secret))`, and that committer is the commitment's
-  signer.
+- **Signed commitments** (`rsa-pss-sha512`): the keyid is the URI that
+  `hb_committer:uri/2` gives for the signing key, `uri-did-ar-<L><B>` with type
+  bits `000` for an RSA key, which holds the address
+  `base64url(SHA-256(public-key))`. The raw public key (for RSA, the big-endian
+  modulus bytes) is the `public-key` parameter, in base64url.
+- **`hmac:constant:`** (default HMAC): the key for the HMAC is the text after
+  `hmac:constant:` in the keyid. The default keyid when none is supplied is
+  `hmac:constant:ao`, so the default content key is the byte string `ao`. This
+  scheme yields **no committer** (content commitments have no signer).
+- **`hmac:secret:`** (proxy / authenticated HMAC): the HMAC key is the SHA-256
+  of `hmac:secret:` followed by a caller-supplied `secret`; the keyid is
+  `hmac:secret:<ID>` where `ID = base64url(SHA-256(secret))`, as
+  `hb_util:secret_key_to_committer/1` gives it, and that keyid is the
+  commitment's `committer`.
 
 If a request supplies both a keyid (carrying a scheme) and a `scheme` field, they
 MUST agree (`scheme_mismatch` otherwise). If a recomputed keyid disagrees with a
@@ -446,10 +447,10 @@ supplied keyid, fail (`key_mismatch`). An unknown scheme is `unknown_scheme`; an
 unsupported `type` for default-scheme selection is `unsupported_scheme` /
 `unsupported-scheme`.
 
-Address derivation per key type (for `publickey`): RSA-PSS, EdDSA(Ed25519), and
-secp256k1 (non-Ethereum) all use `base64url(SHA-256(public-key))`; Ethereum uses
-its keccak-based address; Solana uses base58 of the public key. RSA is the
-default and the only type produced by the `signed` alias.
+The committer of an RSA, Ed25519 or ECDSA (secp256k1) key is the `did-ar@1.0`
+label of `base64url(SHA-256(public-key))`, and that of an Ethereum or Solana key
+is its `did:pkh:` URI (`hb_committer:uri/2`). RSA is the default and the only
+type produced by the `signed` alias.
 
 ### 5.8 Carried RFC 9421 parameters
 
@@ -648,7 +649,7 @@ An implementation MUST exhibit all of the following, each observable through
    `signature` = `base64url(signature-bytes)`. **HMAC commitment ID** =
    `signature` = `base64url(HMAC-SHA256(key, signature-base))` (43 chars).
 5. **Content ID stability.** The content (HMAC) ID of a message is a deterministic
-   function of its TABM and the default key `constant:ao`; re-encoding or
+   function of its TABM and the default key `ao`; re-encoding or
    re-signing the message does not change it. RSA-PSS signing the same message
    twice yields **different** signed IDs but the **same** content ID and the same
    signature base.
@@ -664,13 +665,15 @@ An implementation MUST exhibit all of the following, each observable through
    `content-digest`.
 8. **SF binary uses standard base64.** `content-digest` and the `signature`
    dictionary values use `:…:` standard (`+/`, `=`-padded) base64; all IDs,
-   addresses, and the `signature`/`keyid` commitment fields use **base64url**.
+   addresses, and the `signature` commitment field use **base64url**, and a
+   `keyid` is a URI (§5.7).
    No value is hex.
-9. **keyid/committer.** `publickey` keyids are `publickey:<standard-base64(pubkey)>`
-   and the committer is `base64url(SHA-256(pubkey))`; `constant` keyids default to
-   `constant:ao`, use the keyid bytes as the HMAC key, and have no committer;
-   `secret` keyids are `secret:<base64url(SHA-256(secret))>` and that hash is the
-   committer.
+9. **keyid/committer.** A signed commitment's keyid and committer are the URI of
+   the signing key's committer (`uri-did-ar-<L><B>`, type bits `000`, for an RSA
+   key); `hmac:constant:` keyids default to `hmac:constant:ao`, use the text
+   after `hmac:constant:` as the HMAC key, and have no committer; `hmac:secret:`
+   keyids are `hmac:secret:<base64url(SHA-256(secret))>`, use the SHA-256 of
+   `hmac:secret:` followed by the secret as the HMAC key, and are the committer.
 10. **Verification.** `verify` recomputes the signature base from the commitment's
     `committed` list and returns `true` iff the RSA-PSS check passes (signed) or
     the recomputed MAC byte-equals `signature` (HMAC); tampering with any covered

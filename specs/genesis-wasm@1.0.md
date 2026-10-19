@@ -605,9 +605,9 @@ ensure-started / failure-closed paths.
 15. **Discovery trust.** `latest-checkpoint` returns `no-import-authorities` when
     the allow-list is empty; otherwise it returns only the single most-recent
     checkpoint owned by a trusted authority for the process (or `not_found`).
-16. **Encodings.** Process ids, checkpoint ids, committer addresses are
-    **base64url** (43-char), never hex; CU request bodies are JSON; the slot is a
-    decimal integer in the assignment-compute path.
+16. **Encodings.** Process ids and checkpoint ids are **base64url** (43-char),
+    never hex; committers are URIs (`hb_committer:uri/2`); CU request bodies are
+    JSON; the slot is a decimal integer in the assignment-compute path.
 
 ## 11. Out of scope
 

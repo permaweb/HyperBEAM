@@ -38,9 +38,9 @@ device and is described here only where it affects the device's contract (§6).
   open-ended and out of scope; this spec pins only the keys `meta@1.0` itself
   reads or writes.
 - **Operator:** the identity authorised to change the node message. Resolved as:
-  the node message's `operator` option if set; else the address of the node's
-  configured wallet if a wallet exists; else the sentinel **`unclaimed`**. See
-  §7 for the exact authority test.
+  the node message's `operator` option if set; else the committer URI of the
+  node's configured wallet if a wallet exists; else the sentinel
+  **`unclaimed`**. See §7 for the exact authority test.
 - **Unclaimed node:** a node whose effective operator is `unclaimed` (no
   `operator` option and no wallet). On an unclaimed node, the operator-authority
   test passes for **any** caller (§7) — this is the mechanism by which a node is
@@ -210,21 +210,22 @@ hard-code a single response codec.
 
 Two related notions appear; pin both precisely.
 
-### Resolving the operator address
-The effective operator address is computed from the node message as:
+### Resolving the operator
+The effective operator is computed from the node message as:
 1. If the `operator` option is set, use it.
-2. Else, if the node has a configured wallet, use that wallet's **address**.
+2. Else, if the node has a configured wallet, use the URI of its committer
+   (`hb_opts:committer/1`).
 3. Else, the operator is the sentinel **`unclaimed`**.
 
-Addresses are compared in their **human-readable (base64url) form**. A node
-message `operator` value of the literal string `unclaimed` is equivalent to the
-unclaimed sentinel.
+An operator, which `operator` may give as an address or in any form that
+`hb_committer:uri/2` reads, is compared as that URI. A node message `operator`
+value of the literal string `unclaimed` is equivalent to the unclaimed sentinel.
 
 ### The authority test (used to gate node-message updates)
 A request is **authorised as operator** iff:
 - the effective operator is **`unclaimed`** (any caller passes — the unclaimed
   case), **OR**
-- the effective operator's address is a member of the request's **committers**
+- the effective operator's URI is a member of the request's **committers**
   (i.e. the request is signed by the operator).
 
 This is failure-closed for a claimed node: a request that is unsigned, or signed
@@ -329,7 +330,7 @@ requests.
 - **Behaviour:** Apply the **operator authority test** of §7 to the selected
   message's committers and return the boolean outcome. On an **unclaimed** node
   the answer is `true` for any caller; on a claimed node it is `true` iff the
-  operator's address is among the committers.
+  operator's URI is among the committers.
 - **Returns:** `{ok, Boolean}`.
 - **Side effects:** none.
 
@@ -356,8 +357,8 @@ message `#{ status => <code>, body => <value> }`.
 
 ## 9. Data formats & encodings
 
-- Operator/committer addresses are **base64url** (human-readable) form, never
-  hex; comparisons are on that form.
+- Operators and committers are compared as the URIs that `hb_committer:uri/2`
+  gives; addresses are **base64url** (human-readable) form, never hex.
 - The negotiated response/commitment codec is named under `commitment-device`
   in the node message (§6); signing and encoding use it.
 - `node-history` is an **ordered list** of accepted update requests (oldest

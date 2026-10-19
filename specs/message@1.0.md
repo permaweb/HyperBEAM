@@ -36,11 +36,13 @@ precondition for almost every other device.
   message MAY carry a `commitments` key: a map from **commitment ID** (a
   base64url 43-char identifier) to a **commitment message**. A commitment
   message has at least `commitment-device` (the device that produced and can
-  verify it) and, for signed commitments, `committer` (the signer's address) and
+  verify it) and, for signed commitments, `committer` (the signer's URI) and
   `committed` (the list of keys it covers). Unsigned commitments (content IDs)
   have a `commitment-device` but **no** `committer`.
-- **Committer / signer:** the address (`committer`) named in a signed
-  commitment.
+- **Committer / signer:** the URI (`committer`) of the signer of a commitment, as
+  `hb_committer:uri/2` gives it: `uri-did-ar-<L><B>` with type bits `000` for an
+  RSA, Ed25519 or ECDSA key, a `did:pkh:` URI for an Ethereum or Solana key, and
+  an `hmac:secret:` URI for an HMAC secret.
 - **TABM (Type-Annotated Binary Message):** the flat, all-binary normal form a
   message is converted to before IDs/commitments are computed (see the
   `structured@1.0` spec). IDs are computed over the TABM form.
@@ -185,10 +187,10 @@ precondition for almost every other device.
 - Returns the message's `commitments` map (possibly empty). Used as a selector
   surface by `id`/`verify`/`committed`.
 
-### `committers` — list signer addresses
+### `committers` — list signer URIs
 - **Reads:** `Base` (its `commitments`).
 - **Behaviour:** Return the `committer` value of every commitment that has one.
-- **Returns:** `{ok, [Address]}` (empty if uncommitted). Order unspecified.
+- **Returns:** `{ok, [URI]}` (empty if uncommitted). Order unspecified.
 
 ### `committed` — list committed keys
 - **Reads:** `Base`; the same `committers`/`commitment-ids` selectors as `id`;
@@ -235,15 +237,15 @@ precondition for almost every other device.
 The reserved selector keywords `all` and `none` arrive **as binaries**
 (`<<"all">>` / `<<"none">>`) when they come over the wire or from another device
 (e.g. the commitment device asking this device for `committed` with
-`committers => <<"all">>`); a literal committer **address** or commitment **ID**
+`committers => <<"all">>`); a literal committer **URI** or commitment **ID**
 is also a binary. An implementation MUST treat `<<"all">>`/`<<"none">>` as the
-keywords (not as addresses) and any other binary as a literal address/ID.
+keywords (not as committers) and any other binary as a literal URI/ID.
 Given `Req` selectors, compute the set of commitment IDs to operate on:
 - `commitment-ids`: `none` → none; `all` → every commitment ID; a list/single ID
   → those IDs.
 - `committers`: `none` → none; `all` → the IDs of all commitments that have a
-  `committer`; a list/single address → the IDs of commitments whose `committer`
-  matches. If a requested committer address has **no** commitment, the operation
+  `committer`; a list/single URI → the IDs of commitments whose `committer` is
+  that URI. If a requested committer has **no** commitment, the operation
   MUST error (`requested-committers-not-found`).
 - The result is the **union** of the two. Default when neither selector is
   given: `id`/`committed` default to the unsigned default-device commitment (the
@@ -252,8 +254,8 @@ Given `Req` selectors, compute the set of commitment IDs to operate on:
 
 ## 5. Data formats & encodings
 
-- IDs and committer addresses are **base64url** (43 chars for 32-byte values),
-  never hex.
+- IDs are **base64url** (43 chars for 32-byte values), never hex; a committer is
+  a URI (§2).
 - The combined-ID accumulation operates on the 32-byte native decodings of the
   IDs, modular-added into a 256-bit big-endian accumulator initialised to 0.
 - IDs are computed over the **TABM** form of the message with `commitments`
@@ -319,7 +321,7 @@ Given `Req` selectors, compute the set of commitment IDs to operate on:
 7. `id` of a message with N signed commitments equals the order-independent
    accumulation of the selected commitment IDs; permuting the commitments yields
    the identical ID; selecting a single commitment yields that commitment's ID.
-8. `committers` returns exactly the `committer` addresses of commitments that
+8. `committers` returns exactly the `committer` URIs of commitments that
    have one; `[]` for an uncommitted message.
 9. `committed` returns the intersection of selected commitments' committed-key
    lists, with `+link` suffixes stripped unless `raw` is set.

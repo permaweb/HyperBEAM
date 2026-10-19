@@ -43,10 +43,10 @@ bare name lookup against `name@1.0` consults this registry. It also answers
   is a cache of the durable registry consulted first on lookup so that durable
   storage need not be read per request (§6). It is node state, not per-message
   state.
-- **Operator:** the node's controlling identity — the address configured as the
-  node operator, or, if none is configured, the address of the node's own signing
-  key; a node with neither is **unclaimed**. Operator authority is evaluated by
-  delegating to the node-meta device's `is-operator` contract (§7).
+- **Operator:** the node's controlling identity — the committer configured as the
+  node operator, or, if none is configured, the committer of the node's own
+  signing key; a node with neither is **unclaimed**. Operator authority is
+  evaluated by delegating to the node-meta device's `is-operator` contract (§7).
 
 ## 3. Device interface
 
@@ -270,8 +270,8 @@ is out of scope — only that it maps each registered name to its stored value (
 - **Register is operator-gated, failure-closed.** Only the **operator** may
   register a name. The device determines operator status by delegating to the
   node-meta `is-operator` contract: the request's **signers** (committers) are
-  compared against the node's operator address (the configured operator, else the
-  node's own signing-key address). A request not signed by the operator is
+  compared against the URI that `hb_committer:uri/2` gives for the operator
+  (else the node's own signing key). A request not signed by the operator is
   **denied** with the `403`/`Unauthorized.` error and changes nothing. Concretely,
   the check resolves the `is-operator` key on a `meta@1.0`-bound message, passing
   the committed register request under `body` —

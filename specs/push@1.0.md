@@ -423,8 +423,8 @@ placeholders.
   local sub-trace would be.
 
 ### 5.11 Encodings
-- All ids (process ids, message ids, target ids, committer addresses) are
-  **base64url** (43 chars for 32-byte values), never hex.
+- All ids (process ids, message ids, target ids) are **base64url** (43 chars for
+  32-byte values), never hex; committers are URIs (`hb_committer:uri/2`).
 - All keys are lowercase, hyphenated binaries on the wire. Provenance keys are
   exactly `from-process`, `from-uncommitted`, `from-base`, `from-scheduler`,
   `from-authority`. The skip marker is the literal binary `<<"skipped">>`.
@@ -507,13 +507,13 @@ placeholders.
   scheduled onto a target is signed according to the **target's** policy,
   resolved in this order:
   1. **`policy`** on the target process: if present and it resolves to a policy
-     message carrying an **`accept-committers`** value (a committer address, or a
+     message carrying an **`accept-committers`** value (a committer URI, or a
      parsed list of them), sign with **exactly** those committers.
   2. **`authority`** on the target process: if present (a single authority
      address or a parsed list), sign with every listed authority the node can
      **act as** — i.e. that it **holds a wallet for**. "Locally available
-     identities" means the node's configured identity set, addressed by
-     `message@1.0` address; a listed authority the node holds no wallet for
+     identities" means the node's configured identity set, keyed by the URI of
+     each identity's committer; a listed authority the node holds no wallet for
      contributes no committer.
   3. **Default:** sign with the node's default identity (its configured wallet).
 - After signing, the message MUST **verify** before it is written to cache and
