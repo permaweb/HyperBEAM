@@ -488,7 +488,7 @@ undefined_import_stub(Base, Req, Opts) ->
             Opts
         ),
     UndefinedCallsPath =
-        <<"state/results/", Prefix/binary, "/undefined-calls">>,
+        <<"results/", Prefix/binary, "/undefined-calls">>,
     Res = hb_ao:set(
         Base,
         #{
@@ -662,6 +662,15 @@ state_export_and_restore_test() ->
     ?assertEqual(
         {ok, [4]},
         hb_ao:resolve(NewBase, <<"compute/results/output">>, #{})
+    ),
+    % An import that no stdlib device answers is recorded beside the results.
+    ?assertMatch(
+        {ok, [#{ <<"module">> := <<"my_lib">>, <<"func">> := <<"mul">> } | _]},
+        hb_ao:resolve(
+            hb_maps:without([<<"stdlib">>], Req, #{}),
+            <<"compute/results/undefined-calls">>,
+            #{}
+        )
     ).
 
 %%% Test helpers
