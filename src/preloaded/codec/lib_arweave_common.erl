@@ -692,11 +692,9 @@ holds_tags(OriginalTags, FieldKeys, Commitment, TABM, Opts) ->
             Opts
         ).
 
-%% @doc Check that a message holds the given values for their keys. Lazy
-%% values, as in a message read from a cache, are loaded before comparing.
-holds(Values, TABM, Opts) ->
-    hb_cache:ensure_all_loaded(Values, Opts) ==
-        hb_cache:ensure_all_loaded(maps:with(maps:keys(Values), TABM), Opts).
+%% @doc Check that a message holds the given values for their keys.
+holds(Values, TABM, _Opts) ->
+    Values == maps:with(maps:keys(Values), TABM).
 
 %% @doc Check that the message gives its committed keys the types that the
 %% commitment's `ao-types' tag gives them. Equal `ao-types' values need no
