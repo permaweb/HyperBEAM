@@ -61,9 +61,12 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
                 batch_size,
                 hb_util:int(maps:get(<<"batch-size">>, Opts, ?DEFAULT_BATCH_SIZE))
             },
-            no_mem_init,
-            no_sync
+            no_mem_init
         ] ++
+        case maps:get(<<"sync">>, Opts, false) of
+            true -> [];
+            false -> [no_sync]
+        end ++
         case maps:get(<<"read-ahead">>, Opts, true) of
             true -> [];
             false -> [no_readahead]
@@ -112,7 +115,7 @@ flusher(Instance, FlushEvery) ->
     receive
         stop -> ok
     after FlushEvery ->
-        flush(Instance, #{}, #{}),
+        commit(Instance),
         flusher(Instance, FlushEvery)
     end.
 
@@ -382,12 +385,29 @@ stop_flusher(DataDir) ->
             receive {'DOWN', Ref, process, PID, _} -> ok end
     end.
 
-%% @doc Commit the writes that `elmdb' holds in memory. `elmdb:put_batch/2'
-%% returns before its writes are committed: writes are committed in batches of
-%% `batch-size', and a halt of the node before then loses them.
+%% @doc Commit the writes that `elmdb' holds in memory, and sync them to disk.
+%% `elmdb:put_batch/2' returns before its writes are committed: writes are
+%% committed in batches of `batch-size', and a halt of the node before then
+%% loses them. A store with `sync' set to `true' syncs every commit to disk.
+%% Any other store commits to the OS page cache only, and a loss of power can
+%% lose its commits since the last flush.
+flush(Opts = #{ <<"sync">> := true }, _Req, _NodeOpts) ->
+    commit(find_env(Opts));
 flush(Opts, _Req, _NodeOpts) ->
-    #{ <<"db">> := DBInstance } = find_env(Opts),
-    case elmdb:flush(DBInstance) of
+    Instance = #{ <<"env">> := Env } = find_env(Opts),
+    maybe
+        ok ?= commit(Instance),
+        lmdb_result(elmdb:env_sync(Env))
+    end.
+
+%% @doc Commit the writes that `elmdb' holds in memory.
+commit(#{ <<"db">> := DBInstance }) ->
+    lmdb_result(elmdb:flush(DBInstance)).
+
+%% @doc Normalize the result of an `elmdb' call. `ok' is returned as is. An
+%% error is logged and returned as `{error, Type}'.
+lmdb_result(Result) ->
+    case Result of
         ok -> ok;
         {error, Type, Description} ->
             ?event(
