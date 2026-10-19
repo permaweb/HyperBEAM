@@ -248,13 +248,16 @@ response(State, RawResponse, NodeMsg) ->
                                 <<"recipient">> =>
                                     case hb_opts:get(p4_recipient, undefined, NodeMsg) of
                                         Addr when is_binary(Addr) ->
-                                            hb_util:committer(Addr);
+                                            hb_committer:uri(Addr, NodeMsg);
                                         _ ->
                                             case hb_opts:get(operator, undefined, NodeMsg) of
                                                 undefined ->
                                                     <<"unknown">>;
                                                 Operator ->
-                                                    hb_util:committer(Operator)
+                                                    hb_committer:uri(
+                                                        Operator,
+                                                        NodeMsg
+                                                    )
                                             end
                                     end,
                                 <<"request">> => Request

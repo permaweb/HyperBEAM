@@ -251,7 +251,7 @@ avoid_double_read_test() ->
         % The item verifies, so it is cached under its ID with its commitment.
         ?assertEqual(
             [
-                ?ARWEAVE_COMMITTER(
+                hb_committer:uri(
                     <<"TeWsA2tuo4aFnhWy-ZiP5t2FYXLisp3s4KagrX9LXEI">>
                 )
             ],

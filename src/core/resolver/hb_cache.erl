@@ -1687,7 +1687,7 @@ test_match_message(Store) ->
     % A match on the keys of a commitment returns the commitment's ID.
     Wallet = ar_wallet:new(),
     Committer =
-        hb_util:committer(hb_util:human_id(ar_wallet:to_address(Wallet))),
+        hb_committer:uri(hb_util:human_id(ar_wallet:to_address(Wallet))),
     Signed = hb_message:commit(#{ <<"w">> => <<"1">> }, Opts#{
         <<"priv-wallet">> => Wallet
     }),

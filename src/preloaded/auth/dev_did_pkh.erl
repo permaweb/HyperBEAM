@@ -2,15 +2,14 @@
 %%% names the committer of a key by its blockchain account, which is written
 %%% in the CAIP-10 form. The account of each type of key is as follows:
 %%% <pre>
-%%%     arweave:7wIU:ADDRESS     An RSA, Ed25519 or ECDSA key. The address is
-%%%                              the base64url SHA-256 hash of the key.
 %%%     eip155:1:ADDRESS         An Ethereum key. The address is checksummed.
 %%%     solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:ADDRESS
 %%%                              A Solana key. The address is the key in
 %%%                              base58.
 %%% </pre>
 %%% The `did@1.0' device reads a `did:pkh:' URI with this device, giving it
-%%% the account as the `body' of the committer.
+%%% the account as the `body' of the committer. The committer of an RSA,
+%%% Ed25519 or ECDSA key is `did-ar@1.0'.
 %%%
 %%% A committer that is read from its URI holds its account as its `body'. A
 %%% committer that holds a key has the public key as its `owner', the
@@ -99,12 +98,6 @@ account(#{ <<"owner">> := Owner, <<"type">> := Type }) ->
 %% @doc Return the CAIP-10 account of a public key, using the address that
 %% `ar_wallet:to_address/2' gives for it. Keys of other types have no account.
 key_account(Owner, KeyType)
-        when KeyType =:= ?RSA_KEY_TYPE;
-            KeyType =:= ?EDDSA_KEY_TYPE;
-            KeyType =:= ?ECDSA_KEY_TYPE ->
-    Address = hb_util:human_id(ar_wallet:to_address(Owner, KeyType)),
-    {ok, <<"arweave:7wIU:", Address/binary>>};
-key_account(Owner, KeyType)
         when KeyType =:= ?ETHEREUM_KEY_TYPE;
             KeyType =:= ?TYPED_ETHEREUM_KEY_TYPE ->
     {ok, <<"eip155:1:", (ar_wallet:to_address(Owner, KeyType))/binary>>};
@@ -115,11 +108,8 @@ key_account(_Owner, _KeyType) ->
     {error, #{ <<"error">> => <<"unsupported-key-type">> }}.
 
 %% @doc Check that an account is one that `key_account/2' returns for a key. The
-%% address of an Arweave account is a human-readable ID, the address of an
-%% Ethereum account carries its EIP-55 checksum, and the address of a Solana
-%% account is the base58 encoding of 32 bytes.
-is_account(<<"arweave:7wIU:", Address/binary>>) ->
-    hb_util:is_human_id(Address);
+%% address of an Ethereum account carries its EIP-55 checksum, and the address
+%% of a Solana account is the base58 encoding of 32 bytes.
 is_account(Account = <<"eip155:1:0x", Hex:40/binary>>) ->
     re:run(Hex, <<"\\A[0-9a-fA-F]+\\z">>, [{capture, none}]) =:= match andalso
         key_account(<<"0x", Hex/binary>>, ?TYPED_ETHEREUM_KEY_TYPE) =:=
@@ -139,25 +129,13 @@ is_account(_Account) ->
 %% and that it reads back as a committer with the same URI.
 uri_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
-    Committer = ar_wallet:new(?RSA_KEY_TYPE),
-    Address = hb_util:human_id(ar_wallet:to_address(Committer)),
-    {ok, URI} = hb_uri:to(Committer, #{ <<"scheme">> => <<"did">> }, Opts),
-    ?assertEqual(<<"did:pkh:arweave:7wIU:", Address/binary>>, URI),
+    Ethereum = ar_wallet:new(?ETHEREUM_KEY_TYPE),
+    {ok, URI} = hb_uri:to(Ethereum, #{ <<"scheme">> => <<"did">> }, Opts),
+    ?assertMatch(<<"did:pkh:eip155:1:0x", _:40/binary>>, URI),
     {ok, Read} = hb_uri:from(URI, Opts),
     ?assertEqual(
         {ok, URI},
         hb_uri:to(Read, #{ <<"scheme">> => <<"did">> }, Opts)
-    ),
-    Ethereum = ar_wallet:new(?ETHEREUM_KEY_TYPE),
-    ?assertMatch(
-        {ok, <<"did:pkh:eip155:1:0x", _:40/binary>>},
-        hb_uri:to(Ethereum, #{ <<"scheme">> => <<"did">> }, Opts)
-    ),
-    % Check that an Ed25519 node's address is the one its committer names.
-    Ed25519 = #{ <<"priv-wallet">> => ar_wallet:new(?EDDSA_KEY_TYPE) },
-    ?assertEqual(
-        hb_opts:committer(Ed25519),
-        hb_util:committer(hb_opts:address(Ed25519))
     ),
     % Check the URI of the CAIP-10 example account on Solana mainnet.
     Solana =
@@ -179,14 +157,14 @@ uri_test() ->
 %% from its URI, and that a signature by the key of another account does not.
 commit_verify_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
-    Committer = ar_wallet:new(?RSA_KEY_TYPE),
+    Committer = ar_wallet:new(?ETHEREUM_KEY_TYPE),
     {ok, URI} = hb_uri:to(Committer, #{ <<"scheme">> => <<"did">> }, Opts),
     {ok, Read} = hb_uri:from(URI, Opts),
-    Req = #{ <<"body">> => <<"base">>, <<"type">> => <<"rsa-pss-sha512">> },
+    Req = #{ <<"body">> => <<"base">>, <<"type">> => <<"ethereum">> },
     {ok, Signed} = hb_ao:raw(Committer, Req#{ <<"path">> => <<"commit">> }, Opts),
     Verify = Req#{ <<"path">> => <<"verify">> },
     ?assertEqual({ok, true}, hb_ao:raw(Read, maps:merge(Verify, Signed), Opts)),
-    Other = ar_wallet:new(?RSA_KEY_TYPE),
+    Other = ar_wallet:new(?ETHEREUM_KEY_TYPE),
     {ok, OtherSigned} =
         hb_ao:raw(Other, Req#{ <<"path">> => <<"commit">> }, Opts),
     ?assertEqual(

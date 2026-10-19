@@ -279,20 +279,20 @@ verify_identity(Item, TABM, Opts) ->
                     committer(Item, Opts)
     end.
 
-%% @doc Return the URI of the committer of an item's signature: the
-%% `did-pkh@1.0' committer of the item's owner. If the key has no account, we
-%% return `unset'.
+%% @doc Return the URI of the committer of an item's signature, as
+%% `hb_committer:uri/2' gives it for the committer of the item's owner. If the
+%% key has no account, we return `unset'.
 committer(Item, Opts) ->
+    KeyType = Item#tx.signature_type,
     Committer =
         #{
-            <<"device">> => <<"did-pkh@1.0">>,
+            <<"device">> => ar_wallet:committer_device(KeyType),
             <<"owner">> => Item#tx.owner,
-            <<"type">> => ar_tx:serialize_sig_type(Item#tx.signature_type)
+            <<"type">> => ar_tx:serialize_sig_type(KeyType)
         },
-    ToURI = #{ <<"path">> => <<"to">>, <<"type">> => <<"uri">> },
-    case hb_ao:raw(Committer, ToURI, Opts) of
-        {ok, URI} -> URI;
-        {error, _} -> unset
+    case hb_committer:uri(Committer, Opts) of
+        URI when is_binary(URI) -> URI;
+        _ -> unset
     end.
 
 %% @doc Sign the item or transaction of a message with the committer of the

@@ -606,8 +606,9 @@ tx_field(Body, Field, Default, Opts) ->
 %% message with any other number of signers is not attributable to one party,
 %% so it cannot open, cancel, reserve or pay for anything.
 signer(Body, Opts) ->
-    case hb_message:signers(Body, Opts) of
-        [?ARWEAVE_COMMITTER(Address)] -> {ok, Address};
+    SignerURIs = hb_message:signers(Body, Opts),
+    case [hb_committer:address(SignerURI) || SignerURI <- SignerURIs] of
+        [{ok, Address}] -> {ok, Address};
         _ -> not_found
     end.
 

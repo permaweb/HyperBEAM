@@ -7,7 +7,7 @@
 %%% optional string `count'. Supported filters are `ids', `tags', `owners',
 %%% `recipients' and `block'. Tag names address message keys. Values within a
 %%% tag are ORed; separate tags and other filters are ANDed. Owners are
-%%% Arweave addresses, matched by their `did:pkh:' committers; indexed
+%%% Arweave addresses, matched by the URIs of their committers; indexed
 %%% recipients use the commitment's `field-target'.
 %%% Without these selecting filters,
 %%% queries enumerate confirmed base-layer TXs from block headers, optionally
@@ -1528,7 +1528,7 @@ match(<<"owners">>, Owners, Opts) ->
     {ok, matching_commitments(<<"committer">>, owner_committers(Owners), Opts)};
 match(<<"owner">>, Owner, Opts) ->
     Res =
-        matching_commitments(<<"committer">>, ?ARWEAVE_COMMITTER(Owner), Opts),
+        matching_commitments(<<"committer">>, hb_committer:uri(Owner), Opts),
     ?event({match_owner, Owner, Res}),
     {ok, Res};
 match(<<"recipients">>, Recipients, Opts) ->
@@ -1642,9 +1642,9 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
     Filtered.
 
 %% @doc Convert the owners of a GraphQL query, which are Arweave addresses, to
-%% their `did:pkh:' committers.
+%% the URIs of their committers.
 owner_committers(null) -> null;
-owner_committers(Owners) -> [?ARWEAVE_COMMITTER(Owner) || Owner <- Owners].
+owner_committers(Owners) -> [hb_committer:uri(Owner) || Owner <- Owners].
 
 %% @doc Return the IDs of the messages whose commitments carry a field:
 %% their committer, or their target.

@@ -503,10 +503,10 @@ trusted_signer_accepts(Ref, SpecID, Signer, Opts) when is_map(Signer) ->
 trusted_signer_accepts(_Ref, _SpecID, _Signer, _Opts) ->
     false.
 
-trusted_signer_address(Signer, _Opts) when is_binary(Signer) ->
-    hb_util:committer(Signer);
+trusted_signer_address(Signer, Opts) when is_binary(Signer) ->
+    hb_committer:uri(Signer, Opts);
 trusted_signer_address(Signer, Opts) when is_map(Signer) ->
-    hb_util:committer(hb_maps:get(<<"address">>, Signer, undefined, Opts));
+    hb_committer:uri(hb_maps:get(<<"address">>, Signer, undefined, Opts));
 trusted_signer_address(_Signer, _Opts) ->
     undefined.
 
@@ -517,7 +517,7 @@ trusted_signer_devices_test() ->
         [hb_util:human_id(<<N:256>>) || N <- lists:seq(1, 5)],
     ?assertEqual(
         [
-            ?ARWEAVE_COMMITTER(Address)
+            hb_committer:uri(Address)
         ||
             Address <- [Plain, Unscoped, ByRef, BySpec]
         ],

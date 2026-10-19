@@ -259,7 +259,7 @@ ledger(NodeMsg) ->
         <<"balances">> =>
             maps:fold(
                 fun(Account, Balance, Balances) ->
-                    Balances#{ hb_util:committer(Account) => Balance }
+                    Balances#{ hb_committer:uri(Account, NodeMsg) => Balance }
                 end,
                 #{},
                 hb_opts:get(simple_pay_ledger, #{}, NodeMsg)

@@ -18,8 +18,6 @@
 -define(NI_URI(ID), <<"ni:///sha-256;", (ID)/binary>>).
 %% @doc The committer of unsigned commitments: an HMAC key known to everyone.
 -define(UNSIGNED_COMMITTER, <<"hmac:constant:ao">>).
-%% @doc The `did:pkh:' committer of an Arweave address.
--define(ARWEAVE_COMMITTER(Address), <<"did:pkh:arweave:7wIU:", (Address)/binary>>).
 %% @doc Macro for checking a term is a link.
 -define(IS_LINK(X), (is_tuple(X) andalso element(1, X) == link)).
 %% @doc List of special keys that are used in the AO-Core protocol.

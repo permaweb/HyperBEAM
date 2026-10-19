@@ -64,7 +64,7 @@ device_info() ->
 
 %% @doc General utility functions that are available to other modules.
 parse_schedulers(SchedLoc) when is_list(SchedLoc) ->
-    lists:map(fun hb_util:committer/1, SchedLoc);
+    lists:map(fun hb_committer:uri/1, SchedLoc);
 parse_schedulers(SchedLoc) when is_binary(SchedLoc) ->
     parse_schedulers(
         binary:split(

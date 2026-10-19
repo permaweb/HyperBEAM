@@ -224,10 +224,15 @@ unread_request_link_test() ->
         {ok, hb_test_utils:committer(Wallet)},
         hb_http:get(Node, <<"/~meta@1.0/info/committer">>, #{})
     ),
-    % The node's wallet is the message of that committer.
+    % The node's wallet is the message of that committer, whose URI is in host
+    % form.
     ?assertEqual(
         {ok, hb_test_utils:committer(Wallet)},
-        hb_uri:to(Wallet, #{ <<"scheme">> => <<"did">> }, #{})
+        hb_uri:to(
+            Wallet,
+            #{ <<"scheme">> => <<"did">>, <<"characters">> => <<"host">> },
+            #{}
+        )
     ).
 
 %% @doc Test that we can't set the node message if the request is not signed by
@@ -358,7 +363,7 @@ typed_authorization_test() ->
             hb_message:commit(Fields, #{ <<"priv-wallet">> => Other }), AdminOpts)),
     ?assertMatch({ok, _},
         lib_meta:is_authorized(<<"node-message">>, operator, Signed, AdminOpts)),
-    % An operator given as an address is its `did:pkh:' committer.
+    % An operator given as an address is the committer of the address.
     ?assertMatch({ok, _},
         lib_meta:is_authorized(<<"node-message">>, operator, Signed,
             #{ <<"operator">> => hb:address(Owner) })).

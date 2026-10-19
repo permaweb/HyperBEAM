@@ -130,14 +130,13 @@ data(ID, Opts) ->
     end.
 
 %% @doc Find the location of the scheduler based on its ID, through GraphQL.
-%% The `did:pkh:' committer of an Arweave address is found by the address.
+%% The committer of an Arweave address is found by the address.
 %% Current AO location records use lowercase tags. Nodes may disable the
 %% fallback to legacy capitalized tags with `scheduler-legacy-locations'.
 location(Address, Opts) ->
     location(Address, undefined, Opts).
-location(?ARWEAVE_COMMITTER(Address), Variant, Opts) ->
-    location(Address, Variant, Opts);
-location(Address, Variant, Opts) ->
+location(Committer, Variant, Opts) ->
+    Address = hb_util:committer_address(Committer),
     maybe
         % Fallback to legacy capitalized tags if a lower-case result is not
         % available and `scheduler-legacy-locations' is enabled.
@@ -262,10 +261,10 @@ device_queries(SpecID, TrustedSigners, Opts) ->
             {Address, signer_valid_until_height(Signer, Opts)}
         ||
             Signer <- TrustedSigners,
-            % GraphQL finds the items of a `did:pkh:' committer of an Arweave
-            % address by the address.
-            ?ARWEAVE_COMMITTER(Address) <-
-                [trusted_signer_address(Signer, Opts)]
+            % GraphQL finds the items of the committer of an Arweave address
+            % by the address.
+            {ok, Address} <-
+                [hb_committer:address(trusted_signer_address(Signer, Opts))]
         ],
     case lists:any(fun({_Signer, Height}) -> Height =/= undefined end, SignerPolicies) of
         false ->
@@ -279,10 +278,10 @@ device_queries(SpecID, TrustedSigners, Opts) ->
             ]
     end.
 
-trusted_signer_address(Signer, _Opts) when is_binary(Signer) ->
-    hb_util:committer(Signer);
+trusted_signer_address(Signer, Opts) when is_binary(Signer) ->
+    hb_committer:uri(Signer, Opts);
 trusted_signer_address(Signer, Opts) when is_map(Signer) ->
-    hb_util:committer(hb_maps:get(<<"address">>, Signer, undefined, Opts));
+    hb_committer:uri(hb_maps:get(<<"address">>, Signer, undefined, Opts));
 trusted_signer_address(_Signer, _Opts) ->
     undefined.
 
@@ -553,10 +552,9 @@ subindex_to_tags(Subindex) ->
 %%% Tests
 device_valid_until_height_query_test() ->
     SpecID = <<"spec">>,
-    Alice = <<"alice">>,
-    Bob = <<"bob">>,
-    AliceCommitter = ?ARWEAVE_COMMITTER(Alice),
-    BobCommitter = ?ARWEAVE_COMMITTER(Bob),
+    [Alice, Bob] = [hb_util:human_id(<<N:256>>) || N <- [1, 2]],
+    AliceCommitter = hb_committer:uri(Alice),
+    BobCommitter = hb_committer:uri(Bob),
     [{BaseQuery, BaseVars}] =
         device_queries(SpecID, [AliceCommitter, BobCommitter], #{}),
     ?assertEqual([Alice, Bob], maps:get(<<"trusted">>, BaseVars)),
@@ -655,7 +653,7 @@ l2_dataitem_test() ->
     ?event(gateway, {l2_dataitem, Res}),
     ?assert(hb_message:verify(Res, all, #{})),
     ?assertEqual(
-        [?ARWEAVE_COMMITTER(<<"vh-NTHVvlKZqRxc8LyyTNok65yQ55a_PJ1zWLb9G2JI">>)],
+        [hb_committer:uri(<<"vh-NTHVvlKZqRxc8LyyTNok65yQ55a_PJ1zWLb9G2JI">>)],
         hb_message:signers(Res, #{})
     ),
     Data = maps:get(<<"data">>, Res),
@@ -670,7 +668,7 @@ l2_dataitem_ed25519_test() ->
     ?event(gateway, {l2_dataitem, Res}),
     ?assert(hb_message:verify(Res, all, #{})),
     ?assertEqual(
-        [?ARWEAVE_COMMITTER(<<"ejhYD9Cw9VCsVik6yGLoclo3CLRvAITHTZamLY_6ro4">>)],
+        [hb_committer:uri(<<"ejhYD9Cw9VCsVik6yGLoclo3CLRvAITHTZamLY_6ro4">>)],
         hb_message:signers(Res, #{})
     ),
     %% Check Data
@@ -712,7 +710,7 @@ anchor_verification_test() ->
     {ok, Verified} = result_to_message(Item, #{}),
     ?assert(hb_message:verify(Verified, all, #{})),
     ?assertEqual(
-        [?ARWEAVE_COMMITTER(<<"ejhYD9Cw9VCsVik6yGLoclo3CLRvAITHTZamLY_6ro4">>)],
+        [hb_committer:uri(<<"ejhYD9Cw9VCsVik6yGLoclo3CLRvAITHTZamLY_6ro4">>)],
         hb_message:signers(Verified, #{})
     ),
     Unanchored = Item#{ <<"anchor">> => <<>> },

@@ -846,11 +846,10 @@ committer(Default, Opts) ->
         Wallet -> uri(Wallet, Opts)
     end.
 
-%% @doc Return the URI of a wallet.
+%% @doc Return the URI of a wallet: the URI of its committer that
+%% `hb_committer:uri/2' gives.
 uri(Wallet, Opts) ->
-    ToURI = #{ <<"path">> => <<"to">>, <<"type">> => <<"uri">> },
-    {ok, URI} = hb_ao:raw(Wallet, ToURI, Opts),
-    URI.
+    hb_committer:uri(Wallet, Opts).
 
 %% @doc Find all known IDs and their sub-options from the `priv_ids' map. Allows
 %% the identities to be named, or based on addresses. The results are normalized

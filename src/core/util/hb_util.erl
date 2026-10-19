@@ -30,7 +30,7 @@
 -export([all_atoms/0, binary_is_atom/1]).
 -export([lowercase_key/1]).
 -export([base58_encode/1, base58_decode/1, atom_to_dashed_binary/1]).
--export([committer/1, committer_address/1]).
+-export([committer_address/1]).
 -include("include/hb.hrl").
 
 -include_lib("eunit/include/eunit.hrl").
@@ -300,33 +300,14 @@ human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 42 ->
     Bin.
 
-%% @doc Convert a committer given by a node's configuration, a process
-%% definition or Lua code to its URI. An Arweave address has no URI scheme, so
-%% it becomes the URI of its `did:pkh:' committer. A query after the address,
-%% such as the `?hint=' of a scheduler, is kept. Any other binary without a URI
-%% scheme is not a committer. We return it as it is, so that it matches no
-%% signer, and log it as an `invalid_committer' event. A URI or any other term
-%% is returned as it is.
-committer(Value) when is_binary(Value) ->
-    case hb_uri:scheme(Value) of
-        {ok, _Scheme, _Rest} -> Value;
-        _ ->
-            [Address | _] = binary:split(Value, <<"?">>),
-            case is_human_id(Address) of
-                true -> ?ARWEAVE_COMMITTER(Value);
-                false ->
-                    ?event(committer, {invalid_committer, Value}),
-                    Value
-            end
-    end;
-committer(Value) ->
-    Value.
-
 %% @doc Convert a committer to the form that Lua and AOS code read. The
-%% `did:pkh:' committer of an Arweave address becomes the address. Any other
+%% `did-ar@1.0' committer of an Arweave address becomes the address. Any other
 %% committer is returned as it is.
-committer_address(?ARWEAVE_COMMITTER(Address)) -> Address;
-committer_address(Committer) -> Committer.
+committer_address(Committer) ->
+    case hb_committer:address(Committer) of
+        {ok, Address} -> Address;
+        error -> Committer
+    end.
 
 %% @doc Check whether a binary is a human-readable ID: the base64url encoding
 %% of 32 bytes, as `human_id/1' returns it.

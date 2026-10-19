@@ -441,10 +441,15 @@ latest_checkpoint(ProcID, TrustedSigners, Opts) ->
     Variables =
         #{
             <<"ProcID">> => ProcID,
-            % GraphQL finds the items of a `did:pkh:' committer of an Arweave
-            % address by the address.
+            % GraphQL finds the items of the committer of an Arweave address
+            % by the address.
             <<"TrustedSigners">> =>
-                [Address || ?ARWEAVE_COMMITTER(Address) <- TrustedSigners]
+                [
+                    Address
+                ||
+                    SignerURI <- TrustedSigners,
+                    {ok, Address} <- [hb_committer:address(SignerURI)]
+                ]
         },
     case hb_client_gateway:query(Query, Variables, Opts) of
         {error, Reason} ->
@@ -460,10 +465,11 @@ latest_checkpoint(ProcID, TrustedSigners, Opts) ->
 %% @doc Return the committers named by the `genesis-wasm-import-authorities'
 %% option.
 import_authorities(Opts) ->
-    lists:map(
-        fun hb_util:committer/1,
-        hb_opts:get(genesis_wasm_import_authorities, [], Opts)
-    ).
+    [
+        hb_committer:uri(Authority, Opts)
+    ||
+        Authority <- hb_opts:get(genesis_wasm_import_authorities, [], Opts)
+    ].
 
 %% @doc Validate whether a checkpoint message is signed by a trusted snapshot
 %% authority and is for a `ao.TN.1' process or has `execution-device' set to
@@ -913,8 +919,8 @@ import_legacy_checkpoint() ->
         <<"priv-wallet">> => hb:wallet(),
         <<"genesis-wasm-import-authorities">> =>
             [
-                ?ARWEAVE_COMMITTER(<<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>),
-                ?ARWEAVE_COMMITTER(<<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>)
+                hb_committer:uri(<<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>),
+                hb_committer:uri(<<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>)
             ]
     },
     % Process with 12 slots

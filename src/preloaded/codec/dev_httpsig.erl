@@ -172,14 +172,9 @@ committer(#{ <<"committer">> := URI }, Opts) when is_binary(URI) ->
         committer(#{ <<"committer">> => Committer }, Opts)
     end;
 committer(#{ <<"committer">> := Committer }, Opts) ->
-    maybe
-        {ok, URI} ?=
-            hb_ao:raw(
-                Committer,
-                #{ <<"path">> => <<"to">>, <<"type">> => <<"uri">> },
-                Opts
-            ),
-        {ok, Committer, URI}
+    case hb_committer:uri(Committer, Opts) of
+        URI when is_binary(URI) -> {ok, Committer, URI};
+        _ -> {error, not_found}
     end;
 committer(_Req, _Opts) ->
     {error, not_found}.
@@ -697,8 +692,9 @@ commitment_identity_test() ->
             }
         )
     ),
-    % The `keyid' of a signed commitment is the `did:pkh:' URI of its key. The
-    % commitment carries the key as its `public-key', and has no `owner'.
+    % The `keyid' of a signed commitment is the URI of the committer of its
+    % key. The commitment carries the key as its `public-key', and has no
+    % `owner'.
     Committer = hb_test_utils:committer(maps:get(<<"priv-wallet">>, Opts)),
     [SignedCommitment] = maps:values(maps:get(<<"commitments">>, Signed)),
     ?assertMatch(

@@ -516,7 +516,7 @@ do_decode(Other, _Opts) ->
 %% @doc Decode a value of a message from Lua. Lua holds the Arweave committer
 %% of a commitment as its address, so we convert it back to its URI.
 decode_value(<<"commitments">>, Commitments) when is_map(Commitments) ->
-    map_committers(fun hb_util:committer/1, Commitments);
+    map_committers(fun hb_committer:uri/1, Commitments);
 decode_value(_Key, Value) ->
     Value.
 

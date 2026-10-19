@@ -13,7 +13,7 @@
 %%% type of the key as its `type' if the label states a key type. A label of an
 %%% ID gives the message with that ID. `to' gives `did:ar:<address>', or with
 %%% `characters => host' the label with no key type, which is the URI that
-%%% `hb_committer:uri/2' gives.
+%%% commitments hold (see `hb_committer').
 %%%
 %%% A committer that holds a key has the public key as its `owner', the
 %%% signature type of the key as its `type', and the private key as `d' in
@@ -157,8 +157,7 @@ key_address(_Owner, _KeyType) ->
 %% committer with the same URIs.
 uri_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
-    Committer =
-        (ar_wallet:new(?RSA_KEY_TYPE))#{ <<"device">> => <<"did-ar@1.0">> },
+    Committer = ar_wallet:new(?RSA_KEY_TYPE),
     Address = hb_util:human_id(ar_wallet:to_address(Committer)),
     Host = #{ <<"scheme">> => <<"did">>, <<"characters">> => <<"host">> },
     {ok, URI} = hb_uri:to(Committer, #{ <<"scheme">> => <<"did">> }, Opts),
@@ -171,6 +170,12 @@ uri_test() ->
             ?assertEqual({ok, HostURI}, hb_uri:to(ReadCommitter, Host, Opts))
         end,
         [URI, HostURI]
+    ),
+    % The committer of an Ed25519 node is that of its address.
+    Ed25519 = #{ <<"priv-wallet">> => ar_wallet:new(?EDDSA_KEY_TYPE) },
+    ?assertEqual(
+        hb_opts:committer(Ed25519),
+        hb_committer:uri(hb_opts:address(Ed25519))
     ),
     % A label of an ID gives the message with that ID.
     {ok, ID} = hb_cache:write(#{ <<"a">> => <<"1">> }, Opts),
@@ -185,8 +190,7 @@ uri_test() ->
 %% signature either.
 commit_verify_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
-    Committer =
-        (ar_wallet:new(?RSA_KEY_TYPE))#{ <<"device">> => <<"did-ar@1.0">> },
+    Committer = ar_wallet:new(?RSA_KEY_TYPE),
     Address = hb_util:human_id(ar_wallet:to_address(Committer)),
     {ok, URI} = hb_uri:to(Committer, #{ <<"scheme">> => <<"did">> }, Opts),
     {ok, Read} = hb_uri:from(URI, Opts),
@@ -195,8 +199,7 @@ commit_verify_test() ->
         hb_ao:raw(Committer, Req#{ <<"path">> => <<"commit">> }, Opts),
     Verify = maps:merge(Req#{ <<"path">> => <<"verify">> }, Signed),
     ?assertEqual({ok, true}, hb_ao:raw(Read, Verify, Opts)),
-    Other =
-        (ar_wallet:new(?RSA_KEY_TYPE))#{ <<"device">> => <<"did-ar@1.0">> },
+    Other = ar_wallet:new(?RSA_KEY_TYPE),
     {ok, OtherSigned} =
         hb_ao:raw(Other, Req#{ <<"path">> => <<"commit">> }, Opts),
     ?assertEqual(

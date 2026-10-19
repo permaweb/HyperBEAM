@@ -20,15 +20,15 @@ opts(Opts) ->
             )
     }.
 
-%% @doc Read the latest known scheduler location for a committer. An Arweave
-%% address is read as its `did:pkh:' committer.
+%% @doc Read the latest known scheduler location for a committer, given in any
+%% form that `hb_committer:uri/2' reads.
 read(Address, RawOpts) ->
     Opts = opts(RawOpts),
     Res =
         hb_cache:read(
             hb_path:to_binary([
                 ?LOCATION_CACHE_PREFIX,
-                hb_util:committer(Address)
+                hb_committer:uri(Address, Opts)
             ]),
             Opts
         ),

@@ -7,7 +7,8 @@
 %%% signers, a scheduler location or the accounts of a ledger, takes it in any
 %%% of these forms: a committer message, a message that it committed, a URI in
 %%% either form (see `hb_uri'), or an Arweave address. `uri/2' gives each of
-%%% them in one form, so that the URIs of one committer compare equal:
+%%% them in one form, so that the URIs of one committer compare equal.
+%%% Commitments, signers lists and ledgers hold this form:
 %%% <ul>
 %%%   <li>The committer of an Arweave key, whose address is the SHA-256 of the
 %%%       key (an RSA, Ed25519 or ECDSA key), is `did-ar@1.0'. Its URI is
@@ -255,10 +256,13 @@ uri_test() ->
     ?assertEqual(URI, uri(<<"did:ar:", Address/binary>>)),
     ?assertEqual(URI, uri(encode({address, ?RSA_KEY_TYPE}, Address))),
     ?assertEqual(<<URI/binary, "?hint=x">>, uri(<<Address/binary, "?hint=x">>)),
-    ?assertEqual(
-        URI,
-        uri(Wallet#{ <<"device">> => <<"did-ar@1.0">> }, Opts)
-    ),
+    ?assertEqual(URI, uri(Wallet, Opts)),
+    Signed =
+        hb_message:commit(
+            #{ <<"a">> => <<"1">> },
+            Opts#{ <<"priv-wallet">> => Wallet }
+        ),
+    ?assertEqual(URI, uri(Signed, Opts)),
     ?assertEqual({ok, Address}, address(URI)),
     ?assertEqual(error, address(encode({id, undefined}, Address))),
     ?assertEqual(<<"hmac:constant:ao">>, uri(<<"hmac:constant:ao">>)),

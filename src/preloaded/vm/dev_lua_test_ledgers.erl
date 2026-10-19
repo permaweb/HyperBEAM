@@ -280,7 +280,7 @@ apply_names(Map, EnvNames, Opts) ->
     IDs =
         maps:from_list(
             lists:filtermap(
-                fun({Wallet = #{ <<"device">> := <<"did-pkh@1.0">> }, V}) ->
+                fun({Wallet = #{ <<"device">> := <<"did-ar@1.0">> }, V}) ->
                     {true, {hb:address(Wallet), V}};
                    ({Key, V}) ->
                     try {true, {hb_util:human_id(Key), V}}

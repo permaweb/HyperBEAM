@@ -515,13 +515,15 @@ verify_controllers(WalletDetails, Request, Opts) ->
     RequiredControllers =
         hb_util:int(hb_maps:get(<<"required-controllers">>, WalletDetails, 1, Opts)),
     Controllers =
-        lists:map(
-            fun hb_util:committer/1,
-            parse_controllers(
-                hb_maps:get(<<"controllers">>, WalletDetails, [], Opts),
-                Opts
-            )
-        ),
+        [
+            hb_committer:uri(Controller, Opts)
+        ||
+            Controller <-
+                parse_controllers(
+                    hb_maps:get(<<"controllers">>, WalletDetails, [], Opts),
+                    Opts
+                )
+        ],
     PresentControllers =
         lists:filter(
             fun(Signer) ->
@@ -829,7 +831,7 @@ test_wallet_generate_and_verify(GeneratePath, ExpectedName, CommitParams) ->
     % transport commitments.
     hb_test_utils:assert_hashpath_reply(
         SignedMessage,
-        ?ARWEAVE_COMMITTER(WalletAddr),
+        hb_committer:uri(WalletAddr),
         <<"Test message">>
     ).
 
@@ -937,7 +939,7 @@ commit_with_cookie_wallet_test() ->
     % transport commitments.
     hb_test_utils:assert_hashpath_reply(
         SignedMessage,
-        ?ARWEAVE_COMMITTER(WalletName),
+        hb_committer:uri(WalletName),
         <<"Test data">>
     ).
 
@@ -1393,6 +1395,6 @@ stored_access_control_verifies_test() ->
         hb_http:post(Node, SignRequest#{ <<"priv">> => Priv }, #{}),
     hb_test_utils:assert_hashpath_reply(
         SignedMessage,
-        ?ARWEAVE_COMMITTER(WalletAddr),
+        hb_committer:uri(WalletAddr),
         <<"Test message">>
     ).

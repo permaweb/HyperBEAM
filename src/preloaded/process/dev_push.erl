@@ -758,7 +758,7 @@ apply_security(authority, Msg, TargetProcess, Codec, Opts) ->
             % committers. Sign with all local valid keys.
             commit_result(
                 Msg,
-                lists:map(fun hb_util:committer/1, Authorities),
+                [hb_committer:uri(A, Opts) || A <- Authorities],
                 Codec,
                 Opts
             );
@@ -768,10 +768,11 @@ apply_security(authority, Msg, TargetProcess, Codec, Opts) ->
             ?event(push, {found_authority, {authority, Authority}}, Opts),
             commit_result(
                 Msg,
-                lists:map(
-                    fun hb_util:committer/1,
-                    hb_util:binary_to_strings(Authority)
-                ),
+                [
+                    hb_committer:uri(A, Opts)
+                ||
+                    A <- hb_util:binary_to_strings(Authority)
+                ],
                 Codec,
                 Opts
             )

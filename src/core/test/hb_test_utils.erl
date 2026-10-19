@@ -34,9 +34,9 @@ test_store(Mod, Tag) ->
     filelib:ensure_dir(binary_to_list(TestDir)),
     #{ <<"store-module">> => Mod, <<"name">> => TestDir }.
 
-%% @doc Return the `did:pkh:' URI of the committer of an Arweave wallet's key.
+%% @doc Return the URI of the committer of an Arweave wallet's key.
 committer(Wallet) ->
-    ?ARWEAVE_COMMITTER(hb_util:human_id(ar_wallet:to_address(Wallet))).
+    hb_committer:uri(hb_util:human_id(ar_wallet:to_address(Wallet))).
 
 %% @doc Run each test in a suite with each set of options. Start and reset
 %% the store(s) for each test. Expects suites to be a list of tuples with
