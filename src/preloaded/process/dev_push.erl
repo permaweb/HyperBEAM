@@ -227,12 +227,14 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                             hb_ao:get(
                                                 <<"scheduler">>,
                                                 PrimaryProcess,
+                                                undefined,
                                                 Opts
                                             ),
                                         <<"from-authority">> =>
                                             hb_ao:get(
                                                 <<"authority">>,
                                                 PrimaryProcess,
+                                                undefined,
                                                 Opts
                                             )
                                     },
@@ -1616,7 +1618,8 @@ test_parse_max_depth() ->
 %% recursive `/push' is skipped, so the response carries an explicit
 %% `resulted-in: <<"skipped">>' marker and the target's compute is not invoked.
 test_max_depth_zero_schedules_only() ->
-    {Sender, Receiver, MsgSlot, Opts} = setup_two_process_message(),
+    {Sender, Receiver, MsgSlot, Opts} =
+        setup_two_process_message([<<"authority">>]),
     {ok, ReceiverSlotBefore} =
         hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
     {ok, PushResult} =
@@ -1640,7 +1643,17 @@ test_max_depth_zero_schedules_only() ->
     %% always runs, even when push_downstream is short-circuited.
     {ok, ReceiverSlotAfter} =
         hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
-    ?assert(ReceiverSlotAfter > ReceiverSlotBefore).
+    ?assert(ReceiverSlotAfter > ReceiverSlotBefore),
+    % A Sender with no `authority' sends a message with no `from-authority'.
+    ?assertEqual(
+        undefined,
+        hb_ao:get(
+            <<"schedule/assignments/2/body/from-authority">>,
+            Receiver,
+            undefined,
+            Opts
+        )
+    ).
 
 %% @doc `max-depth = 1' on the outer push: the outbox is scheduled and the
 %% target's `/push' runs once (depth 1 -> depth 0). When that target's own
@@ -1734,15 +1747,29 @@ test_compute_push_hook_idempotent() ->
 %% Ping message on the Sender that targets the Receiver. Returns
 %% `{Sender, Receiver, MsgSlot, Opts}' so individual tests can drive
 %% `/push' (or `/compute&push') against the staged message and observe the
-%% resulting downstream behaviour.
+%% resulting downstream behaviour. The Sender holds none of the keys in
+%% `SenderWithout'.
 setup_two_process_message() ->
+    setup_two_process_message([]).
+setup_two_process_message(SenderWithout) ->
     hb_process_test_vectors:init(),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"cache-control">> => [],
         <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
     },
-    Sender = hb_process_test_vectors:aos_process(Opts),
+    Sender =
+        hb_message:commit(
+            hb_maps:without(
+                SenderWithout,
+                hb_message:uncommitted(
+                    hb_process_test_vectors:aos_process(Opts),
+                    Opts
+                ),
+                Opts
+            ),
+            Opts
+        ),
     {ok, _} = hb_cache:write(Sender, Opts),
     {ok, _} =
         hb_ao:resolve(Sender, #{
