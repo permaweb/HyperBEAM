@@ -313,7 +313,7 @@ wasm_compute_from_id_test_parallel() ->
     schedule_wasm_call(Base, <<"fac">>, [5.0], Opts),
     BaseID = hb_message:id(Base, all, Opts),
     Req = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
-    {ok, Res} = hb_ao:resolve(BaseID, Req, Opts),
+    {ok, Res} = hb_ao:resolve(<<"ao:", BaseID/binary>>, Req, Opts),
     ?event(process_compute, {computed_message, {res, Res}}),
     ?assertEqual([120.0], hb_ao:get(<<"results/output">>, Res, Opts)).
 

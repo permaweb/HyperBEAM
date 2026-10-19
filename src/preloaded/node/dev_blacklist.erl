@@ -214,7 +214,7 @@ collect_ids(Bin, Acc, _Opts) when ?IS_ID(Bin) -> [hb_util:human_id(Bin) | Acc];
 collect_ids(<<Scheme:2/binary, ":", Rest/binary>>, Acc, _Opts)
         when Scheme =:= <<"ao">>; Scheme =:= <<"ni">> ->
     % The binary is an `ao:' URI or a `ni:' name. We percent-decode it as
-    % `hb_singleton' decodes the path of an `ao://' URI, then collect every ID
+    % `hb_singleton' decodes the path of an `ao:' URI, then collect every ID
     % that it contains, wherever it appears. A URI that cannot be decoded
     % cannot be read either, so we scan it as it is.
     Decoded =

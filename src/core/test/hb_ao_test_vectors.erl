@@ -520,7 +520,7 @@ direct_id_key_resolution_test() ->
     {ok, ID} = hb_cache:write(#{ <<"value">> => <<"kept">> }, Opts),
     ?assertEqual(
         {ok, <<"kept">>},
-        hb_ao:resolve(ID, <<"value">>, Opts)
+        hb_ao:resolve(<<"ao:", ID/binary>>, <<"value">>, Opts)
     ).
 
 resolve_id_test(Opts) ->
@@ -1166,18 +1166,6 @@ load_as_test(Opts) ->
     {ok, ID} = hb_cache:write(Msg, Opts),
     {ok, ReadMsg} = hb_cache:read(ID, Opts),
     ?assert(hb_message:match(Msg, ReadMsg, primary, Opts)),
-    ?assertEqual(
-        {ok, <<"MESSAGE">>},
-        hb_ao:resolve_many(
-            [
-                {as, <<"message@1.0">>, #{ <<"path">> => <<ID/binary>> }},
-                <<"test_func">>,
-                <<"test_key">>
-            ],
-            Opts
-        )
-    ),
-    % An `as' of the `ao:' URI of the message loads it as the ID does.
     ?assertEqual(
         {ok, <<"MESSAGE">>},
         hb_ao:resolve_many(

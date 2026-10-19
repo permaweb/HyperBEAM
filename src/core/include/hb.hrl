@@ -12,7 +12,7 @@
 %% human-readable ID encoding.
 -define(IS_ID(X), (is_binary(X) andalso (byte_size(X) == 42 orelse byte_size(X) == 43 orelse byte_size(X) == 32))).
 %% @doc Macro usable in guards that recognizes the hashpath URI scheme.
--define(IS_HASHPATH(X), (is_binary(X) andalso byte_size(X) >= 5 andalso binary_part(X, 0, 5) == <<"ao://">>)).
+-define(IS_HASHPATH(X), (is_binary(X) andalso byte_size(X) >= 3 andalso binary_part(X, 0, 3) == <<"ao:">>)).
 %% @doc Builds the `ni:' name of a binary from its base64url SHA-256 (RFC 6920
 %% s3, with no authority). `hb_cache' stores a binary under this name.
 -define(NI_URI(ID), <<"ni:///sha-256;", (ID)/binary>>).

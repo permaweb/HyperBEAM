@@ -19,10 +19,12 @@
 %%%         -> {ok, URI} | {error, Reason}
 %%% '''
 %%%
-%%% `from' sets three options when it resolves the device:
+%%% `from' sets four options when it resolves the device:
 %%% <ul>
 %%%   <li>`hashpath' is `ignore', so the resolution adds no hashpath to the
-%%%       result. Loading a message by its ID does not add one either.</li>
+%%%       result.</li>
+%%%   <li>`return-context' is `false', so `from' returns the resource, not the
+%%%       context of the resolution, when the caller asks for a context.</li>
 %%%   <li>`cache-control' is `no-cache' and `no-store', so the result is not
 %%%       read from the cache or written to it. Each `from' of a URI reads the
 %%%       resource again.</li>
@@ -63,7 +65,7 @@
 %%%
 %%% A URI can be:
 %%% <ul>
-%%%   <li>the base of a resolution (`hb_ao');</li>
+%%%   <li>the base or the request of a resolution (`hb_ao');</li>
 %%%   <li>a path part (`hb_singleton');</li>
 %%%   <li>a link value, or a path that `hb_cache' reads.</li>
 %%% </ul>
@@ -109,6 +111,7 @@ from(Scheme, Rest, Opts) ->
             #{ <<"path">> => <<"from">>, <<"type">> => <<"uri">> },
             Opts#{
                 <<"hashpath">> => ignore,
+                <<"return-context">> => false,
                 <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
                 <<"force-message">> => false
             }

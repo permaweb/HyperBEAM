@@ -38,13 +38,13 @@
 %%%   `//a', `/~meta@1.0' and `/&k=v'.
 %%% - A first path part that is a key, alone or with a device, is read as the
 %%%   `ao:' URI of that key, upon the node that executes the path. The device
-%%%   is applied to the loaded message. An ID is its own `ao:' URI.
+%%%   is applied to the loaded message.
 %%% - A first path part with a key that sets other keys, as in `/a&k=v' and
 %%%   `/a~d@1.0&k=v', is a request upon the carried message.
 %%% Each later path part is a request, applied in turn to the result of the
-%%% parts before it. A hashpath is `ao://' followed by a path, in which each
-%%% request may be followed by claims about the result of its execution.
-%%% `hb_hashpath' reads and checks these claims. For example:
+%%% parts before it. A hashpath is `ao:' followed by a path without its first
+%%% `/', in which each request may be followed by claims about the result of
+%%% its execution. `hb_hashpath' reads and checks these claims. For example:
 %%% <pre>
 %%%     //a/b           => [#{}, #{ path => a }, #{ path => b }]
 %%%     /a/b            => [ao:a, #{ path => b }]
@@ -52,11 +52,11 @@
 %%%     /a&k=v/b        => [#{}, #{ path => a, k => v }, #{ path => b }]
 %%%     /a~d@1.0&k=v/b  => [{as, d@1.0, #{ path => a, k => v }}, #{ path => b }]
 %%%     /~meta@1.0/info => [{as, meta@1.0, #{}}, #{ path => info }]
-%%%     /ID~d@1.0/k     => [{as, d@1.0, #{ path => ID }}, #{ path => k }]
-%%%     /ID/k=v         => [ID, #{ path => k, k => v }]
-%%%     /ID/ao:ID2      => [ID, {resolve, [ao:ID2]}]
+%%%     /ID/ID2         => [ao:ID, #{ path => ID2 }]
+%%%     /ID/ao:ID2      => [ao:ID, ao:ID2]
+%%%     /ao:ID~d@1.0/k  => [{as, d@1.0, ao:ID}, #{ path => k }]
 %%%     //a/(//b/c)/d   => [#{}, #{ path => a }, (resolve //b/c), #{ path => d }]
-%%%     ao://ID/k.ID2   => [ID, #{ path => k }], claiming that the result is ID2
+%%%     ao:ID/k.ID2     => [ao:ID, #{ path => k }], claiming its result is ID2
 %%% </pre>
 %%%
 %%% The grammar of a path is given below in EBNF (ISO 14977), over the bytes
@@ -64,11 +64,9 @@
 %%% and are generated from the `.xrl' and `.yrl' files of the same names that
 %%% sit beside this module.
 %%% <pre>
-%%%     hashpath     = "ao://", path ;
+%%%     hashpath     = "ao:", path ;
 %%%     path         = [ "/" ], [ part ], { "/", [ part ] }, [ "?", query ] ;
-%%%     part         = uri | subpath | step, [ claims ] ;
-%%%     uri          = scheme, ":", { uri byte | group | quoted } ;
-%%%     scheme       = letter, { letter | digit | "+" | "-" | "." } ;
+%%%     part         = subpath | step, [ claims ] ;
 %%%     subpath      = group ;
 %%%     group        = "(", { group byte | group | quoted }, ")" ;
 %%%     quoted       = '"', { quoted byte | "\", byte }, '"' ;
@@ -97,20 +95,23 @@
 %%%                    application/x-www-form-urlencoded string ? ;
 %%%     key byte     = byte - ( "/" | "?" | "&" | "=" | "~" | "(" | ")" | '"' ) ;
 %%%     value byte   = key byte | "=" | "~" ;
-%%%     uri byte     = value byte | "&" ;
-%%%     group byte   = uri byte | "/" | "?" ;
+%%%     group byte   = value byte | "&" | "/" | "?" ;
 %%%     quoted byte  = byte - ( '"' | "\" ) ;
 %%% </pre>
 %%%
 %%% The grammar does not express the following rules, which are applied to
 %%% the parts that it reads:
 %%% <ul>
-%%%   <li>A part that starts with a URI scheme and its `:' (see `hb_uri') is
-%%%       read as a URI, whatever follows the scheme. The `:' of a URI is
-%%%       written in a path as it is, but its `/', `?', `#' and `%' characters
-%%%       must be percent-escaped. Like an ID, a URI is a step of its own: as
+%%%   <li>A key that starts with a URI scheme and its `:' (see `hb_uri'),
+%%%       alone or with only a device, is that URI, percent-decoded. A claim
+%%%       or a device after the URI is that of its part, so the characters of
+%%%       the URI that are the syntax of a part (`.', `~', `&', `=', `+', `;',
+%%%       `@', `*', `(', `)', `/', `?', `%', `"' and space) must be
+%%%       percent-encoded, as must `#'. A URI alone is a step of its own: as
 %%%       the first part it is the base, and after the base it is the request
-%%%       that it names.</li>
+%%%       that it identifies. A URI with a device is the message that the
+%%%       device is applied to. With `=' or `&key=value', a key that starts
+%%%       with a URI scheme is read as any other key.</li>
 %%%   <li>The query of a path starts at the first `?' that is not inside a
 %%%       group.</li>
 %%%   <li>Claims are only read at the end of a part, in the order that the
@@ -119,12 +120,8 @@
 %%%       is not an ID of 43 bytes. For example, `~meta@1.0' names a device,
 %%%       and `a.b' is a key. These characters are not in the base64url
 %%%       alphabet of IDs, so a claim never needs to be escaped.</li>
-%%%   <li>The base is the first part when it is an ID or a URI, a subpath, or
-%%%       a step with a device. Otherwise the base is the empty message, and
-%%%       the first part is the first request. A bare key of 32, 42 or 43
-%%%       bytes is an ID. After the base, a bare ID is a key in a path. In a
-%%%       hashpath, whose request position holds an ID, a bare ID of 43 bytes
-%%%       is the ID of the request, and one of 32 or 42 bytes is a key.</li>
+%%%   <li>A key is read in the same way whatever its length. A message is
+%%%       given by its URI, such as `ao:<ID>'.</li>
 %%%   <li>Claims follow a request, never the base.</li>
 %%%   <li>In `key=value', and in `&key=value' after a step, the key is split
 %%%       at its first `+' or space that is not inside a group or a quoted
@@ -132,9 +129,9 @@
 %%%       sets `k' to the integer 1.</li>
 %%%   <li>A value or a device that is a single group, such as `(/a/b)', is a
 %%%       subpath. It is resolved, and its result is used in its place.</li>
-%%%   <li>The key of a step keeps its percent-escapes, unless the step gives
-%%%       it a value with `='. Every other key, value, device and URI is
-%%%       percent-decoded after it is parsed.</li>
+%%%   <li>The key of a step keeps its percent-escapes, unless the step is a
+%%%       URI or gives the key a value with `='. Every other key, value and
+%%%       device is percent-decoded after it is parsed.</li>
 %%% </ul>
 -module(hb_singleton).
 -export([from/2, from_request/2, from_path/1, to/1, to_part/1, parse/2]).
@@ -173,8 +170,8 @@ to(Messages) ->
     {TABMMessage, _FinalIndex, Scopes} =
         lists:foldl(
             fun
-                % Special case when AO-Core message is ID
-                (Message, {Acc, Index, ScopedModifications}) when ?IS_ID(Message) ->
+                % Special case when AO-Core message is a URI
+                (Message, {Acc, Index, ScopedModifications}) when is_binary(Message) ->
                     {append_path(Message, Acc), Index + 1, ScopedModifications};
                 % Special case when AO-Core message can be written as one part
                 ({part, Part}, {Acc, Index, ScopedModifications}) ->
@@ -305,7 +302,7 @@ to_part({as, Device, #{ <<"path">> := Key } = Msg}) when map_size(Msg) == 1 ->
 to_part(#{ <<"path">> := Key } = Msg) when map_size(Msg) == 1 ->
     maybe
         {ok, K} ?= literal(Key, ?KEY_SYNTAX),
-        true ?= (byte_size(K) > 0 andalso not ?IS_ID(K)) orelse error,
+        true ?= byte_size(K) > 0 orelse error,
         {ok, K}
     end;
 to_part(#{ <<"path">> := Key } = Msg) when map_size(Msg) == 2 ->
@@ -350,9 +347,9 @@ from(RawMsg, Opts) ->
 
 %% @doc Parse a singleton TABM message, a path or a hashpath into the contexts
 %% of its steps. The first context holds the base, and each context holds a
-%% request and the claims that follow it in the path. A base that is an ID is
-%% given as `base-id', and a request that is an ID in a hashpath is given as
-%% `request-id'. Throws as `from/2' does.
+%% request and the claims that follow it in the path. A base or a request that
+%% is a URI is given as its `base-uri' or `request-uri', and each claim as the
+%% `ao:' URI of its ID. Throws as `from/2' does.
 parse(RawMsg, Opts) when is_binary(RawMsg) ->
     parse(#{ <<"path">> => RawMsg }, Opts);
 parse(RawMsg, Opts) ->
@@ -366,18 +363,7 @@ parse(RawMsg, Opts) ->
             Query,
             Opts
         ),
-    Contexts = contexts(Parts, MsgWithoutBasePath, Opts),
-    case ?IS_HASHPATH(RawPath) of
-        true -> lists:map(fun request_id/1, Contexts);
-        false -> Contexts
-    end.
-
-%% @doc Move a request that is a bare ID of 43 bytes to the `request-id' of
-%% its context. Only hashpaths are read this way, as their requests may be
-%% given by ID.
-request_id(Ctx = #{ <<"request">> := ID }) when byte_size(ID) == 43 ->
-    (maps:remove(<<"request">>, Ctx))#{ <<"request-id">> => ID };
-request_id(Ctx) -> Ctx.
+    contexts(Parts, MsgWithoutBasePath, Opts).
 
 %% @doc Build the contexts of the parts of a path. The other keys of the
 %% singleton are added to the messages, as their scopes direct.
@@ -401,80 +387,60 @@ contexts(Parts, MsgWithoutBasePath, Opts) ->
 %% the first context. Throws `invalid_claim' if the base is followed by claims.
 pair([], []) -> [];
 pair([Base | Requests], [[] | Claims]) ->
+    BaseCtx = step_context(<<"base">>, Base),
     case lists:zipwith(fun request_context/2, Requests, Claims) of
-        [] -> [base_context(Base)];
-        [First | Rest] -> [maps:merge(base_context(Base), First) | Rest]
+        [] -> [BaseCtx];
+        [First | Rest] -> [maps:merge(BaseCtx, First) | Rest]
     end;
 pair(_Msgs, [[Claim | _] | _]) ->
     throw({invalid_singleton, invalid_claim, text([Claim])}).
 
-%% @doc Make the context of a base. A base that is an ID is given as
-%% `base-id'.
-base_context(Base) ->
-    case step_id(Base) of
-        {ok, ID} -> #{ <<"base-id">> => ID };
-        _ -> #{ <<"base">> => Base }
-    end.
-
-%% @doc Make the context of a request, with the keys of its claims. A request
-%% that is a URI is given as `{resolve, [URI]}', so that the message it names
-%% is the request.
+%% @doc Make the context of a request, with the keys of its claims.
 request_context(Req, Claims) ->
-    lists:foldl(
-        fun claim_context/2,
-        case step_id(Req) of
-            uri -> #{ <<"request">> => {resolve, [Req]} };
-            _ -> #{ <<"request">> => Req }
-        end,
-        Claims
-    ).
+    lists:foldl(fun claim_context/2, step_context(<<"request">>, Req), Claims).
 
-%% @doc Tell whether a step is an ID, a URI or a key. A binary of 43 bytes
-%% without a URI scheme is an ID, and a binary with a scheme is a URI.
-step_id(Step) when is_binary(Step) ->
-    case {hb_uri:scheme(Step), byte_size(Step)} of
-        {{error, not_found}, 43} -> {ok, Step};
-        {{error, not_found}, _} -> key;
-        _ -> uri
-    end;
-step_id(_Step) -> key.
+%% @doc Make the context of a base or a request. A base or a request that is a
+%% URI is held in `base-uri' or `request-uri'.
+step_context(Name, URI) when is_binary(URI) ->
+    #{ <<Name/binary, "-uri">> => URI };
+step_context(Name, Step) -> #{ Name => Step }.
 
-%% @doc Add the keys of a claim to a context.
+%% @doc Add the keys of a claim to a context, each as the `ao:' URI of the ID
+%% that it claims.
 claim_context({varied, _, {Base, Req, _}}, Ctx) ->
     Ctx#{
-        <<"varied-base-id">> => hb_util:bin(Base),
-        <<"varied-request-id">> => hb_util:bin(Req)
+        <<"varied-base-uri">> => <<"ao:", (hb_util:bin(Base))/binary>>,
+        <<"varied-request-uri">> => <<"ao:", (hb_util:bin(Req))/binary>>
     };
 claim_context({dependencies, _, {ID, _}}, Ctx) ->
-    Ctx#{ <<"dependencies-id">> => hb_util:bin(ID) };
+    Ctx#{ <<"dependencies-uri">> => <<"ao:", (hb_util:bin(ID))/binary>> };
 claim_context({result, _, {ID, _}}, Ctx) ->
-    Ctx#{ <<"varied-result-id">> => hb_util:bin(ID) };
+    Ctx#{ <<"varied-result-uri">> => <<"ao:", (hb_util:bin(ID))/binary>> };
 claim_context({extension, _, {ID, _}}, Ctx) ->
     Ctx#{
-        <<"varied-result-id">> => hb_util:bin(ID),
+        <<"varied-result-uri">> => <<"ao:", (hb_util:bin(ID))/binary>>,
         <<"normalizer">> => base
     }.
 
 %% @doc Convert a list of contexts into the messages to execute: the base,
-%% then each request. A request given by its ID is resolved to the message
-%% with that ID.
+%% then each request. A base or a request given by its URI is the URI.
 requests([]) -> [];
 requests(Contexts = [First | _]) ->
     [
         case First of
-            #{ <<"base-id">> := ID } -> ID;
+            #{ <<"base-uri">> := URI } -> URI;
             #{ <<"base">> := Base } -> Base
         end
     |
         [
             case Ctx of
-                #{ <<"request-id">> := ID } -> {resolve, [ID]};
+                #{ <<"request-uri">> := URI } -> URI;
                 #{ <<"request">> := Req } -> Req
             end
         ||
             Ctx <- Contexts,
             is_map_key(<<"request">>, Ctx) orelse
-                is_map_key(<<"request-id">>, Ctx)
+                is_map_key(<<"request-uri">>, Ctx)
         ]
     ].
 
@@ -494,7 +460,7 @@ from_request(Req, Opts) ->
     ].
 
 %% @doc Parse the relative reference into its parts and its query. The parts
-%% of a hashpath follow its `ao://'. A path given as a list is already split:
+%% of a hashpath follow its `ao:'. A path given as a list is already split:
 %% each element is one part, even if it holds a `/'.
 from_path(Parts) when is_list(Parts) -> {ok, lists:map(fun list_part/1, Parts), #{}};
 from_path(RelativeRef) when is_binary(RelativeRef) ->
@@ -523,9 +489,9 @@ list_part(Part) when is_binary(Part) ->
     Parsed;
 list_part(Part) -> {term, Part}.
 
-%% @doc Scan a path into its tokens. The `ao://' of a hashpath is dropped.
-tokens(<<"ao://", _/binary>> = Hashpath) ->
-    [{scheme, _, "ao:"}, {'/', _}, {'/', _} | Tokens] = lex(Hashpath),
+%% @doc Scan a path into its tokens. The `ao:' of a hashpath is dropped.
+tokens(<<"ao:", _/binary>> = Hashpath) ->
+    [{scheme, _, "ao:"} | Tokens] = lex(Hashpath),
     Tokens;
 tokens(Path) -> lex(Path).
 
@@ -640,8 +606,8 @@ open_group(Tokens) ->
 
 %% @doc Find the position of the character that follows the given leading
 %% tokens of a path, counted in bytes from the start of the text. We take the
-%% column of the first token from the lexer, as only `ao://' can come before
-%% it, and add the bytes of the tokens that follow. The lexer's columns cannot
+%% column of the first token from the lexer, as only `ao:' can come before it,
+%% and add the bytes of the tokens that follow. The lexer's columns cannot
 %% be used for later tokens: they do not count bytes after a tab, a newline,
 %% a byte above 127, or a separator that does not start a claim, such as the
 %% `@' of `~meta@1.0'.
@@ -701,14 +667,13 @@ parse_query(QStr) ->
 
 %% @doc Normalize the base path. A first path part without a key is the
 %% carried message, with the rest of the part applied to it. A key, alone or
-%% with a device, is read as an `ao:' URI, and an ID is its own `ao:' URI. A
-%% key that sets other keys, with or without a device, is a request upon the
-%% carried message.
+%% with a device, is read as an `ao:' URI. A key that sets other keys, with or
+%% without a device, is a request upon the carried message.
 normalize_base([]) -> [];
 normalize_base([{empty, Claims} | Rest]) -> [{#{}, Claims} | Rest];
 normalize_base([First = {Base, _} | Rest]) when is_binary(Base) -> [First | Rest];
 normalize_base([{{as, Dev, Raw = #{ <<"path">> := Key }}, Claims} | Rest])
-        when map_size(Raw) == 1, Key =/= <<>>, not ?IS_ID(Key) ->
+        when map_size(Raw) == 1, Key =/= <<>> ->
     [{{as, Dev, <<"ao:", Key/binary>>}, Claims} | Rest];
 normalize_base([First = {{as, _, _}, _} | Rest]) -> [First | Rest];
 normalize_base([First = {{resolve, _}, _} | Rest]) -> [First | Rest];
@@ -781,12 +746,6 @@ do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) 
     RawAdditional = lists:nth(I, ScopedKeys),
     {Msg, Additional} =
         case hb_maps:get(<<"path">>, RawMsg, <<"">>, Opts) of
-            ID when ?IS_ID(ID) ->
-                % When we have an ID, we do not merge the globally scoped elements.
-                {
-                    RawMsg,
-                    #{}
-                };
             <<"">> ->
                 % When we have an empty path, we remove the path from both
                 % messages. AO-Core will then simply set the device specifier
@@ -822,28 +781,33 @@ do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
     [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
 
 %% @doc Build the step of a part, and return it with the claims that follow
-%% it. A URI is decoded, a subpath is parsed as a path, and the keys of a step
-%% are built in the following order:
+%% it. A subpath is parsed as a path, and the keys of a step are built in the
+%% following order:
 %% 1. The key, and its value after `=' or its device after `~'
 %% 2. Inlined key-value pairs after `&'
 %% 3. The device specifier
 build_part(empty, _Opts) -> {empty, []};
 build_part({term, Term}, _Opts) -> {Term, []};
-build_part({uri, Tokens}, _Opts) -> {decode_string(text(Tokens)), []};
 build_part({subpath, {group, _, Tokens}}, Opts) ->
     {{resolve, subpath(Tokens, Opts)}, []};
 build_part({step, Step, Claims}, Opts) -> {step(Step, Opts), Claims}.
 
-%% @doc Build the message of a step, or return its key if it is an ID.
+%% @doc Build the message of a step. A key that starts with a URI scheme is
+%% the URI, percent-decoded: alone, it is the step, and with a device and no
+%% other keys, it is the message that the device is applied to.
+step({key, Tokens = [{scheme, _, _} | _]}, _Opts) ->
+    decode_string(text(Tokens));
 step({key, Tokens}, _Opts) ->
-    case text(Tokens) of
-        ID when ?IS_ID(ID) -> ID;
-        Key -> #{ <<"path">> => path_key(Key) }
-    end;
+    #{ <<"path">> => path_key(text(Tokens)) };
 step({value, KeyTokens, ValueTokens, Items}, Opts) ->
     % The key of `Key=Value' or `Key+Type=Value' is the path.
     {Key, Val} = key_value(KeyTokens, ValueTokens, Opts),
     items(Items, #{ <<"path">> => path_key(Key), Key => Val }, Opts);
+step({device, KeyTokens = [{scheme, _, _} | _], DeviceTokens, []}, Opts) ->
+    {as,
+        decode_string(maybe_subpath(DeviceTokens, Opts)),
+        decode_string(text(KeyTokens))
+    };
 step({device, KeyTokens, DeviceTokens, Items}, Opts) ->
     {as,
         decode_string(maybe_subpath(DeviceTokens, Opts)),
@@ -999,21 +963,27 @@ parse_explicit_message_test() ->
     Singleton2 = #{
         <<"path">> => <<"/", DummyID/binary, "/a">>
     },
-    ?assertEqual([DummyID, #{ <<"path">> => <<"a">> }], from(Singleton2, #{})),
+    ?assertEqual(
+        [<<"ao:", DummyID/binary>>, #{ <<"path">> => <<"a">> }],
+        from(Singleton2, #{})
+    ),
     Singleton3 = #{
         <<"path">> => <<"/", DummyID/binary, "/a">>,
         <<"a">> => <<"b">>
     },
     ?assertEqual(
-        [DummyID, #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }],
+        [
+            <<"ao:", DummyID/binary>>,
+            #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }
+        ],
         from(Singleton3, #{})
     ),
     % The other keys of the singleton are given to its requests, not to an
-    % `as' upon an ID or upon the `ao:' URI of a key.
+    % `as' upon the `ao:' URI of a key.
     ?assertEqual(
         [
             [
-                {as, <<"d@1.0">>, #{ <<"path">> => DummyID }},
+                {as, <<"d@1.0">>, <<"ao:", DummyID/binary>>},
                 #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }
             ],
             [
@@ -1027,16 +997,23 @@ parse_explicit_message_test() ->
             Path <- [<<"/", DummyID/binary, "~d@1.0/a">>, <<"/k~d@1.0/a">>]
         ]
     ),
-    % After the base, a bare ID is a key.
+    % After the base, a key of any length takes the keys of the request.
     ?assertEqual(
-        [DummyID, DummyID],
-        from(<<"/", DummyID/binary, "/", DummyID/binary>>, #{})
+        [
+            {as, <<"location@1.0">>, #{ <<"variant">> => <<"ao.N.1">> }},
+            #{ <<"path">> => DummyID, <<"variant">> => <<"ao.N.1">> }
+        ],
+        from(<<"/~location@1.0/", DummyID/binary, "?variant=ao.N.1">>, #{})
     ),
-    % A part that starts with a URI scheme is the URI, decoded, with the `&',
-    % `~' and `=' that follow the scheme.
+    % A key that starts with a URI scheme is the URI, percent-decoded. Its `&',
+    % `~' and `=' are percent-encoded: unencoded, they are those of its part.
     ?assertEqual(
         [<<"ni:///sha-256;x&k=v~d@1.0">>, #{ <<"path">> => <<"a">> }],
-        from(#{ <<"path">> => <<"/ni:%2f%2f%2fsha-256;x&k=v~d@1.0/a">> }, #{})
+        from(<<"/ni:%2f%2f%2fsha-256;x%26k%3dv%7ed@1.0/a">>, #{})
+    ),
+    ?assertEqual(
+        [{as, <<"d@1.0">>, <<"ni:///sha-256;x">>}, #{ <<"path">> => <<"a">> }],
+        from(<<"/ni:%2f%2f%2fsha-256;x~d@1.0/a">>, #{})
     ).
 
 %% @doc Device fields are data while parsing, including on device-only steps.
@@ -1119,7 +1096,7 @@ multiple_messages_to_test() ->
 
 basic_hashpath_to_test() ->
     Messages = [
-        <<"e5ohB7TgMYRoc0BLllkmAqkqLy1SrliEkOPJlNPXBQ8">>,
+        <<"ao:e5ohB7TgMYRoc0BLllkmAqkqLy1SrliEkOPJlNPXBQ8">>,
         #{<<"method">> => <<"GET">>, <<"path">> => <<"some-other">>}
     ],
     Expected = #{
@@ -1273,7 +1250,7 @@ basic_hashpath_test() ->
     Msgs = from(Req, #{}),
     ?assertEqual(2, length(Msgs)),
     [Base, Msg2] = Msgs,
-    ?assertEqual(Base, Hashpath),
+    ?assertEqual(Base, <<"ao:", Hashpath/binary>>),
     ?assertEqual(<<"GET">>, hb_maps:get(<<"method">>, Msg2)),
     ?assertEqual(<<"some-other">>, hb_maps:get(<<"path">>, Msg2)).
 
@@ -1511,7 +1488,7 @@ path_parts_test() ->
         from(<<"//a/b/c">>, #{})
     ),
     ?assertMatch(
-        [<<"IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q">>, #{}],
+        [<<"ao:IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q">>, #{}],
         from(<<"/IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q/req">>, #{})
     ),
     ?assertMatch(

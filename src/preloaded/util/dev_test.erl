@@ -794,15 +794,15 @@ vary_projection_uses_projected_cache_key_test() ->
     FirstCtx = hb_hashpath:context(hb_path:hashpath(First, Opts), Opts),
     SecondCtx = hb_hashpath:context(hb_path:hashpath(Second, Opts), Opts),
     ?assertNotEqual(
-        maps:get(<<"base-id">>, FirstCtx), maps:get(<<"base-id">>, SecondCtx)
+        maps:get(<<"base-uri">>, FirstCtx), maps:get(<<"base-uri">>, SecondCtx)
     ),
     ?assertEqual(
-        maps:get(<<"varied-base-id">>, FirstCtx),
-        maps:get(<<"varied-base-id">>, SecondCtx)
+        maps:get(<<"varied-base-uri">>, FirstCtx),
+        maps:get(<<"varied-base-uri">>, SecondCtx)
     ),
     ?assertEqual(
-        maps:get(<<"varied-result-id">>, FirstCtx),
-        maps:get(<<"varied-result-id">>, SecondCtx)
+        maps:get(<<"varied-result-uri">>, FirstCtx),
+        maps:get(<<"varied-result-uri">>, SecondCtx)
     ),
     ?assertEqual(8, hb_ao:get(<<"base/deep/slot">>, Second, Opts)),
     ?assertEqual(9, hb_ao:get(<<"request/deep-request/slot">>, Second, Opts)).

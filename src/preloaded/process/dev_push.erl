@@ -510,7 +510,7 @@ push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
                 BaseReq#{ <<"max-depth">> => N - 1 }
         end,
     hb_ao:resolve(
-        {as, <<"process@1.0">>, TargetID},
+        {as, <<"process@1.0">>, <<"ao:", TargetID/binary>>},
         Req,
         Opts#{ <<"cache-control">> => <<"always">> }
     ).
@@ -1241,7 +1241,7 @@ test_push_prompts_encoding_change_disabled() ->
     Res =
         hb_ao:resolve_many(
             [
-                <<"QQiMcAge5ZtxcUV7ruxpi16KYRE8UBP0GAAqCIJPXz0">>,
+                <<"ao:QQiMcAge5ZtxcUV7ruxpi16KYRE8UBP0GAAqCIJPXz0">>,
                 {as, <<"process@1.0">>, <<>>},
                 Msg
             ],
@@ -1846,7 +1846,7 @@ test_nested_push_prompts_encoding_change() ->
     Res2 =
         hb_ao:resolve_many(
             [
-                hb_message:id(Base, all, Opts),
+                <<"ao:", (hb_message:id(Base, all, Opts))/binary>>,
                 {as, <<"process@1.0">>, <<>>},
                 Msg
             ],

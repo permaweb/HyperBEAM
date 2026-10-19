@@ -166,5 +166,5 @@ end
 --- is not on this node
 function ao_get_as_missing()
     return ao.get("data", {"as", "message@1.0",
-        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"})
+        "ao:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"})
 end

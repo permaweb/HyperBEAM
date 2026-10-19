@@ -290,7 +290,7 @@ hashpath_test() ->
     Base = #{ priv => #{<<"empty">> => <<"message">>} },
     Req = #{ priv => #{<<"exciting">> => <<"Request">>} },
     Hashpath = hashpath(Base, Req, #{}),
-    ?assert(is_binary(Hashpath) andalso byte_size(Hashpath) == 87).
+    ?assertMatch(<<_:43/binary, "/ao:", _:43/binary>>, Hashpath).
 
 hashpath_direct_req_test() ->
     Base = #{ <<"base">> => <<"message">> },

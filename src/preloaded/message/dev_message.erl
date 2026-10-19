@@ -1182,7 +1182,7 @@ key_from_device_test() ->
     {ok, ID} = hb_cache:write(#{ <<"a">> => not_found }, #{}),
     ?assertEqual(
         {ok, not_found},
-        hb_ao:resolve(ID, <<"a">>, #{})
+        hb_ao:resolve(<<"ao:", ID/binary>>, <<"a">>, #{})
     ),
     ?assertEqual({ok, 1}, hb_ao:resolve(#{ <<"a">> => 1 }, <<"a">>, #{})),
     % A key named `get' is read like any other.

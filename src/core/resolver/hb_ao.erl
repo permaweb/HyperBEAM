@@ -30,9 +30,9 @@
 %%% The result of any computation can be either a new message or a raw literal 
 %%% value (a binary, integer, float, atom, or list of such values).
 %%% 
-%%% A base that is an ID or a URI is loaded before the request is resolved on
-%%% it. An ID is read from the cache. A URI is read by the device of its
-%%% scheme (`hb_uri').
+%%% A base or a request that is a URI is loaded by the device of its scheme
+%%% (`hb_uri') before the request is resolved. A message is given by its URI,
+%%% such as `ao:<ID>'.
 %%% 
 %%% Devices can be expressed as either modules or maps. They can also be 
 %%% referenced by an Arweave ID, which can be used to load a device from 
@@ -209,27 +209,10 @@ raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
 %% @doc Resolve a list of messages in sequence. Take the output of the first
 %% message as the input for the next message. Once the last message is resolved,
 %% return the result.
-%% A `resolve_many' call with only a single ID will attempt to read the message
-%% directly from the store. No execution is performed. A call with only a
-%% binary loads the resource associated with the binary, if it starts with a
-%% URI scheme (`hb_uri:maybe_from/2').
-resolve_many([ID], Opts) when ?IS_ID(ID) ->
-    % Note: This case is necessary to place specifically here for two reasons:
-    % 1. It is not in `do_resolve_many' because we need to handle the case
-    %    where a result from a prior invocation is an ID itself. We should not
-    %    attempt to resolve such IDs further.
-    % 2. The main AO-Core logic looks for linkages between message input
-    %    pairs and outputs. With only a single ID, there is not a valid pairing
-    %    to use in looking up a cached result.
-    ?event_debug(debug_ao_core, {stage, na, resolve_directly_to_id, ID, {opts, Opts}}, Opts),
-    try {ok, ensure_message_loaded(ID, Opts)}
-    catch _:_:_ -> {error, not_found}
-    end;
+%% A call with only a binary returns the resource associated with the binary,
+%% if it starts with a URI scheme (`hb_uri:maybe_from/2').
 resolve_many([URI], Opts) when is_binary(URI) ->
-    maybe
-        {ok, Msg} ?= hb_uri:maybe_from(URI, Opts),
-        do_resolve_many([Msg], Opts)
-    end;
+    hb_uri:maybe_from(URI, Opts);
 resolve_many(ListMsg, Opts) when is_map(ListMsg) ->
     % We have been given a message rather than a list of messages, so we should
     % convert it to a list, assuming that the message is monotonically numbered.
@@ -293,11 +276,6 @@ resolve_stage(1, Link, Req, Opts) when ?IS_LINK(Link) ->
     % continue with the resolution.
     ?event_debug(debug_ao_core, {stage, 1, resolve_base_link, {link, Link}}, Opts),
     resolve_stage(1, hb_cache:ensure_loaded(Link, Opts), Req, Opts);
-resolve_stage(1, BaseID, Req, Opts) when ?IS_ID(BaseID) ->
-    maybe
-        {ok, Base} ?= hb_cache:read(BaseID, Opts),
-        resolve_stage(1, Base, Req, Opts)
-    end;
 resolve_stage(1, Base, Link, Opts) when ?IS_LINK(Link) ->
     % If the second message is a link, we should load the message and
     % continue with the resolution.
@@ -310,27 +288,11 @@ resolve_stage(1, {as, DevID, <<"ao:", _/binary>> = URI}, Req, Opts) ->
         {ok, Base} ?= hb_uri:from(URI, Opts),
         resolve_stage(1, set(Base, <<"device">>, DevID, Opts), Req, Opts)
     end;
-resolve_stage(1, {as, DevID, Ref}, Req, Opts) when ?IS_ID(Ref) ->
-    % Normalize `as' requests with a raw ID as the path.
-    resolve_stage(1, {as, DevID, #{ <<"path">> => Ref }}, Req, Opts);
 resolve_stage(1, {as, DevID, Link}, Req, Opts) when ?IS_LINK(Link) ->
     % If the first message is an `as' with a link, we should load the message and
     % continue with the resolution.
     ?event_debug(debug_ao_core, {stage, 1, resolve_base_as_link, {link, Link}}, Opts),
     resolve_stage(1, {as, DevID, hb_cache:ensure_loaded(Link, Opts)}, Req, Opts);
-resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Req, Opts) when ?IS_ID(ID) ->
-    % If the first message is an `as' with an ID, we should load the message and
-    % apply the non-path elements of the sub-request to it.
-    ?event_debug(debug_ao_core, {stage, 1, subresolving_with_load, {dev, DevID}, {id, ID}}, Opts),
-    RemBase = hb_maps:without([<<"path">>], Raw, Opts),
-    ?event_debug(debug_subresolution, {loading_message, {id, ID}, {params, RemBase}}, Opts),
-    Baseb = ensure_message_loaded(ID, Opts),
-    ?event_debug(debug_subresolution, {loaded_message, {msg, Baseb}}, Opts),
-    Basec = hb_maps:merge(Baseb, RemBase, Opts),
-    ?event_debug(debug_subresolution, {merged_message, {msg, Basec}}, Opts),
-    Based = set(Basec, <<"device">>, DevID, Opts),
-    ?event_debug(debug_subresolution, {loaded_parameterized_message, {msg, Based}}, Opts),
-    resolve_stage(1, Based, Req, Opts);
 resolve_stage(1, Raw = {as, DevID, SubReq}, Req, Opts) ->
     % Set the device of the message to the specified one and resolve the sub-path.
     % As this is the first message, we will then continue to execute the request
@@ -439,7 +401,14 @@ resolve_stage(1, Base, Req, Opts) when is_list(Base) ->
     );
 resolve_stage(1, Base, NonMapReq, Opts) when not is_map(NonMapReq) ->
     ?event_debug(debug_ao_core, {stage, 1, path_normalize}),
-    resolve_stage(1, Base, #{ <<"path">> => NonMapReq }, Opts);
+    % A request that is a URI is the message that it identifies. Any other
+    % request is a path.
+    case hb_uri:maybe_from(NonMapReq, Opts) of
+        {ok, NonMapReq} ->
+            resolve_stage(1, Base, #{ <<"path">> => NonMapReq }, Opts);
+        {ok, Req} -> resolve_stage(1, Base, Req, Opts);
+        Error -> Error
+    end;
 resolve_stage(1, Base, #{ <<"path">> := <<"/">> }, _Opts) ->
     % Resolving `/' returns the base message.
     {ok, Base};
@@ -957,17 +926,8 @@ maybe_profiled_apply(Func, Args, Base, Req, Opts) ->
     Res.
 -endif.
 
-%% @doc Ensure that a message is loaded from the cache if it is an ID, or 
-%% a link, such that it is ready for execution.
-ensure_message_loaded(MsgID, Opts) when ?IS_ID(MsgID) ->
-    case hb_cache:read(MsgID, Opts) of
-        {ok, LoadedMsg} ->
-            LoadedMsg;
-        failure ->
-            failure;
-        {error, not_found} ->
-            throw({necessary_message_not_found, <<"/">>, MsgID})
-    end;
+%% @doc Ensure that a message is loaded from the cache if it is a link, such
+%% that it is ready for execution.
 ensure_message_loaded(MsgLink, Opts) when ?IS_LINK(MsgLink) ->
     hb_cache:ensure_loaded(MsgLink, Opts);
 ensure_message_loaded(Msg, _Opts) ->
