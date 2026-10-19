@@ -22,6 +22,7 @@
 %%% the `body' verifies with that key.
 -module(dev_did_pkh).
 -implements(<<"did-pkh@1.0">>).
+-device_libraries([lib_did]).
 -export([from/3, to/3, commit/3, verify/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -65,20 +66,8 @@ to(Committer, #{ <<"type">> := <<"uri">> }, _Opts) ->
     #{ body := binary(), type := binary(), _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ signature := binary(), owner := binary() }} | {error, _}.
-commit(Committer, #{ <<"body">> := Base, <<"type">> := Type }, _Opts) ->
-    #{ <<"owner">> := Owner, <<"type">> := CommitterType } = Committer,
-    KeyType = key_type(CommitterType),
-    case key_type(Type) of
-        KeyType ->
-            {
-                ok,
-                #{
-                    <<"signature">> => ar_wallet:sign(Committer, Base, digest(Type)),
-                    <<"owner">> => Owner
-                }
-            };
-        _ -> {error, #{ <<"error">> => <<"unsupported-key-type">> }}
-    end.
+commit(Committer, Req, _Opts) ->
+    lib_did:commit(Committer, Req).
 
 %% @doc Verify a signature of the request's `body'. The request's `owner' must
 %% be a key of the committer's account, and the `signature' must verify with
@@ -94,28 +83,18 @@ commit(Committer, #{ <<"body">> := Base, <<"type">> := Type }, _Opts) ->
     },
     #{ _ => _ }
 ) -> {ok, boolean()}.
-verify(Committer, Req = #{ <<"owner">> := Owner, <<"type">> := Type }, _Opts) ->
-    KeyType = key_type(Type),
-    case {account(Committer), key_account(Owner, KeyType)} of
-        {{ok, Account}, {ok, Account}} ->
-            #{ <<"body">> := Base, <<"signature">> := Sig } = Req,
-            Wallet =
-                #{
-                    <<"type">> => ar_tx:serialize_sig_type(KeyType),
-                    <<"owner">> => Owner
-                },
-            {ok, ar_wallet:verify(Wallet, Base, Sig, digest(Type))};
-        _ -> {ok, false}
-    end;
-verify(_Committer, _Req, _Opts) ->
-    {ok, false}.
+verify(Committer, Req, _Opts) ->
+    case account(Committer) of
+        {ok, Account} -> lib_did:verify(Account, Req, fun key_account/2);
+        {error, _} -> {ok, false}
+    end.
 
 %% @doc Return the account of a committer: its `body' if it has one, else the
 %% account of its key.
 account(#{ <<"body">> := Account }) ->
     {ok, Account};
 account(#{ <<"owner">> := Owner, <<"type">> := Type }) ->
-    key_account(Owner, key_type(Type)).
+    key_account(Owner, lib_did:key_type(Type)).
 
 %% @doc Return the CAIP-10 account of a public key, using the address that
 %% `ar_wallet:to_address/2' gives for it. Keys of other types have no account.
@@ -153,17 +132,6 @@ is_account(<<"solana:", Reference:32/binary, ":", Address/binary>>)
     end;
 is_account(_Account) ->
     false.
-
-%% @doc Convert a signature type to the type of key that signs with it. The
-%% signature type is either `rsa-pss-sha512', from HTTP message signatures,
-%% or one of Arweave's signature types.
-key_type(<<"rsa-pss-sha512">>) -> ?RSA_KEY_TYPE;
-key_type(Type) -> ar_tx:deserialize_sig_type(Type).
-
-%% @doc Return the hash algorithm of a signature type: SHA-512 for
-%% `rsa-pss-sha512', and SHA-256 for Arweave's signature types.
-digest(<<"rsa-pss-sha512">>) -> sha512;
-digest(_Type) -> sha256.
 
 %%% Tests
 
