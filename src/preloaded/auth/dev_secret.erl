@@ -967,6 +967,9 @@ export_wallet_test() ->
     ?event({export_test, {export_response, ExportResponse}}),
     % Should return wallet details including key, auth, exportable, persist.
     ?assertMatch(#{<<"wallet">> := _, <<"persist">> := <<"in-memory">>}, ExportResponse),
+    % The exported key gives `e' in its fewest octets, as RFC 7518 requires.
+    #{ <<"e">> := E } = hb_json:decode(maps:get(<<"wallet">>, ExportResponse)),
+    ?assertEqual(<<"AQAB">>, E),
     ?assert(maps:is_key(<<"access-control">>, ExportResponse)),
     ?assert(maps:is_key(<<"controllers">>, ExportResponse)),
     % The reply holds the wallet's key, so it tells caches not to store it.

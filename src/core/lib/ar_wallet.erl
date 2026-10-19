@@ -316,7 +316,7 @@ to_json(Wallet = #{ <<"type">> := Type = ?RSA_SIGN_TYPE }) ->
     hb_json:encode(#{
         kty => <<"RSA">>,
         ext => true,
-        e => hb_util:encode(<<PublicExpnt:32>>),
+        e => hb_util:encode(binary:encode_unsigned(PublicExpnt)),
         n => hb_util:encode(Pub),
         d => hb_util:encode(Priv)
     });
