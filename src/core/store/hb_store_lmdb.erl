@@ -193,7 +193,7 @@ read_result(Opts, Path) ->
             {composite, _} -> hit;
             {error, not_found} -> miss;
             not_found -> miss;
-            _ -> unknown
+            _ -> error
         end,
     sample_metrics(EnvOpts, StartTime, MetricStatus),
     Result.
