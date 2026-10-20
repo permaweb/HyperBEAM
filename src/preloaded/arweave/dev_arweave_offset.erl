@@ -238,9 +238,22 @@ bundle_start_offset(ChunkJSON) ->
 
 message_from_offset(TargetOffset, BundleStartOffset, KnownOffset, KnownChunk, Opts) ->
     maybe
+        {ok, _ChunkJSON, BundleChunk} ?=
+            chunk_from_offset(BundleStartOffset, Opts),
+        % A member contains the target only if the header ends at or before the
+        % target, so a longer header gives `not_found` without reading the rest
+        % of it. `bundle_header/4` refuses a chunk too short to contain the item
+        % count.
+        ClaimedSize = ar_bundles:bundle_header_size(BundleChunk),
+        true ?=
+            ClaimedSize =:= invalid_bundle_header
+                orelse ClaimedSize =< TargetOffset - BundleStartOffset
+                orelse {error, not_found},
         {ok, HeaderSize, BundleIndex} ?=
             lib_arweave_common:bundle_header(
                 BundleStartOffset,
+                infinity,
+                BundleChunk,
                 Opts
             ),
         {ok, ItemStartOffset, ItemSize} ?=
@@ -383,6 +396,68 @@ parse_offset_test() ->
     ),
     ?assertEqual(error, parse(<<"65t3aueqg2rkyk7c7csh7g3262xwkz5v5d7xtzit3rlpxjaa6ezq">>)),
     ok.
+
+%% @doc A 1 KB item whose first 32 bytes claim a huge bundle item count must
+%% not drive an unbounded header read: the bytes before the target offset
+%% bound the header, so the lookup gives `not_found` without fetching any
+%% chunk past it.
+offset_header_bound_test() ->
+    ItemSize = 1000,
+    AbsEnd = 1000000,
+    % The first 32 bytes claim 50,000 items, a 3 MB header, from a 1 KB item.
+    Item = <<50000:256/little, 0:((ItemSize - 32) * 8)>>,
+    % The chunk has the proofs that an Arweave node gives: the item is the
+    % data of a transaction, the only one in its block.
+    {Root, Tree} =
+        ar_merkle:generate_tree([{ar_tx:generate_chunk_id(Item), ItemSize}]),
+    {TXRoot, TXTree} = ar_merkle:generate_tree([{Root, ItemSize}]),
+    Chunk =
+        hb_json:encode(
+            #{
+                <<"chunk">> => hb_util:encode(Item),
+                <<"chunk_size">> => ItemSize,
+                <<"absolute_end_offset">> => AbsEnd,
+                <<"data_path">> =>
+                    hb_util:encode(ar_merkle:generate_path(Root, 0, Tree)),
+                <<"tx_path">> =>
+                    hb_util:encode(ar_merkle:generate_path(TXRoot, 0, TXTree))
+            }
+        ),
+    {ok, Gateway, Handle} =
+        hb_mock_server:start(
+            [{"/chunk/[...]", chunk, fun(_Req) -> {200, Chunk} end}]
+        ),
+    Opts =
+        #{
+            <<"routes">> =>
+                [
+                    #{
+                        <<"template">> => <<"/arweave">>,
+                        <<"node">> =>
+                            #{
+                                <<"match">> => <<"^/arweave">>,
+                                <<"with">> => Gateway,
+                                <<"opts">> =>
+                                    #{
+                                        <<"http-client">> => httpc,
+                                        <<"protocol">> => http2
+                                    }
+                            }
+                    }
+                ]
+        },
+    Res =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            hb_util:bin(AbsEnd - 1),
+            Opts
+        ),
+    Fetches = length(hb_mock_server:get_requests(Handle, chunk)),
+    hb_mock_server:stop(Handle),
+    % The item's chunk is read to find its start and its header; a bounded
+    % read stops there, while an unbounded one fetches the claimed 3 MB.
+    ?assert(Fetches =< 2),
+    ?assertEqual({error, not_found}, Res).
 
 offset_item_cases_test() ->
     Opts = #{},

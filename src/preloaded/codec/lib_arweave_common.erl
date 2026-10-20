@@ -9,7 +9,7 @@
 -export([bundle_hint/4, data/4, tags/5, excluded_tags/3]).
 -export([item_hint/4, signed_children_hint/3]).
 -export([to/3, to/6, siginfo/6, fields_to_tx/4, decode/1]).
--export([bundle_header/2, bundle_header/3]).
+-export([bundle_header/2, bundle_header/3, bundle_header/4]).
 -include("include/hb.hrl").
 
 -define(ANS104_BASE_FIELDS, [<<"anchor">>, <<"target">>]).
@@ -1020,28 +1020,33 @@ bundle_header(BundleStartOffset, MaxSize, Opts) ->
         Opts
     ) of
         {ok, FirstChunk} ->
-            case ar_bundles:bundle_header_size(FirstChunk) of
-                invalid_bundle_header ->
-                    {error, invalid_bundle_header};
-                HeaderSize when HeaderSize > MaxSize ->
-                    {error, invalid_bundle_header};
-                HeaderSize ->
-                    case read_bundle_header(
-                        BundleStartOffset, HeaderSize, FirstChunk, Opts
-                    ) of
-                        {ok, HeaderBin} ->
-                            case ar_bundles:decode_bundle_header(HeaderBin) of
-                                {_Items, BundleIndex} ->
-                                    {ok, HeaderSize, BundleIndex};
-                                invalid_bundle_header ->
-                                    {error, invalid_bundle_header}
-                            end;
-                        Error ->
-                            Error
-                    end
-            end;
+            bundle_header(BundleStartOffset, MaxSize, FirstChunk, Opts);
         Error ->
             Error
+    end.
+
+%% @doc Decode the bundle header index whose first chunk is given, reading any
+%% rest of the header from the given global start offset.
+bundle_header(BundleStartOffset, MaxSize, FirstChunk, Opts) ->
+    case ar_bundles:bundle_header_size(FirstChunk) of
+        invalid_bundle_header ->
+            {error, invalid_bundle_header};
+        HeaderSize when HeaderSize > MaxSize ->
+            {error, invalid_bundle_header};
+        HeaderSize ->
+            case read_bundle_header(
+                BundleStartOffset, HeaderSize, FirstChunk, Opts
+            ) of
+                {ok, HeaderBin} ->
+                    case ar_bundles:decode_bundle_header(HeaderBin) of
+                        {_Items, BundleIndex} ->
+                            {ok, HeaderSize, BundleIndex};
+                        invalid_bundle_header ->
+                            {error, invalid_bundle_header}
+                    end;
+                Error ->
+                    Error
+            end
     end.
 
 %% @doc Read exactly the bytes needed to decode a bundle header.
