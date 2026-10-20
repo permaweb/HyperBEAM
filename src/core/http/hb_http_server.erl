@@ -812,6 +812,7 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
                 }
             ),
             Error;
+        {failure, _} = Failure -> Failure;
         Other ->
             {error, Other}
     end.

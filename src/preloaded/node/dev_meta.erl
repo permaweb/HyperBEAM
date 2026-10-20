@@ -618,7 +618,12 @@ modify_request_test() ->
                 }
         }),
     {ok, Res} = hb_http:get(Node, <<"//added">>, #{}),
-    ?assertEqual(<<"value">>, Res).
+    ?assertEqual(<<"value">>, Res),
+    % The hook raises on `GET /', whose `body' is empty: 500, with its message.
+    ?assertMatch(
+        {failure, <<"Handler for hook `request` raised", _/binary>>},
+        hb_http:get(Node, <<"/">>, #{})
+    ).
 
 %% @doc Test that version information is available and returned correctly.
 buildinfo_test() ->
