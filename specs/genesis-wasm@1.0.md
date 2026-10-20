@@ -70,12 +70,13 @@ the result mapping, the lifecycle, and the trust rules are normative here.
 ## 3. Device interface
 
 - **Dispatch shape:** **explicit-keys.** The device answers exactly the keys
-  `init`, `compute`, `normalize`, `snapshot`, `import`, and `latest-checkpoint`
-  (§4). It does **not** install a default/catch-all handler. Every other key —
-  including the reserved inspection/mutation/commitment keys (`keys`, `set`,
-  `set-path`, `remove`, `id`, `commitments`, `committers`, `committed`, `verify`,
-  `commit`) — falls through to the base `message@1.0` device and behaves exactly
-  as for any message. An implementation MUST NOT capture those keys.
+  `init`, `compute`, `normalize`, `snapshot`, and `import` (§4). It does **not**
+  install a default/catch-all handler. Every other key — including the reserved
+  inspection/mutation/commitment keys (`keys`, `set`, `set-path`, `remove`, `id`,
+  `commitments`, `committers`, `committed`, `verify`, `commit`), and
+  `latest-checkpoint` — falls through to the base `message@1.0` device and
+  behaves exactly as for any message. An implementation MUST NOT capture those
+  keys.
 
 - **Role.** The device is normally installed as a process's **execution device**
   and invoked by a `process@1.0` orchestrator, which resolves `init` once,
@@ -88,7 +89,7 @@ the result mapping, the lifecycle, and the trust rules are normative here.
   - **`Opts`** — node options (carry the CU configuration of §6 and the import
     authorities of §7).
 
-  `import`/`latest-checkpoint` MAY also be invoked directly (e.g.
+  `import` MAY also be invoked directly (e.g.
   `<<"…~genesis-wasm@1.0/import=<id>&process-id=<id>">>`).
 
 - **Compute request shape (`Req`).** On the `compute` path the request carries:
@@ -104,7 +105,7 @@ the result mapping, the lifecycle, and the trust rules are normative here.
   All keys are **lowercase, hyphenated, binary on the wire**; ids are
   **base64url**, never hex.
 
-- **Import request shape (`Req`).** On the `import`/`latest-checkpoint` path:
+- **Import request shape (`Req`).** On the `import` path:
 
   | Key | Type | Required | Meaning |
   |---|---|---|---|
@@ -248,9 +249,10 @@ checkpoint id is supplied, or the latest trusted one is discovered.
   2. **Obtain the checkpoint message:**
      - If `Req` carries `import = <id>`, read that checkpoint message from the
        store. If it is not present, return `not_found` (§8).
-     - Else, **discover** the latest trusted checkpoint for the process id via
-       `latest-checkpoint` (§4.5). If discovery yields no checkpoint, return its
-       error (`{error, no_import_authorities}` / `{error, not_found}`).
+     - Else, **discover** the latest trusted checkpoint for the process id
+       (*Checkpoint discovery*, below, and §4.5). If discovery yields no
+       checkpoint, return its error (`{error, no_import_authorities}` /
+       `{error, not_found}`).
   3. **Validate and adopt** the checkpoint (§4.5 *Validation & adoption*).
 - **Returns:** `{ok, State'}` — the target process message as
   `lib_process:ensure_process_key/2` returns it, with
@@ -260,14 +262,11 @@ checkpoint id is supplied, or the latest trusted one is discovered.
   store under the process's `computed/<process-id>/slot/<slot>` path (§4.5);
   reads the gateway/store. No CU subprocess is started by `import` itself.
 
-### `latest-checkpoint` (Base, Req → result)
-Discover the most recent **trusted** legacy checkpoint for a process id. As a
-**resolved key** it is invoked `(Base, Req, Opts)` like any device key: the process
-id is `Req`'s `process-id` if present, else derived from `Base` (its committed id).
-`import` calls the same discovery **internally** with the process id it already
-holds (an `(ProcID, Opts)` helper) — an earlier `(ProcID, Opts → result)` heading
-named that internal helper, not the resolved-key arity (the two cannot both be the
-public signature; the resolved key is `(Base, Req, Opts)`).
+### Checkpoint discovery (a step of `import`)
+Discover the most recent **trusted** legacy checkpoint for a process id. `import`
+runs this step with its process id and the node's options. It is not a key of
+the device: `latest-checkpoint` resolves as any other key that the device does
+not answer (§3), so a request cannot give discovery its options.
 
 - **Reads:** the import authorities from `Opts` (§7); the gateway.
 - **Behaviour (MUST):**
@@ -286,7 +285,7 @@ public signature; the resolved key is `(Base, Req, Opts)`).
 
 #### 4.5 Checkpoint validation, discovery & adoption (normative)
 
-**Discovery (`latest-checkpoint`)** filters strictly by the trusted **owners**
+**Discovery** filters strictly by the trusted **owners**
 list at the gateway, so an untrusted signer's checkpoint is never returned by
 discovery in the first place.
 
@@ -491,8 +490,8 @@ else the `hb_opts` default message.
 | `untrusted` (`status 400`) | `import`: no committer of the checkpoint is in the import-authority allow-list. |
 | `unverified` (`status 400`) | `import`: the checkpoint message does not `verify`. |
 | `process_mismatch` (`status 400`) | `import`: the checkpoint's `process` ≠ the target process id. |
-| `not_found` | `import` with an explicit `import = <id>` that is absent from the store; or `latest-checkpoint` discovery finding no matching transaction. |
-| `no_import_authorities` | `latest-checkpoint`/`import` discovery when the import-authority allow-list is empty. |
+| `not_found` | `import` with an explicit `import = <id>` that is absent from the store; or `import` discovery finding no matching transaction. |
+| `no_import_authorities` | `import` discovery when the import-authority allow-list is empty. |
 | double-skip error (carries current state) | `compute`: a duplicate re-run that *itself* reports a skip whose request already had `skip = true` (§4.4) — aborts rather than looping. |
 | propagated `{failure, _}` | any CU HTTP/transport failure, or a CU answer that is not a result (decoded by the delegated layer). Passed up unchanged; `process@1.0` stores nothing for the slot, so a later `compute` of the slot calls the CU again. |
 | propagated `{error, _}` | any error surfaced by `dedup@1.0`/`patch@1.0`/the gateway/`message@1.0`. Passed up unchanged. |
@@ -522,8 +521,8 @@ and `{error, no_import_authorities}`.
     the live state (`patch-from = /results/outbox`).
   - `dedup@1.0` provides once-only assignment semantics, threading a seen-set
     through the state.
-- **Import vs compute lifecycle.** `import`/`latest-checkpoint` are **out-of-band
-  state seeding** — they populate the process's cached state from a trusted legacy
+- **Import vs compute lifecycle.** `import` is **out-of-band
+  state seeding** — it populates the process's cached state from a trusted legacy
   checkpoint **without** running a CU, so a freshly imported process can then be
   computed forward from the imported slot. Attempting to compute a slot **before**
   the imported slot is expected to fail (the snapshot defines the lower bound of
@@ -542,10 +541,10 @@ paths); items 7–8 and the lifecycle items are checkable by code review of the
 ensure-started / failure-closed paths.
 
 1. **Dispatch.** The device answers exactly `init`, `compute`, `normalize`,
-   `snapshot`, `import`, `latest-checkpoint`; every other key (`keys`, `set`,
-   `set-path`, `remove`, `id`, `commitments`, `committers`, `committed`, `verify`,
-   `commit`, and arbitrary data keys) resolves with the exact `message@1.0`
-   behaviour and is **not** captured by this device.
+   `snapshot`, `import`; every other key (`keys`, `set`, `set-path`, `remove`,
+   `id`, `commitments`, `committers`, `committed`, `verify`, `commit`,
+   `latest-checkpoint`, and arbitrary data keys) resolves with the exact
+   `message@1.0` behaviour and is **not** captured by this device.
 2. **`init` is identity.** Resolving `init` returns the base message unchanged,
    with no CU interaction, network, or state change.
 3. **Compute pipeline.** A successful assignment `compute` (a) ensures the CU is
@@ -610,7 +609,7 @@ ensure-started / failure-closed paths.
     process (as `lib_process:ensure_process_key/2` returns it) +
     `at-slot = <checkpoint nonce>` + `snapshot = <checkpoint>`, and writes that
     full state under the process's `computed/<process-id>/slot/<slot>` path.
-15. **Discovery trust.** `latest-checkpoint` returns
+15. **Discovery trust.** `import` discovery returns
     `{error, no_import_authorities}` when the allow-list is empty; otherwise it
     returns only the single most-recent checkpoint owned by a trusted authority
     for the process (or `not_found`).
@@ -654,11 +653,6 @@ ensure-started / failure-closed paths.
   the surviving assignment's committed result, but confirm whether the synthetic
   body's content is ever observed downstream (it should only serve to advance the
   slot as a no-op).
-- **`latest-checkpoint` as a public key vs internal helper.** Discovery is
-  exposed as a resolvable key and also used internally by `import`. Its argument
-  shape (a process id + options, rather than the usual `Base`/`Req`) is unusual
-  for a resolved key; a reimplementer should confirm the exact public invocation
-  form, or treat it as import-internal only.
 - **Status-probe caching across a resolution.** The liveness probe result may be
   memoised per worker for the duration of a resolution. The exact lifetime of
   that memo (and whether a stale "live" could survive a CU crash within one

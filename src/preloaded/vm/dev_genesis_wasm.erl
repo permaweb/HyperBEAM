@@ -5,7 +5,6 @@
 -specification("../../../specs/genesis-wasm@1.0.md").
 -device_libraries([lib_process, lib_process_cache]).
 -export([init/3, compute/3, normalize/3, snapshot/3, import/3]).
--export([latest_checkpoint/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
@@ -689,7 +688,19 @@ signed_checkpoint_import_test() ->
     {ok, 2, Cached} = lib_process_cache:latest(ProcID, Opts),
     Snapshot = hb_maps:get(<<"snapshot">>, Cached, Opts),
     ?assert(hb_message:verify(Snapshot, all, Opts)),
-    ?assertEqual(CheckpointID, hb_message:id(Snapshot, signed, Opts)).
+    ?assertEqual(CheckpointID, hb_message:id(Snapshot, signed, Opts)),
+    % `latest-checkpoint' is not a key of the device.
+    ?assertEqual(
+        {error, not_found},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"genesis-wasm@1.0">> },
+            #{
+                <<"path">> => <<"latest-checkpoint">>,
+                <<"genesis-wasm-import-authorities">> => []
+            },
+            Opts
+        )
+    ).
 
 %% @doc Genesis requests stay on their configured server, independently of
 %% the routing table used by standalone delegated computation.

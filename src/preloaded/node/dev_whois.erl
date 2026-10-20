@@ -3,8 +3,6 @@
 -module(dev_whois).
 %%% Device API
 -export([node/3, echo/3]).
-%%% Public utilities
--export([ensure_host/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
