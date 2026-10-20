@@ -117,8 +117,10 @@ IDs, and commitments are normative.
   5. Attach **commitments** (§5.9): if the transaction is signed, a signed
      commitment keyed by its signed ID; else if its tags are not all-normal (case
      differs, duplicate names, a private name, a reserved field name appears as
-     a tag, or a list bundle; §5.6), an unsigned commitment keyed by its
-     unsigned ID; else no commitment.
+     a tag, or a list bundle; §5.6), or the message has no `data` key (or an
+     empty one) and a non-link `body` key, which `to` would take as its data
+     (§5.7), an unsigned commitment keyed by its unsigned ID; else no
+     commitment.
 - **Returns:** `{ok, Message}` (a TABM map) or `{ok, Binary}`.
 - **Side effects:** none beyond reading linked/cached values it is handed. (A
   bundled `data` field is decoded in place; no writes.)
@@ -168,8 +170,9 @@ IDs, and commitments are normative.
     decode). This re-normalises the message and (re)computes the unsigned content
     ID. `commit` then **ALWAYS attaches an unsigned `tx@1.0` commitment** keyed by
     that unsigned ID — even when the tags are all-normal. (`from`'s rule that an
-    unsigned commitment is attached *only* for non-all-normal tags, §4.1.5/§5.9.3,
-    governs the **decode path** — where an all-normal message needs no commitment
+    unsigned commitment is attached *only* for non-all-normal tags or a `body`
+    that `to` would take as the data, §4.1.5/§5.9.3, governs the **decode
+    path** — where any other message needs no commitment
     to round-trip. An explicit `commit unsigned` request is different: it MUST
     yield a commitment, so if the round-trip's `from` produced none, attach the
     unsigned content commitment explicitly.) No wallet is used.
@@ -492,7 +495,8 @@ is treated as RSA-typed for preimage purposes).
 Same as signed, **minus** `committer`, `signature`, `owner` (there is no signer)
 and `bundle-format` / `bundle-version` / `bundle-map`.
 `type = unsigned-sha256`. Keyed by the unsigned ID. An unsigned commitment is
-produced by `from` only when the tags are not all-normal (otherwise the message
+produced by `from` only when the tags are not all-normal, or the message has no
+`data` key (or an empty one) and a non-link `body` key (otherwise the message
 needs no commitment to round-trip).
 
 #### 5.9.4 Reconstructing sig info (`to`)
@@ -548,9 +552,9 @@ with **URL-safe base64 without padding** on the wire. Hex MUST NOT be used.
 - **Tag order & duplicates:** tags that are not all-normal keep their order,
   case and duplicates through `original-tags`; all-normal tags keep their order
   through the commitment's `committed` list. All-normal does not include order:
-  an unsigned transaction with all-normal tags gets no commitment, and `to`
-  gives its tags in sorted key order, so one whose tags are not sorted
-  re-encodes with another unsigned ID.
+  an unsigned transaction with all-normal tags gets no commitment (unless
+  §4.1.5 gives it one), and `to` gives its tags in sorted key order, so one
+  whose tags are not sorted re-encodes with another unsigned ID.
 - The device performs **no result caching** of its own; it transforms the
   supplied message/transaction. (`structured@1.0` reads linked values fully
   for a bundled conversion.)

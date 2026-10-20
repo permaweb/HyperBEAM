@@ -381,7 +381,11 @@ with_commitments(
         Tags, Base, CommittedKeys, Opts) ->
     case Item#tx.signature of
         ?DEFAULT_SIG ->
-            case normal_tags(BaseFields, Item) of
+            % Without a commitment, a message with a `body' that is not a link
+            % and no `data' encodes the `body' as its data, so such an item
+            % keeps an unsigned commitment.
+            case normal_tags(BaseFields, Item) andalso
+                    inline_key(not_found, Base, Opts) =/= <<"body">> of
                 true -> Base;
                 false ->
                     with_unsigned_commitment(

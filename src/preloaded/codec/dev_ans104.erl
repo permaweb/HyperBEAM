@@ -496,6 +496,20 @@ ao_data_key_test() ->
     TagDec =
         hb_message:convert(TagTX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?assert(hb_message:verify(TagDec, all, #{})),
+    % An unsigned item with a `body' tag and no data encodes to itself once
+    % decoded.
+    Unsigned = ar_bundles:new_item(<<>>, <<>>, TagTX#tx.tags, <<>>),
+    UnsignedDec =
+        hb_message:convert(
+            Unsigned,
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
+            #{}
+        ),
+    ?assertEqual(
+        Unsigned,
+        hb_message:convert(UnsignedDec, <<"ans104@1.0">>, #{})
+    ),
     % A message with its own `ao-data-key' verifies once committed.
     Own =
         hb_message:commit(
