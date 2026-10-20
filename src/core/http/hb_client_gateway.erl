@@ -103,7 +103,7 @@ item_spec() ->
 %% where `<id>' is the base64-url-encoded transaction ID.
 data(ID, Opts) ->
     Req = #{
-        <<"multirequest-accept-status">> => 200,
+        <<"multirequest-admissible-status">> => 200,
         <<"multirequest-responses">> => 1,
         <<"path">> => <<"/arweave/raw/", ID/binary>>,
         <<"method">> => <<"GET">>
