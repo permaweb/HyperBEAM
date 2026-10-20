@@ -583,11 +583,7 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
                         XOffset,
                         DataRoot,
                         DataSize,
-                        pending(
-                            #{},
-                            #{ <<"offset">> => XOffset, <<"pending">> => RelativeTXID },
-                            Opts
-                        )
+                        get_pending_chunk(RelativeTXID, XOffset, Opts)
                     )
                 end,
             % A peer answers 404 for an offset that is not the end of a chunk,
@@ -877,7 +873,69 @@ get_chunk(Offset, Opts) ->
     % leaeve the header out and continue to search for a case where it is
     % needed.
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
-    request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
+    maybe
+        {ok, JSON} ?=
+            request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts),
+        TXPath = hb_util:decode(maps:get(<<"tx_path">>, JSON)),
+        TXEnd = ar_merkle:extract_note(TXPath),
+        % The transaction proof supplies the data root and transaction bounds.
+        % Its block root is not available on this read path.
+        {ok, TXRoot} ?= ar_merkle:extract_root(TXPath),
+        {DataRoot, TXStart, TXEnd} =
+            ar_merkle:validate_path(TXRoot, TXEnd - 1, TXEnd, TXPath),
+        validate_chunk(JSON, DataRoot, TXEnd - TXStart)
+    end.
+
+%% @doc Check the data path, chunk hash and size against the data root.
+validate_chunk(JSON, DataRoot, DataSize) ->
+    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
+    ChunkID = ar_tx:generate_chunk_id(Chunk),
+    DataPath = hb_util:decode(maps:get(<<"data_path">>, JSON)),
+    {ChunkEnd, Ruleset} = chunk_position(DataPath, 0, 0, basic_ruleset),
+    case ar_merkle:validate_path(
+        DataRoot,
+        ChunkEnd - 1,
+        DataSize,
+        DataPath,
+        Ruleset
+    ) of
+        {ChunkID, Start, End} when End - Start =:= byte_size(Chunk) ->
+            {ok, JSON};
+        _ -> {error, 'invalid-chunk-proof'}
+    end.
+
+%% @doc Recover the transaction-relative end offset, including subtree rebases.
+chunk_position(<<_:32/binary, End:256>>, _Left, Shift, Ruleset) ->
+    {Shift + End, Ruleset};
+chunk_position(Path, Left, Shift, Ruleset) ->
+    {Rebased, Branch} =
+        case Path of
+            <<0:256, Rest/binary>> -> {true, Rest};
+            _ -> {false, Path}
+        end,
+    <<L:32/binary, _:32/binary, Note:256, Child/binary>> = Branch,
+    {ok, ChildRoot} =
+        ar_merkle:extract_root(
+            case Child of
+                <<0:256, ChildBranch/binary>> -> ChildBranch;
+                _ -> Child
+            end
+        ),
+    NextLeft =
+        case ChildRoot of
+            L -> Left;
+            _ -> max(Left, Note)
+        end,
+    case Rebased of
+        true ->
+            chunk_position(
+                Child,
+                0,
+                Shift + NextLeft,
+                offset_rebase_support_ruleset
+            );
+        false -> chunk_position(Child, NextLeft, Shift, Ruleset)
+    end.
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -1186,19 +1244,42 @@ pending(Base, Request, Opts) ->
                     );
                 {ok, RawOffset} ->
                     Offset = hb_util:int(RawOffset),
-                    % Download an unconfirmed chunk by its offset
-                    request(
-                        <<"GET">>,
-                        <<
-                            "/unconfirmed_chunk/",
-                            TXID/binary,
-                            "/",
-                            (hb_util:bin(Offset))/binary
-                        >>,
-                        Opts
-                    )
+                    % Check the chunk against the verified transaction header.
+                    maybe
+                        {ok, TX} ?=
+                            pending(
+                                #{},
+                                #{
+                                    <<"pending">> => TXID,
+                                    <<"exclude-data">> => true
+                                },
+                                Opts
+                            ),
+                        {ok, JSON} ?= get_pending_chunk(TXID, Offset, Opts),
+                        {ok, _} ?=
+                            decode_relative_chunk(
+                                Offset,
+                                hb_util:decode(maps:get(<<"data-root">>, TX)),
+                                hb_util:int(maps:get(<<"data-size">>, TX)),
+                                {ok, JSON}
+                            ),
+                        {ok, JSON}
+                    end
             end
     end.
+
+%% @doc Download an unconfirmed chunk by its offset.
+get_pending_chunk(TXID, Offset, Opts) ->
+    request(
+        <<"GET">>,
+        <<
+            "/unconfirmed_chunk/",
+            TXID/binary,
+            "/",
+            (hb_util:bin(Offset))/binary
+        >>,
+        Opts
+    ).
 
 %%% Internal Functions
 
@@ -2329,6 +2410,140 @@ get_bad_tx_test_parallel() ->
     Path = <<"/~arweave@2.9/tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
     ?assertEqual({error, not_found}, Res).
+
+%% @doc Chunk reads check the received bytes and proof before returning a range.
+chunk_proof_test_() ->
+    [
+        {
+            hb_util:list(Mode) ++ " " ++ hb_util:list(Change),
+            fun() -> chunk_proof(Mode, Change) end
+        }
+    ||
+        Mode <- [confirmed, split, rebased, nested, pending, pending_json],
+        Change <- [valid, data, path]
+    ].
+
+chunk_proof(Mode, Change) ->
+    Data = <<"test-data">>,
+    Leaf = {ar_tx:generate_chunk_id(Data), byte_size(Data)},
+    Filler =
+        {
+            ar_tx:generate_chunk_id(binary:copy(<<0>>, ?DATA_CHUNK_SIZE)),
+            ?DATA_CHUNK_SIZE
+        },
+    {DataRoot, DataTree} =
+        ar_merkle:generate_tree(
+            case Mode of
+                split ->
+                    [
+                        {ar_tx:generate_chunk_id(<<"other">>), 5},
+                        {element(1, Leaf), 14}
+                    ];
+                rebased -> [[Filler], [Leaf]];
+                nested -> [[Filler], [[Filler], [Leaf]]];
+                _ -> [Leaf]
+            end
+        ),
+    DataSize =
+        case Mode of
+            split -> 14;
+            rebased -> ?DATA_CHUNK_SIZE + 9;
+            nested -> 2 * ?DATA_CHUNK_SIZE + 9;
+            _ -> 9
+        end,
+    DataPath = ar_merkle:generate_path(DataRoot, DataSize - 1, DataTree),
+    {TXRoot, TXTree} =
+        ar_merkle:generate_tree(
+            [
+                {<<0:256>>, 100},
+                {DataRoot, 100 + DataSize},
+                {<<1:256>>, 125 + DataSize}
+            ]
+        ),
+    JSON = #{
+        <<"chunk">> => hb_util:encode(Data),
+        <<"data_path">> => hb_util:encode(DataPath),
+        <<"tx_path">> =>
+            hb_util:encode(ar_merkle:generate_path(TXRoot, 100, TXTree)),
+        <<"absolute_end_offset">> => hb_util:bin(1000 + DataSize),
+        <<"chunk_size">> => <<"9">>
+    },
+    Changed =
+        case Change of
+            valid -> JSON;
+            data -> JSON#{ <<"chunk">> := hb_util:encode(<<"bad!-data">>) };
+            path ->
+                PrefixSize = byte_size(DataPath) - 64,
+                <<Prefix:PrefixSize/binary, Byte, Rest/binary>> = DataPath,
+                JSON#{
+                    <<"data_path">> :=
+                        hb_util:encode(
+                            <<Prefix/binary, (Byte bxor 1), Rest/binary>>
+                        )
+                }
+        end,
+    Header = hb_json:decode(post_tx_json_payload(post_tx_json_client_opts())),
+    {ok, Node, Handle} =
+        hb_mock_server:start(
+            [
+                {"/chunk/:offset", chunk, {200, hb_json:encode(Changed)}},
+                {
+                    "/unconfirmed_chunk/:id/:offset",
+                    chunk,
+                    {200, hb_json:encode(Changed)}
+                },
+                {"/unconfirmed_tx/:id", tx, {200, hb_json:encode(Header)}}
+            ]
+        ),
+    Opts = #{
+        <<"store">> => [hb_test_utils:test_store(hb_store_volatile)],
+        <<"routes">> =>
+            [
+                #{
+                    <<"template">> => <<"^/arweave">>,
+                    <<"node">> =>
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => Node,
+                            <<"opts">> => #{ <<"http-client">> => httpc }
+                        }
+                }
+            ]
+    },
+    Offset =
+        case Mode of
+            pending ->
+                #{
+                    <<"relative">> => maps:get(<<"id">>, Header),
+                    <<"offset">> => 0
+                };
+            _ -> 1000 + DataSize - byte_size(Data)
+        end,
+    try
+        Result =
+            case Mode of
+                pending_json ->
+                    hb_ao:resolve(
+                        #{ <<"device">> => <<"arweave@2.9">> },
+                        #{
+                            <<"path">> => <<"pending">>,
+                            <<"pending">> => maps:get(<<"id">>, Header),
+                            <<"offset">> => 9
+                        },
+                        Opts
+                    );
+                _ -> hb_store_arweave:read_chunks(Offset, 4, Opts)
+            end,
+        case {Change, Mode} of
+            {valid, pending_json} ->
+                {ok, Received} = Result,
+                ?assertEqual(Changed, maps:with(maps:keys(Changed), Received));
+            {valid, _} -> ?assertEqual({ok, <<"test">>}, Result);
+            _ -> ?assertEqual({error, 'invalid-chunk-proof'}, Result)
+        end
+    after
+        hb_mock_server:stop(Handle)
+    end.
 
 pending_offset_handling_test() ->
     ClientOpts = post_tx_json_client_opts(),
