@@ -561,6 +561,12 @@ write_read_fake_bundle_tx_test() ->
     ok = write_offset(Opts, ID, <<"tx@1.0">>, StartOffset, Size),
     {ok, TX} = read(Opts, #{ <<"read">> => ID }, Opts),
     ?assert(hb_message:verify(TX, all, #{})),
+    % A form of the ID with other spare bits in its last character raises.
+    OtherForm = <<"cGNURX2IUt98VKVIeXSfYe6eulNwPEqijaQfvatzd_p">>,
+    ?assertError(
+        {badmatch, ID},
+        read(Opts, #{ <<"read">> => OtherForm }, Opts)
+    ),
     ok.
 
 %% @doc A node with no offset index of its own finds the offsets of an Arweave

@@ -280,9 +280,13 @@ key_to_atom(Key, Mode) ->
     end.
 
 %% @doc Convert a human readable ID to a native binary ID. If the ID is already
-%% a native binary ID, it is returned as is.
+%% a native binary ID, it is returned as is. The last of the 43 characters of a
+%% human readable ID has 2 bits that its 32 bytes do not use, so 4 forms decode
+%% to the same bytes: any form but the one that `human_id/1' gives raises.
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
-    decode(Bin);
+    Native = decode(Bin),
+    Bin = encode(Native),
+    Native;
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     Bin;
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 42 ->
