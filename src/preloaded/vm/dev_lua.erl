@@ -5,7 +5,6 @@
 -export([device_info/1, init/3, snapshot/3, normalize/3, functions/3]).
 %%% Public Utilities
 -export([encode/2, decode/2]).
--export([pure_lua_process_benchmark/1]).
 -include("include/hb.hrl").
 -include_lib("luerl/include/luerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
