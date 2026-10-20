@@ -568,6 +568,7 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
     ) of
         {ok, PendingTX} ->
             DataSize = hb_util:int(maps:get(<<"data_size">>, PendingTX)),
+            DataRoot = hb_util:decode(maps:get(<<"data_root">>, PendingTX)),
             hb_prometheus:observe(
                 Length,
                 arweave_chunk_load_requested_bytes,
@@ -577,6 +578,9 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
             GETFun =
                 fun(XOffset) ->
                     decode_relative_chunk(
+                        XOffset,
+                        DataRoot,
+                        DataSize,
                         pending(
                             #{},
                             #{ <<"offset">> => XOffset, <<"pending">> => RelativeTXID },
@@ -584,7 +588,25 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
                         )
                     )
                 end,
-            case fetch_and_collect(Offsets, GETFun, Opts) of
+            % A peer answers 404 for an offset that is not the end of a chunk,
+            % so a chunk that does not end at one of `Offsets' is missing here.
+            Concurrency =
+                hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
+            Found =
+                [
+                    ChunkInfo
+                ||
+                    {ok, ChunkInfo} <-
+                        hb_pmap:parallel_map(Offsets, GETFun, Concurrency)
+                ],
+            case fill_relative_gaps(
+                Found,
+                max(1, Offset + 1),
+                min(Offset + Length, DataSize),
+                DataSize,
+                GETFun,
+                Opts
+            ) of
                 {ok, ChunkInfos} ->
                     {ok, Binaries} = assemble_chunks(ChunkInfos, Offset + 1),
                     {ok, iolist_to_binary(Binaries)};
@@ -594,11 +616,75 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
             Error
     end.
 
-decode_relative_chunk({ok, JSON}) ->
-    {ok, decode_chunk_tuple(JSON, ar_merkle:extract_note(
-        hb_util:decode(maps:get(<<"data_path">>, JSON))))};
-decode_relative_chunk({error, _} = Err) ->
+%% @doc Decode a pending chunk response into a {Start, End, Binary} tuple,
+%% taking the start and end from the chunk's proof. The proof must verify
+%% against the data root under either rule set by which a node admits a
+%% pending chunk, and the chunk must contain the byte at the offset it was
+%% fetched for.
+decode_relative_chunk(Offset, DataRoot, DataSize, {ok, JSON}) ->
+    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
+    ChunkID = ar_tx:generate_chunk_id(Chunk),
+    DataPath = hb_util:decode(maps:get(<<"data_path">>, JSON)),
+    Validate =
+        fun(Ruleset) ->
+            ar_merkle:validate_path(
+                DataRoot,
+                Offset - 1,
+                DataSize,
+                DataPath,
+                Ruleset
+            )
+        end,
+    % A proof with rebased subtrees verifies only under the rebase rule set.
+    Bounds =
+        case Validate(strict_borders_ruleset) of
+            false -> Validate(offset_rebase_support_ruleset);
+            StrictBounds -> StrictBounds
+        end,
+    case Bounds of
+        {ChunkID, Start, End}
+                when End - Start =:= byte_size(Chunk),
+                    Start < Offset, Offset =< End ->
+            {ok, {Start + 1, End, Chunk}};
+        _ ->
+            {error, 'invalid-chunk-proof'}
+    end;
+decode_relative_chunk(_Offset, _DataRoot, _DataSize, {error, _} = Err) ->
     Err.
+
+%% @doc Fetch pending chunks until they cover bytes `RangeStart' to `RangeEnd'.
+%% A peer serves a pending chunk only at its end offset, which is the start of
+%% the chunk after it. So the chunk that contains the last byte of a gap is
+%% asked for at the start of the first chunk after the gap, or at the data
+%% size if no chunk after the gap is known.
+fill_relative_gaps(ChunkInfos, RangeStart, RangeEnd, DataSize, GETFun, Opts) ->
+    Sorted = sort_chunks(ChunkInfos),
+    case find_gaps(Sorted, RangeStart, RangeEnd) of
+        [] ->
+            {ok, [Info || Info = {Start, _, _} <- Sorted, Start =< RangeEnd]};
+        Gaps ->
+            Offsets =
+                [
+                    hd(
+                        [Start - 1 || {Start, _, _} <- Sorted, Start > GapEnd]
+                            ++ [DataSize]
+                    )
+                ||
+                    {_GapStart, GapEnd} <- Gaps
+                ],
+            case fetch_and_collect(Offsets, GETFun, Opts) of
+                {ok, NewInfos} ->
+                    fill_relative_gaps(
+                        Sorted ++ NewInfos,
+                        RangeStart,
+                        RangeEnd,
+                        DataSize,
+                        GETFun,
+                        Opts
+                    );
+                Error -> Error
+            end
+    end.
 
 %% @doc Iteratively detect gaps in coverage and fetch the chunk at the start
 %% of each gap until the entire range [Offset, EndOffset] is covered.
@@ -2251,7 +2337,110 @@ pending_offset_handling_test() ->
         ?assertEqual(PendingData, maps:get(<<"data">>, StoreTX))
     after
         hb_mock_server:stop(MockHandle)
-    end.
+    end,
+    % Pending transactions whose chunks end off multiples of 256 KiB read in
+    % full: arweave-js's even split, an uneven split, four 128 KiB chunks, and
+    % two chunks in a rebased subtree before a third.
+    lists:foreach(
+        fun({Sizes, Rebased}) ->
+            {ID, Data, PeerOpts, PeerHandle} =
+                start_pending_peer(Sizes, Rebased, ClientOpts),
+            try
+                ?assertEqual(
+                    {ok, Data},
+                    hb_store_arweave:read_chunks(
+                        #{ <<"relative">> => ID, <<"offset">> => 0 },
+                        byte_size(Data),
+                        PeerOpts
+                    )
+                ),
+                % A read with no length returns only the first chunk.
+                ?assertEqual(
+                    {ok, binary:part(Data, 0, hd(Sizes))},
+                    hb_ao:resolve(
+                        #{ <<"device">> => <<"arweave@2.9">> },
+                        #{
+                            <<"path">> => <<"chunk">>,
+                            <<"pending">> => ID,
+                            <<"offset">> => 0
+                        },
+                        PeerOpts
+                    )
+                )
+            after
+                hb_mock_server:stop(PeerHandle)
+            end
+        end,
+        [
+            {[136192, 136192], 0},
+            {[200000, 100000], 0},
+            {[131072, 131072, 131072, 131072], 0},
+            {[200000, 200000, 134528], 2}
+        ]
+    ).
+
+%% @doc Start a peer that serves a pending transaction of random chunks of the
+%% given sizes, each chunk only at its end offset. The first `Rebased' chunks
+%% are a rebased subtree of the transaction's data tree. Returns the
+%% transaction's ID and data, the options that route to the peer, and the
+%% peer's handle.
+start_pending_peer(Sizes, Rebased, Opts) ->
+    Chunks =
+        ar_tx:chunks_to_size_tagged_chunks(
+            [crypto:strong_rand_bytes(Size) || Size <- Sizes]
+        ),
+    Leaves = ar_tx:sized_chunks_to_sized_chunk_ids(Chunks),
+    {Root, Tree} =
+        ar_merkle:generate_tree(
+            case lists:split(Rebased, Leaves) of
+                {[], _} -> Leaves;
+                {Subtree, Rest} -> [Subtree | Rest]
+            end
+        ),
+    TX =
+        ar_tx:sign(
+            #tx{ format = 2, data_root = Root, data_size = lists:sum(Sizes) },
+            hb:wallet()
+        ),
+    {ok, Node, Handle} = hb_mock_server:start([
+        {"/unconfirmed_chunk/:id/:offset", pending_chunk,
+            fun(#{ <<"bindings">> := #{ offset := Offset } }) ->
+                End = hb_util:int(Offset),
+                case lists:keyfind(End, 2, Chunks) of
+                    {Chunk, End} ->
+                        Path = ar_merkle:generate_path(Root, End - 1, Tree),
+                        {
+                            200,
+                            hb_json:encode(
+                                #{
+                                    <<"chunk">> => hb_util:encode(Chunk),
+                                    <<"data_path">> => hb_util:encode(Path)
+                                }
+                            )
+                        };
+                    false ->
+                        {404, <<>>}
+                end
+            end},
+        {"/unconfirmed_tx/:id", pending_tx,
+            {200, hb_json:encode(ar_tx:tx_to_json_struct(TX))}}
+    ]),
+    Route =
+        #{
+            <<"template">> => <<"^/arweave">>,
+            <<"node">> =>
+                #{
+                    <<"match">> => <<"^/arweave">>,
+                    <<"with">> => Node,
+                    <<"opts">> => #{ <<"http-client">> => httpc }
+                }
+        },
+    {
+        hb_util:human_id(TX#tx.id),
+        iolist_to_binary([Chunk || {Chunk, _} <- Chunks]),
+        Opts#{ <<"routes">> => [Route] },
+        Handle
+    }.
 
 %% @doc: helper test to generate and write a dataitem to disk so that we
 %% can validate it using 3rd-party js libraries and gateways.
