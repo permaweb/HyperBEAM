@@ -106,10 +106,10 @@ all(Base, Req, Opts) ->
     match(Req, Base, Req, Opts).
 
 %% @doc Search the node's store for all of the keys and values in the base
-%% message, aside from the `commitments' and `path' keys.
+%% message, aside from the `commitments', `path' and `device' keys.
 -spec base(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, _} | {error, _}.
 base(Base, Req, Opts) ->
-    match(Base, Base, Req, Opts).
+    match(hb_maps:without([<<"device">>], Base, Opts), Base, Req, Opts).
 
 %% @doc Search only for the (list of) key(s) specified in `only' in the request.
 %% The `only' key can be a binary, a map, or a list of keys. See the moduledoc
@@ -318,6 +318,11 @@ test_setup() ->
 basic_test() ->
     {ok, Opts, _} = test_setup(),
     {ok, [ID]} = hb_ao:resolve(<<"~query@1.0/all?basic=binary-value">>, Opts),
+    % `base' matches the keys of the base message, without its `device'.
+    ?assertEqual(
+        {ok, [ID]},
+        hb_ao:resolve(<<"~query@1.0&basic=binary-value/base">>, Opts)
+    ),
     {ok, Read} = hb_cache:read(ID, Opts),
     ?assertEqual(<<"binary-value">>, hb_maps:get(<<"basic">>, Read)),
     ?assertEqual(<<"binary-value-2">>, hb_maps:get(<<"basic-2">>, Read)),
