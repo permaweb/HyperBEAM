@@ -169,7 +169,9 @@ adopt_node_message(Request, NodeMsg) ->
     end.
 
 is_permanent(NodeMsg) ->
-    hb_ao:get(<<"initialized">>, NodeMsg, not_found, NodeMsg) =:= <<"permanent">>.
+    hb_util:bin(
+        hb_ao:get(<<"initialized">>, NodeMsg, not_found, NodeMsg)
+    ) =:= <<"permanent">>.
 
 %%% Tests
 
@@ -500,7 +502,28 @@ permanent_node_message_test() ->
     {ok, Res2} = hb_http:get(Node, #{ <<"path">> => <<"/~meta@1.0/info">> }, Opts),
     ?event({get_res, Res2}),
     ?assertEqual(<<"test2">>, hb_ao:get(<<"test-config-item">>, Res2, Opts)),
-    ?assertEqual(1, length(hb_ao:get(<<"node-history">>, Res2, [], Opts))).
+    ?assertEqual(1, length(hb_ao:get(<<"node-history">>, Res2, [], Opts))),
+    % A node given the atom `permanent', as a config file gives it, refuses too.
+    ?assertMatch(
+        {error, _},
+        hb_http:post(
+            hb_http_server:start_node(
+                Opts#{
+                    <<"initialized">> => permanent,
+                    <<"priv-wallet">> => ar_wallet:new()
+                }
+            ),
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~meta@1.0/info">>,
+                    <<"type">> => <<"node-message">>,
+                    <<"test-config-item">> => <<"bad-value">>
+                },
+                Opts#{ <<"priv-wallet">> => Owner }
+            ),
+            Opts
+        )
+    ).
 
 %% @doc An unclaimed node cannot be remotely claimed or reconfigured.
 unclaimed_node_rejects_mutation_test() ->
