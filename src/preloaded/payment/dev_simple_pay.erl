@@ -238,7 +238,7 @@ balance(_, RawReq, NodeMsg) ->
                     [] -> undefined;
                     [Signer | _] -> Signer
                 end;
-            Explicit -> Explicit
+            Explicit -> hb_committer:uri(Explicit, NodeMsg)
         end,
     {ok, get_balance(Target, NodeMsg)}.
 
@@ -441,6 +441,22 @@ get_balance_and_top_up_test() ->
                     <<"path">> => <<"/~simple-pay@1.0/topup">>,
                     <<"amount">> => 100,
                     <<"recipient">> =>
+                        hb_util:human_id(ar_wallet:to_address(ClientWallet))
+                },
+                Opts#{ <<"priv-wallet">> => HostWallet }
+            ),
+            Opts
+        )
+    ),
+    % A balance whose `target' is that address reads its committer's account.
+    ?assertEqual(
+        {ok, 380},
+        hb_http:get(
+            Node,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~simple-pay@1.0/balance">>,
+                    <<"target">> =>
                         hb_util:human_id(ar_wallet:to_address(ClientWallet))
                 },
                 Opts#{ <<"priv-wallet">> => HostWallet }
