@@ -21,7 +21,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(DEFAULT_TTL, 28 * 24 * 60 * 60). % 28 days.
+-define(DEFAULT_TTL, 28 * 24 * 60 * 60 * 1000). % 28 days, in milliseconds.
 -define(DEFAULT_CODEC, <<"httpsig@1.0">>).
 
 %% @doc Handle all requests aside `known` with the `location/4' resolver.
@@ -235,12 +235,7 @@ default_url(Opts) ->
 %% `location_notify' option. Finally, we will return the signed location record
 %% to the caller.
 generate_new_location(Nonce, Base, OnlyCommitted, Opts) ->
-    DefaultTTL =
-        hb_opts:get(
-            location_ttl,
-            hb_opts:get(scheduler_location_ttl, 1000 * 60 * 60, Opts),
-            Opts
-        ),
+    DefaultTTL = hb_opts:get(location_ttl, ?DEFAULT_TTL, Opts),
     TimeToLive =
         case hb_maps:get(<<"time-to-live">>, Base, not_found, Opts) of
             not_found ->
@@ -572,4 +567,14 @@ register_location_on_boot_test() ->
             <<"nonce">> := Nonce
         } when Nonce > 0,
         RemoteLocation
+    ),
+    % Records for an operator's request and an unsigned GET: 28 days in ms.
+    {ok, PeerLocation} =
+        hb_http:get(NotifiedPeer, <<"/~location@1.0/node">>, #{}),
+    ?assertEqual(
+        [2419200000, 2419200000],
+        [
+            hb_maps:get(<<"time-to-live">>, CurrentBody, not_found, #{}),
+            hb_maps:get(<<"time-to-live">>, PeerLocation, not_found, #{})
+        ]
     ).

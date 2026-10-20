@@ -244,10 +244,6 @@ raw_default_message() ->
         <<"bundler-ans104">> => <<"https://up.arweave.net:443">>,
         % Location of the wallet keyfile on disk that this node will use.
         <<"priv-key-location">> => <<"hyperbeam-key.json">>,
-        % The time-to-live that should be specified when we register
-        % ourselves as a scheduler on the network.
-        % Default: 7 days.
-        <<"scheduler-location-ttl">> => (60 * 60 * 24 * 7) * 1000,
         % Generated LMDB store of preloaded device artifacts.
         <<"preloaded-store">> =>
             #{

@@ -46,7 +46,7 @@ These options control identity and security settings.
 |--------|------|---------|-------------|
 | `trusted_device_signers` | List | [] | List of device signer addresses or signer policy objects the node should trust; non-empty enables remote device lookup; policy objects may set `valid-until-height` and `devices` |
 | `trusted` | Map | {} | Trusted entities |
-| `scheduler_location_ttl` | Integer | 604800000 | TTL for scheduler registration (7 days in ms) |
+| `location_ttl` | Integer | 2419200000 | TTL of the node's location records (28 days in ms) |
 
 ## Caching & Storage
 

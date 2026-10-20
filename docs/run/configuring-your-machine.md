@@ -75,7 +75,7 @@ These options control identity and security settings.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `scheduler_location_ttl` | Integer | 604800000 | TTL for scheduler registration (7 days in ms) |
+| `location_ttl` | Integer | 2419200000 | TTL of the node's location records (28 days in ms) |
 
 #### TLS termination
 
