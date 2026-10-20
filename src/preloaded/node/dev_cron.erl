@@ -43,7 +43,7 @@ once(_Base, Req, Opts) ->
                 ok,
                 #{
                     <<"status">> => 200,
-                    <<"cache-control">> => [<<"no-store">>],
+                    <<"cache-control">> => <<"no-store">>,
                     <<"body">> => ReqMsgID
                 }
             }
@@ -116,7 +116,7 @@ every(_Base, Req, Opts) ->
                     ok,
                     #{
                         <<"status">> => 200,
-                        <<"cache-control">> => [<<"no-store">>],
+                        <<"cache-control">> => <<"no-store">>,
                         <<"body">> => ReqMsgID
                     }
                 }
@@ -146,7 +146,7 @@ stop(_Base, Req, Opts) ->
 					hb_name:unregister(Name),
 					{ok, #{
 						<<"status">> => 200,
-						<<"cache-control">> => [<<"no-store">>],
+						<<"cache-control">> => <<"no-store">>,
 						<<"body">> => #{
 							<<"message">> => <<"Task stopped successfully">>,
 							<<"task-id">> => TaskID
@@ -180,7 +180,7 @@ report(_Base, Req, Opts) ->
 				end,
 			{ok, #{
 				<<"status">> => 200,
-				<<"cache-control">> => [<<"no-store">>],
+				<<"cache-control">> => <<"no-store">>,
 				<<"task-id">> => TaskID,
 				<<"active">> => Active
 			}}

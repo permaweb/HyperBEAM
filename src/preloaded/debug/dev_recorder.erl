@@ -14,7 +14,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEVICE, <<"recorder@1.0">>).
--define(NO_CACHE, [<<"no-cache">>, <<"no-store">>]).
+-define(NO_CACHE, <<"no-cache, no-store">>).
 -define(RECORDING_KEY, {?DEVICE, recording}).
 -define(RECORDING_EVENTS_KEY, {?DEVICE, events}).
 -define(RECORDING_SEQUENCE_KEY, {?DEVICE, sequence}).

@@ -68,7 +68,7 @@ csr(_Base, Request, Opts) ->
         {ok, #{
             <<"status">> => 200,
             <<"content-type">> => <<"text/plain">>,
-            <<"cache-control">> => [<<"no-store">>],
+            <<"cache-control">> => <<"no-store">>,
             <<"body">> => public_key:pem_encode([
                 {'CertificationRequest', DER, not_encrypted}
             ])
@@ -114,7 +114,7 @@ well_known(_Base, Request, Opts) ->
                 {ok, Authorization} -> {ok, #{
                     <<"status">> => 200,
                     <<"content-type">> => <<"text/plain">>,
-                    <<"cache-control">> => [<<"no-store">>],
+                    <<"cache-control">> => <<"no-store">>,
                     <<"body">> => Authorization
                 }};
                 _ -> not_found()
@@ -123,7 +123,7 @@ well_known(_Base, Request, Opts) ->
             {error, #{
                 <<"status">> => 405,
                 <<"allow">> => <<"GET">>,
-                <<"cache-control">> => [<<"no-store">>],
+                <<"cache-control">> => <<"no-store">>,
                 <<"body">> => <<"Method not allowed.">>
             }}
     end.
@@ -132,7 +132,7 @@ well_known(_Base, Request, Opts) ->
 not_found() ->
     {error, #{
         <<"status">> => 404,
-        <<"cache-control">> => [<<"no-store">>],
+        <<"cache-control">> => <<"no-store">>,
         <<"body">> => <<"Not found.">>
     }}.
 
@@ -187,7 +187,7 @@ dns_reply(Name, Type, #{tls := TLS, challenges := Challenges}) ->
                 <<"authoritative">> => true,
                 <<"answers">> => Answers,
                 <<"authority">> => case Answers of [] -> [SOA]; _ -> [] end,
-                <<"cache-control">> => [<<"no-store">>]
+                <<"cache-control">> => <<"no-store">>
             }}
     end.
 

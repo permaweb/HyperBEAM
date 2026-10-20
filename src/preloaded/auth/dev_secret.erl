@@ -200,7 +200,7 @@ generate(Base, Request, Opts) ->
             {
                 ok,
                 (hb_maps:get(<<"access-control">>, WalletDetails, #{}, Opts))#{
-                    <<"cache-control">> => [<<"no-store">>],
+                    <<"cache-control">> => <<"no-store">>,
                     <<"body">> =>
                         <<"secret:", Committer/binary>>
                 }
@@ -356,7 +356,7 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
     Committer = hb_maps:get(<<"committer">>, WalletDetails, undefined, Opts),
     KeyID = <<"secret:", Committer/binary>>,
     Base = RespBase#{
-        <<"body">> => KeyID, <<"cache-control">> => [<<"no-store">>]
+        <<"body">> => KeyID, <<"cache-control">> => <<"no-store">>
     },
     % Determine how to persist the wallet.
     case hb_maps:get(<<"persist">>, WalletDetails, <<"in-memory">>, Opts) of
@@ -606,7 +606,7 @@ export(Base, Request, Opts) ->
                     fun(Wallet) ->
                         Loaded = hb_cache:ensure_all_loaded(Wallet, PrivOpts),
                         ?event({exported, {priv_wallet, Loaded}}),
-                        Loaded#{ <<"cache-control">> => [<<"no-store">>] }
+                        Loaded#{ <<"cache-control">> => <<"no-store">> }
                     end,
                     Wallets
                 )
@@ -972,8 +972,8 @@ export_wallet_test() ->
     ?assertEqual(<<"AQAB">>, E),
     ?assert(maps:is_key(<<"access-control">>, ExportResponse)),
     ?assert(maps:is_key(<<"controllers">>, ExportResponse)),
-    % The reply holds the wallet's key, so it tells caches not to store it.
-    ?assertEqual([<<"no-store">>], maps:get(<<"cache-control">>, ExportResponse)),
+    % A reply with the wallet's key has the header `cache-control: no-store'.
+    ?assertEqual(<<"no-store">>, maps:get(<<"cache-control">>, ExportResponse)),
     % Should return the correct wallet address in the response.
     ?assertEqual(WalletAddress, maps:get(<<"address">>, ExportResponse)),
     AccessControl = maps:get(<<"access-control">>, ExportResponse),

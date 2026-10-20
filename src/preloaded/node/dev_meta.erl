@@ -83,7 +83,7 @@ info(_, Request, NodeMsg) ->
             DynamicKeys = add_dynamic_keys(NodeMsg),
             {ok, filter_node_msg(DynamicKeys, NodeMsg)}
     end,
-    {ErlStatus, Res#{ <<"cache-control">> => [<<"no-store">>] }}.
+    {ErlStatus, Res#{ <<"cache-control">> => <<"no-store">> }}.
 
 %% @doc Remove items from the node message that are not encodable into a
 %% message.
