@@ -101,10 +101,16 @@ format(Ctx, Opts) ->
 %% @doc Utilize the `hashpath` of the prior resolution, if it is available,
 %% falling back to the URI of the base if known, and recomputing it only if
 %% necessary. If the execution input of the base is only a device, we write it
-%% as `~Device', as we do for a request.
+%% as `~Device', as we do for a request. A base that is the `ao:' URI of a key
+%% with a device is written as `Key~Device'.
 format_base(#{ <<"base-uri">> := URI }, _) -> {ok, URI};
 format_base(#{ <<"base">> := Base = {as, _, Msg} }, _) when map_size(Msg) == 0 ->
     hb_singleton:to_part(Base);
+format_base(Ctx = #{ <<"base">> := {as, Device, <<"ao:", Key/binary>>} }, Opts) ->
+    case hb_singleton:to_part({as, Device, #{ <<"path">> => Key }}) of
+        {ok, Part} -> {ok, Part};
+        error -> find_uri(<<"base">>, Ctx, Opts)
+    end;
 format_base(Ctx = #{ <<"base">> := Base }, Opts) ->
     case hb_private:from_message(Base) of
         #{ <<"hashpath">> := HP, <<"hashpath-result">> := ID } ->
@@ -513,12 +519,27 @@ execute(Ctx, Opts) ->
         true =
             not is_map(Req) orelse
                 length(hb_path:from_message(request, Req, Opts)) == 1,
-        hb_ao:resolve(
-            Base,
-            Req,
-            (internal_opts(Opts))#{ <<"return-context">> => true }
-        )
+        resolve_context(Base, Req, internal_opts(Opts))
     end.
+
+%% @doc Resolve a request on a base and return the context of its execution.
+%% For a request that is only a device, `hb_ao' sets the device on the base
+%% and returns that message without a context, so the context is built here
+%% with the message as its result.
+resolve_context(Base, Req = {as, _, Msg}, ExecOpts) when map_size(Msg) == 0 ->
+    maybe
+        {ok, Res} ?= hb_ao:resolve(Base, Req, ExecOpts),
+        {ok,
+            #{
+                <<"base">> => Base,
+                <<"request">> => Req,
+                <<"result">> => Res,
+                <<"varied-result">> => Res
+            }
+        }
+    end;
+resolve_context(Base, Req, ExecOpts) ->
+    hb_ao:resolve(Base, Req, ExecOpts#{ <<"return-context">> => true }).
 
 %% @doc Load the minimal executable base for a hashpath or a given part number
 %% within it. A link to a hashpath loads the hashpath, and any other link is
@@ -610,6 +631,17 @@ load_base([First | _], 1, Opts) -> load_field(<<"base">>, First, Opts);
 load_base(Parts, PartNum, Opts) -> load(Parts, PartNum - 1, Opts).
 
 %% @doc Read an addressed context value, or use its supplied in-memory value.
+%% A base that is an `ao:' URI with a device is read and checked as a
+%% `base-uri' is, and the device is set on the message as `hb_ao' sets it.
+load_field(
+    <<"base">>,
+    #{ <<"base">> := {as, Device, URI = <<"ao:", _/binary>>} },
+    Opts
+) ->
+    maybe
+        {ok, Base} ?= load_field(<<"base">>, #{ <<"base-uri">> => URI }, Opts),
+        {ok, hb_ao:set(Base, <<"device">>, Device, internal_opts(Opts))}
+    end;
 load_field(Name, Ctx, Opts) when is_map_key(Name, Ctx) ->
     Value = hb_cache:ensure_loaded(maps:get(Name, Ctx), Opts),
     case maps:find(<<Name/binary, "-uri">>, Ctx) of
@@ -1143,7 +1175,16 @@ wrong_content_address_test() ->
     ?assertNot(verify_all(<<"ao:", Claimed/binary>>, Opts)),
     HP = <<"ao:", Claimed/binary, "/value">>,
     ?assertMatch({error, _}, load(HP, Opts)),
-    ?assertMatch({error, _}, load({link, HP, #{}}, Opts)).
+    ?assertMatch({error, _}, load({link, HP, #{}}, Opts)),
+    % A device as a request or on the base is set on a base that matches its ID.
+    ?assertMatch(
+        [{ok, <<"actual">>}, {ok, <<"actual">>}, {error, _}],
+        [
+            load(<<"ao:", Actual/binary, "/~message@1.0/value">>, Opts),
+            load(<<"ao:", Actual/binary, "~message@1.0/value">>, Opts),
+            load(<<"ao:", Claimed/binary, "~message@1.0/value">>, Opts)
+        ]
+    ).
 
 %% @doc The dependency shape selects the original inputs before coercion.
 coerced_dependencies_test() ->
