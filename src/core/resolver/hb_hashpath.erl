@@ -975,6 +975,17 @@ failed_load_test() ->
                 <<"Hashpath claim does not verify.">>
             }
         ]
+    ),
+    % A hashpath in a group is resolved with its claim, as `load/2' reads it.
+    ?assertEqual(
+        {error, <<"Hashpath claim does not verify.">>},
+        hb_ao:resolve_many(
+            hb_singleton:from(
+                <<"/(ao:", ID/binary, "/value.", WrongID/binary, ")">>,
+                Opts
+            ),
+            Opts
+        )
     ).
 
 %% @doc Reject texts that are not hashpaths, and paths that do not follow the

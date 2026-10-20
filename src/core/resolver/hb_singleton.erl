@@ -132,6 +132,12 @@
 %%%       sets `k' to the integer 1.</li>
 %%%   <li>A value or a device that is a single group, such as `(/a/b)', is a
 %%%       subpath. It is resolved, and its result is used in its place.</li>
+%%%   <li>A hashpath in a path is given as a group, which is a subpath, as in
+%%%       `/(ao:ID/k.ID2)/d'. A client or a proxy may decode `%2E' to `.' and
+%%%       `%7E' to `~' (RFC 3986 s2.3): `/ao:ID%2Fk%2EID2/d' may reach the
+%%%       node as `/ao:ID%2Fk.ID2/d', in which `.ID2' is a claim of the
+%%%       part. A subpath that holds claims is resolved as a hashpath, so
+%%%       `hb_hashpath' checks the claims.</li>
 %%%   <li>The key of a step keeps its percent-escapes, unless the step is a
 %%%       URI or gives the key a value with `='. Every other key, value and
 %%%       device is percent-decoded after it is parsed.</li>
@@ -860,10 +866,17 @@ maybe_subpath([{group, _, Tokens}], Opts) -> {resolve, subpath(Tokens, Opts)};
 maybe_subpath(Tokens, _Opts) -> text(Tokens).
 
 %% @doc Parse the tokens of a subpath into its requests. A subpath is a path,
-%% and may have a query of its own.
+%% and may have a query of its own. A subpath that holds claims gives its
+%% hashpath, which `hb_hashpath' resolves and checks: the subpath itself if it
+%% starts with `ao:', and `ao:' and the subpath if not.
 subpath(Tokens, Opts) ->
     {PathTokens, QStr} = split_query(Tokens),
-    requests(contexts(parts(PathTokens), parse_query(QStr), Opts)).
+    Parts = parts(PathTokens),
+    case {[ Part || Part = {step, _, [_ | _]} <- Parts ], text(Tokens)} of
+        {[], _} -> requests(contexts(Parts, parse_query(QStr), Opts));
+        {_, Hashpath = <<"ao:", _/binary>>} -> [Hashpath];
+        {_, Path} -> [<<"ao:", Path/binary>>]
+    end.
 
 %% @doc Extract the characters from the binary until a separator is found.
 %% The first argument of the function is an explicit separator character, or
