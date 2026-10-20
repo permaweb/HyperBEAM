@@ -109,7 +109,10 @@ post_schedule(Base, Req, Opts) ->
                     Committed,
                     Opts
                 ),
-                #{ <<"method">> => <<"POST">>, <<"target">> => <<"base">> },
+                #{
+                    <<"method">> => <<"POST">>,
+                    <<"arweave-subject">> => <<"base">>
+                },
                 Opts
             ),
         {ok, _} = dev_arweave_scheduler_cache:write_header(Committed, Opts),

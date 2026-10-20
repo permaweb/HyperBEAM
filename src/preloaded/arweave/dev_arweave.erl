@@ -45,7 +45,12 @@ status(_Base, _Request, Opts) ->
 %% header.
 -spec tx(
     #{ _ => _ },
-    #{ method => binary(), tx => binary(), target => binary(), _ => _ },
+    #{
+        method => binary(),
+        tx => binary(),
+        'arweave-subject' => binary(),
+        _ => _
+    },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {error, _}.
 tx(Base, Request, Opts) ->
@@ -61,10 +66,13 @@ tx(Base, Request, Opts) ->
 %% Note: When uploading ans104 transactions, this function will use the
 %% node's default bundler. If instead you want to use this node as a bundler
 %% you should use the ~bundler@1.0 device.
--spec post_tx(#{ _ => _ }, #{ target => binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, #{ _ => _ }} | {error, _}.
+-spec post_tx(
+    #{ _ => _ },
+    #{ 'arweave-subject' => binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _}.
 post_tx(Base, RawRequest, Opts) ->
-    {ok, Request} = extract_target(Base, RawRequest, Opts),
+    {ok, Request} = extract_subject(Base, RawRequest, Opts),
     case hb_maps:find(<<"commitment-device">>, Request, Opts) of
         {ok, Device} ->
             post_tx(Base, Request, Opts, Device);
@@ -89,9 +97,10 @@ post_tx_detect_device(Base, Request, Opts) ->
             {error, too_many_commitment_devices}
     end.
 
-%% @doc Extract the target from the request or base message.
-extract_target(Base, Request, Opts) ->
-    case hb_maps:get(<<"target">>, Request, <<"request">>, Opts) of
+%% @doc Extract the message to post from the request or base message, by the
+%% `arweave-subject' key of the request.
+extract_subject(Base, Request, Opts) ->
+    case hb_maps:get(<<"arweave-subject">>, Request, <<"request">>, Opts) of
         <<"request">> ->
             {ok, Request};
         <<"base">> ->
@@ -1531,11 +1540,22 @@ post_ans104_message_test_parallel() ->
             #{
                 <<"variant">> => <<"ao.N.1">>,
                 <<"type">> => <<"Process">>,
+                % The item has a `target', as a message to a process does.
+                <<"target">> => hb_util:human_id(crypto:strong_rand_bytes(32)),
                 <<"data">> => <<"test-data">>
             },
             ClientOpts,
             #{ <<"commitment-device">> => <<"ans104@1.0">> }
         ),
+    % A mistyped `arweave-subject' fails.
+    ?assertMatch(
+        {failure, _},
+        hb_http:post(
+            Server,
+            Msg#{ <<"path">> => <<"/~arweave@2.9/tx?arweave-subject=requst">> },
+            ClientOpts
+        )
+    ),
     {ok, PostRes} =
         hb_http:post(
             Server,

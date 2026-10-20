@@ -113,7 +113,7 @@ upload(Msg, Opts, _CommitmentDevice) ->
         <<"arweave@2.9">>,
         <<"tx">>,
         Msg,
-        #{ <<"method">> => <<"POST">>, <<"target">> => <<"base">> },
+        #{ <<"method">> => <<"POST">>, <<"arweave-subject">> => <<"base">> },
         Opts
     ).
 
