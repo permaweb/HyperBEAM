@@ -54,7 +54,7 @@ serialize(Msg, #{ <<"format">> := <<"components">> }, Opts) ->
     % Convert to HTTPSig via TABM through calling `hb_message:convert` rather
     % than executing `to/3` directly. This ensures that our responses are 
     % normalized.
-    {ok, EncMsg} = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts),
+    EncMsg = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts),
     {ok,
         #{
             <<"body">> => hb_maps:get(<<"body">>, EncMsg, <<>>),
@@ -64,8 +64,7 @@ serialize(Msg, #{ <<"format">> := <<"components">> }, Opts) ->
 serialize(Msg, _Req, Opts) ->
     % We assume the default format of `binary` if none of the prior clauses
     % match.
-    HTTPSig = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts), 
-    {ok, dev_httpsig_conv:encode_http_msg(HTTPSig, Opts) }.
+    {ok, dev_httpsig_conv:encode_http_msg(Msg, Opts) }.
 
 -spec verify(
     #{ _ => _ },
@@ -922,6 +921,21 @@ committed_id_test() ->
     % The type of `a b' is committed: as a binary, it does not verify.
     ?assertNot(
         hb_message:verify(Committed#{ <<"a b">> => <<"1">> }, all, Opts)
+    ),
+    % Both forms of a signed message hold its signature as a header.
+    HTTPSigSigned =
+        hb_message:commit(Msg#{ <<"device">> => <<"httpsig@1.0">> }, Opts),
+    ?assertMatch(
+        {ok, <<"basic: value\r\ndevice: httpsig@1.0\r\nsignature: ", _/binary>>},
+        hb_ao:resolve(HTTPSigSigned, <<"serialize">>, Opts)
+    ),
+    ?assertMatch(
+        {ok, #{ <<"headers">> := #{ <<"signature">> := _ } }},
+        hb_ao:resolve(
+            HTTPSigSigned,
+            #{ <<"path">> => <<"serialize">>, <<"format">> => <<"components">> },
+            Opts
+        )
     ).
 
 commit_secret_key_test() ->
