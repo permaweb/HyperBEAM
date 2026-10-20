@@ -188,15 +188,17 @@ is_tx_indexed(TXID, Opts) ->
 
 %% @doc List indexed blocks and transactions in the given range.
 %% Returns JSON with block heights as keys, each containing indexed and not-indexed lists.
-list_index(Request, From, undefined, Opts) ->
-    list_index(Request, From, 0, Opts);
+list_index(_Request, _From, undefined, _Opts) ->
+    {error, <<"`mode=list` requires `to`.">>};
 list_index(_Request, From, To, _Opts) when From < To ->
     {ok, #{
         <<"content-type">> => <<"application/json">>,
         <<"body">> => hb_json:encode(#{})
     }};
 list_index(Request, From, To, Opts) ->
-    Result = list_index_blocks(Request, From, To, Opts, #{}),
+    % A list reports the index state, so it does not refetch cached headers.
+    Result =
+        list_index_blocks(Request#{ <<"reindex">> => false }, From, To, Opts, #{}),
     JSON = hb_json:encode(Result),
     {ok, #{
         <<"content-type">> => <<"application/json">>,
@@ -1707,6 +1709,14 @@ list_index_test_parallel() ->
             <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>
         ], maps:get(<<"indexed">>, BlockInfo)),
     ?assertEqual([ ], maps:get(<<"not-indexed">>, BlockInfo)),
+    % A list without `to' is refused, not read down to block 0.
+    ?assertMatch(
+        {error, _},
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=", BlockBin/binary, "&mode=list">>,
+            Opts
+        )
+    ),
     ok.
 
 %% @doc Reindexing bypasses cached headers while retaining request directives.
