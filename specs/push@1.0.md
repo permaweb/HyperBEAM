@@ -272,7 +272,8 @@ Given the loaded target process `T`, the message-to-schedule `Msg` (target id
    `{ id = <signed id of the scheduled message>, target = TARGET,
       slot = NEXTSLOT, resulted-in = <sub-trace | "skipped"> }`.
    On a downstream failure it is an error placeholder
-   `{ response = error, target = TARGET, reason = <error> }` (§8).
+   `{ response = error, id, target = TARGET, slot = NEXTSLOT,
+      reason = <error> }` (§8).
 
 ## 5. Data formats & encodings
 
@@ -585,7 +586,7 @@ atom name; current payloads are human-readable structured messages, so the
 | `target-not-available` | an outbox value is not a schedulable message **at all** (e.g. not a map). | `response = error`, `status = 404`, `outbox-index`, `reason`, `message`. |
 | `resolve-error` | maybe-evaluate (`resolve`) of an entry failed. | not a placeholder: a message with `resolve = error`, `status = 400`, `target` (source process id), `outbox-index`, `reason`, `source` is scheduled in place of the entry (§4.4). |
 | `schedule-error` | scheduling the result onto the target failed (status ≠ 200 / error, and any codec downgrade also failed). | `response = error`, `target`, `reason`. |
-| `push-error` | the recursive downstream `/push` of a scheduled slot returned an error. | `response = error`, `target`, `reason`. |
+| `push-error` | the recursive downstream `/push` of a scheduled slot returned an error. | `response = error`, `id`, `target`, `slot`, `reason`. |
 
 Placeholders MUST NOT abort the traversal of sibling entries: a failure on one
 outbox entry is recorded and the loop proceeds with the rest. Top-level errors

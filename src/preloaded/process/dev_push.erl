@@ -224,9 +224,9 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                 <<"slot">> => Slot,
                 <<"process">> => ID
             })};
-        {Err, Error} when Err == error; Err == failure ->
-            ?event(push, {push_failed_to_find_outbox, {error, Error}}, Opts),
-            {error, Error}
+        {Err, _} when Err == error; Err == failure ->
+            ?event(push, {push_failed_to_find_outbox, {error, Result}}, Opts),
+            {error, Result}
     end.
 
 target_process_not_found(Target) ->
@@ -366,7 +366,9 @@ push_result_message(MsgToPush, Origin, Opts) ->
                             ?event(push, {push_failed, {error, Error}}, Opts),
                             #{
                                 <<"response">> => <<"error">>,
+                                <<"id">> => PushedMsgID,
                                 <<"target">> => PushTarget,
+                                <<"slot">> => NextSlotOnProc,
                                 <<"reason">> => Error
                             }
                     end;
@@ -1723,6 +1725,15 @@ test_max_depth_zero_schedules_only() ->
     {ok, ReceiverSlotAfter} =
         hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
     ?assert(ReceiverSlotAfter > ReceiverSlotBefore),
+    % A push of a slot that is not yet scheduled returns the compute's error.
+    ?assertMatch(
+        {error, #{ <<"phase">> := <<"get-schedule">> }},
+        hb_ao:resolve(
+            Receiver,
+            #{ <<"path">> => <<"push">>, <<"slot">> => ReceiverSlotAfter + 1 },
+            Opts
+        )
+    ),
     % A Sender with no `authority' sends a message with no `from-authority'.
     ?assertEqual(
         undefined,
