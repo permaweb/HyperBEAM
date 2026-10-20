@@ -151,7 +151,9 @@ error_to_bin(Reason) ->
 %% of a write that returns anything but ok.
 cache_item(Item, Opts) ->
     try
-        ok = dev_bundler_cache:write_item(Item, Opts)
+        ok = dev_bundler_cache:write_item(Item, Opts),
+        % Commit the item to disk before the upload is answered.
+        ok = hb_store:flush(hb_opts:get(store, no_viable_store, Opts), Opts)
     catch
         Type:ExceptionReason ->
             {error, #{
