@@ -103,27 +103,30 @@ Not a key of this device: `message@1.0` answers `info`. It returns
 Read or mutate the routing table.
 - **Reads:** the node's routing table (from node options, possibly via the route
   provider, §6); on mutation, the request `Req` (its `method`, its commitments,
-  and the route fields to add). The node's `operator` / route-owner list and any
-  registrar configuration (from node options).
+  and the route fields to add). The node's route owners (§7), its route
+  provider, and any registrar configuration (from node options).
 - **Behaviour:**
   - If `method` (read from `Req`, default `GET`) is **not** `POST`: return the
     current routing table.
   - If `method` is `POST`: **add a route**. Two sub-modes:
     - **No registrar configured:** authorise then insert. The request MUST be
-      signed by an authorised operator/route-owner (§7). If authorised, insert
-      the keys of the request that the owners' commitments cover into the table
-      and **re-sort the
-      whole table ascending by each route's `priority`** (a route with no
-      `priority` sorts as if its key were absent — see §6 ordering), then
-      install the new table as the node's routes. Return
-      `{ok, <<"Route added.">>}`. If not authorised, return error
-      `not_authorized`.
+      signed by a route owner (§7). If not authorised, return error
+      `not_authorized`. If authorised and `router-opts` has a `provider`, the
+      table is the provider's (§6), so return error
+      `<<"Routes come from the provider.">>` and change nothing. Otherwise
+      insert as the new route the request's `route` (`register` sends the
+      offered route as `route`), else the request itself; it contains only the
+      keys that the owner's commitments cover. Then **re-sort the whole table
+      ascending by each route's `priority`** (§6 ordering), install the new
+      table as the node's routes, and return `{ok, <<"Route added.">>}`.
     - **Registrar configured:** do not insert locally; instead forward the
       registration to the configured registrar resolution (an indirection named
       in node options, optionally with a path override). On success return
       `{ok, <<"Route added.">>}`; on failure propagate the underlying error.
 - **Returns:** `{ok, Table}` (GET) | `{ok, <<"Route added.">>}` (authorised
-  POST) | `{error, not_authorized}` | `{error, Reason}` (registrar failure).
+  POST) | `{error, not_authorized}` |
+  `{error, <<"Routes come from the provider.">>}` | `{error, Reason}` (registrar
+  failure).
 - **Side effects:** authorised POST **persists** a new routing table into the
   node's options (table mutation). The registrar sub-mode performs whatever
   resolution the registrar denotes (may include outbound calls).
@@ -218,10 +221,10 @@ remote router peer. Idempotent (safe to call once; repeated calls re-post).
   identity to sign as.
 - **Behaviour:** For each offered route, read its `registration-peer` (the
   remote router's location) and POST a signed registration message to that
-  peer's `routes` endpoint. The registration body names the offered route and an
-  action of `register`; it is committed/signed (as the `as` identity if given,
-  else the node's default identity) so the peer can authenticate and
-  charge/verify.
+  peer's `routes` endpoint. The registration body contains the offered route as
+  `route` and an `action` of `register`; it is committed/signed (as the `as`
+  identity if given, else the node's default identity) so the peer can
+  authenticate and charge/verify.
 - **Returns:** `{ok, <<"Routes registered.">>}`.
 - **Side effects:** outbound signed POST(s) to remote router peer(s).
 
@@ -309,10 +312,12 @@ that relays it to the matched upstream, or run it locally if no route matches.
   numbered map is evaluated in ascending numeric-key order (`1`, `2`, …).
 - **Priority on insert.** When a route is added via POST (no-registrar mode),
   the whole table is re-sorted **ascending by `priority`** (stable for equal
-  priorities, lower value earlier). `priority` affects ONLY this insert-time
-  sort; at match time, precedence is purely positional. An implementation
-  SHOULD compute the sort without recomputing message hashpaths (a performance
-  concern, not observable).
+  priorities, lower value earlier). The new route goes before the routes of its
+  priority, and the routes without a `priority`, such as the node's default
+  routes, keep their order after the routes that have one. `priority` affects
+  ONLY this insert-time sort; at match time, precedence is purely positional.
+  An implementation SHOULD compute the sort without recomputing message
+  hashpaths (a performance concern, not observable).
 - **Route provider (dynamic table).** The table source is selected by the node
   option **`router-opts`** (a map): if `router-opts` carries a **`provider`** key
   (an indirection — a message or path to resolve, or a **list** of them to
@@ -383,12 +388,14 @@ that relays it to the matched upstream, or run it locally if no route matches.
 ## 7. Security & authority
 
 - **Adding a route (no registrar)** is **operator-gated**: the POST request MUST
-  carry a commitment from an address in the node's authorised set — the node
-  option `route-owners`, default `[operator]`. The check is: the URI that
-  `hb_committer:uri/2` gives for at least one authorised owner appears among the
-  request's committers/signers, and the commitments of those owners verify.
-  If not, the device returns `not_authorized` and the table is unchanged
-  (**failure-closed**).
+  carry a verified commitment of a route owner. The route owners are the
+  committers that the node's `route-owners` option gives, else the node's
+  operator: the committer of its `operator` option, else of the node's own
+  signing key, as `meta@1.0` reads it. The check is: a commitment whose
+  committer is the URI that `hb_committer:uri/2` gives for a route owner
+  verifies on the request, and the route contains only the keys that such
+  commitments cover. If not, the device returns `not_authorized` and the table
+  is unchanged (**failure-closed**).
 - **Registrar mode** delegates the authority decision to the configured
   registrar resolution; the local node does not itself gate in that mode.
 - **`register`** signs its outbound registration with the node's identity (or
@@ -405,8 +412,11 @@ that relays it to the matched upstream, or run it locally if no route matches.
   short-circuit), or a strategy selected zero nodes, or a matched route had
   neither `node` nor `nodes`.
 - `no_matching_route` — `match` found no matching route.
-- `not_authorized` — a `routes` POST (no-registrar mode) was not signed by an
-  authorised operator/route-owner.
+- `not_authorized` — a `routes` POST (no-registrar mode) was not signed by a
+  route owner.
+- `<<"Routes come from the provider.">>` — a `routes` POST (no-registrar mode)
+  signed by a route owner while `router-opts` has a `provider`, whose routes are
+  the only ones the device reads (§6); the table is unchanged.
 - `invalid_user_path` — `preprocess` matched a route but the user's request had
   an empty or non-binary `path`.
 - `invalid_replace_args` — a node's `match`/`with` path transform could not
@@ -492,9 +502,14 @@ HTTP:
     `routes/<index>` (or `explicit` for an `http(s)://` short-circuit); no match
     returns `no_matching_route`. `match` reads its routes from `Base`.
 20. A `routes` POST in no-registrar mode adds the route **iff** the request is
-    signed by an authorised operator/route-owner (returns `Route added.`),
-    otherwise returns `not_authorized` and leaves the table unchanged; after a
-    successful add, the table is re-sorted ascending by `priority`.
+    signed by a route owner (returns `Route added.`), otherwise returns
+    `not_authorized` and leaves the table unchanged. The route is the request's
+    `route`, else the request, with only the keys that the owner signed. While
+    a `provider` is set, an owner's POST returns
+    `{error, <<"Routes come from the provider.">>}` and adds nothing. After a
+    successful add, the table is re-sorted ascending by `priority`, keeping the
+    order of routes of equal or no `priority`, with the new route first among
+    those of its priority.
 21. With a registrar configured, a `routes` POST is forwarded to the registrar
     resolution rather than inserted locally; success returns `Route added.`,
     failure propagates the registrar error.
