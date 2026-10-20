@@ -397,8 +397,13 @@ result_to_message(Item, Opts) ->
             result_to_message(undefined, Item, Opts)
     end.
 %% @doc Load an L1 transaction in its native form. The node is read through
-%% `hb_ao:get/3', so its keys are in `structured@1.0' form.
-result_to_message(ExpectedID, #{ <<"bundledin">> := null }, Opts) ->
+%% `hb_ao:get/3', so its keys are in `structured@1.0' form. A node is an L1
+%% transaction if its `bundledIn' is null or its fee is not zero. ANS-104
+%% items pay no fee. Some gateways give an L1 transaction an empty
+%% `bundledIn' ID.
+result_to_message(ExpectedID, Item, Opts)
+        when map_get(<<"bundledin">>, Item) =:= null;
+             map_get(<<"winston">>, map_get(<<"fee">>, Item)) =/= <<"0">> ->
     hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"path">> => <<"tx">>, <<"tx">> => ExpectedID },
