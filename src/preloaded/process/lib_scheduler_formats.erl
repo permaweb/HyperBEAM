@@ -26,7 +26,7 @@ assignments_to_bundle(ProcID, Assignments, More, TimeInfo, RawOpts) ->
         <<"continues">> => hb_util:atom(More),
         <<"timestamp">> => hb_util:int(Timestamp),
         <<"block-height">> => hb_util:int(Height),
-        <<"block-hash">> => hb_util:human_id(Hash),
+        <<"block-hash">> => Hash,
         <<"assignments">> =>
             hb_message:normalize_commitments(
                 hb_maps:from_list(
@@ -69,7 +69,7 @@ assignments_to_aos2(ProcID, Assignments, More, RawOpts) ->
                     <<"has_next_page">> => More,
                     <<"timestamp">> => list_to_binary(integer_to_list(Timestamp)),
                     <<"block-height">> => list_to_binary(integer_to_list(Height)),
-                    <<"block-hash">> => hb_util:human_id(Hash)
+                    <<"block-hash">> => Hash
                 },
             <<"edges">> =>
                 lists:map(
