@@ -805,7 +805,7 @@ do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) 
     StepMsg = hb_message:convert(
         Merged,
         <<"structured@1.0">>,
-        Opts#{ <<"topic">> => ao_internal }
+        Opts#{ <<"topic">> => ao_internal, <<"linkify-mode">> => keep }
     ),
     ?event_debug(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys, Opts)];
@@ -817,7 +817,7 @@ do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
     StepMsg = hb_message:convert(
         Merged,
         <<"structured@1.0">>,
-        Opts#{ <<"topic">> => ao_internal }
+        Opts#{ <<"topic">> => ao_internal, <<"linkify-mode">> => keep }
     ),
     ?event_debug(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
@@ -1363,14 +1363,21 @@ linked_key_test() ->
             <<"ao:", (hb_util:human_id(crypto:strong_rand_bytes(32)))/binary>>,
             #{}
         },
+    Nested = #{ <<"a">> => <<"b">> },
     Req = #{
         <<"path">> => {link, PathID, #{}},
         <<"test-key">> => Missing,
-        <<"typed-key+integer">> => {link, ID, #{}}
+        <<"typed-key+integer">> => {link, ID, #{}},
+        <<"nested">> => Nested
     },
     [_, Msg] = from(Req, Opts),
     ?assertEqual(Missing, maps:get(<<"test-key">>, Msg)),
-    ?assertEqual(123, maps:get(<<"typed-key">>, Msg)).
+    ?assertEqual(123, maps:get(<<"typed-key">>, Msg)),
+    % A nested message stays in its step: the parse writes nothing.
+    ?assertEqual(
+        {error, not_found},
+        hb_cache:read(hb_message:id(Nested, all, Opts), Opts)
+    ).
 
 subpath_in_key_test() ->
     Req = #{
