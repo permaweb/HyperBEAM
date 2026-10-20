@@ -112,7 +112,7 @@ debug_trace(Mod, Func, Line, Opts) ->
 term(X) -> term(X, #{}).
 term(X, Opts) -> term(X, Opts, 0).
 term(X, Opts, Indent) ->
-    try do_term(X, Opts, Indent)
+    try do_term(redact_private(X), Opts, Indent)
     catch A:B:C ->
         Mode = hb_opts:get(mode, prod, Opts),
         PrintFailPreference = hb_opts:get(debug_print_fail_mode, quiet, Opts),
@@ -211,6 +211,15 @@ do_term(MsgList, Opts, Indent) when is_list(MsgList) ->
     list(MsgList, Opts, Indent);
 do_term(X, Opts, Indent) ->
     indent("~80p", [X], Opts, Indent).
+
+%% @doc Replace the value of a tuple `{Key, Value}' whose `Key' starts with
+%% `priv', such as an event's `{priv_wallet, Wallet}', with `redacted'.
+redact_private(Pair = {Key, _}) ->
+    case hb_private:is_private(Key) of
+        true -> {Key, redacted};
+        false -> Pair
+    end;
+redact_private(X) -> X.
 
 %% @doc Helper function to format tuples with arity greater than 2.
 tuple(Tuple, Opts, Indent) ->
@@ -1111,6 +1120,11 @@ private_message_test() ->
             )
         end,
         [0, 1, 3]
+    ),
+    % A tuple whose first element starts with `priv' prints without its value.
+    ?assertEqual(
+        "priv_wallet: redacted",
+        term({priv_wallet, <<"private-marker">>})
     ).
 
 private_trace_test() ->
