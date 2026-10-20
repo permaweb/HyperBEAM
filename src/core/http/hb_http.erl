@@ -497,10 +497,13 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % Remove the private components from the message, if they are present.
     WithoutPriv = hb_private:reset(WithoutCookie),
     % Add the `accept-bundle: true' key to the message, if the caller has not
-    % set an explicit preference.
+    % set an explicit preference. The value is a binary, as is the node's port
+    % in `ao-peer-port' below: the peer node reads them with `hb_util:bool/1'
+    % and `hb_util:bin/1', and a request with no typed values of its own
+    % carries no `ao-types'.
     WithAcceptBundle =
         case hb_maps:get(<<"accept-bundle">>, Message, not_found, Opts) of
-            not_found -> WithoutPriv#{ <<"accept-bundle">> => true };
+            not_found -> WithoutPriv#{ <<"accept-bundle">> => <<"true">> };
             _ -> WithoutPriv
         end,
     % Determine the `ao-peer-port' from the message to send or the node message.
@@ -513,10 +516,12 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                 hb_maps:get(
                     <<"ao-peer-port">>,
                     WithAcceptBundle,
-                    hb_opts:get(
-                        port_external,
-                        hb_opts:get(port, undefined, Opts),
-                        Opts
+                    hb_util:bin(
+                        hb_opts:get(
+                            port_external,
+                            hb_opts:get(port, undefined, Opts),
+                            Opts
+                        )
                     ),
                     Opts
                 )
@@ -718,6 +723,18 @@ simple_ao_resolve_unsigned_test() ->
     ?assertEqual(
         {ok, forbidden},
         post(URL, #{ <<"path">> => <<"//key2">>, <<"key2">> => forbidden }, test_opts())
+    ),
+    % A request with no typed values of its own carries no `ao-types'.
+    ?assertNotMatch(
+        #{ headers := #{ <<"ao-types">> := _ } },
+        prepare_request(
+            <<"httpsig@1.0">>,
+            <<"POST">>,
+            URL,
+            <<"//key1">>,
+            TestMsg,
+            test_opts()
+        )
     ),
     % A request in another codec carries no private key of the message.
     #{ headers := Headers, body := Body } =
