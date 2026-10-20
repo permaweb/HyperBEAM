@@ -117,7 +117,8 @@ add_dynamic_keys(NodeMsg) ->
     add_identity_addresses(UpdatedNodeMsg).
 
 add_identity_addresses(NodeMsg) ->
-    Identities = hb_opts:get(identities, #{}, NodeMsg),
+    NodeOpts = hb_http_server:with_node_committer(NodeMsg),
+    Identities = hb_opts:get(identities, #{}, NodeOpts),
     NewIdentities = maps:map(fun(_, Identity) ->
         Identity#{
             <<"address">> => hb:address(
@@ -187,16 +188,24 @@ config_test() ->
 
 %% @doc Test that we can't get the node message if the requested key is private.
 priv_inaccessible_test() ->
+    Wallet = ar_wallet:new(),
     Node = hb_http_server:start_node(
         #{
             <<"test-config-item">> => <<"test">>,
-            <<"priv-key">> => <<"BAD">>
+            <<"priv-key">> => <<"BAD">>,
+            <<"identities">> =>
+                #{ <<"test">> => #{ <<"priv-wallet">> => Wallet } }
         }
     ),
     {ok, Res} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
     ?event({res, Res}),
     ?assertEqual(<<"test">>, hb_ao:get(<<"test-config-item">>, Res, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"priv-key">>, Res, #{})).
+    ?assertEqual(not_found, hb_ao:get(<<"priv-key">>, Res, #{})),
+    % An identity of the node is listed by its address, without its wallet.
+    ?assertEqual(
+        #{ <<"test">> => #{ <<"address">> => hb:address(Wallet) } },
+        hb_maps:get(<<"identities">>, Res, not_found, #{})
+    ).
 
 %% @doc A request that carries a link to a message the node does not hold is
 %% answered when its path does not read the link.
