@@ -364,12 +364,23 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
             ?event({priv_wallet_details, WalletDetails}),
             % Find the necessary wallet details to set the cookie on the client.
             JSONKey = hb_maps:get(<<"wallet">>, WalletDetails, undefined, Opts),
-            % Don't store, set the cookie in the response.
+            % Don't store, set the cookie in the response. The key is a
+            % credential: page scripts may not read its cookie, and browsers
+            % send it only over HTTPS, from this site's pages.
             hb_ao:resolve(
                 Base#{ <<"device">> => <<"cookie@1.0">> },
                 #{
                     <<"path">> => <<"store">>,
-                    <<"wallet-", Address/binary>> => hb_escape:encode_quotes(JSONKey)
+                    <<"wallet-", Address/binary>> =>
+                        #{
+                            <<"value">> => hb_escape:encode_quotes(JSONKey),
+                            <<"attributes">> =>
+                                #{
+                                    <<"path">> => <<"/">>,
+                                    <<"samesite">> => <<"strict">>
+                                },
+                            <<"flags">> => [<<"httponly">>, <<"secure">>]
+                        }
                 },
                 Opts
             );
@@ -927,6 +938,18 @@ commit_with_cookie_wallet_test() ->
         hb_http:get(Node, <<"/~secret@1.0/generate?persist=client">>, #{}),
     WalletName = maps:get(<<"wallet-address">>, GenResponse),
     #{ <<"priv">> := Priv } = GenResponse,
+    % Page scripts, other sites and plain HTTP do not get the wallet's cookie.
+    ?assertMatch(
+        #{
+            <<"attributes">> :=
+                #{ <<"path">> := <<"/">>, <<"samesite">> := <<"strict">> },
+            <<"flags">> := [<<"httponly">>, <<"secure">>]
+        },
+        hb_maps:get(
+            hb_util:lowercase_key(<<"wallet-", WalletName/binary>>),
+            maps:get(<<"cookie">>, Priv)
+        )
+    ),
     % Use the cookie to sign a message (no wallet parameter needed).
     TestMessage = #{
         <<"device">> => <<"secret@1.0">>,
