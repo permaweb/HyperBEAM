@@ -469,7 +469,18 @@ route_to_request(M, {error, Reason}, _Opts) ->
 %% preferred format. This function honors the `accept-bundle' option, if it is
 %% already present in the message, and sets it to `true' if it is not.
 prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
-    Message = hb_ao:normalize_keys(RawMessage, Opts),
+    NormMessage = hb_ao:normalize_keys(RawMessage, Opts),
+    % Remove the `multirequest-*' keys, which configure `hb_http_multi' on this
+    % node, unless a commitment covers them.
+    Message =
+        hb_message:without_unless_signed(
+            lists:filter(
+                fun(<<"multirequest-", _/binary>>) -> true; (_) -> false end,
+                hb_maps:keys(NormMessage)
+            ),
+            NormMessage,
+            Opts
+        ),
     % Verify the outbound message if paranoid mode is enabled for http_request
     hb_message:paranoid_verify(http_request, Message, Opts),
     % Generate a `cookie' key for the message, if an unencoded cookie is
@@ -733,6 +744,18 @@ simple_ao_resolve_unsigned_test() ->
             URL,
             <<"//key1">>,
             TestMsg,
+            test_opts()
+        )
+    ),
+    % A request to one peer carries no unsigned `multirequest-*' key.
+    ?assertNotMatch(
+        #{ headers := #{ <<"multirequest-responses">> := _ } },
+        prepare_request(
+            <<"httpsig@1.0">>,
+            <<"POST">>,
+            URL,
+            <<"//key1">>,
+            TestMsg#{ <<"multirequest-responses">> => 1 },
             test_opts()
         )
     ),

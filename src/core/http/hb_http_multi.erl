@@ -51,22 +51,12 @@ request(Config, Method, Path, Message, Opts) ->
         admissible_status := Statuses,
         parallel := Parallel
     } = multirequest_opts(Config, Message, Opts),
-    MultirequestMsg =
-        hb_message:without_unless_signed(
-            lists:filter(
-                fun(<<"multirequest-", _/binary>>) -> true; (_) -> false end,
-                hb_maps:keys(Message)
-            ),
-            Message,
-            Opts
-        ),
     ?event(debug_multi,
         {multirequest_opts_parsed,
             {config, Config},
             {method, Method},
             {path, Path},
-            {raw_message, Message},
-            {message_to_send, MultirequestMsg}
+            {raw_message, Message}
         }),
     {AdmissibleResults, AllResponses} =
         if Parallel =/= false ->
@@ -77,7 +67,7 @@ request(Config, Method, Path, Message, Opts) ->
                 StopAfter,
                 Method,
                 Path,
-                MultirequestMsg,
+                Message,
                 Admissible,
                 Statuses,
                 Opts
@@ -88,7 +78,7 @@ request(Config, Method, Path, Message, Opts) ->
                 Responses,
                 Method,
                 Path,
-                MultirequestMsg,
+                Message,
                 Admissible,
                 Statuses,
                 Opts
