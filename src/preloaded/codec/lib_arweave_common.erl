@@ -238,11 +238,11 @@ tag_keys(Item, _Opts) ->
         Item#tx.tags
     ).
 
-%% @doc Return the complete message for an item, less its commitments. The
-%% precidence order for choosing fields to place into the base message is:
-%% 1. Data
-%% 2. Tags
-%% 3. Fields
+%% @doc Return the complete message for an item, less its commitments. Each
+%% committed key takes its value from `Data', then `Fields', then `Tags'. A
+%% field in `Fields' takes precedence over a tag of the same name, and the tag
+%% stays only in the commitment's `original-tags'. A field with its default
+%% value is not in `Fields', so a tag of the same name gives the key's value.
 base(CommittedKeys, Fields, Tags, Data, Opts) ->
     hb_maps:from_list(
         lists:map(
