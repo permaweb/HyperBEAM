@@ -112,7 +112,9 @@ find_profiling_config(Opts) ->
                 prod -> false;
                 _ -> hb_features:test()
             end;
-        EnableProfiling -> EnableProfiling
+        Signers when is_list(Signers) -> Signers;
+        % A configuration file gives `true' and `false' as binaries.
+        EnableProfiling -> hb_util:bool(EnableProfiling)
     end.
 
 %% @doc Validate that profiling is enabled. 
@@ -338,6 +340,27 @@ eprof_resolution_test() ->
             ),
             #{ <<"profiling">> => [] }
         )
+    ),
+    % A node in `prod' mode does not profile unless `profiling' is set.
+    ?assertEqual(
+        {error, <<"Profiling is disabled.">>},
+        hb_ao:resolve(
+            #{ <<"path">> => <<"/~profile@1.0/run?run=/~meta@1.0/build">> },
+            #{ <<"mode">> => prod }
+        )
+    ),
+    % `profiling: true' in a configuration file enables profiling.
+    {ok, Conf} = hb_opts:load_bin(<<"profiling: true">>, #{}),
+    validate_profiler_output(
+        <<"eprof">>,
+        hb_ao:resolve(
+            #{
+                <<"path">> => <<"/~profile@1.0/run?run=/~meta@1.0/build">>,
+                <<"engine">> => <<"eprof">>,
+                <<"return-mode">> => <<"message">>
+            },
+            Conf
+        )
     ).
 
 -ifdef(ENABLE_EFLAME).
@@ -358,14 +381,14 @@ test_profiler_exec(function, Engine) ->
     eval(
         fun() -> {ok, #{ <<"node">> => <<"HyperBEAM">> }} end,
         #{ <<"engine">> => Engine, <<"return-mode">> => <<"message">> },
-        #{}
+        #{ <<"profiling">> => true }
     );
 test_profiler_exec(resolution, Engine) ->
     hb_ao:resolve(
         #{
             <<"path">> => <<"/~profile@1.0/run?run=/~meta@1.0/build">>,
             <<"engine">> => Engine, <<"return-mode">> => <<"message">> },
-        #{}
+        #{ <<"profiling">> => true }
     ).
 
 %% @doc Verify the expected type of output from a profiler.

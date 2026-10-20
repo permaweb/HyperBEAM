@@ -297,7 +297,6 @@ raw_default_message() ->
         <<"commitment-device">> => <<"httpsig@1.0">>,
         % Dev options
         <<"mode">> => debug,
-        <<"profiling">> => true,
         % Every modification to `Opts' called directly by the node operator
         % should be recorded here.
         <<"node-history">> => [],
