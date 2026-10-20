@@ -486,7 +486,16 @@ ao_data_key_test() ->
     ?assertEqual(<<"Body value">>, Enc#tx.data),
     Dec = hb_message:convert(Enc, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?event({dec, Dec}),
-    ?assert(hb_message:verify(Dec, all, #{})).
+    ?assert(hb_message:verify(Dec, all, #{})),
+    % An item with a `body' tag and no data verifies once decoded.
+    TagTX =
+        ar_bundles:sign_item(
+            #tx{ tags = [{<<"body">>, <<"Body value">>}] },
+            hb:wallet()
+        ),
+    TagDec =
+        hb_message:convert(TagTX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ?assert(hb_message:verify(TagDec, all, #{})).
         
 simple_signed_to_httpsig_test() ->
     Structured =

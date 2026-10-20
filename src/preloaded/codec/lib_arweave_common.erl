@@ -6,7 +6,7 @@
 -export([verify_committed_keys/5]).
 -export([add_commitment/4]).
 -export([with_commitments/8]).
--export([bundle_hint/4, data/3, tags/5, excluded_tags/3]).
+-export([bundle_hint/4, data/4, tags/5, excluded_tags/3]).
 -export([item_hint/4, signed_children_hint/3]).
 -export([to/3, to/6, siginfo/6, fields_to_tx/4, decode/1]).
 -export([bundle_header/2, bundle_header/3]).
@@ -62,7 +62,7 @@ to(Device, TABM, Req, FieldsFun, ExcludedTagsFun, Opts) ->
             TABM,
             Opts
         ),
-    Data = data(TABM, Req, Opts),
+    Data = data(MaybeCommitment, TABM, Req, Opts),
     ?event({calculated_data, Data}),
     TX0 = siginfo(TABM, Req, Data, MaybeCommitment, FieldsFun, Opts),
     ?event({found_siginfo, TX0}),
@@ -830,8 +830,8 @@ decode(Encoded) ->
     end.
 
 %% @doc Calculate the data field for a message.
-data(TABM, Req, Opts) ->
-    DataKey = inline_key(TABM),
+data(MaybeCommitment, TABM, Req, Opts) ->
+    DataKey = inline_key(MaybeCommitment, TABM, Opts),
     UnencodedNestedMsgs = data_messages(TABM, Opts),
     NestedMsgs =
         hb_maps:map(
@@ -900,7 +900,7 @@ tags(TX, MaybeCommitment, TABM, ExcludedTagKeys, Opts) ->
         CommittedTagKeys
     ),
     bundle_tags_to_tags(MaybeCommitment) ++
-        committed_tag_keys_to_tags(TABM, TagKeys, Opts).
+        committed_tag_keys_to_tags(MaybeCommitment, TABM, TagKeys, Opts).
 
 committed_tag_keys({ok, _, Commitment}, _TABM, Opts) ->
     lists:map(
@@ -941,8 +941,8 @@ exclude_anchor_tag(TX, TABM, Opts) ->
     end.
 
 %% @doc Apply the `ao-data-key' to the committed keys.
-committed_tag_keys_to_tags(TABM, Committed, Opts) ->
-    DataKey = inline_key(TABM),
+committed_tag_keys_to_tags(MaybeCommitment, TABM, Committed, Opts) ->
+    DataKey = inline_key(MaybeCommitment, TABM, Opts),
     ?event(
         {tags_before_data_key,
             {tag_keys, Committed},
@@ -977,20 +977,31 @@ bundle_tags_to_tags({ok, _, Commitment}) ->
 bundle_tags_to_tags(_) ->
     [].
 
-%% @doc Determine if an `ao-data-key' should be added to the message.
-inline_key(Msg) ->
+%% @doc Return the key whose value is the data of a message's item: the
+%% message's `ao-data-key', or `data' if the message has a `data'. Otherwise,
+%% a message with a commitment uses the value of the `ao-data-key' tag in the
+%% commitment's `original-tags', or `data'. A message without a commitment
+%% uses `body' if its `body' is not a link, or `data'.
+inline_key(MaybeCommitment, Msg, Opts) ->
     InlineKey = maps:get(<<"ao-data-key">>, Msg, undefined),
     case {
         InlineKey,
         maps:get(<<"data">>, Msg, ?DEFAULT_DATA) == ?DEFAULT_DATA,
+        MaybeCommitment,
         maps:is_key(<<"body">>, Msg)
             andalso not ?IS_LINK(
                 hb_link:decode(maps:get(<<"body">>, Msg, undefined))
             )
     } of
-        {Explicit, _, _} when Explicit =/= undefined ->
+        {Explicit, _, _, _} when Explicit =/= undefined ->
             InlineKey;
-        {_, true, true} ->
+        {_, true, {ok, _, Commitment}, _} ->
+            OriginalTags =
+                hb_maps:get(<<"original-tags">>, Commitment, #{}, Opts),
+            Tags =
+                tags(#tx{ tags = original_tags_to_tags(OriginalTags) }, Opts),
+            maps:get(<<"ao-data-key">>, Tags, <<"data">>);
+        {_, true, _, true} ->
             <<"body">>;
         _ ->
             <<"data">>
