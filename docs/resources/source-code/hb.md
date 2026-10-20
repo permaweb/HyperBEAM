@@ -94,8 +94,7 @@ modules of the hyperbeam node.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#address-0">address/0</a></td><td>Get the address of a wallet.</td></tr><tr><td valign="top"><a href="#address-1">address/1*</a></td><td></td></tr><tr><td valign="top"><a href="#benchmark-2">benchmark/2</a></td><td>Run a function as many times as possible in a given amount of time.</td></tr><tr><td valign="top"><a href="#benchmark-3">benchmark/3</a></td><td>Run multiple instances of a function in parallel for a given amount of time.</td></tr><tr><td valign="top"><a href="#build-0">build/0</a></td><td>Utility function to hot-recompile and load the hyperbeam environment.</td></tr><tr><td valign="top"><a href="#debug_wait-4">debug_wait/4</a></td><td>Utility function to wait for a given amount of time, printing a debug
-message to the console first.</td></tr><tr><td valign="top"><a href="#do_start_simple_pay-1">do_start_simple_pay/1*</a></td><td></td></tr><tr><td valign="top"><a href="#init-0">init/0</a></td><td>Initialize system-wide settings for the hyperbeam node.</td></tr><tr><td valign="top"><a href="#no_prod-3">no_prod/3</a></td><td>Utility function to throw an error if the current mode is prod and
-non-prod ready code is being executed.</td></tr><tr><td valign="top"><a href="#now-0">now/0</a></td><td>Utility function to get the current time in milliseconds.</td></tr><tr><td valign="top"><a href="#profile-1">profile/1</a></td><td>Utility function to start a profiling session and run a function,
+message to the console first.</td></tr><tr><td valign="top"><a href="#do_start_simple_pay-1">do_start_simple_pay/1*</a></td><td></td></tr><tr><td valign="top"><a href="#init-0">init/0</a></td><td>Initialize system-wide settings for the hyperbeam node.</td></tr><tr><td valign="top"><a href="#now-0">now/0</a></td><td>Utility function to get the current time in milliseconds.</td></tr><tr><td valign="top"><a href="#profile-1">profile/1</a></td><td>Utility function to start a profiling session and run a function,
 then analyze the results.</td></tr><tr><td valign="top"><a href="#read-1">read/1</a></td><td>Debugging function to read a message from the cache.</td></tr><tr><td valign="top"><a href="#read-2">read/2</a></td><td></td></tr><tr><td valign="top"><a href="#start_mainnet-0">start_mainnet/0</a></td><td>Start a mainnet server without payments.</td></tr><tr><td valign="top"><a href="#start_mainnet-1">start_mainnet/1</a></td><td></td></tr><tr><td valign="top"><a href="#start_simple_pay-0">start_simple_pay/0</a></td><td>Start a server with a <code>simple-pay@1.0</code> pre-processor.</td></tr><tr><td valign="top"><a href="#start_simple_pay-1">start_simple_pay/1</a></td><td></td></tr><tr><td valign="top"><a href="#start_simple_pay-2">start_simple_pay/2</a></td><td></td></tr><tr><td valign="top"><a href="#topup-3">topup/3</a></td><td>Helper for topping up a user's balance on a simple-pay node.</td></tr><tr><td valign="top"><a href="#topup-4">topup/4</a></td><td></td></tr><tr><td valign="top"><a href="#wallet-0">wallet/0</a></td><td></td></tr><tr><td valign="top"><a href="#wallet-1">wallet/1</a></td><td></td></tr></table>
 
 
@@ -165,16 +164,6 @@ message to the console first.
 `init() -> any()`
 
 Initialize system-wide settings for the hyperbeam node.
-
-<a name="no_prod-3"></a>
-
-### no_prod/3 ###
-
-`no_prod(X, Mod, Line) -> any()`
-
-Utility function to throw an error if the current mode is prod and
-non-prod ready code is being executed. You can find these in the codebase
-by looking for ?NO_PROD calls.
 
 <a name="now-0"></a>
 

@@ -384,7 +384,6 @@ default_worker(GroupName, Base, Opts) ->
 %% `priv', as an integer.
 default_grouper(Base, Req, Opts) ->
     %?event({calculating_default_group_name, {base, Base}, {req, Req}}),
-    ?no_prod("Using a hash for group names is not secure."),
     case hb_opts:get(await_inprogress, true, Opts) of
         true ->
             case has_commitments(Base) andalso has_commitments(Req) andalso

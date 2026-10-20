@@ -61,7 +61,6 @@
 -endif.
 -define(debug_wait(T), hb:debug_wait(T, ?MODULE, ?FUNCTION_NAME, ?LINE)).
 -define(debug_print(X), hb_event:debug_print(X, ?MODULE, ?FUNCTION_NAME, ?LINE)).
--define(no_prod(X), hb:no_prod(X, ?MODULE, ?LINE)).
 
 %%% Macro shortcuts for debugging.
 %% @doc A macro for marking that you got 'here'.

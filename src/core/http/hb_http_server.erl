@@ -1816,6 +1816,20 @@ restart_server_test() ->
         hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{ <<"protocol">> => http2 })
     ).
 
+%% @doc A node in `prod' mode serves requests. `HB_MODE' gives the processes
+%% that serve them the global mode `prod'.
+prod_mode_test() ->
+    Node = start_node(#{ <<"mode">> => prod }),
+    os:putenv("HB_MODE", "prod"),
+    try
+        ?assertEqual(
+            {ok, prod},
+            hb_http:get(Node, <<"/~meta@1.0/info/mode">>, #{})
+        )
+    after
+        os:unsetenv("HB_MODE")
+    end.
+
 %% @doc A request whose path reads a link to a message the node does not hold
 %% gets 404.
 read_missing_link_test() ->
