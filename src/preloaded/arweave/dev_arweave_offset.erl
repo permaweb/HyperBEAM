@@ -312,13 +312,14 @@ maybe_nested_item(
         {ok, HeaderSize, HeaderTX} ?= deserialize_header(FirstChunk),
         true ?= TargetOffset >= ItemStartOffset + HeaderSize,
         true ?= ar_tx:type(HeaderTX) =/= binary,
-        message_from_offset(
-            TargetOffset,
-            ItemStartOffset + HeaderSize,
-            KnownOffset,
-            KnownChunk,
-            Opts
-        )
+        {ok, _, _, _} ?=
+            message_from_offset(
+                TargetOffset,
+                ItemStartOffset + HeaderSize,
+                KnownOffset,
+                KnownChunk,
+                Opts
+            )
     else
         false -> {ok, ItemStartOffset, ItemSize, FirstChunk};
         {error, not_found} -> {ok, ItemStartOffset, ItemSize, FirstChunk};
@@ -500,7 +501,12 @@ offset_nested_item_test() ->
         ),
     {ItemStartOffset, _ItemSize} =
         bundle_message_offset_from_tx(TXID, [1, 2], Opts),
-    assert_offset_matches(hb_util:bin(ItemStartOffset + 1), Expected, Opts).
+    assert_offset_matches(hb_util:bin(ItemStartOffset + 1), Expected, Opts),
+    % The last byte of item 1's bundle index gives item 1.
+    {FirstMemberOffset, _} = bundle_message_offset_from_tx(TXID, [1, 1], Opts),
+    {ok, Bundle} =
+        hb_http:get(Node, <<"/~arweave@2.9/tx=", TXID/binary, "/1">>, Opts),
+    assert_offset_matches(hb_util:bin(FirstMemberOffset - 1), Bundle, Opts).
 
 assert_offset_item(Path, DataSize, Tags, Opts) ->
     {ok, Item} = hb_ao:resolve(#{ <<"device">> => <<"arweave@2.9">> }, Path, Opts),
