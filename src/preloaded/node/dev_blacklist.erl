@@ -309,7 +309,7 @@ ensure_cache_table(Msg, Opts) ->
                     refresh_loop(Opts)
                 end
             ),
-            case FallbackMode of 
+            case hb_util:atom(FallbackMode) of
                 continue -> {ok, Msg};
                 halt ->
                     IsInitialized = 
@@ -458,6 +458,20 @@ basic_test() ->
     ?assertMatch(
         {error, #{ <<"status">> := 451 }},
         hb_http:get(MsgProviderNode, SignedID1, Opts1)
+    ),
+    % A binary `blacklist-fallback', as a config file gives it, is read.
+    ?assertMatch(
+        {ok, <<"test-3">>},
+        hb_http:get(
+            hb_http_server:start_node(
+                Opts1#{
+                    <<"priv-wallet">> => ar_wallet:new(),
+                    <<"blacklist-fallback">> => <<"continue">>
+                }
+            ),
+            <<"/", UnsignedID3/binary, "/body">>,
+            Opts1
+        )
     ),
     ok.
 
