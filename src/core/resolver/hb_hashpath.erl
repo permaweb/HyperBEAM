@@ -150,7 +150,11 @@ format_request(Req, Opts) ->
 
 %% @doc Use the request URI when supplied by a parsed receipt. A request that
 %% has a smallest form (see `hb_singleton:to_part/1') is written in it, and
-%% any other request as its URI.
+%% any other request as its URI. A request URI that is a hashpath is formatted
+%% with `to_part/1', so `ao:B/k.R' is the group `(ao:B/k.R)'.
+format_request_context(#{ <<"request-uri">> := URI }, _Opts)
+        when ?IS_HASHPATH(URI) ->
+    hb_singleton:to_part(URI);
 format_request_context(#{ <<"request-uri">> := URI }, _Opts) -> {ok, URI};
 format_request_context(Ctx = #{ <<"request">> := Req }, Opts) ->
     Input =
@@ -896,6 +900,26 @@ compact_form_round_trip_test() ->
             % A request that is only a device is written as `~Device'.
             <<"ao:BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4"
               "/~test-device@1.0/compute">>
+        ]
+    ),
+    % A request that is a hashpath of several parts is formatted as a group,
+    % and a URI with a device as it is; each form then formats as itself.
+    R = <<"cGF0Y2gtaWQtMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA">>,
+    lists:foreach(
+        fun({HP, Form}) ->
+            ?assertEqual(
+                [Form, Form],
+                [ format(parse(In, Opts), Opts) || In <- [HP, Form] ]
+            )
+        end,
+        [
+            {
+                <<"ao:a/ao:b%2Fk%2E", R/binary>>,
+                <<"ao:a/(ao:b/k.", R/binary, ")">>
+            },
+            {<<"ao:a/ao:b%2Fk">>, <<"ao:a/(ao:b/k)">>},
+            {<<"ao:a/ao:b~d@1.0">>, <<"ao:a/ao:b~d@1.0">>},
+            {<<"ao:a/(ao:b~d@1.0)">>, <<"ao:a/(ao:b~d@1.0)">>}
         ]
     ),
     % A resolved base that is only a device is written as `~Device'.

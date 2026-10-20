@@ -262,8 +262,9 @@ base_path([Base | _]) when is_map(Base) ->
 base_path(_) -> #{}.
 
 %% @doc Mark the messages that `to_part/1' can write in their smallest form:
-%% every request that has one, a base that is only a device, and a base that
-%% is the `ao:' URI of a key, with or without a device.
+%% every request that has one, a base that is only a device, a base that is
+%% the `ao:' URI of a key, with or without a device, and a base that is any
+%% other hashpath or the resolution of one.
 smallest([]) -> [];
 smallest([Base | Requests]) ->
     [
@@ -272,7 +273,12 @@ smallest([Base | Requests]) ->
             {as, _, Msg} when map_size(Msg) == 0 -> smallest_part(Base);
             {as, D, <<"ao:", Key/binary>>} ->
                 smallest_part({as, D, #{ <<"path">> => Key }});
-            <<"ao:", Key/binary>> -> smallest_part(#{ <<"path">> => Key });
+            <<"ao:", Key/binary>> ->
+                case to_part(#{ <<"path">> => Key }) of
+                    {ok, Part} -> {part, Part};
+                    error -> smallest_part(Base)
+                end;
+            {resolve, _} -> smallest_part(Base);
             _ -> Base
         end
     |
@@ -293,7 +299,14 @@ smallest_part(Msg) ->
 %%     #{ path => X, X => V }       => X=V
 %%     #{ device => D }             => ~D
 %%     {as, D, #{ path => X }}      => X~D
+%%     {as, D, ao:K}                => ao:K~D
+%%     {resolve, [ao:P]}            => (ao:P)
+%%     {resolve, [M1, M2, ...]}     => (ao:P1/P2/...)
+%%     ao:P                         => ao:P, or (ao:P) if P is not a key
 %% </pre>
+%% `from/2' reads `(ao:P)' as a subpath, which resolves to the message that
+%% the hashpath `ao:P' gives. The parts of a subpath are those that
+%% `smallest/1' gives its messages, so each message must have one.
 to_part(#{ <<"device">> := Device } = Msg) when map_size(Msg) == 1 ->
     to_part({as, Device, #{}});
 to_part({as, Device, Msg}) when map_size(Msg) == 0 ->
@@ -308,6 +321,12 @@ to_part({as, Device, #{ <<"path">> := Key } = Msg}) when map_size(Msg) == 1 ->
         {ok, <<"~", D/binary>>} ?= to_part({as, Device, #{}}),
         {ok, <<K/binary, "~", D/binary>>}
     end;
+to_part({as, Device, <<"ao:", Key/binary>>}) ->
+    maybe
+        {ok, _} ?= literal(Key, [<<"%">> | ?KEY_SYNTAX]),
+        {ok, <<"~", D/binary>>} ?= to_part({as, Device, #{}}),
+        {ok, <<"ao:", Key/binary, "~", D/binary>>}
+    end;
 to_part(#{ <<"path">> := Key } = Msg) when map_size(Msg) == 1 ->
     maybe
         {ok, K} ?= literal(Key, ?KEY_SYNTAX),
@@ -321,6 +340,20 @@ to_part(#{ <<"path">> := Key } = Msg) when map_size(Msg) == 2 ->
         {ok, V} ?= literal(Value, ?VALUE_SYNTAX),
         true ?= byte_size(K) > 0 orelse error,
         {ok, <<K/binary, "=", V/binary>>}
+    end;
+to_part({resolve, [<<"ao:", _/binary>> = Hashpath]}) ->
+    {ok, <<"(", Hashpath/binary, ")">>};
+to_part({resolve, Msgs = [_ | _]}) ->
+    Parts = [ Part || {part, Part} <- smallest(Msgs) ],
+    maybe
+        true ?= length(Parts) == length(Msgs) orelse error,
+        Path = iolist_to_binary(lists:join(<<"/">>, Parts)),
+        {ok, <<"(ao:", Path/binary, ")">>}
+    end;
+to_part(<<"ao:", Path/binary>> = Hashpath) ->
+    case literal(Path, [<<"%">> | ?KEY_SYNTAX]) of
+        {ok, _} -> {ok, Hashpath};
+        error -> to_part({resolve, [Hashpath]})
     end;
 to_part(_) -> error.
 
@@ -1098,7 +1131,12 @@ simple_to_test() ->
     ?assertEqual(Key, from(to(Key), #{})),
     KeyDevice = [{as, <<"d@1.0">>, <<"ao:a">>}, #{ <<"path">> => <<"b">> }],
     ?assertEqual(#{ <<"path">> => <<"/a~d@1.0/b">> }, to(KeyDevice)),
-    ?assertEqual(KeyDevice, from(to(KeyDevice), #{})).
+    ?assertEqual(KeyDevice, from(to(KeyDevice), #{})),
+    % A hashpath that is not a key is a group, as the base or as a request.
+    ?assertEqual(
+        #{ <<"path">> => <<"/(ao:a/b)/(ao:c~d@1.0/e)">> },
+        to([<<"ao:a/b">>, <<"ao:c~d@1.0/e">>])
+    ).
 
 multiple_messages_to_test() ->
     Messages =
