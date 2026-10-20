@@ -545,9 +545,10 @@ resolve_context(Base, Req = {as, _, Msg}, ExecOpts) when map_size(Msg) == 0 ->
 resolve_context(Base, Req, ExecOpts) ->
     hb_ao:resolve(Base, Req, ExecOpts#{ <<"return-context">> => true }).
 
-%% @doc Load the minimal executable base for a hashpath or a given part number
-%% within it. A link to a hashpath loads the hashpath, and any other link is
-%% loaded as a link.
+%% @doc Load the result of a hashpath, or of a given part number within it, by
+%% resolving the request of each part on its base. The claims of the hashpath
+%% are ignored: the result has the hashpath of this node's resolution. A link
+%% to a hashpath loads the hashpath, and any other link is loaded as a link.
 load(Link = {link, _, LinkOpts}, Opts) ->
     MergedOpts = hb_store:scope(
         hb_util:deep_merge(Opts, LinkOpts, Opts),
@@ -575,20 +576,9 @@ load(Hashpath, PartNum, Opts) when is_binary(Hashpath) ->
 load(Parts, PartNum, Opts)
         when is_list(Parts), is_integer(PartNum),
              PartNum > 0, PartNum =< length(Parts) ->
-    Ctx = lists:nth(PartNum, Parts),
-    maybe
-        {ok, Result} ?= load_context(Parts, PartNum, Ctx, Opts),
-        {ok, attach(Result, format(lists:sublist(Parts, PartNum), Opts), Opts)}
-    end;
+    load_result(Parts, PartNum, lists:nth(PartNum, Parts), Opts);
 load(_Parts, _PartNum, _Opts) ->
     {error, <<"Hashpath part number out of bounds.">>}.
-
-%% @doc Load a stored replacement or reconstruct the base of an overlay.
-load_context(Parts, PartNum, Ctx, Opts) ->
-    case is_context(Ctx) of
-        true -> load_base(Parts, PartNum, Opts);
-        false -> load_result(Parts, PartNum, Ctx, Opts)
-    end.
 
 %% @doc An explicit pre-result context presents the prior state as ancestry.
 %% A compact request without witnesses still denotes the request's result.
@@ -600,37 +590,25 @@ is_context(Ctx) ->
             maps:is_key(<<"dependencies-uri">>, Ctx) orelse
             maps:is_key(<<"dependencies">>, Ctx)).
 
-%% @doc Use an available result witness, or recompute the stated claim.
+%% @doc Resolve the request of a part on its base with `hb_ao:resolve/3'. The
+%% resolver returns the cached result if the node has one, and executes the
+%% request if not. A part without a request gives its base.
 load_result(Parts, PartNum, Ctx, Opts) ->
-    case {maps:get(<<"normalizer">>, Ctx, replace),
-            load_field(<<"varied-result">>, Ctx, Opts)} of
-        {replace, {ok, Result}} -> {ok, Result};
-        {base, {ok, Patch}} ->
-            maybe
-                {ok, Base} ?= load_base(Parts, PartNum, Opts),
-                result_from_context(
-                    Ctx#{ <<"base">> => Base, <<"varied-result">> => Patch },
-                    Opts
-                )
-            end;
-        {_, _} ->
-            maybe
-                {ok, Base} ?= load_base(Parts, PartNum, Opts),
-                case maps:is_key(<<"request">>, Ctx) orelse
-                        maps:is_key(<<"request-uri">>, Ctx) of
-                    false -> {ok, Base};
-                    true ->
-                        case verify_context(Ctx#{ <<"base">> => Base }, Opts) of
-                            {true, Result} -> {ok, Result};
-                            {error, _} = Error -> Error;
-                            false ->
-                                {error, <<"Hashpath claim does not verify.">>}
-                        end
+    maybe
+        {ok, Base} ?= load_base(Parts, PartNum, Opts),
+        case maps:is_key(<<"request">>, Ctx) orelse
+                maps:is_key(<<"request-uri">>, Ctx) of
+            false -> {ok, Base};
+            true ->
+                maybe
+                    {ok, Req} ?= load_field(<<"request">>, Ctx, Opts),
+                    hb_ao:resolve(Base, Req, Opts#{ <<"hashpath">> => update })
                 end
-            end
+        end
     end.
 
-%% @doc A replacement can be loaded without any of the states before it.
+%% @doc Load the base of a part: the base of the first part, or the result of
+%% the part before it.
 load_base([First | _], 1, Opts) -> load_field(<<"base">>, First, Opts);
 load_base(Parts, PartNum, Opts) -> load(Parts, PartNum - 1, Opts).
 
@@ -993,23 +971,22 @@ failed_load_test() ->
         end,
         [
             {<<"missing">>, not_found},
-            {<<"restore">>, <<"No viable state to restore.">>},
-            {
-                <<"value.", WrongID/binary>>,
-                <<"Hashpath claim does not verify.">>
-            }
+            {<<"restore">>, <<"No viable state to restore.">>}
         ]
     ),
-    % A hashpath in a group is resolved with its claim, as `load/2' reads it.
+    % A load ignores a false claim, in a group too; `verify_all/2' refuses it.
+    Claimed = <<"ao:", ID/binary, "/value.", WrongID/binary>>,
     ?assertEqual(
-        {error, <<"Hashpath claim does not verify.">>},
-        hb_ao:resolve_many(
-            hb_singleton:from(
-                <<"/(ao:", ID/binary, "/value.", WrongID/binary, ")">>,
+        [{ok, 7}, {ok, 7}, {ok, 7}, false],
+        [
+            load(Claimed, Opts),
+            hb_cache:read(Claimed, Opts),
+            hb_ao:resolve_many(
+                hb_singleton:from(<<"/(", Claimed/binary, ")">>, Opts),
                 Opts
             ),
-            Opts
-        )
+            verify_all(Claimed, Opts)
+        ]
     ).
 
 %% @doc Reject texts that are not hashpaths, and paths that do not follow the
@@ -1176,8 +1153,9 @@ overlay_receipt_test() ->
         hb_maps:get(<<"counter">>, Continued, undefined, PortableOpts)
     ).
 
-%% @doc A replacement remains loadable when its predecessor is unavailable;
-%% changing a base after resolution must not re-use its old receipt.
+%% @doc A replacement loads by resolving its request on its base, not from its
+%% stored result; changing a base after resolution must not re-use its old
+%% receipt.
 replacement_receipt_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store(),
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
@@ -1186,8 +1164,8 @@ replacement_receipt_test() ->
     {ok, Result} = hb_ao:resolve(Base, Req, Opts),
     HP = hb_path:hashpath(Result, Opts),
     hb_cache:write(Result, Opts),
-    ?assertEqual({error, not_found},
-        hb_cache:read(hb_message:id(Base, all, Opts), Opts)),
+    ?assertEqual({error, not_found}, load(HP, Opts)),
+    hb_cache:write(Base, Opts),
     {ok, Loaded} = load(HP, Opts),
     ?assertEqual(<<"replacement">>,
         hb_maps:get(<<"value">>, Loaded, undefined, Opts)),
@@ -1394,8 +1372,8 @@ request_overlay_receipt_test() ->
         hb_private:reset(hb_cache:ensure_all_loaded(Loaded, Opts))),
     ?assert(verify_all(HP, Opts)).
 
-%% @doc The ancestry of a patch is its pre-result context. Loading it presents
-%% the prior state; a compact key request still resolves to that key's value.
+%% @doc The hashpath of a patch without its result claim loads by resolving its
+%% request, and gives the patched result with the hashpath of the resolution.
 pre_result_context_test() ->
     Opts = #{
         <<"store">> => hb_test_utils:test_store(),
@@ -1409,25 +1387,29 @@ pre_result_context_test() ->
             maps:without([<<"varied-result-uri">>, <<"normalizer">>], Ctx),
             Opts
         ),
-    {ok, Prior} = load(BeforePatch, Opts),
-    ?assertEqual(1, hb_maps:get(<<"counter">>, Prior, undefined, Opts)),
-    ?assertEqual(BeforePatch, hb_path:hashpath(Prior, Opts)),
-    ?assertEqual({ok, 1}, load(<<BeforePatch/binary, "/counter">>, Opts)),
+    {ok, Loaded} = load(BeforePatch, Opts),
+    ?assertEqual(2, hb_maps:get(<<"counter">>, Loaded, undefined, Opts)),
+    ?assertEqual(
+        hb_path:hashpath(Result, Opts),
+        hb_path:hashpath(Loaded, Opts)
+    ),
+    ?assertEqual({ok, 2}, load(<<BeforePatch/binary, "/counter">>, Opts)),
     ?assert(verify_all(BeforePatch, Opts)),
-    {ok, Next} = hb_ao:resolve(Prior, <<"vary-overlay">>, Opts),
-    ?assertEqual(2, hb_maps:get(<<"counter">>, Next, undefined, Opts)),
+    {ok, Next} = hb_ao:resolve(Loaded, <<"vary-overlay">>, Opts),
+    ?assertEqual(3, hb_maps:get(<<"counter">>, Next, undefined, Opts)),
     ?assert(verify_all(hb_path:hashpath(Next, Opts), Opts)).
 
-%% @doc Binary replacements are content-addressed values, independently of
-%% the inputs that produced them. Native scalar keys remain executable paths.
+%% @doc A binary result loads by resolving its request on its base, directly or
+%% through a stored hashpath. A key with a literal value, such as `7', loads by
+%% its `ao:' path.
 literal_result_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     Value = <<"literal replacement">>,
-    hb_cache:write(Value, Opts),
+    {ok, ValueBaseID} = hb_cache:write(#{ <<"value">> => Value }, Opts),
     HP =
         format(
             #{
-                <<"base">> => #{},
+                <<"base-uri">> => <<"ao:", ValueBaseID/binary>>,
                 <<"request">> => #{ <<"path">> => <<"value">> },
                 <<"varied-result">> => Value
             },
@@ -1483,16 +1465,21 @@ store_path_link_test() ->
         )
     ).
 
-%% @doc A hashpath link obeys its store scope, including replacement witnesses.
+%% @doc A hashpath link obeys its store scope, including for the base of its
+%% request.
 scoped_link_test() ->
     Remote = (hb_test_utils:test_store())#{ <<"scope">> => remote },
     Opts = #{ <<"store">> => [hb_test_utils:test_store(), Remote] },
     Value = <<"remote replacement">>,
-    hb_cache:write(Value, Opts#{ <<"store">> => [Remote] }),
+    {ok, BaseID} =
+        hb_cache:write(
+            #{ <<"value">> => Value },
+            Opts#{ <<"store">> => [Remote] }
+        ),
     HP =
         format(
             #{
-                <<"base">> => #{},
+                <<"base-uri">> => <<"ao:", BaseID/binary>>,
                 <<"request">> => #{ <<"path">> => <<"value">> },
                 <<"varied-result">> => Value
             },
@@ -1558,7 +1545,35 @@ http_receipt_test() ->
         {ok, Loaded} = load(HP, Opts),
         {ok, Next} = hb_ao:resolve(Loaded, <<"vary-overlay">>, Opts),
         ?assertEqual(2, hb_maps:get(<<"counter">>, Next, undefined, Opts)),
-        ?assert(verify_all(hb_path:hashpath(Next, Opts), Opts))
+        ?assert(verify_all(hb_path:hashpath(Next, Opts), Opts)),
+        % The node ignores false claims and gives the hashpath it computes.
+        {ok, W} = hb_cache:write(#{ <<"wrong-result">> => 42 }, Opts),
+        {ok, Unclaimed} = load(<<"ao:", BaseID/binary, "/child">>, Opts),
+        ?assertEqual(
+            lists:duplicate(4, hb_path:hashpath(Unclaimed, Opts)),
+            [
+                hb_maps:get(
+                    <<"hashpath">>,
+                    hb_util:ok(
+                        hb_http:get(
+                            Node,
+                            <<"/ao:", BaseID/binary, "%2Fchild", Claim/binary>>,
+                            Opts
+                        )
+                    ),
+                    undefined,
+                    Opts
+                )
+            ||
+                Claim <-
+                    [
+                        <<"%2E", W/binary>>,
+                        <<"%2A", W/binary>>,
+                        <<"%3B", W/binary, "%2B", W/binary>>,
+                        <<"%40", W/binary>>
+                    ]
+            ]
+        )
     after
         cowboy:stop_listener(hb_util:human_id(ar_wallet:to_address(Wallet)))
     end.
