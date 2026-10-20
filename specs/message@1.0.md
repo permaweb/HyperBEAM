@@ -195,8 +195,9 @@ precondition for almost every other device.
 - **Returns:** `{ok, [Key]}`.
 
 ### `verify` — check commitments
-- **Reads:** the target message (the key of `Req` that `target` gives, else
-  `Base`); the `committers`/`ids` selectors.
+- **Reads:** the target message (the value of the key of `Req` that its
+  `message-subject` gives, else `Base`; `Req`'s `target` is not read); the
+  `committers`/`ids` selectors.
 - **Behaviour:** Select the commitment IDs to verify (same selection rules; the
   default for `verify` is **all** commitments). For each, give the commitment,
   with the private element of the request, as the request, and ask that

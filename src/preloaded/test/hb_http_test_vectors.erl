@@ -985,7 +985,7 @@ exercise(relay, {Host, PrimaryOpts}, {ID, _}, Expected, Transport, ClientOpts) -
                     <<"path">> => <<"/~relay@1.0/call">>,
                     <<"peer">> => Host,
                     <<"relay-path">> => <<"/", ID/binary>>,
-                    <<"target">> => <<"proxy-message">>,
+                    <<"relay-subject">> => <<"proxy-message">>,
                     <<"proxy-message">> => headers(Transport)
                 },
             Actual =

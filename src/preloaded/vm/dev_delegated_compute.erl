@@ -171,7 +171,7 @@ do_relay(Method, Path, Body, Headers, Opts) ->
         },
         Headers#{
             <<"path">> => <<"call">>,
-            <<"target">> => <<"payload">>,
+            <<"relay-subject">> => <<"payload">>,
             <<"payload">> =>
                 Headers#{
                     <<"path">> => Path,

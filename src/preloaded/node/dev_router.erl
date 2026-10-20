@@ -811,7 +811,7 @@ preprocess(Base, RawReq, Opts) ->
                             },
                             #{
                                 <<"path">> => <<"call">>,
-                                <<"target">> => <<"proxy-message">>,
+                                <<"relay-subject">> => <<"proxy-message">>,
                                 <<"proxy-message">> => RelayReq
                             }
                         ]

@@ -66,15 +66,18 @@ the node's own key before dispatch, gated by node policy.
   (there is no default handler).
 
 - **Target selection (shared by `call` and `cast`):** the **base target** is
-  selected from the request via the standard `target` indirection:
-  - If `Req` has no `target` key, or `target` is the literal binary `self`, the
-    base target is the **base message `M1`** (the original message).
-  - Otherwise `target` is a key: the base target is the value of that key in
-    `Req`; if that key is absent, `call` raises
+  selected from the request by its `relay-subject` key:
+  - If `Req` has no `relay-subject` key, or `relay-subject` is the literal
+    binary `self`, the base target is the **base message `M1`** (the original
+    message).
+  - Otherwise `relay-subject` gives a key: the base target is the value of that
+    key in `Req`; if that key is absent, `call` raises
     `{badmatch, {error, not_found}}`.
+  - `Req`'s `target` is not read: it is a key of the message, such as the
+    process that an item is sent to.
 
-  This is the same target-selection rule defined by `message@1.0`. The base
-  target is then transformed into the outbound message per §4.`call`.
+  This is the selection rule of `message@1.0`, whose key is `message-subject`.
+  The base target is then transformed into the outbound message per §4.`call`.
 
 - **Message shape — routing fields (read from `M1`, the base target, and `Req`):**
   all optional, each resolved by a pinned precedence list (§4). The recognised
@@ -214,10 +217,11 @@ the node's own key before dispatch, gated by node policy.
   that, when resolved, performs a `relay@1.0/call` of the original request:
   1. The first element selects the relay device: `#{ device => relay@1.0 }`.
   2. The second element invokes the relay: a message with
-     `path => call`, `target => proxy-message`, and
+     `path => call`, `relay-subject => proxy-message`, and
      `proxy-message => <the original request>` (the value of `Req`'s `request`
-     key). `target => proxy-message` instructs `call`'s target selection to use
-     that element's `proxy-message` (the original request) as the base target.
+     key). `relay-subject => proxy-message` instructs `call`'s target selection
+     to use that element's `proxy-message` (the original request) as the base
+     target.
 - **Returns:** `{ok, #{ body => [ ... ] }}` — the rewrite message described above.
   Throws `{unexpected, error}` when `Req` has no `request` key.
 - **Side effects:** none (it performs no network call itself; it produces the
@@ -232,14 +236,15 @@ the node's own key before dispatch, gated by node policy.
 - All keys are binary, lowercase, hyphenated. Routing-field key names are exactly:
   `path`, `relay-path`, `method`, `relay-method`, `body`, `relay-body`, `peer`,
   `relay-route`, `relay-device`, `commit-request`, `relay-commit-request`,
-  `target`, `device`, `cookie`, `set-cookie`, `multirequest-*`. The node option
-  keys are `relay-allow-commit-request`, `relay-http-client`,
+  `relay-subject`, `device`, `cookie`, `set-cookie`, `multirequest-*`. The
+  node option keys are `relay-allow-commit-request`, `relay-http-client`,
   `relay-allowed-hosts` and `relay-block-internal`. (Implementations whose
   option/key layer canonicalises case or underscore MUST resolve these to the
   same keys as their hyphenated binary forms.)
 - The `request` rewrite emits the literal binaries `relay@1.0` (device),
-  `call` (path), `proxy-message` (target), and `OK` (the `cast` return). The
-  `target` sentinel for "use the original message" is the literal binary `self`.
+  `call` (path), `proxy-message` (relay-subject), and `OK` (the `cast`
+  return). The `relay-subject` sentinel for "use the original message" is the
+  literal binary `self`.
 - The commit toggle is interpreted as a boolean: it is coerced to the atoms
   `true`/`false`; a value that coerces to neither raises an error. The
   absence of the toggle defaults to `false`.
@@ -333,11 +338,13 @@ the node's own key before dispatch, gated by node policy.
   substrate resolving a list whose first element sets `device => relay@1.0`, so
   that the subsequent `call` element is resolved under this device. This is the
   standard returned-value device-switch mechanism.
-- **`target` indirection.** Because `call`/`cast` use the standard `target`
-  selection of `message@1.0`, a caller can relay either the bound message itself
-  (default / `target = self`) or the value of the request's key that `target`
-  gives (as the `request` rewrite does with `target = proxy-message`). This
-  lets one resolution wrap an arbitrary inner message as the thing to relay.
+- **`relay-subject` indirection.** Because `call`/`cast` select the message to
+  relay by `relay-subject`, as `message@1.0` does by `message-subject`, a
+  caller can relay either the bound message itself (default /
+  `relay-subject = self`) or the value of a key of the request (as the
+  `request` rewrite does with `relay-subject = proxy-message`). This lets one
+  resolution wrap an arbitrary inner message as the thing to relay, and leaves
+  `target` to the message itself.
 - **Routing table.** With no explicit `peer`, `call` defers destination choice to
   the router; with an explicit `peer` and no `relay-route` it bypasses routing
   and dispatches directly.
@@ -348,10 +355,11 @@ the node's own key before dispatch, gated by node policy.
 1. The device answers exactly three resolvable keys — `call`, `cast`, `request`
    — and installs no default/catch-all handler; a request for any other key is
    not captured by this device.
-2. `call` and `cast` select their **base target** via the standard `target`
-   rule: absent `target` or `target = self` → the bound message; otherwise the
-   value of the request's key that `target` gives; if the request lacks that
-   key, `call` raises `{badmatch, {error, not_found}}`.
+2. `call` and `cast` select their **base target** by `relay-subject`: absent
+   `relay-subject` or `relay-subject = self` → the bound message; otherwise the
+   value of the request's key that `relay-subject` gives; if the request lacks
+   that key, `call` raises `{badmatch, {error, not_found}}`. The request's
+   `target` is not read.
 3. `call` resolves the outbound **path**, **method**, **body**, **device**, and
    **peer** by first-match over the exact ordered candidate-source lists in §4
    (`call`), stopping at the first source that yields a value; a field with no hit
@@ -388,7 +396,8 @@ the node's own key before dispatch, gated by node policy.
     it, discards its result and any error, and returns `{ok, <<"OK">>}`
     immediately and unconditionally.
 12. `request` returns `{ok, #{ body => L }}` where `L` is the ordered two-element
-    list `[ #{ device => relay@1.0 }, #{ path => call, target => proxy-message,
+    list `[ #{ device => relay@1.0 }, #{ path => call,
+    relay-subject => proxy-message,
     proxy-message => <the request's `request` value> } ]`; without a `request`
     key it throws `{unexpected, error}`.
 13. End-to-end: a node whose routing table maps a path to an executor peer, with
