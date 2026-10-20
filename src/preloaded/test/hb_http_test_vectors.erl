@@ -222,7 +222,8 @@ messages() ->
                 {"space key", <<"a b">>},
                 {"colon key", <<"a:b">>},
                 {"long key", binary:copy(<<"k">>, 200)},
-                {"long escaped key", binary:copy(<<"A">>, 100)},
+                % 85 spaces escape to 255 bytes, the longest file name.
+                {"long escaped key", binary:copy(<<" ">>, 85)},
                 {"path key", <<"path">>},
                 {"method key", <<"method">>}
             ],
