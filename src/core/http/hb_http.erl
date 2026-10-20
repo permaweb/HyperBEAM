@@ -474,10 +474,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % node, unless a commitment covers them.
     Message =
         hb_message:without_unless_signed(
-            lists:filter(
-                fun(<<"multirequest-", _/binary>>) -> true; (_) -> false end,
-                hb_maps:keys(NormMessage)
-            ),
+            hb_http_multi:multirequest_keys(NormMessage, Opts),
             NormMessage,
             Opts
         ),

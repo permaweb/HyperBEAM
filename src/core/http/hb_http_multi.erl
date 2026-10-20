@@ -25,7 +25,7 @@
 %%% `reference', if set. Acceptance means the configured checks passed; without
 %%% a content predicate it does not establish that the returned content is valid.
 -module(hb_http_multi).
--export([request/5]).
+-export([request/5, multirequest_keys/2]).
 -include("include/hb.hrl").
 
 %% @doc Dispatch the same HTTP request to many nodes. Can be configured to
@@ -117,6 +117,14 @@ multirequest_opt(Key, Config, Message, Default, Opts) ->
         ],
         Default,
         Opts#{ <<"hashpath">> => ignore }
+    ).
+
+%% @doc Return the `multirequest-*' keys of a message, which configure a
+%% multirequest on this node.
+multirequest_keys(Message, Opts) ->
+    lists:filter(
+        fun(<<"multirequest-", _/binary>>) -> true; (_) -> false end,
+        hb_maps:keys(Message, Opts)
     ).
 
 %% @doc Check if a response is admissible, according to the configuration. A
