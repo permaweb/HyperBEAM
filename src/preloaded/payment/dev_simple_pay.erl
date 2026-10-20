@@ -290,7 +290,11 @@ topup(_, Req, NodeMsg) ->
         {error, _} -> {error, <<"Unauthorized">>};
         {ok, Signed} ->
             Amount = hb_ao:get(<<"amount">>, Signed, 0, NodeMsg),
-            Recipient = hb_ao:get(<<"recipient">>, Signed, undefined, NodeMsg),
+            Recipient =
+                hb_committer:uri(
+                    hb_ao:get(<<"recipient">>, Signed, undefined, NodeMsg),
+                    NodeMsg
+                ),
             NewBalance = debit(Recipient, -Amount, NodeMsg),
             ?event(payment,
                 {topup,
@@ -410,6 +414,23 @@ get_balance_and_top_up_test() ->
             <<"/~simple-pay@1.0/topup?amount+integer=1">>,
             hb_message:commit(
                 #{ <<"amount">> => 100, <<"recipient">> => ClientAddress },
+                Opts#{ <<"priv-wallet">> => HostWallet }
+            ),
+            Opts
+        )
+    ),
+    % A top-up to the client's Arweave address credits its committer's account.
+    ?assertEqual(
+        {ok, 380},
+        hb_http:post(
+            Node,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~simple-pay@1.0/topup">>,
+                    <<"amount">> => 100,
+                    <<"recipient">> =>
+                        hb_util:human_id(ar_wallet:to_address(ClientWallet))
+                },
                 Opts#{ <<"priv-wallet">> => HostWallet }
             ),
             Opts
