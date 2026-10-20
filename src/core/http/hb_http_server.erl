@@ -1816,8 +1816,9 @@ restart_server_test() ->
         hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{ <<"protocol">> => http2 })
     ).
 
-%% @doc A node in `prod' mode serves requests. `HB_MODE' gives the processes
-%% that serve them the global mode `prod'.
+%% @doc A node in `prod' mode serves requests, and does not profile or record
+%% them unless its options enable it. `HB_MODE' gives the processes that serve
+%% them the global mode `prod'.
 prod_mode_test() ->
     Node = start_node(#{ <<"mode">> => prod }),
     os:putenv("HB_MODE", "prod"),
@@ -1825,6 +1826,18 @@ prod_mode_test() ->
         ?assertEqual(
             {ok, prod},
             hb_http:get(Node, <<"/~meta@1.0/info/mode">>, #{})
+        ),
+        ?assertEqual(
+            {error, <<"Profiling is disabled.">>},
+            hb_http:get(Node, <<"/~profile@1.0/run?run=/~meta@1.0/info">>, #{})
+        ),
+        ?assertEqual(
+            {error, <<"Recording is disabled.">>},
+            hb_http:get(
+                Node,
+                <<"/~recorder@1.0/record?record=/~meta@1.0/info">>,
+                #{}
+            )
         )
     after
         os:unsetenv("HB_MODE")
