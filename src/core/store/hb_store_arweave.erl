@@ -572,13 +572,27 @@ remote_index_test() ->
             <<"store-module">> => hb_store_arweave,
             <<"index-store">> => [hb_test_utils:test_store()]
         },
-    Store = Local#{ <<"remote-index">> => true },
     TXID = <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
     ItemID = <<"1R5QEtX53Z_RRQJwzFWf40oXiPW2FibErT_h02pu8MU">>,
+    % The store sends its offset requests to a node that holds both offsets.
+    Index = Local#{ <<"index-store">> => [hb_test_utils:test_store()] },
+    ok = write_offset(Index, TXID, <<"tx@1.0">>, 363524457275638, 8387),
+    ok = write_offset(Index, ItemID, <<"ans104@1.0">>, 195193803403756, 1364),
+    IndexNode = hb_http_server:start_node(#{ <<"store">> => [Index] }),
+    Route =
+        #{
+            <<"template">> => <<"^/~arweave@2.9/raw">>,
+            <<"node">> => #{ <<"prefix">> => IndexNode }
+        },
+    Store =
+        Local#{
+            <<"remote-index">> => true,
+            <<"routes">> => [Route | hb_opts:get(routes, [], #{})]
+        },
     ?assertEqual(not_found, read_offset(Local, TXID, #{})),
     ?assertMatch(
         {ok, #{ <<"codec">> := <<"tx@1.0">>, <<"length">> := 8387 }},
-        read_offset(Store, TXID, #{})
+        read_offset(Store, TXID, Store)
     ),
     % The offset is retained once a read at it succeeds, so the routes are
     % asked once per message.
