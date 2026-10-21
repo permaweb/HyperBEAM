@@ -575,6 +575,8 @@ error_slot_is_skipped_test_parallel() ->
                 """
                 function inc(base)
                     base.count = (base.count or 0) + 1
+                    base.t = base.t or {}
+                    base.t[base.count * 2] = "v"
                     return base
                 end
                 function fail(base)
@@ -596,6 +598,11 @@ error_slot_is_skipped_test_parallel() ->
     {ok, Res} =
         hb_ao:resolve(Base, #{ <<"path">> => <<"compute">>, <<"slot">> => 3 }, Opts),
     ?assertEqual(3, hb_ao:get(<<"count">>, Res, Opts)),
+    % The state from Lua has the binary keys that the cache writes.
+    ?assertEqual(
+        #{ <<"2">> => <<"v">>, <<"4">> => <<"v">>, <<"6">> => <<"v">> },
+        hb_maps:get(<<"t">>, Res, not_found, Opts)
+    ),
     % The erroring slot is stored with the error as its results.
     {ok, ErrSlot} =
         hb_ao:resolve(Base, #{ <<"path">> => <<"compute">>, <<"slot">> => 2 }, Opts),

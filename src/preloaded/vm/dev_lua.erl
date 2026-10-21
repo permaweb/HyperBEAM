@@ -491,6 +491,9 @@ normalize(Base, _Req, RawOpts) ->
 %% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message, removing
 %% the commitments that do not verify. No commitment is added, so a message
 %% that passes through Lua unchanged keeps exactly the commitments it had.
+%% Every key is a binary, as the cache writes it. A key that is a table, and a
+%% value that is a function or userdata, which Luerl gives as a fun or a tuple,
+%% are dropped, as a message cannot have them.
 decode(EncMsg, Opts) ->
     hb_message:normalize_commitments(
         do_decode(EncMsg, Opts),
@@ -505,7 +508,19 @@ do_decode(EncMsg = [{_K, _V} | _], Opts) when is_list(EncMsg) ->
     do_decode(
         maps:map(
             fun(Key, V) -> decode_value(Key, do_decode(V, Opts)) end,
-            maps:from_list(EncMsg)
+            hb_ao:normalize_keys(
+                maps:from_list(
+                    [
+                        {K, V}
+                    ||
+                        {K, V} <- EncMsg,
+                        not is_list(K),
+                        not is_function(V),
+                        not is_tuple(V)
+                    ]
+                ),
+                Opts
+            )
         ),
         Opts
     );
