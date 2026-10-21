@@ -44,7 +44,9 @@
 %%%
 %%% Indexed pagination orders by offset and ID and returns `member=' cursors.
 %%% One ID at two offsets can produce two edges. Unreadable entries are omitted
-%%% from the edges, without refilling the page. `hasNextPage' reflects remaining
+%%% from the edges, and the next matches take their place until the page has
+%%% `first' edges, the index has no more, or the page has read
+%%% `query-arweave-max-index-count' matches. `hasNextPage' reflects remaining
 %%% index matches, not their readability. `count' ignores `after' and counts
 %%% matches across the query's ranges, capped by `query-arweave-max-index-count'
 %%% (default 1000); it is neither an uncapped total nor a count of readable
@@ -113,7 +115,7 @@
 -define(DEFAULT_MAX_PAGE_SIZE, 100).
 %% The cursor of an index-served edge: its match's key in the index.
 -define(MEMBER_CURSOR, "member=").
-%% The most matches a page's `count' reads by default.
+%% The most matches a page reads by default, for its `count' or its edges.
 -define(DEFAULT_MAX_INDEX_COUNT, 1000).
 %% The bytes read past an offset when the item's header runs beyond its
 %% chunk: signature, owner, target, anchor and tags, which ANS-104 caps at
@@ -148,7 +150,7 @@ query(#{ <<"count">> := Count }, <<"count">>, _Args, _Opts) ->
     {ok, Count};
 query(#{ <<"matches">> := Matches, <<"terminal">> := Terminal },
         <<"edges">>, _Args, Opts) ->
-    % The edges of an index-served page, read only when asked for. The
+    % The edges of a block-TX page, read only when asked for. The
     % terminal page of a forced-next-page read marks its last cursor.
     Edges = match_edges(Matches, Opts),
     Marked =
@@ -1023,14 +1025,16 @@ index_connection(Predicates, Args, Opts) ->
             end,
         Ranges = index_ranges(Direction, Args, Opts),
         PageSize = page_size(Args, Opts),
-        {ok, Matches} ?=
-            index_matches(Predicates, Ranges, After, PageSize + 1, Opts),
-        More = length(Matches) > PageSize,
+        {ok, Read, Edges, More} ?=
+            index_edges(Predicates, Ranges, After, PageSize, 0, Opts),
         ForceNextPage = force_next_page(Args, Opts),
         Page =
             #{
-                <<"matches">> => lists:sublist(Matches, PageSize),
-                <<"terminal">> => ForceNextPage andalso not More,
+                <<"edges">> =>
+                    case ForceNextPage andalso not More of
+                        true -> force_terminal_cursor(Edges);
+                        false -> Edges
+                    end,
                 <<"predicates">> => Predicates,
                 <<"ranges">> => Ranges,
                 <<"pageInfo">> =>
@@ -1041,9 +1045,47 @@ index_connection(Predicates, Args, Opts) ->
                 true ->
                     Cap = hb_opts:get(query_arweave_max_index_count,
                         ?DEFAULT_MAX_INDEX_COUNT, Opts),
-                    Page#{ <<"count">> => hb_util:bin(min(length(Matches), Cap)) };
+                    Page#{ <<"count">> => hb_util:bin(min(Read, Cap)) };
                 false -> Page
             end}
+    end.
+
+%% @doc Read the edges of a page from the index, with the number of matches
+%% read and whether the index has more past them. The next matches take the
+%% place of those whose items cannot be read, until the page has `Size'
+%% edges, the index has no more, or the page has read
+%% `query-arweave-max-index-count' matches.
+index_edges(Predicates, Ranges, After, Size, Read, Opts) ->
+    maybe
+        {ok, Matches} ?=
+            index_matches(Predicates, Ranges, After, Size + 1, Opts),
+        Page = lists:sublist(Matches, Size),
+        Edges = match_edges(Page, Opts),
+        More = length(Matches) > Size,
+        Total = Read + length(Page),
+        Cap =
+            hb_opts:get(
+                query_arweave_max_index_count,
+                ?DEFAULT_MAX_INDEX_COUNT,
+                Opts
+            ),
+        Missing = min(Size - length(Edges), Cap - Total),
+        case More andalso Missing > 0 of
+            false -> {ok, Total, Edges, More};
+            true ->
+                maybe
+                    {ok, AllRead, Rest, RestMore} ?=
+                        index_edges(
+                            Predicates,
+                            Ranges,
+                            maps:get(<<"member">>, lists:last(Page)),
+                            Missing,
+                            Total,
+                            Opts
+                        ),
+                    {ok, AllRead, Edges ++ Rest, RestMore}
+                end
+        end
     end.
 
 %% @doc The query's AND predicates, each with alternative values. Owners use
@@ -1866,6 +1908,21 @@ unmined_pages_test() ->
     Descending = Pages(<<"HEIGHT_DESC">>, null, []),
     ?assertEqual(3, length(lists:usort(Descending))),
     ?assertEqual(lists:reverse(Descending), Pages(<<"HEIGHT_ASC">>, null, [])),
+    % The node cannot read this item; a page takes the next match in its place.
+    {ok, _} =
+        hb_cache:write(
+            hb_private:set(
+                hb_message:commit(#{ <<"type">> => <<"Unmined">> }, Opts),
+                <<"offset">>,
+                10,
+                Opts
+            ),
+            Opts#{
+                <<"store">> => [hb_test_utils:test_store()],
+                <<"match-index">> => maps:get(<<"store">>, Opts)
+            }
+        ),
+    ?assertEqual(Descending, Pages(<<"HEIGHT_DESC">>, null, [])),
     ?assertMatch(
         #{ <<"data">> := #{ <<"transactions">> := #{
             <<"count">> := <<"2">>,
