@@ -290,7 +290,8 @@ sandbox(State, [Path | Rest], Opts) ->
     sandbox(NextState, Rest, Opts).
 
 %% @doc Call the Lua script with the given arguments, returning the status
-%% and result that the Lua function returns.
+%% and result that the Lua function returns. A key with no function in the
+%% script is not found.
 -spec compute(
     binary(),
     #{ _ => _ },
@@ -322,6 +323,14 @@ compute(Key, RawBase, RawReq, Opts) ->
             Opts#{ <<"hashpath">> => ignore }
         ),
     ?event(debug_lua, function_found),
+    case luerl:get_table_keys_dec([Function], State) of
+        {ok, nil, _} -> {error, not_found};
+        _ -> call_function(Function, Base, Req, OldPriv, State, Opts)
+    end.
+
+%% @doc Call a function of the Lua state with the parameters that the request
+%% or the base gives, or else with the base and the request.
+call_function(Function, Base, Req, OldPriv, State, Opts) ->
     Params =
         hb_ao:get_first(
             [
@@ -1018,7 +1027,12 @@ invoke_non_compute_key_test() ->
             #{}
         ),
     ?event({result2, Result2}),
-    ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
+    ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})),
+    % A key with no function in the script is not found.
+    ?assertEqual(
+        {error, not_found},
+        hb_ao:resolve(Base, <<"no_function">>, #{})
+    ).
 
 %% @doc Use a Lua module as a hook on the HTTP server via `~meta@1.0'.
 lua_http_hook_test() ->
