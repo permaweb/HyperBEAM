@@ -92,8 +92,8 @@ aos_process(Opts, Stack) ->
     ).
 
 %% @doc Generate a process whose execution device is `lua@5.3a', running
-%% the given Lua script. A slot that runs a script function raising an
-%% uncaught error is the smallest execution returning `{error, _}': the
+%% the given Lua script. A slot that runs a script function returning the
+%% status `error' is the smallest execution returning `{error, _}': the
 %% other executors either always succeed or fail with an exception.
 lua_process(Script, Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
@@ -578,6 +578,9 @@ error_slot_is_skipped_test_parallel() ->
                     return base
                 end
                 function fail(base)
+                    return "error", "The process failed."
+                end
+                function throw(base)
                     error("The process failed.")
                 end
                 """
@@ -588,6 +591,7 @@ error_slot_is_skipped_test_parallel() ->
     schedule_test_message(Base, <<"inc">>, #{ <<"path">> => <<"inc">> }, Opts),
     schedule_test_message(Base, <<"fail">>, #{ <<"path">> => <<"fail">> }, Opts),
     schedule_test_message(Base, <<"inc">>, #{ <<"path">> => <<"inc">> }, Opts),
+    schedule_test_message(Base, <<"throw">>, #{ <<"path">> => <<"throw">> }, Opts),
     % The later slot computes from the state before the erroring slot.
     {ok, Res} =
         hb_ao:resolve(Base, #{ <<"path">> => <<"compute">>, <<"slot">> => 3 }, Opts),
@@ -597,6 +601,12 @@ error_slot_is_skipped_test_parallel() ->
         hb_ao:resolve(Base, #{ <<"path">> => <<"compute">>, <<"slot">> => 2 }, Opts),
     ?assertEqual(<<"error">>, hb_ao:get(<<"results/type">>, ErrSlot, Opts)),
     ?assertEqual(2, hb_ao:get(<<"count">>, ErrSlot, Opts)),
+    % An error that the script raises and does not catch is a failure, so the
+    % slot is not stored.
+    ?assertMatch(
+        {failure, _},
+        hb_ao:resolve(Base, #{ <<"path">> => <<"compute">>, <<"slot">> => 4 }, Opts)
+    ),
     % A compute server that does not answer is a failure of this node, not an
     % error of the process, so the slot is not stored.
     Delegated =

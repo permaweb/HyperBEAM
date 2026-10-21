@@ -403,12 +403,13 @@ process_response({ok, Results, _NewState}, _Priv, _Opts) ->
         >>
     };
 process_response({lua_error, RawError, State}, _Priv, Opts) ->
-    % An error occurred while calling the Lua function. Parse the stack trace
-    % and return it.
+    % The script raised an error and did not catch it, with `error' or at
+    % runtime. A script that throws is a failure, as a device that throws
+    % is. Parse the stack trace and return it.
     Error = try decode(luerl:decode(RawError, State), Opts) catch _:_ -> RawError end,
     StackTrace = decode_stacktrace(luerl:get_stacktrace(State), State, Opts),
     ?event(lua_error, {lua_error, Error, {stacktrace, StackTrace}}),
-    {error, #{
+    {failure, #{
         <<"status">> => 500,
         <<"body">> => Error,
         <<"trace">> => hb_ao:normalize_keys(StackTrace, Opts)
@@ -416,8 +417,7 @@ process_response({lua_error, RawError, State}, _Priv, Opts) ->
 process_response({error, Reason, Trace}, _Priv, _Opts) ->
     % An Erlang exception of the Lua call, for example inside a library call
     % into the node, or of decoding its result. The node does not attest to
-    % it, so it is a failure, not a result of the computation: a script's own
-    % error arrives as a `lua_error', and stays an `error'.
+    % it, so it is a failure, not a result of the computation.
     ?event(lua_error, {trace, Trace}),
     TraceBin = iolist_to_binary(hb_format:trace(Trace)),
     ?event(lua_error, {formatted, {string, TraceBin}}),
@@ -765,7 +765,7 @@ sandboxed_failure_test() ->
         <<"parameters">> => [],
         <<"sandbox">> => true
     },
-    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
+    ?assertMatch({failure, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
 
 default_sandboxed_failure_test() ->
     {ok, Module} = file:read_file("test/test.lua"),
@@ -777,7 +777,7 @@ default_sandboxed_failure_test() ->
         },
         <<"parameters">> => []
     },
-    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
+    ?assertMatch({failure, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
 
 minimum_sandbox_overrides_false_test() ->
     {ok, Module} = file:read_file("test/test.lua"),
@@ -790,7 +790,7 @@ minimum_sandbox_overrides_false_test() ->
         <<"parameters">> => [],
         <<"sandbox">> => false
     },
-    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
+    ?assertMatch({failure, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
 
 lua_minimum_sandbox_can_be_disabled_test() ->
     {ok, Module} = file:read_file("test/test.lua"),
@@ -856,7 +856,7 @@ io_popen_is_sandboxed_by_default_test() ->
         },
         <<"parameters">> => []
     },
-    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"popen_fail">>, #{})).
+    ?assertMatch({failure, _}, hb_ao:resolve(Base, <<"popen_fail">>, #{})).
 
 require_cannot_load_from_disk_test() ->
     % Untrusted code cannot restore `require's filesystem search by
