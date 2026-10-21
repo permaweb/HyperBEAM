@@ -100,7 +100,7 @@ every(_Base, Req, Opts) ->
                         [
                             <<"interval">>,
                             <<"cron-path">>,
-                            hb_maps:get(<<"every">>, Req, <<"every">>, Opts)
+                            <<"every">>
                         ],
                         Req,
                         Opts
@@ -353,7 +353,7 @@ report_every_test() ->
         <<
             "/~cron@1.0/every?test-id=", TestWorkerNameId/binary,
             "&interval=200-milliseconds",
-            "&cron-path=/~test-device@1.0/increment_counter"
+            "&every=/~test-device@1.0/update_state"
         >>,
     {ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
     ReportPath = <<"/~cron@1.0/report=", CronTaskID/binary>>,
@@ -361,6 +361,10 @@ report_every_test() ->
         {ok, #{<<"task-id">> := CronTaskID, <<"active">> := true}},
         hb_http:get(Node, ReportPath, #{})
     ),
+    % The request of each execution does not contain `every'.
+    timer:sleep(400),
+    TestWorkerPid ! {get, self()},
+    receive {state, State} -> ?assertNot(maps:is_key(<<"every">>, State)) end,
     EveryStopPath = <<"/~cron@1.0/stop=", CronTaskID/binary>>,
     % The stop reply holds the task's ID under `task-id', as the report does.
     ?assertMatch(
