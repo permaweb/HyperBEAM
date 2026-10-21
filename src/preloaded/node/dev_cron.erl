@@ -36,9 +36,12 @@ once(_Base, Req, Opts) ->
                     <<"cron-path">>,
                     maps:put(<<"path">>, CronPath, Req)
                 ),
-            Name = {<<"cron@1.0">>, ReqMsgID},
-            Pid = spawn(fun() -> once_worker(CronPath, ModifiedReq, Opts) end),
-            hb_name:register(Name, Pid),
+            % A task runs in one worker: a repeated request while it runs
+            % answers with the same task.
+            hb_name:singleton(
+                {<<"cron@1.0">>, ReqMsgID},
+                fun() -> once_worker(CronPath, ModifiedReq, Opts) end
+            ),
             {
                 ok,
                 #{
@@ -98,19 +101,19 @@ every(_Base, Req, Opts) ->
                         Req,
                         Opts
                     ),
-                Pid =
-                    spawn(
-                        fun() ->
-                            every_worker_loop(
-                                CronPath,
-                                ModifiedReq,
-                                Opts,
-                                IntervalMillis
-                            )
-                        end
-                    ),
-                Name = {<<"cron@1.0">>, ReqMsgID},
-                hb_name:register(Name, Pid),
+                % A task runs in one worker: a repeated request while it runs
+                % answers with the same task.
+                hb_name:singleton(
+                    {<<"cron@1.0">>, ReqMsgID},
+                    fun() ->
+                        every_worker_loop(
+                            CronPath,
+                            ModifiedReq,
+                            Opts,
+                            IntervalMillis
+                        )
+                    end
+                ),
                 {
                     ok,
                     #{
@@ -294,6 +297,8 @@ stop_every_test() ->
             "&cron-path=/~test-device@1.0/increment_counter"
         >>,
     {ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
+    % A repeated request answers with the same task and starts no worker.
+    {ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
     ?event({cron_stop_every_test_created, CronTaskID}),
     % Verify the cron worker process was registered and is alive
     CronWorkerPid = hb_name:lookup({<<"cron@1.0">>, CronTaskID}),
@@ -322,6 +327,12 @@ stop_every_test() ->
     after 1000 ->
         throw(no_response_from_worker)
     end,
+    % No worker of the task is left: the counter stays where the stop left it.
+    TestWorkerPid ! {get, self()},
+    receive {state, Stopped} -> ok end,
+    timer:sleep(400),
+    TestWorkerPid ! {get, self()},
+    receive {state, Later} -> ?assertEqual(Stopped, Later) end,
     % Call stop again using the same CronTaskID to verify the error
     {error, <<"Task not found.">>} = hb_http:get(Node, EveryStopPath, #{}).
 
