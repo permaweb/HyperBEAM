@@ -348,18 +348,20 @@ compute(Key, RawBase, RawReq, Opts) ->
             {req, Req}
         }
     ),
-    process_response(
-        try luerl:call_function_dec(
-            [Function],
-            encode(ResolvedParams, Opts),
-            luerl:put_private(<<"node-message">>, Opts, State)
+    try
+        process_response(
+            luerl:call_function_dec(
+                [Function],
+                encode(ResolvedParams, Opts),
+                luerl:put_private(<<"node-message">>, Opts, State)
+            ),
+            OldPriv,
+            Opts
         )
-        catch
-            _:Reason:Stacktrace -> {error, Reason, Stacktrace}
-        end,
-        OldPriv,
-		Opts
-    ).
+    catch
+        _:Reason:Stacktrace ->
+            process_response({error, Reason, Stacktrace}, OldPriv, Opts)
+    end.
 
 %% @doc Process a response to a Luerl invocation. Returns the typical AO-Core
 %% HyperBEAM response format.
@@ -403,10 +405,10 @@ process_response({lua_error, RawError, State}, _Priv, Opts) ->
         <<"trace">> => hb_ao:normalize_keys(StackTrace, Opts)
     }};
 process_response({error, Reason, Trace}, _Priv, _Opts) ->
-    % An Erlang exception occurred while the Lua call ran, for example
-    % inside a library call into the node. It depends on this node, so it
-    % is a failure, not a result of the computation: a script's own error
-    % arrives as a `lua_error', and stays an `error'.
+    % An Erlang exception of the Lua call, for example inside a library call
+    % into the node, or of decoding its result. The node does not attest to
+    % it, so it is a failure, not a result of the computation: a script's own
+    % error arrives as a `lua_error', and stays an `error'.
     ?event(lua_error, {trace, Trace}),
     TraceBin = iolist_to_binary(hb_format:trace(Trace)),
     ?event(lua_error, {formatted, {string, TraceBin}}),
@@ -736,6 +738,11 @@ error_response_test() ->
             }
         },
         hb_ao:resolve(Base, <<"ao_get_as_missing">>, #{})
+    ),
+    % A result that has a float key cannot be decoded, so it is a failure.
+    ?assertMatch(
+        {failure, _},
+        hb_ao:resolve(Base, <<"float_key_result">>, #{})
     ).
 
 sandboxed_failure_test() ->
