@@ -17,7 +17,6 @@ typedef struct {
     int ready;                       // Flag indicating if the response is ready
     char* error_message;            // Error message (if any)
     ei_term* result_terms;          // List of result terms from the import
-    int result_length;              // Length of the result_terms
 } ImportResponse;
 
 // Structure to represent a WASM process instance

@@ -68,6 +68,7 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
     DRV_DEBUG("Sending %d terms...", msg_index);
     // Send the message to the caller process
     int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
+    driver_free(msg);
     // Wait for the response (we set this directly after the message was sent
     // so we have the lock, before Erlang sends us data back)
     drv_wait(proc->current_import->response_ready, proc->current_import->cond, &proc->current_import->ready);
@@ -80,6 +81,8 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
         wasm_name_t message;
         wasm_name_new_from_string_nt(&message, proc->current_import->error_message);
         wasm_trap_t* trap = wasm_trap_new(proc->store, &message);
+        erl_drv_cond_destroy(proc->current_import->cond);
+        erl_drv_mutex_destroy(proc->current_import->response_ready);
         driver_free(proc->current_import);
         proc->current_import = NULL;
         return trap;
@@ -87,10 +90,11 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
 
     // Convert the response back to WASM values
     const wasm_valtype_vec_t* result_types = wasm_functype_results(wasm_func_type(import_hook->stub_func));
-    for(int i = 0; i < proc->current_import->result_length; i++) {
+    for(int i = 0; i < results->size; i++) {
         results->data[i].kind = wasm_valtype_kind(result_types->data[i]);
     }
     int res = erl_terms_to_wasm_vals(results, proc->current_import->result_terms);
+    driver_free(proc->current_import->result_terms);
     if(res == -1) {
         DRV_DEBUG("Failed to convert terms to wasm vals");
         return NULL;
@@ -304,7 +308,9 @@ void wasm_execute_function(void* raw) {
     // Find the function in the exports
     wasm_func_t* func = get_exported_function(proc, function_name);
     if (!func) {
+        driver_free(proc->current_args);
         send_error(proc, "Function not found: %s", function_name);
+        driver_free(function_name);
         drv_unlock(proc->is_running);
         return;
     }
@@ -336,9 +342,11 @@ void wasm_execute_function(void* raw) {
         DRV_DEBUG("Arg %d: %d", i, args.data[i].of.i64);
         DRV_DEBUG("Source term: %d", proc->current_args[i].value.i_val);
     }
+    driver_free(proc->current_args);
 
     if(res == -1) {
         send_error(proc, "Failed to convert terms to wasm vals");
+        driver_free(function_name);
         drv_unlock(proc->is_running);
         return;
     }
@@ -354,6 +362,7 @@ void wasm_execute_function(void* raw) {
     // Call the function
     DRV_DEBUG("Calling function: %s", function_name);
     wasm_trap_t* trap = wasm_func_call(func, &args, &results);
+    driver_free(function_name);
     
 
     if (trap) {

@@ -145,6 +145,7 @@ ei_term* decode_list(char* buff, int* index) {
     }
     else {
         DRV_DEBUG("Unknown type: %d", type);
+        driver_free(res);
         return NULL;
     }
 

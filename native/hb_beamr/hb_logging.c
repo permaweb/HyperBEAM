@@ -31,6 +31,8 @@ void send_error(Proc* proc, const char* message_fmt, ...) {
     msg[msg_index++] = 2;
 
     int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
+    driver_free(msg);
+    driver_free(message);
     DRV_DEBUG("Sent error message. Res: %d", msg_res);
     va_end(args);
 }
