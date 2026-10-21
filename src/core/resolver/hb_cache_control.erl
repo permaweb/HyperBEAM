@@ -413,7 +413,7 @@ mangled_result_does_not_poison_cache_test() ->
     },
     Base = #{ <<"device">> => <<"test-device@1.0">>, <<"counter">> => <<"1">> },
     lists:foreach(
-        fun({Input, Req}) ->
+        fun({Input, Req, Stored}) ->
             ID = hb_message:id(Input, all, Opts),
             {ok, Res} = hb_ao:resolve(Input, Req, Opts),
             Content = hb_message:uncommitted(hb_private:reset(Res), Opts),
@@ -423,12 +423,17 @@ mangled_result_does_not_poison_cache_test() ->
             ResID = hb_message:id(Res, all, Opts),
             ?assertNotEqual(ID, ResID),
             ?assertEqual(Base, read_content(ID, Opts)),
-            ?assertEqual(Content, read_content(ResID, Opts))
+            case Stored of
+                true -> ?assertEqual(Content, read_content(ResID, Opts));
+                false ->
+                    ?assertEqual({error, not_found}, hb_cache:read(ResID, Opts))
+            end
         end,
         [
-            {hb_message:commit(Base, Opts), <<"mangle">>},
+            % `mangle' gets a signed base, so its result is not stored.
+            {hb_message:commit(Base, Opts), <<"mangle">>, false},
             {hb_message:normalize_commitments(Base, Opts),
-                #{ <<"path">> => <<"set">>, <<"counter">> => <<"2">> }}
+                #{ <<"path">> => <<"set">>, <<"counter">> => <<"2">> }, true}
         ]
     ).
 
@@ -751,6 +756,8 @@ async_computation_writes_test() ->
         <<"cache-control">> => [<<"always">>],
         <<"async-cache">> => true
     },
+    % Start the store: two processes that first use it at once get two tables.
+    hb_store:start(Opts),
     Base = #{ <<"a">> => 1 },
     lists:foreach(fun(X) ->
         Req = #{ <<"path">> => <<"set">>, <<"x">> => X },
