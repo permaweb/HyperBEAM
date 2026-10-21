@@ -330,7 +330,7 @@ query(Msg, <<"data">>, _Args, _Opts) ->
     {ok, Msg};
 query(Msg, <<"size">>, _Args, Opts) ->
     Size =
-        case find_field_key(<<"field-data_size">>, Msg, Opts) of
+        case find_field_key(<<"field-data-size">>, Msg, Opts) of
             {ok, null} -> indexed_data_size(Msg, Opts);
             {ok, DeclaredSize} -> DeclaredSize
         end,

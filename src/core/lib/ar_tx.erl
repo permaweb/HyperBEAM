@@ -245,10 +245,14 @@ reset_owner_address(TX = #tx{format = ans104}) ->
 reset_owner_address(TX) ->
     TX#tx{owner_address = get_owner_address(TX)}.
 
+%% @doc Set the data root of a TX with data: of a format 1 TX from its data, and
+%% of a format 2 TX only if it has none. A format 2 TX keeps the root that it
+%% has, which its signature covers.
 normalize_data_root(Item = #tx{data = Bin, format = 1})
         when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
     Item#tx{data_root = data_root(legacy, Bin)};
-normalize_data_root(Item = #tx{data = Bin, format = 2})
+normalize_data_root(Item = #tx{
+        data = Bin, format = 2, data_root = ?DEFAULT_DATA_ROOT })
         when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
     Item#tx{data_root = data_root(arweavejs, Bin)};
 normalize_data_root(Item) -> Item.
@@ -466,8 +470,9 @@ verify_hash(#tx{ id = ID } = TX) ->
 %% traditionally just verify the transaction based on data_root and data_size.
 %% However in HyperBEAM we will often populate the data field. Adding this
 %% check to verify that `data_root`, `data_size`, and `data` are consistent.
-%% The `data_root` is valid under either cut an Arweave node accepts: the
-%% arweave-js cut, or the node's fixed 256 KiB chunks of data posted in the TX.
+%% The `data_root` is the root of the data in the size-balanced chunks of the
+%% arweave-js library or, checked second, in fixed-size chunks with a smaller
+%% final chunk, which an Arweave node uses for data posted in a TX.
 verify_v2_data(#tx{ format = 2, data = ?DEFAULT_DATA }) ->
     true;
 verify_v2_data(#tx{

@@ -240,7 +240,7 @@ head_raw_tx(TXID, relative, Length, Opts) ->
                 TXID,
                 relative,
                 hb_util:int(
-                    hb_ao:get(<<"data_size">>, StructuredTXHeader, Length, Opts)
+                    hb_ao:get(<<"data-size">>, StructuredTXHeader, Length, Opts)
                 ),
                 StructuredTXHeader,
                 Opts
@@ -567,8 +567,8 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
         Opts
     ) of
         {ok, PendingTX} ->
-            DataSize = hb_util:int(maps:get(<<"data_size">>, PendingTX)),
-            DataRoot = hb_util:decode(maps:get(<<"data_root">>, PendingTX)),
+            DataSize = hb_util:int(maps:get(<<"data-size">>, PendingTX)),
+            DataRoot = hb_util:decode(maps:get(<<"data-root">>, PendingTX)),
             hb_prometheus:observe(
                 Length,
                 arweave_chunk_load_requested_bytes,
@@ -1950,9 +1950,9 @@ get_tx_split_chunk_test_parallel() ->
     ?assertEqual(
         <<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>,
         hb_message:id(Child, signed)),
-    % A TX whose data is cut in fixed 256 KiB chunks: 262,144 + 11,406 bytes.
-    ?assertMatch(
-        {ok, _},
+    % A TX whose data root is the root of chunks of 262,144 and 11,406 bytes:
+    % its read keeps the TX's signed commitment.
+    {ok, FixedSizeChunks} =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9">> },
             #{
@@ -1961,7 +1961,10 @@ get_tx_split_chunk_test_parallel() ->
                 <<"exclude-data">> => false
             },
             #{}
-        )
+        ),
+    ?assertEqual(
+        <<"z0BVqo6FJpyWVzPLwaOYfB4TshMH4EUsC2V4ytouQc4">>,
+        hb_message:id(FixedSizeChunks, signed)
     ),
     ok.
 
