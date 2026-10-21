@@ -26,10 +26,10 @@
 device_info(_M1) ->
     #{
         default => fun handle/4,
-        exclude => [keys, set, id, commit]
+        excludes => [keys, set, id, commit]
     }.
 
-%% @doc Forward the keys and `set' functions to the message device, handle all
+%% @doc The keys in `excludes' go to `message@1.0'. Handle all
 %% others with deduplication. This allows the device to be used in any context
 %% where a key is called. If the `dedup-key
 -spec handle(
@@ -38,10 +38,6 @@ device_info(_M1) ->
     #{ _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {skip, #{ _ => _ }}.
-handle(<<"keys">>, M1, _M2, _Opts) ->
-    hb_ao:raw(<<"message@1.0">>, <<"keys">>, M1, #{}, #{});
-handle(<<"set">>, M1, M2, Opts) ->
-    hb_ao:raw(<<"message@1.0">>, <<"set">>, M1, M2, Opts);
 handle(Key, M1, M2, Opts) ->
     ?event({dedup_handle, {key, Key}, {base, M1}, {req, M2}}),
     % Find the relevant parameters from the messages. We search for the
@@ -171,7 +167,12 @@ dedup_test() ->
     ?assertMatch(
 		#{ <<"result">> := <<"INIT+D2_+D3_+D2/+D3/">> },
 		Msg5
-	).
+	),
+    % `id' gives the ID of the message, not the message.
+    ?assertMatch(
+        {ok, ID} when ?IS_ID(ID),
+        hb_ao:resolve(#{ <<"device">> => <<"dedup@1.0">> }, <<"id">>, #{})
+    ).
 
 dedup_with_multipass_test() ->
     % Create a stack with a dedup device and 2 devices that will append to a
