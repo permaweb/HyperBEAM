@@ -1375,7 +1375,19 @@ modified_committed_value_test() ->
         },
     ?assertNot(hb_message:verify(ModifiedTag, all, #{})),
     ModifiedField = Structured#{ <<"quantity">> => <<"1">> },
-    ?assertNot(hb_message:verify(ModifiedField, all, #{})).
+    ?assertNot(hb_message:verify(ModifiedField, all, #{})),
+    % Commit refuses a request `field-quantity' that differs from the key.
+    ?assertThrow(
+        {request_field_differs, <<"quantity">>},
+        hb_message:commit(
+            #{ <<"quantity">> => <<"1">> },
+            #{ <<"priv-wallet">> => hb:wallet() },
+            #{
+                <<"commitment-device">> => <<"tx@1.0">>,
+                <<"field-quantity">> => <<"100">>
+            }
+        )
+    ).
 
 duplicate_tags_roundtrip_test() ->
     Signed = ar_tx:sign(

@@ -8,7 +8,7 @@
 -export([with_commitments/8]).
 -export([bundle_hint/4, data/3, tags/5, excluded_tags/3]).
 -export([item_hint/4, signed_children_hint/3]).
--export([to/3, to/6, siginfo/5, fields_to_tx/4, decode/1]).
+-export([to/3, to/6, siginfo/6, fields_to_tx/4, decode/1]).
 -export([bundle_header/2, bundle_header/3]).
 -include("include/hb.hrl").
 
@@ -64,7 +64,7 @@ to(Device, TABM, Req, FieldsFun, ExcludedTagsFun, Opts) ->
         ),
     Data = data(TABM, Req, Opts),
     ?event({calculated_data, Data}),
-    TX0 = siginfo(TABM, Data, MaybeCommitment, FieldsFun, Opts),
+    TX0 = siginfo(TABM, Req, Data, MaybeCommitment, FieldsFun, Opts),
     ?event({found_siginfo, TX0}),
     TX1 = TX0#tx{ data = Data },
     Tags = tags(
@@ -651,13 +651,33 @@ signed_by_other(Value, Opts) ->
         )
     ).
 
-%% @doc Calculate the fields for a message, returning an initial TX record.
-siginfo(Message, Data, {ok, _, Commitment}, FieldsFun, Opts) ->
+%% @doc Calculate the fields for a message, returning an initial TX record. A
+%% message without a commitment takes a field from the request's key
+%% `field-<name>' over its own key `<name>'. A key whose field is then at its
+%% default value becomes a tag.
+siginfo(Message, _Req, Data, {ok, _, Commitment}, FieldsFun, Opts) ->
     commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts);
-siginfo(Message, _Data, not_found, FieldsFun, Opts) ->
-    FieldsFun(#tx{}, <<>>, Message, Opts);
-siginfo(Message, _Data, multiple_matches, _FieldsFun, _Opts) ->
+siginfo(Message, Req, _Data, not_found, FieldsFun, Opts) ->
+    Fields = request_fields(Req, Message, FieldsFun, Opts),
+    FieldsFun(#tx{}, <<>>, hb_maps:merge(Message, Fields, Opts), Opts);
+siginfo(Message, _Req, _Data, multiple_matches, _FieldsFun, _Opts) ->
     throw({multiple_ans104_commitments_unsupported, Message}).
+
+%% @doc Return the `field-<name>' keys of a request, without their prefix.
+%% Throw `request_field_differs' if the field of a key is not at its default
+%% value and the message does not have the key with the same value.
+request_fields(Req, Message, FieldsFun, Opts) ->
+    Default = FieldsFun(#tx{}, <<>>, #{}, Opts),
+    maps:from_list(
+        [
+            {Key, Value}
+        ||
+            {<<"field-", Key/binary>>, Value} <- hb_maps:to_list(Req, Opts),
+            FieldsFun(#tx{}, <<>>, #{ Key => Value }, Opts) =:= Default
+                orelse hb_maps:find(Key, Message, Opts) =:= {ok, Value}
+                orelse throw({request_field_differs, Key})
+        ]
+    ).
 
 %% @doc Convert a commitment to a base TX record. Its fields and tags are the
 %% commitment's while the message holds their values. A message changed after
