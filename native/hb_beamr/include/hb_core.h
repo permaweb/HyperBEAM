@@ -25,6 +25,8 @@ typedef struct {
     wasm_instance_t* instance;      // WASM instance
     wasm_module_t* module;          // WASM module
     wasm_store_t* store;            // WASM store
+    wasm_importtype_vec_t imports;  // Types of the module's imports
+    wasm_extern_vec_t externs;      // Functions linked to the imports
     ErlDrvPort port;                // Erlang port associated with this process
     ErlDrvTermData port_term;       // Erlang term representation of the port
     ErlDrvMutex* is_running;        // Mutex to track if the process is running
