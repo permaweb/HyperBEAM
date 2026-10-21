@@ -153,6 +153,7 @@ ei_term* decode_list(char* buff, int* index) {
 }
 
 int get_function_sig(const wasm_externtype_t* type, char* type_str) {
+    type_str[0] = '\0';
     if (wasm_externtype_kind(type) == WASM_EXTERN_FUNC) {
         const wasm_functype_t* functype = wasm_externtype_as_functype_const(type);
         const wasm_valtype_vec_t* params = wasm_functype_params(functype);
