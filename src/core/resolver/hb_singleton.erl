@@ -136,8 +136,8 @@
 %%%       `/(ao:ID/k.ID2)/d'. A client or a proxy may decode `%2E' to `.' and
 %%%       `%7E' to `~' (RFC 3986 s2.3): `/ao:ID%2Fk%2EID2/d' may reach the
 %%%       node as `/ao:ID%2Fk.ID2/d', in which `.ID2' is a claim of the
-%%%       part. A subpath that holds claims is resolved as a hashpath, so
-%%%       `hb_hashpath' checks the claims.</li>
+%%%       part. A subpath with claims is loaded as a hashpath: `hb_hashpath'
+%%%       resolves its requests and ignores the claims.</li>
 %%%   <li>The key of a step keeps its percent-escapes, unless the step is a
 %%%       URI or gives the key a value with `='. Every other key, value and
 %%%       device is percent-decoded after it is parsed.</li>
@@ -899,9 +899,9 @@ maybe_subpath([{group, _, Tokens}], Opts) -> {resolve, subpath(Tokens, Opts)};
 maybe_subpath(Tokens, _Opts) -> text(Tokens).
 
 %% @doc Parse the tokens of a subpath into its requests. A subpath is a path,
-%% and may have a query of its own. A subpath that holds claims gives its
-%% hashpath, which `hb_hashpath' resolves and checks: the subpath itself if it
-%% starts with `ao:', and `ao:' and the subpath if not.
+%% and may have a query of its own. A subpath with claims gives its hashpath,
+%% which `hb_hashpath' loads. The hashpath is the subpath if it starts with
+%% `ao:', and `ao:' followed by the subpath if not.
 subpath(Tokens, Opts) ->
     {PathTokens, QStr} = split_query(Tokens),
     Parts = parts(PathTokens),

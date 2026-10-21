@@ -34,7 +34,7 @@ data_root_field(Prefix, Map, Opts) ->
         ?DEFAULT_DATA ->
             decoded_field(
                 Prefix,
-                <<"data_root">>,
+                <<"data-root">>,
                 Map,
                 ?DEFAULT_DATA_ROOT,
                 fun decode_id/1,
@@ -49,7 +49,7 @@ data_size_field(Prefix, Map, Opts) ->
         ?DEFAULT_DATA ->
             decoded_field(
                 Prefix,
-                <<"data_size">>,
+                <<"data-size">>,
                 Map,
                 ?DEFAULT_DATA_SIZE,
                 fun decode_int/1,
@@ -125,11 +125,11 @@ exclude_reward_tag(TX, TABM, Opts) ->
 exclude_data_root_tag(TX) ->
     case TX#tx.data_root of
         ?DEFAULT_DATA_ROOT -> [];
-        _ -> [<<"data_root">>]
+        _ -> [<<"data-root">>]
     end.
 
 exclude_data_size_tag(TX) ->
     case TX#tx.data_size of
         ?DEFAULT_DATA_SIZE -> [];
-        _ -> [<<"data_size">>]
+        _ -> [<<"data-size">>]
     end.

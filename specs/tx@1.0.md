@@ -105,9 +105,9 @@ IDs, and commitments are normative.
      `Data` is the transaction's `data` field. (This is the inverse of the
      binary wrapping in `to`, §4.2.1.)
   3. Otherwise **validate** the transaction (§5.2); on failure throw the
-     corresponding error atom (§8). Then normalise it (recompute IDs, data_size,
-     data_root from `data` if present; §5.3) and decode any bundled `data` into
-     nested sub-messages.
+     corresponding error atom (§8). Then normalise it (recompute IDs, and
+     data_size from `data` if present; a data root only for a transaction
+     without one; §5.3) and decode any bundled `data` into nested sub-messages.
   4. Compute the three component maps — **fields**, **tags**, **data** (§5.4) —
      then the **committed key set** (§5.6) and assemble the **base message** by
      selecting, for each committed key, its value with precedence **data > field
@@ -141,8 +141,10 @@ IDs, and commitments are normative.
        original tag list, taken from the commitment if present, else defaults
        (unsigned, owner = all-zero, RSA type).
      - **fields**: reconstruct `format`, `target`, `anchor`, `quantity`,
-       `reward`, and (if no inline `data`) `data_root` / `data_size` from the
+       `reward`, `data_root`, and (if no inline `data`) `data_size` from the
        `field-`-prefixed commitment keys and/or the message keys (§5.5, §5.7).
+       The data root of a transaction with inline `data` comes from the
+       commitment's `field-data-root` alone (§5.9.2).
      - **data**: the `data` field (§5.7).
      - **tags**: the ordered tag list (§5.6), including any preserved
        `original-tags`, bundle tags, and the `ao-data-key` tag if the data lives
@@ -172,7 +174,9 @@ IDs, and commitments are normative.
     `to` (with private keys reset), **sign** it with the wallet (RSA-PSS over the
     §5.8 preimage; this sets `owner`, `signature`, `signature_type`, and the
     signed ID), then convert the signed transaction back via `from`. The result
-    carries a signed `tx@1.0` commitment.
+    carries a signed `tx@1.0` commitment. A transaction with `data` is signed
+    with the root that §5.3 gives a transaction without one, not with the root
+    of a commitment that the message has: its data may have changed since.
 - **Returns:** `{ok, CommittedMessage}`.
 - **Side effects:** none (no cache writes); consumes the configured wallet.
 - **Errors:** absence of a usable wallet for a signed commit is a node
@@ -209,8 +213,8 @@ fields are decimal text.
 | target | `target` | 0 or 32 bytes → base64url | `<<>>` (empty) |
 | quantity | `quantity` | non-negative integer (decimal text) | `0` |
 | data | `data` (or `ao-data-key`) | raw binary, or nested bundle | `<<>>` (empty) |
-| data_size | `data_size` | non-negative integer (decimal text) | `0` |
-| data_root | `data_root` | 0 or 32 bytes → base64url | `<<>>` (empty) |
+| data_size | `data-size` | non-negative integer (decimal text) | `0` |
+| data_root | `data-root` (§5.4), `field-data-root` (§5.9.2) | 0 or 32 bytes → base64url | `<<>>` (empty) |
 | signature | — (`signature` in commitment) | bytes → base64url | all-zero (unsigned) |
 | reward | `reward` | non-negative integer (decimal text) | `0` |
 | denomination | — | only `0` supported | `0` |
@@ -219,8 +223,9 @@ fields are decimal text.
 
 The set of **base fields** the codec promotes between the header and the
 message body (and may carry in the commitment as `field-<name>`) is exactly:
-`anchor`, `format`, `quantity`, `reward`, `target`, `data_root`, `data_size`.
-(`owner`/`signature`/`id` live only in the commitment, never as body keys.)
+`anchor`, `format`, `quantity`, `reward`, `target`, `data-root`, `data-size`.
+(`owner`/`signature`/`id` live only in the commitment, never as body keys, and
+so does the data root of a transaction with `data`.)
 
 ### 5.2 Transaction validity (enforced by `from` and `to`)
 
@@ -250,10 +255,13 @@ A non-transaction, non-binary Base passed to `from`/`to` is `invalid-tx`.
 
 Before IDs are taken, a transaction is normalised deterministically:
 
-- If `data` is a non-empty binary: set `data_size = byte_size(data)` and set
-  `data_root` from `data` using the format-appropriate chunking
-  (format 1 → "legacy" fixed-size chunking; format 2 → "arweave-js"
-  size-balanced chunking; §5.11).
+- If `data` is a non-empty binary: set `data_size = byte_size(data)`. A
+  format-2 transaction that has a `data_root` keeps it: its signature covers
+  that root, whatever the chunks of its data. Otherwise set `data_root` to the
+  root of `data` in 256 KiB chunks: for format 1, fixed-size chunks with a
+  smaller final chunk; for format 2, the size-balanced chunks of the
+  arweave-js library, in which the last two chunks split the remainder when
+  the final chunk would be under 32 KiB.
 - If `data` is a map/list (a bundle), serialise it to its ANS-104 bundle bytes
   first, adding the `bundle-format`/`bundle-version`(/`bundle-map`) tags as
   needed, then normalise as a binary.
@@ -268,10 +276,11 @@ From a (normalised, validated) transaction the codec derives three maps:
 
 - **Fields map:** for each base field whose value differs from its default
   (§5.1), an entry `key → encoded-value` (IDs base64url, integers decimal text,
-  `format` encoded as `1` when format = 1, omitted when 2). `data_root` /
-  `data_size` are included **only when `data` is empty** (a header that carries a
-  data root but no inline data); when `data` is present they are derived and not
-  surfaced as body keys.
+  `format` encoded as `1` when format = 1, omitted when 2). `data-root` /
+  `data-size` are included **only when `data` is empty** (a header that has a
+  data root but no inline data). When `data` is present, `data_size` is derived
+  from it and the data root is not a body key: only the commitment's
+  `field-data-root` carries it (§5.9.2).
 - **Tags map:** the transaction's tag list, **normalised**: each tag name is
   lower-cased and `-`/`_`-canonicalised; **duplicate** names are aggregated into
   a single key whose value is an RFC 9651 Structured-Fields **list** of the
@@ -299,7 +308,7 @@ value, only the field is emitted and the tag is dropped; when they differ, the
 tag is preserved via `original-tags` and the field via `field-<name>`.)
 
 `exclude-data` request handling (`to`): when set, the encoder reconstructs the
-header's `data_root`/`data_size` from the `field-data_root`/`field-data_size`
+header's `data_root`/`data_size` from the `field-data-root`/`field-data-size`
 commitment keys (or message keys) and leaves `data` empty, producing a
 value-transfer header that commits to a data root without inlining the bytes.
 
@@ -320,7 +329,7 @@ value-transfer header that commits to a data root without inlining the bytes.
   keys minus `commitments`). For each committed key, emit a tag `{key, value}`
   from the message **EXCEPT**:
   - the **data key** (it becomes the transaction body, not a tag);
-  - any **base field** (`anchor`, `target`, `quantity`, `data_root`, `data_size`,
+  - any **base field** (`anchor`, `target`, `quantity`, `data-root`, `data-size`,
     `reward`, `last_tx`, `owner`, `signature`, `format`, `id`, …): a base field is
     reconstructed as a typed transaction **header field**, not a tag — emitting it
     *also* as a tag double-encodes it and corrupts the signature preimage / ID. (A
@@ -429,6 +438,10 @@ is treated as RSA-typed for preimage purposes).
   `bundle-format` (i.e. the data is a bundle).
 - `field-<name>` for each base field whose header value the codec must preserve
   separately from any same-named tag (§5.5) — value encoded as in §5.1.
+- `field-data-root` for every transaction with a non-empty `data_root`, with
+  data or without: the signed root, base64url. For a transaction with `data`
+  it is the only place the root is carried, and `to` gives the transaction
+  this root as it is, without computing a root from the data.
 - `original-tags` — present only when tags are not all-normal (§5.6).
 - `bundle-format` / `bundle-version` / `bundle-map` — copied from the tags when
   present (so `to` can reproduce them).
@@ -460,7 +473,11 @@ A reconstructed transaction verifies iff **all** hold:
 5. The signature validates against the owner public key over the §5.8 preimage.
 6. For format 2: `(data_size == 0) == (data_root == <<>>)` (size and root agree
    on emptiness); and when `data` is inlined, `data_size == byte_size(data)` and
-   `data_root == data_root(data)`.
+   `data_root` is the root of `data` in the size-balanced chunks of §5.3 or,
+   checked second, in fixed-size 256 KiB chunks with a smaller final chunk,
+   which an Arweave node uses for data posted in a transaction. The `data_root`
+   checked is the signed root of `field-data-root`, so data changed after
+   signing fails this rule.
 
 ### 5.11 base64url
 
@@ -613,9 +630,9 @@ public codec / commit / verify surface:
 - The **ANS-104 data-item** format and the exact bundle byte layout (the sibling
   `ans104@1.0` device), beyond the requirement that `tx@1.0`'s bundled `data`
   uses it and round-trips losslessly.
-- The chunking / Merkle algorithms producing `data_root` (referenced as "legacy"
-  and "arweave-js" modes) are defined by the external Arweave standard; only
-  *which* mode each format uses (§5.3) is pinned here.
+- The Merkle algorithm producing `data_root` from chunks is defined by the
+  external Arweave standard; only the chunks that the codec computes a root
+  over (§5.3, §5.10) are pinned here.
 - The cryptographic primitives of RSA-PSS / ECDSA and SHA-256 / SHA-384
   themselves; the on-chain economic checks Arweave performs (fee sufficiency,
   overspend, last_tx validity) which `verify` here does **not** perform.

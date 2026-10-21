@@ -73,7 +73,11 @@ compute(Msg, Req, Opts) ->
             {ok, Msg};
         {error, Error} ->
             % Return the error.
-            {error, Error}
+            {error, Error};
+        {failure, Failure} ->
+            % The server did not compute the message, which is a failure of
+            % this node.
+            {failure, Failure}
     end.
 
 %% @doc Snapshot the state of the process via the `delegated-compute@1.0' device.
@@ -90,8 +94,9 @@ delegate_request(Msg, Req, Opts) ->
         true ->
             do_compute(Msg, Req, Opts);
         false ->
-            % Return an error if the genesis-wasm feature is disabled.
-            {error, #{
+            % This node cannot compute the message if the genesis-wasm
+            % feature is disabled.
+            {failure, #{
                 <<"status">> => 500,
                 <<"message">> =>
                     <<"HyperBEAM was not compiled with genesis-wasm@1.0 on "
@@ -142,6 +147,7 @@ do_compute(State, Req, Opts) ->
             % Issue an event and return the error.
             ?event({genesis_wasm_compute_error, Error}),
             {error, Error};
+        {failure, Failure} -> {failure, Failure};
         {skip, DoubleSkip = #{ <<"skip">> := true }} ->
             ?event(dedup_short,
                 {dedup_error,

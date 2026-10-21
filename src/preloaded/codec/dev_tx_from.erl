@@ -59,12 +59,16 @@ reward_field(TX, Prefix, _Opts) ->
         fun integer_to_binary/1
     ).
 
-data_root_field(#tx{data = ?DEFAULT_DATA, data_root = DataRoot}, Prefix, _Opts) ->
+%% @doc Return the data root of a TX under `Prefix': with the commitment's
+%% prefix for every TX that has a root, and as a message key only for a TX
+%% without data.
+data_root_field(#tx{data = Data, data_root = DataRoot}, Prefix, _Opts)
+        when Data =:= ?DEFAULT_DATA; Prefix =:= ?FIELD_PREFIX ->
     encoded_field(
         DataRoot,
         ?DEFAULT_DATA_ROOT,
         Prefix,
-        <<"data_root">>,
+        <<"data-root">>,
         fun hb_util:encode/1
     );
 data_root_field(_TX, _Prefix, _Opts) ->
@@ -75,7 +79,7 @@ data_size_field(#tx{data = ?DEFAULT_DATA, data_size = DataSize}, Prefix, _Opts) 
         DataSize,
         ?DEFAULT_DATA_SIZE,
         Prefix,
-        <<"data_size">>,
+        <<"data-size">>,
         fun integer_to_binary/1
     );
 data_size_field(_TX, _Prefix, _Opts) ->

@@ -38,14 +38,15 @@ install(Base, State, Opts) ->
                 ?event(no_ao_table),
                 #{};
             {ok, ExistingTable, _} ->
+                % The table keeps its functions, which `dev_lua:decode/2' drops.
                 ?event({existing_ao_table, ExistingTable}),
-                dev_lua:decode(ExistingTable, Opts)
+                ExistingTable
         end,
     ?event({base_ao_table, BaseAOTable}),
     {ok, State2} =
         luerl:set_table_keys_dec(
             [ao],
-            dev_lua:encode(BaseAOTable, Opts),
+            BaseAOTable,
             State
         ),
     set_functions(Base, State2, Opts).

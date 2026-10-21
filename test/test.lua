@@ -188,3 +188,8 @@ function commitment_count(base)
     for _ in pairs(base.commitments or {}) do count = count + 1 end
     return count
 end
+--- @function float_key_result
+--- @return a table with a float key, which has no AO-Core form
+function float_key_result()
+    return { [1.5] = "x" }
+end

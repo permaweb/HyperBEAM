@@ -8,7 +8,7 @@
 -export([with_commitments/8]).
 -export([bundle_hint/4, data/3, tags/5, excluded_tags/3]).
 -export([item_hint/4, signed_children_hint/3]).
--export([to/3, to/6, siginfo/4, fields_to_tx/4, decode/1]).
+-export([to/3, to/6, siginfo/6, fields_to_tx/4, decode/1]).
 -export([bundle_header/2, bundle_header/3]).
 -include("include/hb.hrl").
 
@@ -64,7 +64,7 @@ to(Device, TABM, Req, FieldsFun, ExcludedTagsFun, Opts) ->
         ),
     Data = data(TABM, Req, Opts),
     ?event({calculated_data, Data}),
-    TX0 = siginfo(TABM, MaybeCommitment, FieldsFun, Opts),
+    TX0 = siginfo(TABM, Req, Data, MaybeCommitment, FieldsFun, Opts),
     ?event({found_siginfo, TX0}),
     TX1 = TX0#tx{ data = Data },
     Tags = tags(
@@ -651,19 +651,39 @@ signed_by_other(Value, Opts) ->
         )
     ).
 
-%% @doc Calculate the fields for a message, returning an initial TX record.
-siginfo(Message, {ok, _, Commitment}, FieldsFun, Opts) ->
-    commitment_to_tx(Message, Commitment, FieldsFun, Opts);
-siginfo(Message, not_found, FieldsFun, Opts) ->
-    FieldsFun(#tx{}, <<>>, Message, Opts);
-siginfo(Message, multiple_matches, _FieldsFun, _Opts) ->
+%% @doc Calculate the fields for a message, returning an initial TX record. A
+%% message without a commitment takes a field from the request's key
+%% `field-<name>' over its own key `<name>'. A key whose field is then at its
+%% default value becomes a tag.
+siginfo(Message, _Req, Data, {ok, _, Commitment}, FieldsFun, Opts) ->
+    commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts);
+siginfo(Message, Req, _Data, not_found, FieldsFun, Opts) ->
+    Fields = request_fields(Req, Message, FieldsFun, Opts),
+    FieldsFun(#tx{}, <<>>, hb_maps:merge(Message, Fields, Opts), Opts);
+siginfo(Message, _Req, _Data, multiple_matches, _FieldsFun, _Opts) ->
     throw({multiple_ans104_commitments_unsupported, Message}).
+
+%% @doc Return the `field-<name>' keys of a request, without their prefix.
+%% Throw `request_field_differs' if the field of a key is not at its default
+%% value and the message does not have the key with the same value.
+request_fields(Req, Message, FieldsFun, Opts) ->
+    Default = FieldsFun(#tx{}, <<>>, #{}, Opts),
+    maps:from_list(
+        [
+            {Key, Value}
+        ||
+            {<<"field-", Key/binary>>, Value} <- hb_maps:to_list(Req, Opts),
+            FieldsFun(#tx{}, <<>>, #{ Key => Value }, Opts) =:= Default
+                orelse hb_maps:find(Key, Message, Opts) =:= {ok, Value}
+                orelse throw({request_field_differs, Key})
+        ]
+    ).
 
 %% @doc Convert a commitment to a base TX record. Its fields and tags are the
 %% commitment's while the message holds their values. A message changed after
 %% signing is given its own fields and committed keys' values instead, so the
 %% commitment's signature does not verify the item.
-commitment_to_tx(Message, Commitment, FieldsFun, Opts) ->
+commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts) ->
     Signature =
         hb_util:decode(
             maps:get(<<"signature">>, Commitment, hb_util:encode(?DEFAULT_SIG))
@@ -691,14 +711,14 @@ commitment_to_tx(Message, Commitment, FieldsFun, Opts) ->
         signature_type = SignatureType,
         tags = Tags
     },
-    case holds_signed_values(Commitment, Tags, Message, Opts) of
+    case holds_signed_values(Commitment, Tags, Message, Data, Opts) of
         true -> FieldsFun(TX, ?FIELD_PREFIX, Commitment, Opts);
         false -> FieldsFun(TX#tx{ tags = [] }, <<>>, Message, Opts)
     end.
 
 %% @doc Check that a message still holds the values of the fields and tags
 %% that its commitment restores. Keys added after signing are not compared.
-holds_signed_values(Commitment, OriginalTags, TABM, Opts) ->
+holds_signed_values(Commitment, OriginalTags, TABM, Data, Opts) ->
     Fields =
         maps:from_list(
             [
@@ -708,8 +728,15 @@ holds_signed_values(Commitment, OriginalTags, TABM, Opts) ->
                     <- hb_maps:to_list(Commitment, Opts)
             ]
         ),
-    holds(Fields, TABM, Opts) andalso
-        holds_tags(OriginalTags, maps:keys(Fields), TABM, Opts).
+    % The data root of a TX with data is not a key of its message: only its
+    % commitment carries the root.
+    MessageFields =
+        case Data of
+            ?DEFAULT_DATA -> Fields;
+            _ -> maps:remove(<<"data-root">>, Fields)
+        end,
+    holds(MessageFields, TABM, Opts) andalso
+        holds_tags(OriginalTags, maps:keys(MessageFields), TABM, Opts).
 
 %% @doc Check that a message holds the values of its commitment's tags. A tag
 %% with the name of a field is skipped: decoding takes the field's value. So is

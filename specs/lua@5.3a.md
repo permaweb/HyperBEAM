@@ -260,14 +260,15 @@ follows (let the decoded values be the Lua returns mapped per §5.2):
    coerced to the AO-Core outcome tag: the resolution returns `{<status-atom>, …}`
    where `<status-atom>` is `S` as an atom (so `"ok"` → an `ok` outcome,
    `"error"` → an `error` outcome). Only `ok` denotes success to the surrounding
-   resolution machinery; `error` is the conventional handled-failure tag. The
+   resolution machinery; `error` is the conventional tag of an error. The
    coercion is **existing-atom only** (`list_to_existing_atom` semantics): the atom
    for `S` MUST already exist in the running node — true for the standard tags
    (`ok`, `error`) and any status already in use. A status string whose atom does
-   **not** already exist is a **fault**, surfacing as an error outcome (§8), *not*
-   a success carrying a novel tag. Scripts SHOULD restrict their status to
-   `ok`/`error`. A script signals failure to AO-Core by returning
-   `("error", <value>)`.
+   **not** already exist is a **fault**, surfacing as a failure (§8), *not* a
+   success carrying a novel tag. Scripts SHOULD restrict their status to
+   `ok`/`error`. A script signals an error to AO-Core by returning
+   `("error", <value>)`. An error that it raises and does not catch is a
+   failure (§8).
 4. **Result shaping.**
    - If the decoded result `R` is a **message** (an associative Lua table), the
      resolved value is that message, with the device's private area (carrying the
@@ -582,7 +583,7 @@ device-load allow-list hook; tracked as a found defect, not fixed here.)
   reject it (e.g. returning an error / a "not trusted" result). This device does
   not itself gate on signer identity.
 - **Failure-closed on faults.** A Lua runtime error or an Erlang/host fault during
-  a call yields an **error outcome** (§8), never a silently-empty success.
+  a call yields a **failure** (§8), never a silently-empty success.
 
 ## 8. Errors
 
@@ -591,19 +592,22 @@ device-load allow-list hook; tracked as a found defect, not fixed here.)
 | `init`/`compute` finds **no** modules (no `module` field and no inline Lua body) | Error: a message stating no Lua modules were found when preparing the environment. (Hyphenated atom form of the cause: `no-lua-modules-found`.) |
 | Module **id not found** in the store | Error message with `status => 404` and a body naming the missing module id. |
 | Module **message not loadable** (no `body`/`data` source) | Error message with `status => 404` and a body explaining a module must carry a `body` of code; the offending module is echoed. |
-| **Lua runtime error** while calling the function (a `lua_error`) | `{error, #{ status => 500, body => <the script's error value>, trace => <decoded stack trace> }}`. `body` is the object the script passed to `error(...)`, **unwrapped** from the engine's structured error: a Lua engine reports `error(X)` as a wrapper (e.g. `{error_call, [X]}`), so `body` is the decoded `X`, **not** the whole wrapper (decoding the wrapper as a value is wrong and may itself crash). For an engine-internal fault that carries no user value (e.g. an illegal-index error), `body` is a readable rendering of that error. The `trace` is a normalised list of frames, each a message with `function`, `parameters` (a numbered message of the frame's decoded arguments), and a `line` (`"<file>:<n>"` when available). |
-| **Status string with no existing atom** returned by the script (§4.3 rule 3) | The status coercion (`list_to_existing_atom`) faults → an error outcome (a `status => 500` Erlang/host error, as the row below), **not** a success carrying the novel tag. |
-| **Erlang/host error** while running Lua (a non-Lua exception) | `{error, #{ status => 500, body => "Erlang error while running Lua: <reason>", trace => <formatted-trace-binary> }}`. |
+| A key with **no function** in the script (its global is `nil`) | `{error, not_found}`. The script is not called. |
+| **Lua runtime error** while calling the function (a `lua_error`) that the script does not catch | `{failure, #{ status => 500, body => <the script's error value>, trace => <decoded stack trace> }}`. `body` is the object the script passed to `error(...)`, **unwrapped** from the engine's structured error: a Lua engine reports `error(X)` as a wrapper (e.g. `{error_call, [X]}`), so `body` is the decoded `X`, **not** the whole wrapper (decoding the wrapper as a value is wrong and may itself crash). For an engine-internal fault that carries no user value (e.g. an illegal-index error), `body` is a readable rendering of that error. The `trace` is a normalised list of frames, each a message with `function`, `parameters` (a numbered message of the frame's decoded arguments), and a `line` (`"<file>:<n>"` when available). |
+| **Status string with no existing atom** returned by the script (§4.3 rule 3) | The status coercion (`list_to_existing_atom`) faults → a failure (a `status => 500` Erlang/host error, as the row below), **not** a success carrying the novel tag. |
+| **Erlang/host error** while running Lua (a non-Lua exception) | `{failure, #{ status => 500, body => "Erlang error while running Lua: <reason>", trace => <formatted-trace-binary> }}`. |
 | `snapshot` with **no** initialised state | Error: cannot snapshot Lua state — state not initialised. |
 | `normalize` with **no** state and **no** locatable snapshot | Error/throw: no Lua state snapshot found. |
 | `functions` with **no** initialised state | Error: not found. |
 
 Notes:
 
-- A script that wishes to signal a *handled* failure returns `("error", <value>)`
-  from its function; this is **not** a Lua runtime error — it produces an `error`
-  **outcome** whose value is `<value>` (§4.3 status coercion), distinct from the
-  `status => 500` Lua-runtime-error message above.
+- A script that wishes to signal an error returns `("error", <value>)` from its
+  function; this is **not** a Lua runtime error — it produces an `error`
+  **outcome** whose value is `<value>` (§4.3 status coercion), which a process
+  stores as the result of its slot. A Lua runtime error that the script does not
+  catch is the `status => 500` failure above, which a process does not store: a
+  script that throws is a failure, as a device that throws is.
 - The status atom of a successful return is whatever string the script returns as
   its first value (default `ok` for a single-value return). An unrecognised status
   string still becomes that atom; only `ok` denotes success to the surrounding
@@ -728,10 +732,10 @@ unreachable/offline path).
     `normalize` with neither live state nor a locatable `snapshot/body` errors.
 17. **`functions`.** Returns the list of global function names in the current
     state; errors (`not found`) when no state is initialised.
-18. **Error shapes.** A Lua runtime error yields
-    `{error, #{ status => 500, body => <error>, trace => <frames> }}` with a
-    decoded stack trace; an Erlang/host fault yields a `status => 500` error whose
-    `body` begins `"Erlang error while running Lua: "`.
+18. **Error shapes.** A Lua runtime error that the script does not catch yields
+    `{failure, #{ status => 500, body => <error>, trace => <frames> }}` with a
+    decoded stack trace; an Erlang/host fault yields a `status => 500` failure
+    whose `body` begins `"Erlang error while running Lua: "`.
 19. **Idempotent init.** Re-running `init` on a message that already holds a
     private state is a no-op (the state is not rebuilt).
 20. **No commitments minted.** Resolving any Lua key creates no commitments; a
@@ -765,10 +769,10 @@ unreachable/offline path).
 
 - **Status string → outcome mapping (RESOLVED — §4.3 rule 3).** A two-value return
   uses the first value as the outcome status atom (so `"ok"` succeeds, `"error"`
-  fails). The coercion is **existing-atom only**: a status whose atom is not already
-  present in the node **faults** (error outcome, §8) rather than producing a novel
-  success tag. Only `ok` denotes success; `error` is the handled-failure
-  convention. Scripts SHOULD restrict themselves to `ok`/`error` — other strings
+  is an error). The coercion is **existing-atom only**: a status whose atom is not
+  already present in the node **faults** (a failure, §8) rather than producing a
+  novel success tag. Only `ok` denotes success; `error` is the convention for an
+  error. Scripts SHOULD restrict themselves to `ok`/`error` — other strings
   are not a portable success channel.
 - **Multi-module name collisions.** When several modules define the same global
   function, last-loaded wins, and a name-map's module order is the map's own key

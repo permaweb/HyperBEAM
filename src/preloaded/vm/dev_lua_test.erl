@@ -153,7 +153,7 @@ exec_test(State, Function) ->
         ),
     case Status of
         ok -> ok;
-        error ->
+        _ ->
             hb_format:print(Result, <<"Lua">>, Function, 1),
             ?assertEqual(
                 ok,

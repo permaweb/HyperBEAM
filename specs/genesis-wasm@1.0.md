@@ -129,11 +129,12 @@ deduplication.
   seen-set from `Base`/`Opts`.
 - **Behaviour (MUST):**
   1. **Ensure the legacy CU is started** (§4.6). If it cannot be made live, return
-     `{error, #{ <<"status">> => 500, <<"message">> => Msg }}` (the binary key
+     `{failure, #{ <<"status">> => 500, <<"message">> => Msg }}` (the binary key
      `message`, **not** `body`) and do **not** call the CU. For `compute`/`snapshot`
      `Msg` is the exact binary **`"HyperBEAM was not compiled with genesis-wasm@1.0
-     on this node."`**; `normalize` instead uses **`"Genesis-wasm server not
-     running."`** (the two paths return different sentinel strings — §8).
+     on this node."`**; `normalize` instead returns `{error, _}` with
+     **`"Genesis-wasm server not running."`** (the two paths return different
+     tags and sentinel strings — §8).
   2. **Deduplicate the assignment.** Determine whether this assignment's subject
      (the request `body`) has already been computed in this evaluation stream,
      using the `dedup@1.0` semantics (subject = `body`, first-pass only; see the
@@ -149,8 +150,9 @@ deduplication.
      `delegated-compute@1.0` behaviour against the (dedup-updated) state with the
      same `Req`. That layer performs the legacy CU HTTP call (§5) and writes the
      decoded results message under the state's `results` key (and the raw decoded
-     JSON under `results/raw`). On a CU/transport failure it returns
-     `{error, _}`, which this device propagates unchanged.
+     JSON under `results/raw`). On a CU/transport failure, or a CU answer that
+     is not a result (§5), it returns `{failure, _}`, which this device
+     propagates unchanged.
   4. **Apply the emitted patches.** Resolve the `patch@1.0` behaviour against the
      result with `patch-from = /results/outbox`, lifting every outbox submessage
      that is a patch (`method: PATCH` or `device: patch@1.0`) onto the live state
@@ -158,8 +160,10 @@ deduplication.
      outbox entries are left in place.
   5. Return the patched state message.
 - **Returns:** `{ok, State'}` — the post-compute, post-patch process state
-  (with `results` populated and patches applied), or `{error, Error}` if
+  (with `results` populated and patches applied), or `{failure, Failure}` if
   ensure-started failed (§4.6) or the delegated CU call failed (§5/§8).
+  `process@1.0` stores nothing for a slot whose `compute` returns
+  `{failure, _}`, so a later `compute` of the slot calls the CU again.
 - **Side effects:** may **spawn** the CU sidecar subprocess (first call only,
   §4.6); makes an outbound **HTTP** call to the local CU (§5); the dedup step may
   write a seen-set entry to the content-addressed store (per `dedup@1.0`).
@@ -214,7 +218,7 @@ Capture the CU's current process memory as a restorable snapshot.
 - **Reads:** the base message (to derive the process id); the CU configuration.
 - **Behaviour (MUST):**
   1. **Ensure the legacy CU is started** (§4.6). If it cannot, return the
-     failure-closed `status 500` error using the **same `compute`/`snapshot`
+     failure-closed `status 500` failure using the **same `compute`/`snapshot`
      sentinel** `"HyperBEAM was not compiled with genesis-wasm@1.0 on this node."`
      (§4.compute step 1 — `snapshot` shares the compute delegate path; it does **not**
      use normalize's `"Genesis-wasm server not running."`).
@@ -224,7 +228,7 @@ Capture the CU's current process memory as a restorable snapshot.
      checkpoint, that layer returns a message indicating "No checkpoint
      produced." rather than failing the whole resolution.
 - **Returns:** `{ok, Snapshot}` — the CU's snapshot response (a message; its
-  `data` is the process-memory blob), or `{error, _}` only if ensure-started
+  `data` is the process-memory blob), or `{failure, _}` only if ensure-started
   failed.
 - **Side effects:** ensure-started (§4.6); makes an outbound HTTP call to the CU.
 
@@ -398,9 +402,10 @@ Contract requirements (MUST):
   dryrun endpoint with no slot. A dryrun MUST NOT change persisted process state.
 - **Result decoding.** The response body is treated as AOS2 JSON and converted to
   an AO-Core results message by the `json-iface@1.0` `from` mapping (`outbox`,
-  `patches`, `data`, …). A transport/HTTP failure surfaces as `{error, _}` and
-  fails the compute step (§8); the device does not silently treat a failed CU
-  call as an empty success.
+  `patches`, `data`, …). A transport/HTTP failure, or a body that holds no
+  `Output`, `Messages` or `Error` key, surfaces as `{failure, _}` and fails the
+  compute step (§8); the device does not silently treat a failed CU call as an
+  empty success.
 
 ## 6. Sidecar configuration & process environment (normative)
 
@@ -481,7 +486,7 @@ not inject the flag, but a request that arrives via the node does.) Read them wi
 
 | Atom / shape | Condition |
 |---|---|
-| `{error, #{ status := 500, message := <"…compiled with genesis-wasm@1.0…"> }}` | `compute` (and the shared delegate path) on a node **not** compiled with the genesis-wasm feature and with no live CU (ensure-started returned not-running). |
+| `{failure, #{ status := 500, message := <"…compiled with genesis-wasm@1.0…"> }}` | `compute` (and the shared delegate path) on a node **not** compiled with the genesis-wasm feature and with no live CU (ensure-started returned not-running). |
 | `{error, #{ status := 500, message := <"Genesis-wasm server not running."> }}` | `normalize` when ensure-started reports the CU is not running. |
 | `invalid-import-target` (`status 400`) | `import`: the target process is neither `variant = ao.TN.1` nor `execution-device = genesis-wasm@1.0`. |
 | `untrusted` (`status 400`) | `import`: no committer of the checkpoint is in the import-authority allow-list. |
@@ -490,7 +495,8 @@ not inject the flag, but a request that arrives via the node does.) Read them wi
 | `not_found` | `import` with an explicit `import = <id>` that is absent from the store; or `latest-checkpoint` discovery finding no matching transaction. |
 | `no-import-authorities` | `latest-checkpoint`/`import` discovery when the import-authority allow-list is empty. |
 | double-skip error (carries current state) | `compute`: a duplicate re-run that *itself* reports a skip whose request already had `skip = true` (§4.4) — aborts rather than looping. |
-| propagated `{error, _}` | any CU HTTP/transport failure (decoded by the delegated layer), or any error surfaced by `dedup@1.0`/`patch@1.0`/the gateway/`message@1.0`. Passed up unchanged. |
+| propagated `{failure, _}` | any CU HTTP/transport failure, or a CU answer that is not a result (decoded by the delegated layer). Passed up unchanged; `process@1.0` stores nothing for the slot, so a later `compute` of the slot calls the CU again. |
+| propagated `{error, _}` | any error surfaced by `dedup@1.0`/`patch@1.0`/the gateway/`message@1.0`. Passed up unchanged. |
 
 The `400`/`500` import/lifecycle errors are returned as **messages** carrying a
 `status` and a `message`/`body` field (HTTP-shaped), not bare atoms; the
@@ -560,9 +566,10 @@ ensure-started / failure-closed paths.
    process's persisted state (a subsequent read of the same key shows the
    pre-dryrun value).
 7. **Failure-closed off-feature.** On a node not compiled with genesis-wasm (and
-   no live CU), `compute`/the shared delegate path returns `status 500` with a
-   "not compiled with genesis-wasm@1.0" message, and `normalize` returns
-   `status 500` "Genesis-wasm server not running." It never **starts** a CU and
+   no live CU), `compute`/the shared delegate path returns `{failure, _}` with
+   `status 500` and a "not compiled with genesis-wasm@1.0" message, and
+   `normalize` returns `{error, _}` with `status 500` "Genesis-wasm server not
+   running." It never **starts** a CU and
    never performs a **delegated CU compute**. Note that ensure-started still
    attempts its liveness `GET /status` probe **first** (per §4.6 step 1 / item 8),
    so this path *does* touch the local status endpoint — which simply fails or
@@ -580,8 +587,10 @@ ensure-started / failure-closed paths.
    `POST /snapshot/<id>`; snapshot-load is `POST /state`; liveness is
    `GET /status` — all against `http://localhost:<genesis-wasm-port>` (default
    6363), with `application/json` bodies and result caching disabled.
-10. **Result is failure-propagating.** A CU transport/HTTP failure makes the
-    compute step return `{error, _}` (never a silently-empty success).
+10. **Result is failure-propagating.** A CU transport/HTTP failure, or a CU
+    answer that is not a result, makes the compute step return `{failure, _}`
+    (never a silently-empty success), and `process@1.0` stores nothing for the
+    slot.
 11. **`normalize` snapshot load.** `normalize` of a state carrying a
     `Checkpoint`-typed `snapshot` loads that snapshot into the CU
     (`POST /state`) and returns the state with the `snapshot` key removed; a

@@ -22,7 +22,7 @@ start() ->
 spawn_server() ->
     TSServer =
         spawn(fun() -> cache(hb_client_remote:arweave_timestamp()) end),
-    spawn(fun() -> refresher(TSServer) end),
+    spawn(fun() -> link(TSServer), refresher(TSServer) end),
     register(?MODULE, TSServer),
     TSServer.
 
@@ -57,6 +57,14 @@ cache(Current) ->
 %% @doc Refresh the timestamp cache periodically.
 refresher(TSServer) ->
     timer:sleep(?TIMEOUT),
-    TS = hb_client_remote:arweave_timestamp(),
-    TSServer ! {refresh, TS},
+    try TSServer ! {refresh, hb_client_remote:arweave_timestamp()}
+    catch
+        Class:Reason ->
+            ?event(warning,
+                {ar_timestamp_refresh_failed,
+                    {class, Class},
+                    {reason, Reason}
+                }
+            )
+    end,
     refresher(TSServer).

@@ -5,7 +5,7 @@
 -specification("../../../specs/push@1.0.md").
 -device_libraries([lib_process]).
 %%% Public API
--export([push/3]).
+-export([push/3, schedule/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -23,9 +23,8 @@
 %%                    process and the call returns immediately. When
 %%                    `false' or absent, the push runs synchronously.
 %% `/max-depth':     Bounds the recursive `/push' fan-out from one source
-%%                    slot's outbox. The source slot's outbox is ALWAYS
-%%                    scheduled on each target (the target's next slot
-%%                    advances) -- `max-depth' only controls whether we
+%%                    slot's outbox. Each outbox entry is scheduled once
+%%                    on its target -- `max-depth' only controls whether we
 %%                    then drive that next slot's `/push' synchronously
 %%                    to fan further downstream:
 %%                       omitted - unbounded recursion.
@@ -103,21 +102,6 @@ is_async(Process, Req, Opts) ->
 do_push(PrimaryProcess, Assignment, Opts) ->
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
     ID = lib_process:process_id(PrimaryProcess, #{}, Opts),
-    UncommittedID =
-        lib_process:process_id(
-            PrimaryProcess,
-            #{ <<"commitments">> => <<"none">> },
-            Opts
-        ),
-    BaseID = calculate_base_id(PrimaryProcess, Opts),
-    ?event(debug,
-        {push_computing_outbox,
-            {process_id, ID},
-            {base_id, BaseID},
-            {process_uncommitted_id, UncommittedID},
-            {slot, Slot}
-        }
-    ),
     ?event(push, {push_computing_outbox, {process_id, ID}, {slot, Slot}}),
     {Status, Result} =
         try
@@ -196,53 +180,18 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             ?event(push, {push_found_outbox, {outbox, Outbox}}),
             Downstream =
                 map_in_order(
-                    fun(Key, RawMsgToPush = #{ <<"target">> := Target }) ->
-                        MsgToPush =
-                            case maybe_evaluate_message(RawMsgToPush, Opts) of
-                                {ok, R} -> R;
-                                Err ->
-                                    #{
-                                        <<"resolve">> => <<"error">>,
-                                        <<"target">> => ID,
-                                        <<"status">> => 400,
-                                        <<"outbox-index">> => Key,
-                                        <<"reason">> => Err,
-                                        <<"source">> => RawMsgToPush
-                                    }
-                            end,
-                        case hb_cache:read(Target, Opts) of
-                            {ok, DownstreamProcess} ->
-                                push_result_message(
-                                    DownstreamProcess,
-                                    MsgToPush,
-                                    #{
-                                        <<"process">> => ID,
-                                        <<"slot">> => Slot,
-                                        <<"outbox-key">> => Key,
-                                        <<"result-depth">> => IncludeDepth,
-                                        <<"max-depth">> => MaxDepth,
-                                        <<"from-base">> => BaseID,
-                                        <<"from-uncommitted">> => UncommittedID,
-                                        <<"from-scheduler">> =>
-                                            hb_ao:get(
-                                                <<"scheduler">>,
-                                                PrimaryProcess,
-                                                undefined,
-                                                Opts
-                                            ),
-                                        <<"from-authority">> =>
-                                            hb_ao:get(
-                                                <<"authority">>,
-                                                PrimaryProcess,
-                                                undefined,
-                                                Opts
-                                            )
-                                    },
-                                    Opts
-                                );
-                            {error, not_found} ->
-                                target_process_not_found(Target)
-                        end;
+                    fun(Key, MsgToPush = #{ <<"target">> := _ }) ->
+                        push_result_message(
+                            MsgToPush,
+                            #{
+                                <<"process">> => ID,
+                                <<"slot">> => Slot,
+                                <<"outbox-key">> => Key,
+                                <<"result-depth">> => IncludeDepth,
+                                <<"max-depth">> => MaxDepth
+                            },
+                            Opts
+                        );
                        (Key, Msg) ->
                             #{
                                 <<"response">> => <<"error">>,
@@ -338,7 +287,7 @@ maybe_evaluate_message(Message, Opts) ->
 %% about the origin of the message: The process that originated the message,
 %% the slot number from which it was sent, and the outbox key of the message,
 %% and the depth to which downstream results should be included in the message.
-push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
+push_result_message(MsgToPush, Origin, Opts) ->
     NormMsgToPush = hb_ao:normalize_keys(MsgToPush, Opts),
     case hb_ao:get(<<"target">>, NormMsgToPush, undefined, Opts) of
         undefined ->
@@ -356,25 +305,48 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
                 },
                 Opts
             ),
-            case schedule_result(TargetProcess, MsgToPush, Origin, Opts) of
+            case hb_ao:resolve(
+                #{
+                    <<"device">> => <<"push@1.0">>,
+                    <<"process">> => maps:get(<<"process">>, Origin)
+                },
+                #{
+                    <<"path">> => <<"schedule">>,
+                    <<"slot">> => hb_util:int(maps:get(<<"slot">>, Origin)),
+                    <<"outbox-key">> =>
+                        hb_util:bin(maps:get(<<"outbox-key">>, Origin))
+                },
+                Opts#{
+                    <<"cache-control">> => <<"always">>,
+                    <<"hashpath">> => update,
+                    <<"async-cache">> => false,
+                    <<"await-inprogress">> => true
+                }
+            ) of
                 {ok, Assignment} ->
                     % Analyze the result of the message push.
                     NextSlotOnProc = hb_ao:get(<<"slot">>, Assignment, Opts),
                     PushedMsg = hb_ao:get(<<"body">>, Assignment, Opts),
+                    PushTarget =
+                        case hb_ao:get(<<"resolve">>, PushedMsg, Opts) of
+                            <<"error">> ->
+                                hb_ao:get(<<"target">>, PushedMsg, Opts);
+                            _ -> TargetID
+                        end,
                     % Get the ID of the message that was pushed. We already have
                     % the 'origin' message, but we need the signed ID.
                     PushedMsgID = hb_message:id(PushedMsg, all, Opts),
                     ?event(push_short,
                         {pushed_message_to,
-                            {process, TargetID},
+                            {process, PushTarget},
                             {slot, NextSlotOnProc}
                         }
                     ),
-                    case push_downstream(TargetID, NextSlotOnProc, Origin, Opts) of
+                    case push_downstream(PushTarget, NextSlotOnProc, Origin, Opts) of
                         {ok, Downstream} ->
                             #{
                                 <<"id">> => PushedMsgID,
-                                <<"target">> => TargetID,
+                                <<"target">> => PushTarget,
                                 <<"slot">> => NextSlotOnProc,
                                 <<"resulted-in">> => Downstream
                             };
@@ -382,10 +354,11 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
                             ?event(push, {push_failed, {error, Error}}, Opts),
                             #{
                                 <<"response">> => <<"error">>,
-                                <<"target">> => TargetID,
+                                <<"target">> => PushTarget,
                                 <<"reason">> => Error
                             }
                     end;
+                {error, Error = #{ <<"response">> := <<"error">> }} -> Error;
                 {error, Error} ->
                     ?event(push, {push_failed, {error, Error}}, Opts),
                     #{
@@ -592,6 +565,93 @@ calculate_base_id(GivenProcess, Opts) ->
         ),
     ?event(debug_base, {push_generated_base, {id, BaseID}, {base, BaseProcess}}),
     BaseID.
+
+%% @doc Schedule one message of a slot's outbox on its target process, and
+%% return the target's assignment. The assignment is stored as the result of
+%% this key, so a repeat push of the slot returns it instead of scheduling the
+%% message again.
+-spec schedule(
+    #{ process := binary() },
+    #{ slot := integer(), 'outbox-key' := binary() },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _}.
+schedule(Base, Req, Opts) ->
+    maybe
+        ProcessID = hb_maps:get(<<"process">>, Base, [], Opts),
+        Key = hb_maps:get(<<"outbox-key">>, Req, [], Opts),
+        ExecutionOpts = lib_process:execution_opts(Opts),
+        {ok, Process} ?= hb_cache:read(ProcessID, ExecutionOpts),
+        {ok, Result} ?=
+            hb_ao:resolve(
+                {as, <<"process@1.0">>, Process},
+                #{
+                    <<"path">> => <<"compute/results">>,
+                    <<"slot">> => hb_maps:get(<<"slot">>, Req, [], Opts)
+                },
+                ExecutionOpts
+            ),
+        Outbox =
+            hb_ao:normalize_keys(
+                hb_private:reset(hb_ao:get(<<"outbox">>, Result, Opts))
+            ),
+        RawMsg = hb_maps:get(Key, Outbox, [], Opts),
+        MsgToPush =
+            case maybe_evaluate_message(RawMsg, Opts) of
+                {ok, R} -> R;
+                Err ->
+                    #{
+                        <<"resolve">> => <<"error">>,
+                        <<"target">> => ProcessID,
+                        <<"status">> => 400,
+                        <<"outbox-index">> => Key,
+                        <<"reason">> => Err,
+                        <<"source">> => RawMsg
+                    }
+            end,
+        Target = hb_ao:get(<<"target">>, RawMsg, Opts),
+        {ok, Assignment} ?=
+            case hb_cache:read(Target, Opts) of
+                {ok, TargetProcess} ->
+                    schedule_result(
+                        TargetProcess,
+                        MsgToPush,
+                        #{
+                            <<"process">> => ProcessID,
+                            <<"from-base">> => calculate_base_id(Process, Opts),
+                            <<"from-uncommitted">> =>
+                                lib_process:process_id(
+                                    Process,
+                                    #{ <<"commitments">> => <<"none">> },
+                                    Opts
+                                ),
+                            <<"from-scheduler">> =>
+                                hb_ao:get(
+                                    <<"scheduler">>,
+                                    Process,
+                                    undefined,
+                                    Opts
+                                ),
+                            <<"from-authority">> =>
+                                hb_ao:get(
+                                    <<"authority">>,
+                                    Process,
+                                    undefined,
+                                    Opts
+                                )
+                        },
+                        Opts
+                    );
+                {error, not_found} -> {error, target_process_not_found(Target)}
+            end,
+        {ok,
+            hb_ao:set(
+                Assignment,
+                <<"cache-control">>,
+                <<"store">>,
+                Opts#{ <<"hashpath">> => ignore }
+            )
+        }
+    end.
 
 %% @doc Add the necessary keys to the message to be scheduled, then schedule it.
 %% If the remote scheduler does not support the given codec, it will be
@@ -1649,6 +1709,21 @@ test_max_depth_zero_schedules_only() ->
             undefined,
             Opts
         )
+    ),
+    % A second push of the slot schedules nothing more on the receiver.
+    {ok, _} =
+        hb_ao:resolve(
+            Sender,
+            #{
+                <<"path">> => <<"push">>,
+                <<"slot">> => MsgSlot,
+                <<"max-depth">> => 0
+            },
+            Opts
+        ),
+    ?assertEqual(
+        {ok, ReceiverSlotAfter},
+        hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts)
     ).
 
 %% @doc `max-depth = 1' on the outer push: the outbox is scheduled and the

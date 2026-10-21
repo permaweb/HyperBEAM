@@ -290,7 +290,8 @@ sandbox(State, [Path | Rest], Opts) ->
     sandbox(NextState, Rest, Opts).
 
 %% @doc Call the Lua script with the given arguments, returning the status
-%% and result that the Lua function returns.
+%% and result that the Lua function returns. A key with no function in the
+%% script is not found.
 -spec compute(
     binary(),
     #{ _ => _ },
@@ -322,6 +323,14 @@ compute(Key, RawBase, RawReq, Opts) ->
             Opts#{ <<"hashpath">> => ignore }
         ),
     ?event(debug_lua, function_found),
+    case luerl:get_table_keys_dec([Function], State) of
+        {ok, nil, _} -> {error, not_found};
+        _ -> call_function(Function, Base, Req, OldPriv, State, Opts)
+    end.
+
+%% @doc Call a function of the Lua state with the parameters that the request
+%% or the base gives, or else with the base and the request.
+call_function(Function, Base, Req, OldPriv, State, Opts) ->
     Params =
         hb_ao:get_first(
             [
@@ -348,18 +357,20 @@ compute(Key, RawBase, RawReq, Opts) ->
             {req, Req}
         }
     ),
-    process_response(
-        try luerl:call_function_dec(
-            [Function],
-            encode(ResolvedParams, Opts),
-            luerl:put_private(<<"node-message">>, Opts, State)
+    try
+        process_response(
+            luerl:call_function_dec(
+                [Function],
+                encode(ResolvedParams, Opts),
+                luerl:put_private(<<"node-message">>, Opts, State)
+            ),
+            OldPriv,
+            Opts
         )
-        catch
-            _:Reason:Stacktrace -> {error, Reason, Stacktrace}
-        end,
-        OldPriv,
-		Opts
-    ).
+    catch
+        _:Reason:Stacktrace ->
+            process_response({error, Reason, Stacktrace}, OldPriv, Opts)
+    end.
 
 %% @doc Process a response to a Luerl invocation. Returns the typical AO-Core
 %% HyperBEAM response format.
@@ -392,21 +403,21 @@ process_response({ok, Results, _NewState}, _Priv, _Opts) ->
         >>
     };
 process_response({lua_error, RawError, State}, _Priv, Opts) ->
-    % An error occurred while calling the Lua function. Parse the stack trace
-    % and return it.
+    % The script raised an error and did not catch it, with `error' or at
+    % runtime. A script that throws is a failure, as a device that throws
+    % is. Parse the stack trace and return it.
     Error = try decode(luerl:decode(RawError, State), Opts) catch _:_ -> RawError end,
     StackTrace = decode_stacktrace(luerl:get_stacktrace(State), State, Opts),
     ?event(lua_error, {lua_error, Error, {stacktrace, StackTrace}}),
-    {error, #{
+    {failure, #{
         <<"status">> => 500,
         <<"body">> => Error,
         <<"trace">> => hb_ao:normalize_keys(StackTrace, Opts)
     }};
 process_response({error, Reason, Trace}, _Priv, _Opts) ->
-    % An Erlang exception occurred while the Lua call ran, for example
-    % inside a library call into the node. It depends on this node, so it
-    % is a failure, not a result of the computation: a script's own error
-    % arrives as a `lua_error', and stays an `error'.
+    % An Erlang exception of the Lua call, for example inside a library call
+    % into the node, or of decoding its result. The node does not attest to
+    % it, so it is a failure, not a result of the computation.
     ?event(lua_error, {trace, Trace}),
     TraceBin = iolist_to_binary(hb_format:trace(Trace)),
     ?event(lua_error, {formatted, {string, TraceBin}}),
@@ -480,6 +491,9 @@ normalize(Base, _Req, RawOpts) ->
 %% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message, removing
 %% the commitments that do not verify. No commitment is added, so a message
 %% that passes through Lua unchanged keeps exactly the commitments it had.
+%% Every key is a binary, as the cache writes it. A key that is a table, and a
+%% value that is a function or userdata, which Luerl gives as a fun or a tuple,
+%% are dropped, as a message cannot have them.
 decode(EncMsg, Opts) ->
     hb_message:normalize_commitments(
         do_decode(EncMsg, Opts),
@@ -494,7 +508,19 @@ do_decode(EncMsg = [{_K, _V} | _], Opts) when is_list(EncMsg) ->
     do_decode(
         maps:map(
             fun(Key, V) -> decode_value(Key, do_decode(V, Opts)) end,
-            maps:from_list(EncMsg)
+            hb_ao:normalize_keys(
+                maps:from_list(
+                    [
+                        {K, V}
+                    ||
+                        {K, V} <- EncMsg,
+                        not is_list(K),
+                        not is_function(V),
+                        not is_tuple(V)
+                    ]
+                ),
+                Opts
+            )
         ),
         Opts
     );
@@ -736,6 +762,11 @@ error_response_test() ->
             }
         },
         hb_ao:resolve(Base, <<"ao_get_as_missing">>, #{})
+    ),
+    % A result that has a float key cannot be decoded, so it is a failure.
+    ?assertMatch(
+        {failure, _},
+        hb_ao:resolve(Base, <<"float_key_result">>, #{})
     ).
 
 sandboxed_failure_test() ->
@@ -749,7 +780,7 @@ sandboxed_failure_test() ->
         <<"parameters">> => [],
         <<"sandbox">> => true
     },
-    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
+    ?assertMatch({failure, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
 
 default_sandboxed_failure_test() ->
     {ok, Module} = file:read_file("test/test.lua"),
@@ -761,7 +792,7 @@ default_sandboxed_failure_test() ->
         },
         <<"parameters">> => []
     },
-    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
+    ?assertMatch({failure, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
 
 minimum_sandbox_overrides_false_test() ->
     {ok, Module} = file:read_file("test/test.lua"),
@@ -774,7 +805,7 @@ minimum_sandbox_overrides_false_test() ->
         <<"parameters">> => [],
         <<"sandbox">> => false
     },
-    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
+    ?assertMatch({failure, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
 
 lua_minimum_sandbox_can_be_disabled_test() ->
     {ok, Module} = file:read_file("test/test.lua"),
@@ -840,7 +871,7 @@ io_popen_is_sandboxed_by_default_test() ->
         },
         <<"parameters">> => []
     },
-    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"popen_fail">>, #{})).
+    ?assertMatch({failure, _}, hb_ao:resolve(Base, <<"popen_fail">>, #{})).
 
 require_cannot_load_from_disk_test() ->
     % Untrusted code cannot restore `require's filesystem search by
@@ -1011,7 +1042,12 @@ invoke_non_compute_key_test() ->
             #{}
         ),
     ?event({result2, Result2}),
-    ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
+    ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})),
+    % A key with no function in the script is not found.
+    ?assertEqual(
+        {error, not_found},
+        hb_ao:resolve(Base, <<"no_function">>, #{})
+    ).
 
 %% @doc Use a Lua module as a hook on the HTTP server via `~meta@1.0'.
 lua_http_hook_test() ->

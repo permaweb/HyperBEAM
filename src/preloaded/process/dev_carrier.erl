@@ -451,14 +451,20 @@ tag_only_tx(Wallet, Tags) ->
     Signed = ar_tx:sign(#tx{ format = 2, reward = 1, tags = Tags }, Wallet),
     hb_message:convert(Signed, <<"structured@1.0">>, <<"tx@1.0">>, #{}).
 
+%% @doc A transfer of units as a transaction that sends no winston: its native
+%% `quantity' is 0, so its `quantity' key is a tag.
 transfer_tx(Wallet, Recipient, Quantity) ->
-    tx(
-        Wallet,
+    hb_message:commit(
         #{
             <<"target">> => ?PROCESS,
             <<"action">> => <<"transfer">>,
             <<"recipient">> => Recipient,
             <<"quantity">> => hb_util:bin(Quantity)
+        },
+        #{ <<"priv-wallet">> => Wallet },
+        #{
+            <<"commitment-device">> => <<"tx@1.0">>,
+            <<"field-quantity">> => <<"0">>
         }
     ).
 
@@ -519,8 +525,10 @@ transfer_moves_the_unit_test() ->
     Opts = test_opts(),
     {Owner, OwnerAddr} = party(),
     {_, BuyerAddr} = party(),
-    Moved =
-        apply_tx(name_held_by(OwnerAddr), transfer_tx(Owner, BuyerAddr, 1), Opts),
+    Transfer = transfer_tx(Owner, BuyerAddr, 1),
+    % The transfer sends no winston: its native `quantity' is 0.
+    ?assertEqual(0, hb_util:int(tx_field(Transfer, <<"quantity">>, 0, Opts))),
+    Moved = apply_tx(name_held_by(OwnerAddr), Transfer, Opts),
     ?assertEqual(0, held_by(Moved, OwnerAddr, Opts)),
     ?assertEqual(1, held_by(Moved, BuyerAddr, Opts)),
     Outbox = hb_ao:get(<<"results/outbox">>, {as, <<"message@1.0">>, Moved}, #{}, Opts),

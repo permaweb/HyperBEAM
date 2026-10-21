@@ -6,8 +6,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
-device_info(_) -> 
-	#{ default => fun handler/4, excludes => [<<"committers">>] }.
+device_info(_) ->
+    #{ default => fun handler/4, excludes => [<<"committers">>] }.
 
 %% @doc Default handler: Assume that the key is an interval descriptor.
 -spec handler(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
@@ -25,21 +25,24 @@ handler(Interval, Base, Req, Opts) ->
     #{ _ => _ }
 ) -> {ok, #{ status := integer(), body := binary(), _ => _ }} | {error, _}.
 once(_Base, Req, Opts) ->
-	case extract_path(<<"once">>, Req, Opts) of
-		not_found ->
-			{error, <<"No cron path found in message.">>};
-		CronPath ->
-			ReqMsgID = hb_message:id(Req, all, Opts),
-			% make the path specific for the end device to be used
-			ModifiedReq =
+    case extract_path(<<"once">>, Req, Opts) of
+        not_found ->
+            {error, <<"No cron path found in message.">>};
+        CronPath ->
+            ReqMsgID = hb_message:id(Req, all, Opts),
+            % make the path specific for the end device to be used
+            ModifiedReq =
                 maps:remove(
                     <<"cron-path">>,
                     maps:put(<<"path">>, CronPath, Req)
                 ),
-			Name = {<<"cron@1.0">>, ReqMsgID},
-			Pid = spawn(fun() -> once_worker(CronPath, ModifiedReq, Opts) end),
-			hb_name:register(Name, Pid),
-			{
+            % A task runs in one worker: a repeated request while it runs
+            % answers with the same task.
+            hb_name:singleton(
+                {<<"cron@1.0">>, ReqMsgID},
+                fun() -> once_worker(CronPath, ModifiedReq, Opts) end
+            ),
+            {
                 ok,
                 #{
                     <<"status">> => 200,
@@ -47,72 +50,75 @@ once(_Base, Req, Opts) ->
                     <<"body">> => ReqMsgID
                 }
             }
-	end.
+    end.
 
 %% @doc Internal function for scheduling a one-time message.
 once_worker(Path, Req, Opts) ->
-	% Directly call the meta device on the newly constructed 'singleton', just
-    % as hb_http_server does.
-	try
-		hb_ao:resolve(Req#{ <<"path">> => Path}, Opts)
-	catch
-		Class:Reason:Stacktrace ->
-			?event(
+    % Resolve the singleton as `hb_http_server' resolves a request from the
+    % wire: with the node's `request' and `response' hooks.
+    try
+        hb_http_server:resolve_request(
+            Path,
+            Req#{ <<"path">> => Path },
+            hb_http_server:get_opts(Opts)
+        )
+    catch
+        Class:Reason:Stacktrace ->
+            ?event(
                 cron_error,
                 {cron_once_worker_error,
                     {path, Path},
                     {error, Class, Reason, {trace, Stacktrace}}
                 }
             ),
-			throw({error, Class, Reason, Stacktrace})
-	end.
-
+            throw({error, Class, Reason, Stacktrace})
+    end.
 
 %% @doc Exported function for scheduling a recurring message.
 -spec every(#{ _ => _ }, #{ interval := binary(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ status := integer(), body := binary(), _ => _ }} | {error, _}.
 every(_Base, Req, Opts) ->
-	case {
-		extract_path(Req, Opts),
-		hb_ao:get(<<"interval">>, Req, Opts)
-	} of
-		{not_found, _} -> 
-			{error, <<"No cron path found in message.">>};
-		{_, not_found} ->
-			{error, <<"No interval found in message.">>};
-		{CronPath, IntervalString} -> 
-			try 
-				IntervalMillis = parse_time(IntervalString),
-				if IntervalMillis =< 0 ->
-					throw(invalid_interval_value);
-				true ->
-					ok
-				end,
-				ReqMsgID = hb_message:id(Req, all, Opts),
-				ModifiedReq =
+    case {
+        extract_path(Req, Opts),
+        hb_ao:get(<<"interval">>, Req, Opts)
+    } of
+        {not_found, _} ->
+            {error, <<"No cron path found in message.">>};
+        {_, not_found} ->
+            {error, <<"No interval found in message.">>};
+        {CronPath, IntervalString} ->
+            try
+                IntervalMillis = parse_time(IntervalString),
+                if IntervalMillis =< 0 ->
+                    throw(invalid_interval_value);
+                true ->
+                    ok
+                end,
+                ReqMsgID = hb_message:id(Req, all, Opts),
+                ModifiedReq =
                     hb_maps:without(
                         [
                             <<"interval">>,
                             <<"cron-path">>,
-                            hb_maps:get(<<"every">>, Req, <<"every">>, Opts)
+                            <<"every">>
                         ],
                         Req,
                         Opts
                     ),
-				Pid =
-                    spawn(
-                        fun() ->
-                            every_worker_loop(
-                                CronPath,
-                                ModifiedReq,
-                                Opts,
-                                IntervalMillis
-                            )
-                        end
-                    ),
-				Name = {<<"cron@1.0">>, ReqMsgID},
-				hb_name:register(Name, Pid),
-				{
+                % A task runs in one worker: a repeated request while it runs
+                % answers with the same task.
+                hb_name:singleton(
+                    {<<"cron@1.0">>, ReqMsgID},
+                    fun() ->
+                        every_worker_loop(
+                            CronPath,
+                            ModifiedReq,
+                            Opts,
+                            IntervalMillis
+                        )
+                    end
+                ),
+                {
                     ok,
                     #{
                         <<"status">> => 200,
@@ -120,71 +126,76 @@ every(_Base, Req, Opts) ->
                         <<"body">> => ReqMsgID
                     }
                 }
-			catch
-				_:{invalid_time_unit, Unit} ->
+            catch
+                _:{invalid_time_unit, Unit} ->
                     {error, <<"Invalid time unit: ", Unit/binary>>};
-				_:invalid_interval_value ->
+                _:invalid_interval_value ->
                     {error, <<"Invalid interval value.">>};
-				_:Reason:_Stack ->
-					{error, {<<"Error parsing interval">>, Reason}}
-			end
-	end.
+                _:Reason:_Stack ->
+                    {error, {<<"Error parsing interval">>, Reason}}
+            end
+    end.
 
 %% @doc Exported function for stopping a scheduled task.
 -spec stop(#{ _ => _ }, #{ stop := binary(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ status := integer(), body := _, _ => _ }} | {error, _}.
 stop(_Base, Req, Opts) ->
-	case hb_maps:get(<<"stop">>, Req, not_found, Opts) of
-		not_found ->
-			{error, <<"No task ID found in message.">>};
-		TaskID ->
-			Name = {<<"cron@1.0">>, TaskID},
-			case hb_name:lookup(Name) of
-				Pid when is_pid(Pid) ->
-					?event({cron_stopping_task, {task_id, TaskID}, {pid, Pid}}),
-					exit(Pid, kill),
-					hb_name:unregister(Name),
-					{ok, #{
-						<<"status">> => 200,
-						<<"cache-control">> => <<"no-store">>,
-						<<"body">> => #{
-							<<"message">> => <<"Task stopped successfully">>,
-							<<"task-id">> => TaskID
-						}
-					}};
-				undefined ->
-					{error, <<"Task not found.">>};
-				Error ->
-					?event({cron_stop_lookup_error, {task_id, TaskID}, {error, Error}}),
-					{error, #{
+    case hb_maps:get(<<"stop">>, Req, not_found, Opts) of
+        not_found ->
+            {error, <<"No task ID found in message.">>};
+        TaskID ->
+            Name = {<<"cron@1.0">>, TaskID},
+            case hb_name:lookup(Name) of
+                Pid when is_pid(Pid) ->
+                    ?event({cron_stopping_task, {task_id, TaskID}, {pid, Pid}}),
+                    exit(Pid, kill),
+                    hb_name:unregister(Name),
+                    {ok, #{
+                        <<"status">> => 200,
+                        <<"cache-control">> => <<"no-store">>,
+                        <<"body">> => #{
+                            <<"message">> => <<"Task stopped successfully">>,
+                            <<"task-id">> => TaskID
+                        }
+                    }};
+                undefined ->
+                    {error, <<"Task not found.">>};
+                Error ->
+                    ?event(
+                        {cron_stop_lookup_error,
+                            {task_id, TaskID},
+                            {error, Error}
+                        }
+                    ),
+                    {error, #{
                         <<"error">> =>
                             <<"Failed to lookup task or unexpected result">>,
-                            <<"details">> => Error
+                        <<"details">> => Error
                     }}
-			end
-	end.
+            end
+    end.
 
 %% @doc Exported function for getting a scheduled task status report.
 -spec report(#{ _ => _ }, #{ report := binary(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ 'task-id' := binary(), active := boolean(), _ => _ }} | {error, _}.
 report(_Base, Req, Opts) ->
-	case hb_maps:get(<<"report">>, Req, not_found, Opts) of
-		not_found ->
-			{error, <<"No task ID found in message.">>};
-		TaskID ->
-			Name = {<<"cron@1.0">>, TaskID},
-			Active =
-				case hb_name:lookup(Name) of
-					Pid when is_pid(Pid) -> erlang:is_process_alive(Pid);
-					undefined -> false
-				end,
-			{ok, #{
-				<<"status">> => 200,
-				<<"cache-control">> => <<"no-store">>,
-				<<"task-id">> => TaskID,
-				<<"active">> => Active
-			}}
-	end.
+    case hb_maps:get(<<"report">>, Req, not_found, Opts) of
+        not_found ->
+            {error, <<"No task ID found in message.">>};
+        TaskID ->
+            Name = {<<"cron@1.0">>, TaskID},
+            Active =
+                case hb_name:lookup(Name) of
+                    Pid when is_pid(Pid) -> erlang:is_process_alive(Pid);
+                    undefined -> false
+                end,
+            {ok, #{
+                <<"status">> => 200,
+                <<"cache-control">> => <<"no-store">>,
+                <<"task-id">> => TaskID,
+                <<"active">> => Active
+            }}
+    end.
 
 every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
     Req1 = Req#{<<"path">> => CronPath},
@@ -195,7 +206,11 @@ every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
         }
     ),
     try
-        hb_ao:resolve(Req1, Opts),
+        hb_http_server:resolve_request(
+            CronPath,
+            Req1,
+            hb_http_server:get_opts(Opts)
+        ),
         ?event({cron_every_worker_executed, {path, CronPath}})
     catch
         Class:Reason:Stack ->
@@ -212,17 +227,17 @@ every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
 
 %% @doc Parse a time string into milliseconds.
 parse_time(BinString) ->
-	[AmountStr, UnitStr] = binary:split(BinString, <<"-">>),
-	Amount = binary_to_integer(AmountStr),
-	Unit = string:lowercase(binary_to_list(UnitStr)),
-	case Unit of
-		"millisecond" ++ _ -> Amount;
-		"second" ++ _ -> Amount * 1000;
-		"minute" ++ _ -> Amount * 60 * 1000;
-		"hour" ++ _ -> Amount * 60 * 60 * 1000;
-		"day" ++ _ -> Amount * 24 * 60 * 60 * 1000;
-		_ -> throw({invalid_time_unit, UnitStr})
-	end.
+    [AmountStr, UnitStr] = binary:split(BinString, <<"-">>),
+    Amount = binary_to_integer(AmountStr),
+    Unit = string:lowercase(binary_to_list(UnitStr)),
+    case Unit of
+        "millisecond" ++ _ -> Amount;
+        "second" ++ _ -> Amount * 1000;
+        "minute" ++ _ -> Amount * 60 * 1000;
+        "hour" ++ _ -> Amount * 60 * 60 * 1000;
+        "day" ++ _ -> Amount * 24 * 60 * 60 * 1000;
+        _ -> throw({invalid_time_unit, UnitStr})
+    end.
 
 %% @doc Extract the path from the request message, given the name of the key
 %% that was invoked.
@@ -234,189 +249,226 @@ extract_path(Key, Req, Opts) ->
 %%% Tests
 
 stop_once_test() ->
-	% Start a new node
-	Node = hb_http_server:start_node(),
-	% Set up a standard test worker (even though delay doesn't use its state)
-	TestWorkerPid = spawn(fun test_worker/0),
-	TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
-	hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
-	% Create a "once" task targeting the delay function
-	OnceUrlPath = <<"/~cron@1.0/once?test-id=", TestWorkerNameId/binary,
-				 "&cron-path=/~test-device@1.0/delay">>,
-	{ok, #{ <<"body">> := OnceTaskID }} = hb_http:get(Node, OnceUrlPath, #{}),
-	?event({cron_stop_once_test_created, {task_id, OnceTaskID}}),
-	% Give a short delay to ensure the task has started and called handle,
+    % Start a new node
+    Node = hb_http_server:start_node(),
+    % Set up a standard test worker (even though delay doesn't use its state)
+    TestWorkerPid = spawn(fun test_worker/0),
+    TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
+    % Create a "once" task targeting the delay function
+    OnceUrlPath =
+        <<
+            "/~cron@1.0/once?test-id=", TestWorkerNameId/binary,
+            "&cron-path=/~test-device@1.0/delay"
+        >>,
+    {ok, #{ <<"body">> := OnceTaskID }} = hb_http:get(Node, OnceUrlPath, #{}),
+    ?event({cron_stop_once_test_created, {task_id, OnceTaskID}}),
+    % Give a short delay to ensure the task has started and called handle,
     % entering the sleep
-	timer:sleep(200),
-	% Verify the once task worker process is registered and alive
-	OncePid = hb_name:lookup({<<"cron@1.0">>, OnceTaskID}),
-	?assert(is_pid(OncePid), "Lookup did not return a PID"),
-	?assert(erlang:is_process_alive(OncePid), "OnceWorker process died prematurely"),
-	% Call stop on the once task while it's sleeping
-	OnceStopPath = <<"/~cron@1.0/stop=", OnceTaskID/binary>>,
-	{ok, OnceStopResult} = hb_http:get(Node, OnceStopPath, #{}),
-	?event({cron_stop_once_test_stopped, OnceStopResult}),
-	% Verify success response from stop
-	?assertMatch(#{<<"status">> := 200}, OnceStopResult),
-	% Verify name is unregistered
-	?assertEqual(undefined, hb_name:lookup({<<"cron@1.0">>, OnceTaskID})),
-	% Allow a moment for the kill signal to be processed
-	timer:sleep(100),
-	% Verify process termination
-	?assertNot(erlang:is_process_alive(OncePid), "Process not killed by stop"),
-	% Call stop again to verify 404 response
-	{error, <<"Task not found.">>} = hb_http:get(Node, OnceStopPath, #{}).
-
+    timer:sleep(200),
+    % Verify the once task worker process is registered and alive
+    OncePid = hb_name:lookup({<<"cron@1.0">>, OnceTaskID}),
+    ?assert(is_pid(OncePid), "Lookup did not return a PID"),
+    ?assert(
+        erlang:is_process_alive(OncePid),
+        "OnceWorker process died prematurely"
+    ),
+    % Call stop on the once task while it's sleeping
+    OnceStopPath = <<"/~cron@1.0/stop=", OnceTaskID/binary>>,
+    {ok, OnceStopResult} = hb_http:get(Node, OnceStopPath, #{}),
+    ?event({cron_stop_once_test_stopped, OnceStopResult}),
+    % Verify success response from stop
+    ?assertMatch(#{<<"status">> := 200}, OnceStopResult),
+    % Verify name is unregistered
+    ?assertEqual(undefined, hb_name:lookup({<<"cron@1.0">>, OnceTaskID})),
+    % Allow a moment for the kill signal to be processed
+    timer:sleep(100),
+    % Verify process termination
+    ?assertNot(erlang:is_process_alive(OncePid), "Process not killed by stop"),
+    % Call stop again to verify 404 response
+    {error, <<"Task not found.">>} = hb_http:get(Node, OnceStopPath, #{}).
 
 %% @doc This test verifies that a recurring task can be stopped by
 %% calling the stop function with the task ID.
 stop_every_test() ->
-	% Start a new node
-	Node = hb_http_server:start_node(),
-	% Set up a test worker process to hold state (counter)
-	TestWorkerPid = spawn(fun test_worker/0),
-	TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
-	hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
-	% Create an "every" task that calls the test worker
-	EveryUrlPath = <<"/~cron@1.0/every?test-id=", TestWorkerNameId/binary, 
-					   "&interval=200-milliseconds",
-				   "&cron-path=/~test-device@1.0/increment_counter">>,
-	{ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
-	?event({cron_stop_every_test_created, CronTaskID}),
-	% Verify the cron worker process was registered and is alive
-	CronWorkerPid = hb_name:lookup({<<"cron@1.0">>, CronTaskID}),
-	?assert(is_pid(CronWorkerPid)),
-	?assert(erlang:is_process_alive(CronWorkerPid)),
-	% Wait a bit to ensure the cron worker has run a few times
-		timer:sleep(400),
-	% Call stop on the cron task using its ID
-	EveryStopPath = <<"/~cron@1.0/stop=", CronTaskID/binary>>,
-	{ok, EveryStopResult} = hb_http:get(Node, EveryStopPath, #{}),
-	?event({cron_stop_every_test_stopped, EveryStopResult}),
-	% Verify success response
-	?assertMatch(#{<<"status">> := 200}, EveryStopResult),
-	% Verify the cron task name is unregistered (lookup returns undefined)
-	?assertEqual(undefined, hb_name:lookup({<<"cron@1.0">>, CronTaskID})),
-	% Allow a moment for the process termination signal to be processed
-	timer:sleep(100),
-	% Verify the cron worker process is terminated
-	?assertNot(erlang:is_process_alive(CronWorkerPid)),
-	% Check the counter in the original test worker was incremented
-	TestWorkerPid ! {get, self()},
-	receive
-		{state, State = #{count := Count}} ->
-			?event({cron_stop_every_test_counter_state, State}),
-			?assert(Count > 0)
-	after 1000 ->
-		throw(no_response_from_worker)
-	end,
-	% Call stop again using the same CronTaskID to verify the error
-	{error, <<"Task not found.">>} = hb_http:get(Node, EveryStopPath, #{}).
+    % Start a new node
+    Node = hb_http_server:start_node(),
+    % Set up a test worker process to hold state (counter)
+    TestWorkerPid = spawn(fun test_worker/0),
+    TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
+    % Create an "every" task that calls the test worker
+    EveryUrlPath =
+        <<
+            "/~cron@1.0/every?test-id=", TestWorkerNameId/binary,
+            "&interval=200-milliseconds",
+            "&cron-path=/~test-device@1.0/increment_counter"
+        >>,
+    {ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
+    % A repeated request answers with the same task and starts no worker.
+    {ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
+    ?event({cron_stop_every_test_created, CronTaskID}),
+    % Verify the cron worker process was registered and is alive
+    CronWorkerPid = hb_name:lookup({<<"cron@1.0">>, CronTaskID}),
+    ?assert(is_pid(CronWorkerPid)),
+    ?assert(erlang:is_process_alive(CronWorkerPid)),
+    % Wait a bit to ensure the cron worker has run a few times
+    timer:sleep(400),
+    % Call stop on the cron task using its ID
+    EveryStopPath = <<"/~cron@1.0/stop=", CronTaskID/binary>>,
+    {ok, EveryStopResult} = hb_http:get(Node, EveryStopPath, #{}),
+    ?event({cron_stop_every_test_stopped, EveryStopResult}),
+    % Verify success response
+    ?assertMatch(#{<<"status">> := 200}, EveryStopResult),
+    % Verify the cron task name is unregistered (lookup returns undefined)
+    ?assertEqual(undefined, hb_name:lookup({<<"cron@1.0">>, CronTaskID})),
+    % Allow a moment for the process termination signal to be processed
+    timer:sleep(100),
+    % Verify the cron worker process is terminated
+    ?assertNot(erlang:is_process_alive(CronWorkerPid)),
+    % Check the counter in the original test worker was incremented
+    TestWorkerPid ! {get, self()},
+    receive
+        {state, State = #{count := Count}} ->
+            ?event({cron_stop_every_test_counter_state, State}),
+            ?assert(Count > 0)
+    after 1000 ->
+        throw(no_response_from_worker)
+    end,
+    % No worker of the task is left: the counter stays where the stop left it.
+    TestWorkerPid ! {get, self()},
+    receive {state, Stopped} -> ok end,
+    timer:sleep(400),
+    TestWorkerPid ! {get, self()},
+    receive {state, Later} -> ?assertEqual(Stopped, Later) end,
+    % Call stop again using the same CronTaskID to verify the error
+    {error, <<"Task not found.">>} = hb_http:get(Node, EveryStopPath, #{}).
 
 report_every_test() ->
-	Node = hb_http_server:start_node(),
-	TestWorkerPid = spawn(fun test_worker/0),
-	TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
-	hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
-	EveryUrlPath = <<"/~cron@1.0/every?test-id=", TestWorkerNameId/binary, 
-					   "&interval=200-milliseconds",
-				   "&cron-path=/~test-device@1.0/increment_counter">>,
-	{ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
-	ReportPath = <<"/~cron@1.0/report=", CronTaskID/binary>>,
-	?assertMatch(
-		{ok, #{<<"task-id">> := CronTaskID, <<"active">> := true}},
-		hb_http:get(Node, ReportPath, #{})
-	),
-	EveryStopPath = <<"/~cron@1.0/stop=", CronTaskID/binary>>,
-	% The stop reply holds the task's ID under `task-id', as the report does.
-	?assertMatch(
-		{ok, #{<<"body">> := #{<<"task-id">> := CronTaskID}}},
-		hb_http:get(Node, EveryStopPath, #{})
-	),
-	?assertMatch(
-		{ok, #{<<"task-id">> := CronTaskID, <<"active">> := false}},
-		hb_http:get(Node, ReportPath, #{})
-	).
-
+    Node = hb_http_server:start_node(),
+    TestWorkerPid = spawn(fun test_worker/0),
+    TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
+    EveryUrlPath =
+        <<
+            "/~cron@1.0/every?test-id=", TestWorkerNameId/binary,
+            "&interval=200-milliseconds",
+            "&every=/~test-device@1.0/update_state"
+        >>,
+    {ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
+    ReportPath = <<"/~cron@1.0/report=", CronTaskID/binary>>,
+    ?assertMatch(
+        {ok, #{<<"task-id">> := CronTaskID, <<"active">> := true}},
+        hb_http:get(Node, ReportPath, #{})
+    ),
+    % The request of each execution does not contain `every'.
+    timer:sleep(400),
+    TestWorkerPid ! {get, self()},
+    receive {state, State} -> ?assertNot(maps:is_key(<<"every">>, State)) end,
+    EveryStopPath = <<"/~cron@1.0/stop=", CronTaskID/binary>>,
+    % The stop reply holds the task's ID under `task-id', as the report does.
+    ?assertMatch(
+        {ok, #{<<"body">> := #{<<"task-id">> := CronTaskID}}},
+        hb_http:get(Node, EveryStopPath, #{})
+    ),
+    ?assertMatch(
+        {ok, #{<<"task-id">> := CronTaskID, <<"active">> := false}},
+        hb_http:get(Node, ReportPath, #{})
+    ).
 
 %% @doc This test verifies that a one-time task can be scheduled and executed.
 once_executed_test() ->
-	% start a new node 
-	Node = hb_http_server:start_node(),
-	% spawn a worker on the new node that calls test_worker/0 which inits
+    % start a new node
+    Node = hb_http_server:start_node(),
+    % spawn a worker on the new node that calls test_worker/0 which inits
     % test_worker/1 with a state of undefined
-	PID = spawn(fun test_worker/0),
-	% generate a random id that we can then use later to lookup the worker
-	ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
-	% register the worker with the id
-	hb_name:register({<<"test">>, ID}, PID),
-	% Construct the URL path with the dynamic ID
-	UrlPath =
+    PID = spawn(fun test_worker/0),
+    % generate a random id that we can then use later to lookup the worker
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    % register the worker with the id
+    hb_name:register({<<"test">>, ID}, PID),
+    % Construct the URL path with the dynamic ID
+    UrlPath =
         <<
             "/~cron@1.0/once=\"/~test-device@1.0/update_state\"",
             "?test-id=",
             ID/binary
         >>,
-	% this should call the worker via the test device
-	% the test device should look up the worker via the id given 
-	{ok, #{ <<"body">> := _ReqMsgId }} = hb_http:get(Node, UrlPath, #{}),
-	% wait for the request to be processed
-		timer:sleep(400),
-	% send a message to the worker to get the state
-	PID ! {get, self()},
-	% receive the state from the worker
-	receive
-		{state, State} ->
-			?event({once_executed_test_received_state, State}),
-			?assertMatch(#{ <<"test-id">> := ID }, State)
-	after 1000 ->
-		FinalLookup = hb_name:lookup({<<"test">>, ID}),
-		?event({timeout_waiting_for_worker, {pid, PID}, {lookup_result, FinalLookup}}),
-		throw(no_response_from_worker)
-	end.
+    % this should call the worker via the test device
+    % the test device should look up the worker via the id given
+    {ok, #{ <<"body">> := _ReqMsgId }} = hb_http:get(Node, UrlPath, #{}),
+    % wait for the request to be processed
+    timer:sleep(400),
+    % send a message to the worker to get the state
+    PID ! {get, self()},
+    % receive the state from the worker
+    receive
+        {state, State} ->
+            ?event({once_executed_test_received_state, State}),
+            ?assertMatch(#{ <<"test-id">> := ID }, State),
+            % The execution is a request for its own path, as from the wire.
+            ?assertEqual(
+                <<"/~test-device@1.0/update_state">>,
+                hb_private:get(<<"http-request/path">>, State, #{})
+            )
+    after 1000 ->
+        FinalLookup = hb_name:lookup({<<"test">>, ID}),
+        ?event(
+            {timeout_waiting_for_worker,
+                {pid, PID},
+                {lookup_result, FinalLookup}
+            }
+        ),
+        throw(no_response_from_worker)
+    end.
 
 %% @doc This test verifies that a recurring task can be scheduled and executed.
 every_worker_loop_test() ->
-	Node = hb_http_server:start_node(),
-	PID = spawn(fun test_worker/0),
-	ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
-	hb_name:register({<<"test">>, ID}, PID),
-	UrlPath =
+    Node = hb_http_server:start_node(),
+    PID = spawn(fun test_worker/0),
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    hb_name:register({<<"test">>, ID}, PID),
+    UrlPath =
         <<
-	            "/~cron@1.0/200-milliseconds", 
-		    "=\"/~test-device@1.0/increment_counter\"",
+            "/~cron@1.0/200-milliseconds",
+            "=\"/~test-device@1.0/increment_counter\"",
             "?test-id=",
             ID/binary
         >>,
-	?event({cron_every_test_send_url, UrlPath}),
-	{ok, #{ <<"body">> := ReqMsgId }} = hb_http:get(Node, UrlPath, #{}),
-	?event({cron_every_test_get_done, {req_id, ReqMsgId}}),
-		timer:sleep(700),
-	PID ! {get, self()},
-	% receive the state from the worker
-	receive
-		{state, State = #{count := C}} ->
-			?event({cron_every_test_received_state, State}),
-			?assert(C >= 3)
-	after 1000 ->
-		FinalLookup = hb_name:lookup({<<"test">>, ID}),
-		?event({cron_every_test_timeout, {pid, PID}, {lookup_result, FinalLookup}}),
-		throw({test_timeout_waiting_for_state, {id, ID}})
-	end.
-	
+    ?event({cron_every_test_send_url, UrlPath}),
+    {ok, #{ <<"body">> := ReqMsgId }} = hb_http:get(Node, UrlPath, #{}),
+    ?event({cron_every_test_get_done, {req_id, ReqMsgId}}),
+    timer:sleep(700),
+    PID ! {get, self()},
+    % receive the state from the worker
+    receive
+        {state, State = #{count := C}} ->
+            ?event({cron_every_test_received_state, State}),
+            ?assert(C >= 3)
+    after 1000 ->
+        FinalLookup = hb_name:lookup({<<"test">>, ID}),
+        ?event(
+            {cron_every_test_timeout,
+                {pid, PID},
+                {lookup_result, FinalLookup}
+            }
+        ),
+        throw({test_timeout_waiting_for_state, {id, ID}})
+    end.
+
 %% @doc This is a helper function that is used to test the cron device.
 %% It is used to increment a counter and update the state of the worker.
 test_worker() -> test_worker(#{count => 0}).
 test_worker(State) ->
-	receive
-		{increment} ->
-			NewCount = maps:get(count, State, 0) + 1,
-			?event({test_worker_incremented, NewCount}),
-			test_worker(State#{count := NewCount});
-		{update, NewState} ->
-			 ?event({test_worker_updated, NewState}),
-			 test_worker(NewState);
-		{get, Pid} ->
-			Pid ! {state, State},
-			test_worker(State)
-	end.
+    receive
+        {increment} ->
+            NewCount = maps:get(count, State, 0) + 1,
+            ?event({test_worker_incremented, NewCount}),
+            test_worker(State#{count := NewCount});
+        {update, NewState} ->
+            ?event({test_worker_updated, NewState}),
+            test_worker(NewState);
+        {get, Pid} ->
+            Pid ! {state, State},
+            test_worker(State)
+    end.
