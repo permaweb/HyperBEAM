@@ -466,12 +466,16 @@ verify_hash(#tx{ id = ID } = TX) ->
 %% traditionally just verify the transaction based on data_root and data_size.
 %% However in HyperBEAM we will often populate the data field. Adding this
 %% check to verify that `data_root`, `data_size`, and `data` are consistent.
+%% The `data_root` is valid under either cut an Arweave node accepts: the
+%% arweave-js cut, or the node's fixed 256 KiB chunks of data posted in the TX.
 verify_v2_data(#tx{ format = 2, data = ?DEFAULT_DATA }) ->
     true;
 verify_v2_data(#tx{
         format = 2, data_root = DataRoot,
         data_size = DataSize, data = Data }) ->
-    (DataSize == byte_size(Data)) andalso (DataRoot == data_root(Data));
+    (DataSize == byte_size(Data)) andalso
+        (DataRoot == data_root(Data) orelse
+            DataRoot == data_root(legacy, Data));
 verify_v2_data(_) ->
     true.
 

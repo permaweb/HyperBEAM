@@ -1950,6 +1950,19 @@ get_tx_split_chunk_test_parallel() ->
     ?assertEqual(
         <<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>,
         hb_message:id(Child, signed)),
+    % A TX whose data is cut in fixed 256 KiB chunks: 262,144 + 11,406 bytes.
+    ?assertMatch(
+        {ok, _},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"tx">>,
+                <<"tx">> => <<"z0BVqo6FJpyWVzPLwaOYfB4TshMH4EUsC2V4ytouQc4">>,
+                <<"exclude-data">> => false
+            },
+            #{}
+        )
+    ),
     ok.
 
 get_tx_basic_data_exclude_data_test_parallel() ->
