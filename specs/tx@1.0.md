@@ -87,6 +87,8 @@ IDs, and commitments are normative.
   from the encoding (only the top-level scalar keys survive). The flag may be
   supplied on the request, on the matched commitment (`bundle` key), or as a node
   option, in that precedence order; absent everywhere it is `false`.
+- **`field-<name>`** (to/commit): for a message without a `tx@1.0` commitment,
+  gives the base field `<name>` over the message's key `<name>` (§5.5).
 - **`exclude-data`** (to): boolean. When true, a `data`/`data_root`/`data_size`
   reconstruction MUST treat the header as carrying *no inline data* even if
   `data_root`/`data_size` are present (used to encode a value-transfer header
@@ -142,7 +144,9 @@ IDs, and commitments are normative.
        (unsigned, owner = all-zero, RSA type).
      - **fields**: reconstruct `format`, `target`, `anchor`, `quantity`,
        `reward`, `data_root`, and (if no inline `data`) `data_size` from the
-       `field-`-prefixed commitment keys and/or the message keys (§5.5, §5.7).
+       `field-`-prefixed commitment keys and/or the message keys; a message
+       without a commitment takes the request's `field-<name>` keys over its
+       own keys (§5.5, §5.7).
        The data root of a transaction with inline `data` comes from the
        commitment's `field-data-root` alone (§5.9.2).
      - **data**: the `data` field (§5.7).
@@ -157,8 +161,8 @@ IDs, and commitments are normative.
 
 ### 4.3 `commit` — produce a `tx@1.0` commitment
 
-- **Reads:** the message (Base); `type` (Req); the signing wallet from node
-  options (key `priv-wallet`).
+- **Reads:** the message (Base); `type` and `field-<name>` (Req, §5.5); the
+  signing wallet from node options (key `priv-wallet`).
 - **Behaviour:** by `type`:
   - **`unsigned` / `unsigned-sha256`:** remove any existing `commitments`, then
     round-trip the message through `to` then `from` (transaction encode →
@@ -303,9 +307,35 @@ This precedence is what lets a tag named like a base field (`anchor`, `quantity`
 …) but carrying a **non-conforming value** (not a valid ID / not an integer)
 survive: such a value cannot become the typed header field, so it is preserved as
 a tag and, because the field reconstruction (§5.7) rejects it, the message keeps
-the tag value. (When both a valid field and a same-named tag exist with the same
-value, only the field is emitted and the tag is dropped; when they differ, the
-tag is preserved via `original-tags` and the field via `field-<name>`.)
+the tag value.
+
+A field at its default value (§5.1) is not in the fields map, so a tag of the
+same name gives the key's value. For a transaction with a `tx@1.0` commitment
+(§5.9), a base field `<name>` and a tag of the same name give:
+
+| Field | Tag of the same name | `field-<name>` in the commitment | The message's key `<name>` |
+|---|---|---|---|
+| at its default value | absent | absent | absent |
+| at its default value | present | absent | the tag's value |
+| not at its default value | absent | the field's value | the field's value |
+| not at its default value | present | the field's value | the field's value |
+
+A base field's name is reserved, so in both rows with a tag the commitment's
+`original-tags` (§5.6) contains the tag, and `to` reproduces it. The same rows
+apply to `ans104@1.0`, whose base fields are `target` and `anchor`.
+
+A caller that wants the field reads the commitment's `field-<name>`, and takes
+the default value when it is absent: the message's key can be the value of a
+tag.
+
+`commit` takes fields from its request. For a message without a `tx@1.0`
+commitment, `to` takes the field `<name>` from a request key `field-<name>`
+over the message's key `<name>`, and `commit` gives `to` its request; a key
+whose field is then at its default value becomes a tag (§5.6). A `quantity: 1`
+key committed with `field-quantity: 0` gives a transaction with quantity 0 and
+the tag `quantity: 1`. `to` refuses a request `field-<name>` that is not at its
+default value and differs from the message's key, or that the message does not
+have (`request-field-differs`).
 
 `exclude-data` request handling (`to`): when set, the encoder reconstructs the
 header's `data_root`/`data_size` from the `field-data-root`/`field-data-size`
@@ -329,12 +359,12 @@ value-transfer header that commits to a data root without inlining the bytes.
   keys minus `commitments`). For each committed key, emit a tag `{key, value}`
   from the message **EXCEPT**:
   - the **data key** (it becomes the transaction body, not a tag);
-  - any **base field** (`anchor`, `target`, `quantity`, `data-root`, `data-size`,
-    `reward`, `last_tx`, `owner`, `signature`, `format`, `id`, …): a base field is
-    reconstructed as a typed transaction **header field**, not a tag — emitting it
-    *also* as a tag double-encodes it and corrupts the signature preimage / ID. (A
-    tag that merely shares a base field's name but is genuinely a tag rides in
-    `original-tags`, the non-all-normal path — never as a promoted top-level tag.)
+  - any **base field** key (§5.1) whose field is not at its default value: the
+    field is reconstructed as a typed transaction **header field**, not a tag —
+    emitting it *also* as a tag double-encodes it and corrupts the signature
+    preimage / ID. A base field key whose field is at its default value — for
+    example a value that is not a valid field value, or a request
+    `field-<name>` at its default value (§5.5) — is emitted as a tag.
   - any value that is **not a top-level scalar** (a map / sub-message value, e.g.
     under `bundle=true`): only scalar binary values become tags; map values are
     bundle data, not tags (§5.7).
@@ -347,10 +377,12 @@ value-transfer header that commits to a data root without inlining the bytes.
   name equals a reserved field name (`data` or a base field) — the *exact*
   original tag list is preserved in the commitment as `original-tags`: a numbered
   message `{"1" → #{name, value}, "2" → …}` (1-based, in original order,
-  preserving name case and duplicates). On `to`, `original-tags` is decoded back
-  to the literal ordered tag list and used verbatim (it takes priority over
-  re-deriving tags from body keys). When the tags *are* all-normal,
-  `original-tags` is omitted.
+  preserving name case and duplicates). On `to`, while the message still has
+  the commitment's field and tag values, `original-tags` is decoded back to the
+  literal ordered tag list and used verbatim (it takes priority over
+  re-deriving tags from body keys); a message whose values changed is given
+  tags derived from its keys, which the commitment's signature does not verify.
+  When the tags *are* all-normal, `original-tags` is omitted.
 - **`ao-types` tags** are re-normalised on decode: the structured-fields
   dictionary is parsed, its keys lower-cased/normalised, and re-encoded, so the
   `ao-types` key set matches the normalised body keys.
@@ -436,8 +468,8 @@ is treated as RSA-typed for preimage purposes).
 - `type` = the §5.9.1 token.
 - `bundle` = `true`/`false` (string) — whether the transaction's tags carry
   `bundle-format` (i.e. the data is a bundle).
-- `field-<name>` for each base field whose header value the codec must preserve
-  separately from any same-named tag (§5.5) — value encoded as in §5.1.
+- `field-<name>` for each entry of the fields map (§5.4), with or without a tag
+  of the same name (§5.5) — value encoded as in §5.1.
 - `field-data-root` for every transaction with a non-empty `data_root`, with
   data or without: the signed root, base64url. For a transaction with `data`
   it is the only place the root is carried, and `to` gives the transaction
@@ -460,7 +492,10 @@ From the matched commitment: `signature` = base64url-decode of `signature` (or
 the all-zero default if absent); `owner` = base64url-decode of `keyid` with the
 `publickey:` scheme prefix stripped (or all-zero default); `signature_type` =
 decode of `type`; tags = decode of `original-tags` (or `[]`). The `field-`
-prefixed keys then reconstruct the header fields (§5.7).
+prefixed keys then reconstruct the header fields (§5.7). The tags and fields
+come from the commitment only while the message still has their values; for a
+message whose values changed, tags = `[]` and its own keys give the fields
+(§5.6).
 
 ### 5.10 Verification (`verify` / round-trip)
 
@@ -497,12 +532,16 @@ with **URL-safe base64 without padding** on the wire. Hex MUST NOT be used.
 - **Determinism:** all derivations are pure functions of the input transaction /
   message. The signature preimage fixes field order (§5.8); committed-key order
   is data-keys (sorted) then non-metadata tag-keys (in tag order) then field-keys
-  (§5.6); tag emission follows the commitment's `committed` order. Two conformant
-  implementations MUST produce byte-identical transactions, IDs, and commitments
-  for the same input.
-- **Tag order & duplicates** are preserved across a round-trip **only** via
-  `original-tags`; a message with all-normal tags does not preserve incidental
-  ordering (none is implied) and needs no commitment to round-trip.
+  (§5.6); tag emission follows `original-tags`, else the commitment's
+  `committed` order, else the sorted keys of a message without a commitment
+  (§5.6). Two conformant implementations MUST produce byte-identical
+  transactions, IDs, and commitments for the same input.
+- **Tag order & duplicates:** tags that are not all-normal keep their order,
+  case and duplicates through `original-tags`; all-normal tags keep their order
+  through the commitment's `committed` list. All-normal does not include order:
+  an unsigned transaction with all-normal tags gets no commitment, and `to`
+  gives its tags in sorted key order, so one whose tags are not sorted
+  re-encodes with another unsigned ID.
 - The device performs **no result caching** of its own; it transforms the
   supplied message/transaction. (A bundled `to` reads linked values fully.)
 
@@ -539,6 +578,9 @@ All error atoms are hyphenated.
 - `multiple-commitments-unsupported` — the message carries more than one
   `tx@1.0` commitment, which `to`/`from` cannot disambiguate.
 - `too-many-keys` — more than 128 tags would be emitted.
+- `request-field-differs` — a request `field-<name>` is not at its default
+  value and differs from the message's key, or the message does not have the
+  key (§5.5).
 - `no-viable-wallet` — a signed `commit` was requested with no signing wallet
   configured.
 - `invalid-signature-type` — a `type` token (commit/decode) names a signature
