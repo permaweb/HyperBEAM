@@ -1377,6 +1377,15 @@ to_message(Path = <<"/block_index/", _/binary>>, <<"GET">>,
     {ok, hb_json:decode(Body)};
 to_message(Path = <<"/unconfirmed_tx/", ID/binary>>, <<"GET">>, Result, LogExtra, Req, Opts) ->
     to_tx_message(pending, ID, Path, Result, LogExtra, Req, Opts);
+to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>,
+        {ok, #{ <<"status">> := 202 }}, LogExtra, Req, Opts) ->
+    % A node answers 202, with no header, for a TX in its mempool. The TX is
+    % read as `pending' reads it, and carries status 202.
+    event_request(Path, <<"GET">>, 202, LogExtra),
+    maybe
+        {ok, TX} ?= pending(#{ <<"pending">> => TXID }, Req, Opts),
+        {ok, TX#{ <<"status">> => 202 }}
+    end;
 to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, Result, LogExtra, Req, Opts) ->
     to_tx_message(tx, TXID, Path, Result, LogExtra, Req, Opts);
 to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, Response}, LogExtra, _Req, Opts) ->
@@ -1686,7 +1695,21 @@ unprocessable_transaction_test() ->
         {failure, _},
         to_message(<<"/tx/test">>, <<"GET">>,
             {error, #{ <<"status">> => 422 }}, [], Req, Opts)
-    ).
+    ),
+    % A 202 to `GET /tx/<ID>' gives the TX as `pending' reads it, with
+    % status 202.
+    {ID, _Data, PeerOpts, Handle} = start_pending_peer([10], 0, Opts),
+    try
+        {ok, Pending} = pending(#{ <<"pending">> => ID }, Req, PeerOpts),
+        ?assertEqual(
+            {ok, Pending#{ <<"status">> => 202 }},
+            to_message(<<"/tx/", ID/binary>>, <<"GET">>,
+                {ok, #{ <<"status">> => 202, <<"body">> => <<"Pending">> }},
+                [], Req, PeerOpts)
+        )
+    after
+        hb_mock_server:stop(Handle)
+    end.
 
 %% @doc A fixed bad interior offset from a live TX is rejected by
 %% bundle_header/3 as invalid_bundle_header.
