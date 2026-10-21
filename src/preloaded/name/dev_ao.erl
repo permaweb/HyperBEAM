@@ -1,13 +1,8 @@
-%%% @doc The device of the `ao:' URI scheme. An `ao:' URI identifies an
-%%% AO-Core message. `hb_uri' reads an `ao:' URI with the `from' key of this
-%%% device.
-%%%
-%%% <pre>
-%%%     ao:<ID>         The message with the ID. A bare ID as a base, or as
-%%%                     the request of a hashpath, is read as this URI.
-%%%     ao://<path>     A hashpath, which `hb_hashpath' loads with its
-%%%                     claims, where `hb_ao:resolve' would ignore them.
-%%% </pre>
+%%% @doc The device of the `ao:' URI scheme. An `ao:' URI is a hashpath (see
+%%% `hb_hashpath'): `ao:' followed by a path, whose first part is the base.
+%%% `ao:<ID>' is the hashpath of one part, the message with the ID. `hb_uri'
+%%% reads an `ao:' URI with the `from' key of this device, which loads the
+%%% hashpath with `hb_hashpath'.
 %%%
 %%% `to' with `type: uri' writes the URI `ao:<ID>' of a message. `<ID>' is the
 %%% ID of the message with all of its commitments.
@@ -24,16 +19,7 @@
     #{ _ => _ }
 ) -> {ok, _} | {error, _}.
 from(#{ <<"body">> := Body }, #{ <<"type">> := <<"uri">> }, Opts) ->
-    read(Body, Opts).
-
-%% @doc Read the message named by the body of an `ao:' URI: a hashpath, which
-%% may be any AO-Core path, or an ID.
-read(<<"//", _/binary>> = Path, Opts) ->
-    hb_hashpath:load(<<"ao:", Path/binary>>, Opts);
-read(ID, Opts) when ?IS_ID(ID) ->
-    hb_cache:read(ID, Opts);
-read(_Body, _Opts) ->
-    {error, not_found}.
+    hb_hashpath:load(<<"ao:", Body/binary>>, Opts).
 
 %% @doc Writes the `ao:' URI of a message.
 -spec to(
@@ -46,8 +32,8 @@ to(Msg, #{ <<"type">> := <<"uri">> }, Opts) ->
 
 %%% Tests
 
-%% @doc Reads three `ao:' URIs: `ao:<ID>', the hashpath `ao://<ID>/a', and
-%% `ao://with-commitments=<ID>,<ID>', the message with two commitments.
+%% @doc Reads three `ao:' URIs: `ao:<ID>', the hashpath `ao:<ID>/a', and
+%% `ao:with-commitments=<ID>,<ID>', the message with two commitments.
 uri_test() ->
     Opts = #{
         <<"store">> => hb_test_utils:test_store(),
@@ -62,14 +48,14 @@ uri_test() ->
     ),
     ?assertEqual(
         {ok, <<"1">>},
-        hb_ao:resolve_many([<<"ao://", ID/binary, "/a">>], Opts)
+        hb_ao:resolve_many([<<"ao:", ID/binary, "/a">>], Opts)
     ),
     % With `force-message' set, as in an HTTP request, the literal that a URI
     % reads stays a literal.
     ?assertEqual(
         {ok, <<"1">>},
         hb_uri:from(
-            <<"ao://", ID/binary, "/a">>,
+            <<"ao:", ID/binary, "/a">>,
             Opts#{ <<"force-message">> => true }
         )
     ),
@@ -93,7 +79,7 @@ uri_test() ->
         hb_ao:resolve_many(
             [
                 <<
-                    "ao://with-commitments=",
+                    "ao:with-commitments=",
                     (hb_util:bin(lists:join(<<",">>, IDs)))/binary
                 >>
             ],

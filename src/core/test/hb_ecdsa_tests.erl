@@ -369,7 +369,7 @@ wallet_new_shape_contract_test() ->
     Wallet = ar_wallet:new_ecdsa(),
     ?assertMatch(
         #{
-            <<"device">> := <<"did-pkh@1.0">>,
+            <<"device">> := <<"did-ar@1.0">>,
             <<"type">> := ?ECDSA_SIGN_TYPE,
             <<"owner">> := <<_:33/binary>>,
             <<"priv">> := #{ <<"d">> := <<_:32/binary>> }

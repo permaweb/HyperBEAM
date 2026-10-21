@@ -35,6 +35,7 @@
 %%%             /Results/Data</pre>
 -module(dev_json_iface).
 -implements(<<"json-iface@1.0">>).
+-specification("../../../specs/json-iface@1.0.md").
 -export([init/3, compute/3, to/3, from/3]).
 %%% Public interface helpers:
 -export([message_to_json_struct/2, json_to_message/2]).
@@ -209,7 +210,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
         % NOTE: When sent to ao "Owner" is the wallet address
         <<"Owner">> => Owner,
         <<"From">> => case ?IS_ID(From) of true -> safe_to_id(From); false -> From end,
-        <<"Tags">> => prepare_tags(TABM, Opts),
+        <<"Tags">> => prepare_tags(TABM, RawMsg, Opts),
         <<"Target">> => safe_to_id(Target),
         <<"Data">> => Data,
         <<"Signature">> =>
@@ -231,7 +232,7 @@ to(Base, Req, Opts) ->
     }.
 %% @doc Prepare the tags of a message as a key-value list, for use in the 
 %% construction of the JSON-Struct message.
-prepare_tags(Msg, Opts) ->
+prepare_tags(Msg, RawMsg, Opts) ->
     % Prepare an ANS-104 message for JSON-Struct construction.
     case hb_message:commitment(#{ <<"commitment-device">> => <<"ans104@1.0">> }, Msg, Opts) of
         {ok, _, Commitment} ->
@@ -241,22 +242,33 @@ prepare_tags(Msg, Opts) ->
                     ?event({using_original_tags, Res}),
                     Res;
                 error -> 
-                    prepare_header_case_tags(Msg, Opts)
+                    prepare_header_case_tags(Msg, RawMsg, Opts)
             end;
         _ ->
-            prepare_header_case_tags(Msg, Opts)
+            prepare_header_case_tags(Msg, RawMsg, Opts)
     end.
 
 %% @doc Convert a message without an `original-tags' field into a list of
-%% key-value pairs, with the keys in HTTP header-case.
-prepare_header_case_tags(TABM, Opts) ->
+%% key-value pairs, with the keys in HTTP header-case. A key that holds a list
+%% in the message gives a pair for each element of the list, because AOS reads
+%% several values of one tag as repeated tags.
+prepare_header_case_tags(TABM, RawMsg, Opts) ->
     % Prepare a non-ANS-104 message for JSON-Struct construction. 
-    lists:map(
+    lists:flatmap(
         fun({Name, Value}) ->
-            #{
-                <<"name">> => header_case_string(maybe_list_to_binary(Name)),
-                <<"value">> => maybe_list_to_binary(Value)
-            }
+            Values =
+                case hb_maps:get(Name, RawMsg, Value, Opts) of
+                    List when is_list(List) -> List;
+                    _ -> [Value]
+                end,
+            [
+                #{
+                    <<"name">> => header_case_string(maybe_list_to_binary(Name)),
+                    <<"value">> => maybe_list_to_binary(Element)
+                }
+            ||
+                Element <- Values
+            ]
         end,
         hb_maps:to_list(
             hb_maps:without(
@@ -586,7 +598,11 @@ generate_stack(File, _Mode, RawOpts) ->
                 <<"type">> => <<"Process">>,
                 <<"image">> => Image,
                 <<"scheduler">> => hb:address(),
-                <<"authority">> => hb:address()
+                <<"authority">> =>
+                    [
+                        <<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>,
+                        hb:address()
+                    ]
             }, Opts)
     },
     {ok, Req} = hb_ao:resolve(Base, <<"init">>, Opts),
@@ -620,7 +636,20 @@ basic_aos_call_test_() ->
 			),
 		?event({res, Res}),
 		Data = hb_ao:get(<<"results/data">>, Res, #{}),
-		?assertEqual(<<"2">>, Data)
+		?assertEqual(<<"2">>, Data),
+		% AOS trusts a message signed by the second of the process's two
+		% authorities.
+		{ok, Trusted} =
+			hb_ao:resolve(
+				Msg,
+				generate_aos_msg(
+					ProcID,
+					<<"return tostring(ao.isTrusted({ Owner = '",
+						(hb:address())/binary, "' }))">>
+				),
+				#{}
+			),
+		?assertEqual(<<"true">>, hb_ao:get(<<"results/data">>, Trusted, #{}))
 	end}.
 
 aos_stack_benchmark_test_() ->

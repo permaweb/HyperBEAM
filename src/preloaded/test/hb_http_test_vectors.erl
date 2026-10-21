@@ -222,7 +222,8 @@ messages() ->
                 {"space key", <<"a b">>},
                 {"colon key", <<"a:b">>},
                 {"long key", binary:copy(<<"k">>, 200)},
-                {"long escaped key", binary:copy(<<"A">>, 100)},
+                % 85 spaces escape to 255 bytes, the longest file name.
+                {"long escaped key", binary:copy(<<" ">>, 85)},
                 {"path key", <<"path">>},
                 {"method key", <<"method">>}
             ],
@@ -300,25 +301,24 @@ paths() -> [direct, remote, secondary, tertiary, relay, post].
 %% messages to.
 stores() -> [hb_store_volatile, hb_store_lmdb, hb_store_fs].
 
-%% @doc The transports: each way of asking for a codec, with every codec that
-%% `hb_codec_test_vectors' tests, and both `accept-bundle' and
-%% `http-only-result' settings. The MIME `accept' header also covers its
-%% precedence below a message's own `content-type'.
+%% @doc The transports: an `accept' of the media type of every codec that
+%% `hb_codec_test_vectors' tests, alone and before `*/*', with both
+%% `accept-bundle' and `http-only-result' settings.
 transports() ->
     [
         {
-            hb_util:list(Mode) ++ "=" ++ hb_util:list(Codec) ++
+            "accept=" ++ hb_util:list(Accept) ++
                 " / accept-bundle=" ++ hb_util:list(Bundle) ++
                 " / http-only-result=" ++ hb_util:list(OnlyResult),
             #{
-                mode => Mode,
+                accept => Accept,
                 codec => Codec,
                 bundle => Bundle,
                 only_result => OnlyResult
             }
         }
     ||
-        Mode <- ['require-codec', 'accept-codec', accept],
+        Others <- [<<>>, <<", */*;q=0.1">>],
         Codec <-
             [
                 <<"httpsig@1.0">>,
@@ -329,7 +329,8 @@ transports() ->
                 <<"tx@1.0">>
             ],
         Bundle <- [false, true],
-        OnlyResult <- [true, false]
+        OnlyResult <- [true, false],
+        Accept <- [<<(hb_http:media_type(Codec))/binary, Others/binary>>]
     ].
 
 %% @doc The combinations that a codec cannot represent by design, each with
@@ -373,6 +374,10 @@ exceptions() ->
             "An ANS-104 item carries one native root signature, not foreign ones."
         }
     ].
+
+%% @doc Return the vectors whose message is posted with a link. The node that
+%% receives one holds the link, and not the message that it links to.
+posted_links() -> ["explicit link"].
 
 typed() ->
     #{
@@ -440,7 +445,7 @@ suite(Messages, Paths, Transports, Store, Full) ->
                                     hb_cache:read(ID, ClientOpts)
                                 ),
                                 exercise(
-                                    Path,
+                                    read_path(Name, Path),
                                     {Host, PrimaryOpts},
                                     {ID, Source},
                                     Expected,
@@ -499,6 +504,15 @@ selected(false, MessageIndex, PathIndex, TransportIndex, Store) ->
                     rem length(stores()),
                 stores()
             ).
+
+%% @doc Return the path that a case reads its message over. A message that is
+%% posted with a link is read back from the node that holds the link.
+read_path(Name, post) ->
+    case lists:member(Name, posted_links()) of
+        true -> post_link;
+        false -> post
+    end;
+read_path(_Name, Path) -> Path.
 
 excluded(Name, #{ codec := Codec, bundle := Bundle }) ->
     lists:any(
@@ -586,7 +600,28 @@ stop_node(Opts) ->
 exercise(direct, {Host, _}, {ID, _}, Expected, Transport, ClientOpts) ->
     Actual = download(Host, ID, Expected, Transport, ClientOpts),
     validate(Expected, Actual, ClientOpts),
-    check_wire(Host, wire_request(ID, Transport), Expected, Transport);
+    check_wire(Host, wire_request(ID, Transport), Transport);
+exercise(link, {Host, _}, {ID, _}, Expected, Transport, ClientOpts) ->
+    % The node holds the link, and not the message that it links to. It
+    % cannot bundle that message, and its reply without a bundle holds the
+    % link.
+    Request = (headers(Transport))#{ <<"path">> => <<"/", ID/binary>> },
+    case maps:get(bundle, Transport) of
+        true ->
+            ?assertMatch(
+                {error, #{ <<"status">> := 404 }},
+                hb_http:get(Host, Request, ClientOpts)
+            );
+        false ->
+            {ok, Received} = hb_http:get(Host, Request, ClientOpts),
+            ?assertEqual(true, hb_message:deep_verify(Received, ClientOpts)),
+            identities(
+                Expected,
+                payload(Expected, Received, ClientOpts),
+                ClientOpts
+            ),
+            check_wire(Host, wire_request(ID, Transport), Transport)
+    end;
 exercise(remote, {Host, _}, {ID, _}, Expected, Transport, ClientOpts) ->
     Store = maps:get(<<"store">>, ClientOpts),
     Remote =
@@ -616,11 +651,10 @@ exercise(remote, {Host, _}, {ID, _}, Expected, Transport, ClientOpts) ->
             path => <<"/~cache@1.0/read?", (query(Transport))/binary>>,
             headers => #{ <<"read">> => ID }
         },
-        Expected,
         Transport
     );
-exercise(post, {_, PrimaryOpts}, {ID, Source} = Message, Expected, Transport,
-        ClientOpts) ->
+exercise(Path, {_, PrimaryOpts}, {ID, Source} = Message, Expected, Transport,
+        ClientOpts) when Path == post; Path == post_link ->
     #{ <<"store-module">> := Store } = maps:get(<<"store">>, PrimaryOpts),
     PostOpts =
         (options(Store))#{
@@ -659,7 +693,7 @@ exercise(post, {_, PrimaryOpts}, {ID, Source} = Message, Expected, Transport,
             end,
             ?assertEqual({error, not_found}, hb_cache:read(ID, ClientOpts)),
             exercise(
-                direct,
+                case Path of post -> direct; post_link -> link end,
                 {PostHost, NodeOpts},
                 Message,
                 Expected,
@@ -702,7 +736,6 @@ exercise(relay, {Host, PrimaryOpts}, {ID, _}, Expected, Transport, ClientOpts) -
                     headers => maps:remove(<<"body">>, Encoded),
                     body => maps:get(<<"body">>, Encoded, <<>>)
                 },
-                Expected,
                 Transport
             )
         end
@@ -769,13 +802,9 @@ query(Transport) ->
 
 %% @doc The request headers that ask for the transport's codec. Lazy links in
 %% the reply are loaded with `hb_http''s usual peer stores.
-headers(#{ mode := Mode, codec := Codec, bundle := Bundle }) ->
+headers(#{ accept := Accept, bundle := Bundle }) ->
     #{
-        hb_util:bin(Mode) =>
-            case Mode of
-                accept -> <<"application/", Codec/binary>>;
-                _ -> Codec
-            end,
+        <<"accept">> => Accept,
         <<"accept-bundle">> => hb_util:bin(Bundle)
     }.
 
@@ -877,6 +906,9 @@ content(Value) -> Value.
 %% @doc Check the signed and unsigned IDs of a message and of each message it
 %% holds, so that a message without commitments cannot pass by verifying
 %% nothing.
+identities(Expected, {link, URI, _}, Opts) ->
+    % A link is `ao:' followed by the ID of the message.
+    ?assertEqual(<<"ao:", (hb_message:id(Expected, all, Opts))/binary>>, URI);
 identities(Expected, Actual, Opts) when is_map(Expected) ->
     ?assertEqual(signed_ids(Expected), signed_ids(Actual)),
     lists:foreach(
@@ -921,11 +953,12 @@ wire_request(ID, Transport) ->
 
 %% @doc Check the codec of the reply on the wire, which `hb_http' does not
 %% return. A request from a fresh client means that a client decoding the reply
-%% in another codec cannot hide a wrong negotiation.
-check_wire(Host, Request, Expected, #{ codec := Codec, mode := Mode }) ->
+%% in another codec cannot hide a wrong negotiation. The `signature-input' and
+%% the `content-type' of the reply give its codec.
+check_wire(Host, Request, #{ codec := Codec }) ->
     Opts = options(),
     try
-        {ok, 200, Headers, Body} =
+        {ok, 200, Headers, _Body} =
             hb_http_client:request(
                 maps:merge(
                     #{ peer => Host, method => <<"GET">>, body => <<>> },
@@ -933,24 +966,9 @@ check_wire(Host, Request, Expected, #{ codec := Codec, mode := Mode }) ->
                 ),
                 Opts
             ),
-        % A message's own `content-type' takes precedence over a codec that
-        % the client prefers, but not over one that it requires.
-        Wanted =
-            case Mode =/= 'require-codec'
-                    andalso is_map(Expected)
-                    andalso maps:is_key(<<"content-type">>, Expected) of
-                true -> <<"httpsig@1.0">>;
-                false -> Codec
-            end,
         ?assertEqual(
-            Wanted,
-            proplists:get_value(<<"codec-device">>, Headers, <<"httpsig@1.0">>)
-        ),
-        % A client can decode an invalid ANS-104 body as HTTPSig, so the body
-        % is also decoded as ANS-104 directly.
-        case Wanted of
-            <<"ans104@1.0">> -> ar_bundles:deserialize(Body);
-            _ -> ok
-        end
+            {ok, Codec},
+            hb_http:message_codec(maps:from_list(Headers), Opts)
+        )
     after hb_store:stop(maps:get(<<"store">>, Opts))
     end.

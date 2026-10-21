@@ -1,29 +1,13 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([once/3, every/3, stop/3, report/3, info/1, info/3]).
+-export([once/3, every/3, stop/3, report/3, device_info/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
-info(_) -> 
+device_info(_) -> 
 	#{ default => fun handler/4, excludes => [<<"committers">>] }.
-
--spec info(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, #{ status := integer(), body := #{ _ => _ }, _ => _ }}.
-info(_Base, _Req, _Opts) ->
-	InfoBody = #{
-		<<"description">> => <<"Cron device for scheduling messages">>,
-		<<"version">> => <<"1.0">>,
-		<<"paths">> => #{
-			<<"info">> => <<"Get device info">>,
-			<<"once">> => <<"Schedule a one-time message">>,
-			<<"every">> => <<"Schedule a recurring message">>,
-			<<"report">> => <<"Get scheduled task status {task}">>,
-			<<"stop">> => <<"Stop a scheduled task {task}">>
-		}
-	},
-	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Default handler: Assume that the key is an interval descriptor.
 -spec handler(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
@@ -59,7 +43,7 @@ once(_Base, Req, Opts) ->
                 ok,
                 #{
                     <<"status">> => 200,
-                    <<"cache-control">> => [<<"no-store">>],
+                    <<"cache-control">> => <<"no-store">>,
                     <<"body">> => ReqMsgID
                 }
             }
@@ -75,7 +59,7 @@ once_worker(Path, Req, Opts) ->
 		Class:Reason:Stacktrace ->
 			?event(
                 cron_error,
-                {cron_every_worker_error,
+                {cron_once_worker_error,
                     {path, Path},
                     {error, Class, Reason, {trace, Stacktrace}}
                 }
@@ -132,7 +116,7 @@ every(_Base, Req, Opts) ->
                     ok,
                     #{
                         <<"status">> => 200,
-                        <<"cache-control">> => [<<"no-store">>],
+                        <<"cache-control">> => <<"no-store">>,
                         <<"body">> => ReqMsgID
                     }
                 }
@@ -162,10 +146,10 @@ stop(_Base, Req, Opts) ->
 					hb_name:unregister(Name),
 					{ok, #{
 						<<"status">> => 200,
-						<<"cache-control">> => [<<"no-store">>],
+						<<"cache-control">> => <<"no-store">>,
 						<<"body">> => #{
 							<<"message">> => <<"Task stopped successfully">>,
-							<<"task_id">> => TaskID
+							<<"task-id">> => TaskID
 						}
 					}};
 				undefined ->
@@ -196,7 +180,7 @@ report(_Base, Req, Opts) ->
 				end,
 			{ok, #{
 				<<"status">> => 200,
-				<<"cache-control">> => [<<"no-store">>],
+				<<"cache-control">> => <<"no-store">>,
 				<<"task-id">> => TaskID,
 				<<"active">> => Active
 			}}
@@ -344,7 +328,11 @@ report_every_test() ->
 		hb_http:get(Node, ReportPath, #{})
 	),
 	EveryStopPath = <<"/~cron@1.0/stop=", CronTaskID/binary>>,
-	{ok, _EveryStopResult} = hb_http:get(Node, EveryStopPath, #{}),
+	% The stop reply holds the task's ID under `task-id', as the report does.
+	?assertMatch(
+		{ok, #{<<"body">> := #{<<"task-id">> := CronTaskID}}},
+		hb_http:get(Node, EveryStopPath, #{})
+	),
 	?assertMatch(
 		{ok, #{<<"task-id">> := CronTaskID, <<"active">> := false}},
 		hb_http:get(Node, ReportPath, #{})

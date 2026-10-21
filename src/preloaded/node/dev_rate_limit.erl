@@ -144,17 +144,17 @@ rate_limit_test() ->
     ServerNode = hb_http_server:start_node(ServerOpts),
     ?assertMatch(
         {ok, _},
-        hb_http:get(ServerNode, <<"id">>, #{})
+        hb_http:get(ServerNode, <<"//id">>, #{})
     ),
     ?debug_wait(100),
     ?assertMatch(
         {ok, _},
-        hb_http:get(ServerNode, <<"id">>, #{})
+        hb_http:get(ServerNode, <<"//id">>, #{})
     ),
     ?debug_wait(100),
     ?assertMatch(
         {error, #{ <<"status">> := 429 }},
-        hb_http:get(ServerNode, <<"id">>, #{})
+        hb_http:get(ServerNode, <<"//id">>, #{})
     ).
 
 rate_limit_reset_test() ->
@@ -173,11 +173,11 @@ rate_limit_reset_test() ->
             }
     },
     ServerNode = hb_http_server:start_node(ServerOpts),
-    ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})),
-    ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})),
+    ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"//id">>, #{})),
+    ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"//id">>, #{})),
     ?assertMatch(
         {error, #{ <<"status">> := 429 }},
-        hb_http:get(ServerNode, <<"id">>, #{})
+        hb_http:get(ServerNode, <<"//id">>, #{})
     ),
     timer:sleep(1_000),
-    ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})).
+    ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"//id">>, #{})).

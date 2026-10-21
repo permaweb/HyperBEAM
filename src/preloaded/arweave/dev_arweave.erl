@@ -15,7 +15,7 @@
 -module(dev_arweave).
 -implements(<<"arweave@2.9">>).
 -device_libraries([lib_arweave_common]).
--export([info/0]).
+-export([device_info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3, block_heights/3, blocks/3, block_index/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
@@ -28,7 +28,7 @@
 
 %% @doc Route unknown keys through offset resolution first, then fall back to
 %% the message device for direct key access.
-info() ->
+device_info() ->
     #{
         excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>],
         default => fun dev_arweave_offset:get/4
@@ -45,7 +45,12 @@ status(_Base, _Request, Opts) ->
 %% header.
 -spec tx(
     #{ _ => _ },
-    #{ method => binary(), tx => binary(), target => binary(), _ => _ },
+    #{
+        method => binary(),
+        tx => binary(),
+        'arweave-subject' => binary(),
+        _ => _
+    },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {error, _}.
 tx(Base, Request, Opts) ->
@@ -61,10 +66,13 @@ tx(Base, Request, Opts) ->
 %% Note: When uploading ans104 transactions, this function will use the
 %% node's default bundler. If instead you want to use this node as a bundler
 %% you should use the ~bundler@1.0 device.
--spec post_tx(#{ _ => _ }, #{ target => binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, #{ _ => _ }} | {error, _}.
+-spec post_tx(
+    #{ _ => _ },
+    #{ 'arweave-subject' => binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _}.
 post_tx(Base, RawRequest, Opts) ->
-    {ok, Request} = extract_target(Base, RawRequest, Opts),
+    {ok, Request} = extract_subject(Base, RawRequest, Opts),
     case hb_maps:find(<<"commitment-device">>, Request, Opts) of
         {ok, Device} ->
             post_tx(Base, Request, Opts, Device);
@@ -89,9 +97,10 @@ post_tx_detect_device(Base, Request, Opts) ->
             {error, too_many_commitment_devices}
     end.
 
-%% @doc Extract the target from the request or base message.
-extract_target(Base, Request, Opts) ->
-    case hb_maps:get(<<"target">>, Request, <<"request">>, Opts) of
+%% @doc Extract the message to post from the request or base message, by the
+%% `arweave-subject' key of the request.
+extract_subject(Base, Request, Opts) ->
+    case hb_maps:get(<<"arweave-subject">>, Request, <<"request">>, Opts) of
         <<"request">> ->
             {ok, Request};
         <<"base">> ->
@@ -194,15 +203,15 @@ head_raw(Base, Request, Opts) ->
             case hb_store_arweave:read_index_offset(IndexStore, TXID) of
                 {ok,
                     #{
-                        <<"codec-device">> := CodecDevice,
+                        <<"codec">> := Codec,
                         <<"start">> := StartOffset,
                         <<"length">> := Length
                     }} ->
                         CodecFun =
-                            case CodecDevice of
+                            case Codec of
                                 <<"ans104@1.0">> -> fun head_raw_ans104/4;
                                 <<"tx@1.0">> -> fun head_raw_tx/4;
-                                _ -> throw({invalid_codec_device, CodecDevice})
+                                _ -> throw({'invalid-codec', Codec})
                             end,
                         CodecFun(TXID, StartOffset, Length, Opts);
                 not_found ->
@@ -352,7 +361,8 @@ get_raw(Base, Request, Opts) ->
         } ->
         ?event(debug_raw, {raw_header,
             {header, Header}}),
-        case parse_range_params(Request, Opts) of
+        case parse_range_params(Request, FullContentLength, Opts) of
+            Err = {error, _} -> Err;
             {ok, StartRange, EndRange} ->
                 RangeLength = (EndRange - StartRange) + 1,
                 {ok, Data} =
@@ -396,16 +406,47 @@ get_raw(Base, Request, Opts) ->
             end
     end.
 
-%% @doc Extract the start and end range from a request.
-parse_range_params(<<"bytes=", ByteDescriptor/binary>>, Opts) ->
-    parse_range_params(<<"bytes ", ByteDescriptor/binary>>, Opts);
-parse_range_params(<<"bytes ", ByteDescriptor/binary>>, _Opts) ->
+%% @doc Extract the start and end of the range a request asks for from an item
+%% of `Length' bytes: `bytes=A-B', `bytes=A-' (to the end) or `bytes=-N' (the
+%% last `N' bytes), as RFC 9110 (section 14.1.2) defines them. The end is at
+%% most the item's last byte. A range that does not parse, or that holds no
+%% byte of the item, returns a 416 error.
+parse_range_params(<<"bytes=", ByteDescriptor/binary>>, Length, Opts) ->
+    parse_range_params(<<"bytes ", ByteDescriptor/binary>>, Length, Opts);
+parse_range_params(<<"bytes ", ByteDescriptor/binary>>, Length, _Opts) ->
     [ByteRange|_] = binary:split(ByteDescriptor, <<"/">>),
-    [Start, End] = binary:split(ByteRange, <<"-">>),
-    {ok, hb_util:int(Start), hb_util:int(End)};
-parse_range_params(Msg, Opts) ->
+    Match =
+        re:run(
+            ByteRange,
+            <<"\\A([0-9]*)-([0-9]*)\\z">>,
+            [{capture, all_but_first, binary}]
+        ),
+    Range =
+        case Match of
+            {match, [<<>>, Suffix]} when Suffix =/= <<>> ->
+                {max(Length - hb_util:int(Suffix), 0), Length - 1};
+            {match, [Start, <<>>]} when Start =/= <<>> ->
+                {hb_util:int(Start), Length - 1};
+            {match, [Start, End]} when Start =/= <<>> ->
+                {hb_util:int(Start), min(hb_util:int(End), Length - 1)};
+            _ ->
+                invalid
+        end,
+    case Range of
+        {First, Last} when First =< Last -> {ok, First, Last};
+        _ ->
+            {error,
+                #{
+                    <<"status">> => 416,
+                    <<"content-range">> =>
+                        <<"bytes */", (hb_util:bin(Length))/binary>>,
+                    <<"body">> => <<"Range not satisfiable.">>
+                }
+            }
+    end;
+parse_range_params(Msg, Length, Opts) ->
     case hb_ao:resolve(Msg, <<"range">>, Opts#{ <<"hashpath">> => ignore }) of
-        {ok, Str} -> parse_range_params(Str, Opts);
+        {ok, Str} -> parse_range_params(Str, Length, Opts);
         _ -> false
     end.
 
@@ -527,6 +568,7 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
     ) of
         {ok, PendingTX} ->
             DataSize = hb_util:int(maps:get(<<"data_size">>, PendingTX)),
+            DataRoot = hb_util:decode(maps:get(<<"data_root">>, PendingTX)),
             hb_prometheus:observe(
                 Length,
                 arweave_chunk_load_requested_bytes,
@@ -536,6 +578,9 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
             GETFun =
                 fun(XOffset) ->
                     decode_relative_chunk(
+                        XOffset,
+                        DataRoot,
+                        DataSize,
                         pending(
                             #{},
                             #{ <<"offset">> => XOffset, <<"pending">> => RelativeTXID },
@@ -543,7 +588,25 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
                         )
                     )
                 end,
-            case fetch_and_collect(Offsets, GETFun, Opts) of
+            % A peer answers 404 for an offset that is not the end of a chunk,
+            % so a chunk that does not end at one of `Offsets' is missing here.
+            Concurrency =
+                hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
+            Found =
+                [
+                    ChunkInfo
+                ||
+                    {ok, ChunkInfo} <-
+                        hb_pmap:parallel_map(Offsets, GETFun, Concurrency)
+                ],
+            case fill_relative_gaps(
+                Found,
+                max(1, Offset + 1),
+                min(Offset + Length, DataSize),
+                DataSize,
+                GETFun,
+                Opts
+            ) of
                 {ok, ChunkInfos} ->
                     {ok, Binaries} = assemble_chunks(ChunkInfos, Offset + 1),
                     {ok, iolist_to_binary(Binaries)};
@@ -553,11 +616,75 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
             Error
     end.
 
-decode_relative_chunk({ok, JSON}) ->
-    {ok, decode_chunk_tuple(JSON, ar_merkle:extract_note(
-        hb_util:decode(maps:get(<<"data_path">>, JSON))))};
-decode_relative_chunk({error, _} = Err) ->
+%% @doc Decode a pending chunk response into a {Start, End, Binary} tuple,
+%% taking the start and end from the chunk's proof. The proof must verify
+%% against the data root under either rule set by which a node admits a
+%% pending chunk, and the chunk must contain the byte at the offset it was
+%% fetched for.
+decode_relative_chunk(Offset, DataRoot, DataSize, {ok, JSON}) ->
+    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
+    ChunkID = ar_tx:generate_chunk_id(Chunk),
+    DataPath = hb_util:decode(maps:get(<<"data_path">>, JSON)),
+    Validate =
+        fun(Ruleset) ->
+            ar_merkle:validate_path(
+                DataRoot,
+                Offset - 1,
+                DataSize,
+                DataPath,
+                Ruleset
+            )
+        end,
+    % A proof with rebased subtrees verifies only under the rebase rule set.
+    Bounds =
+        case Validate(strict_borders_ruleset) of
+            false -> Validate(offset_rebase_support_ruleset);
+            StrictBounds -> StrictBounds
+        end,
+    case Bounds of
+        {ChunkID, Start, End}
+                when End - Start =:= byte_size(Chunk),
+                    Start < Offset, Offset =< End ->
+            {ok, {Start + 1, End, Chunk}};
+        _ ->
+            {error, 'invalid-chunk-proof'}
+    end;
+decode_relative_chunk(_Offset, _DataRoot, _DataSize, {error, _} = Err) ->
     Err.
+
+%% @doc Fetch pending chunks until they cover bytes `RangeStart' to `RangeEnd'.
+%% A peer serves a pending chunk only at its end offset, which is the start of
+%% the chunk after it. So the chunk that contains the last byte of a gap is
+%% asked for at the start of the first chunk after the gap, or at the data
+%% size if no chunk after the gap is known.
+fill_relative_gaps(ChunkInfos, RangeStart, RangeEnd, DataSize, GETFun, Opts) ->
+    Sorted = sort_chunks(ChunkInfos),
+    case find_gaps(Sorted, RangeStart, RangeEnd) of
+        [] ->
+            {ok, [Info || Info = {Start, _, _} <- Sorted, Start =< RangeEnd]};
+        Gaps ->
+            Offsets =
+                [
+                    hd(
+                        [Start - 1 || {Start, _, _} <- Sorted, Start > GapEnd]
+                            ++ [DataSize]
+                    )
+                ||
+                    {_GapStart, GapEnd} <- Gaps
+                ],
+            case fetch_and_collect(Offsets, GETFun, Opts) of
+                {ok, NewInfos} ->
+                    fill_relative_gaps(
+                        Sorted ++ NewInfos,
+                        RangeStart,
+                        RangeEnd,
+                        DataSize,
+                        GETFun,
+                        Opts
+                    );
+                Error -> Error
+            end
+    end.
 
 %% @doc Iteratively detect gaps in coverage and fetch the chunk at the start
 %% of each gap until the entire range [Offset, EndOffset] is covered.
@@ -1499,11 +1626,22 @@ post_ans104_message_test_parallel() ->
             #{
                 <<"variant">> => <<"ao.N.1">>,
                 <<"type">> => <<"Process">>,
+                % The item has a `target', as a message to a process does.
+                <<"target">> => hb_util:human_id(crypto:strong_rand_bytes(32)),
                 <<"data">> => <<"test-data">>
             },
             ClientOpts,
             #{ <<"commitment-device">> => <<"ans104@1.0">> }
         ),
+    % A mistyped `arweave-subject' fails.
+    ?assertMatch(
+        {failure, _},
+        hb_http:post(
+            Server,
+            Msg#{ <<"path">> => <<"/~arweave@2.9/tx?arweave-subject=requst">> },
+            ClientOpts
+        )
+    ),
     {ok, PostRes} =
         hb_http:post(
             Server,
@@ -1672,9 +1810,8 @@ post_tx_json_request(Server, ClientOpts) ->
     hb_http:post(
         Server,
         #{
-            <<"device">> => <<"arweave@2.9">>,
-            <<"path">> => <<"/tx?codec-device=tx@1.0">>,
-            <<"content-type">> => <<"application/json">>,
+            <<"path">> => <<"/~arweave@2.9/tx">>,
+            <<"content-type">> => <<"application/tx">>,
             <<"body">> => Serialized
         },
         ClientOpts
@@ -2200,7 +2337,110 @@ pending_offset_handling_test() ->
         ?assertEqual(PendingData, maps:get(<<"data">>, StoreTX))
     after
         hb_mock_server:stop(MockHandle)
-    end.
+    end,
+    % Pending transactions whose chunks end off multiples of 256 KiB read in
+    % full: arweave-js's even split, an uneven split, four 128 KiB chunks, and
+    % two chunks in a rebased subtree before a third.
+    lists:foreach(
+        fun({Sizes, Rebased}) ->
+            {ID, Data, PeerOpts, PeerHandle} =
+                start_pending_peer(Sizes, Rebased, ClientOpts),
+            try
+                ?assertEqual(
+                    {ok, Data},
+                    hb_store_arweave:read_chunks(
+                        #{ <<"relative">> => ID, <<"offset">> => 0 },
+                        byte_size(Data),
+                        PeerOpts
+                    )
+                ),
+                % A read with no length returns only the first chunk.
+                ?assertEqual(
+                    {ok, binary:part(Data, 0, hd(Sizes))},
+                    hb_ao:resolve(
+                        #{ <<"device">> => <<"arweave@2.9">> },
+                        #{
+                            <<"path">> => <<"chunk">>,
+                            <<"pending">> => ID,
+                            <<"offset">> => 0
+                        },
+                        PeerOpts
+                    )
+                )
+            after
+                hb_mock_server:stop(PeerHandle)
+            end
+        end,
+        [
+            {[136192, 136192], 0},
+            {[200000, 100000], 0},
+            {[131072, 131072, 131072, 131072], 0},
+            {[200000, 200000, 134528], 2}
+        ]
+    ).
+
+%% @doc Start a peer that serves a pending transaction of random chunks of the
+%% given sizes, each chunk only at its end offset. The first `Rebased' chunks
+%% are a rebased subtree of the transaction's data tree. Returns the
+%% transaction's ID and data, the options that route to the peer, and the
+%% peer's handle.
+start_pending_peer(Sizes, Rebased, Opts) ->
+    Chunks =
+        ar_tx:chunks_to_size_tagged_chunks(
+            [crypto:strong_rand_bytes(Size) || Size <- Sizes]
+        ),
+    Leaves = ar_tx:sized_chunks_to_sized_chunk_ids(Chunks),
+    {Root, Tree} =
+        ar_merkle:generate_tree(
+            case lists:split(Rebased, Leaves) of
+                {[], _} -> Leaves;
+                {Subtree, Rest} -> [Subtree | Rest]
+            end
+        ),
+    TX =
+        ar_tx:sign(
+            #tx{ format = 2, data_root = Root, data_size = lists:sum(Sizes) },
+            hb:wallet()
+        ),
+    {ok, Node, Handle} = hb_mock_server:start([
+        {"/unconfirmed_chunk/:id/:offset", pending_chunk,
+            fun(#{ <<"bindings">> := #{ offset := Offset } }) ->
+                End = hb_util:int(Offset),
+                case lists:keyfind(End, 2, Chunks) of
+                    {Chunk, End} ->
+                        Path = ar_merkle:generate_path(Root, End - 1, Tree),
+                        {
+                            200,
+                            hb_json:encode(
+                                #{
+                                    <<"chunk">> => hb_util:encode(Chunk),
+                                    <<"data_path">> => hb_util:encode(Path)
+                                }
+                            )
+                        };
+                    false ->
+                        {404, <<>>}
+                end
+            end},
+        {"/unconfirmed_tx/:id", pending_tx,
+            {200, hb_json:encode(ar_tx:tx_to_json_struct(TX))}}
+    ]),
+    Route =
+        #{
+            <<"template">> => <<"^/arweave">>,
+            <<"node">> =>
+                #{
+                    <<"match">> => <<"^/arweave">>,
+                    <<"with">> => Node,
+                    <<"opts">> => #{ <<"http-client">> => httpc }
+                }
+        },
+    {
+        hb_util:human_id(TX#tx.id),
+        iolist_to_binary([Chunk || {Chunk, _} <- Chunks]),
+        Opts#{ <<"routes">> => [Route] },
+        Handle
+    }.
 
 %% @doc: helper test to generate and write a dataitem to disk so that we
 %% can validate it using 3rd-party js libraries and gateways.

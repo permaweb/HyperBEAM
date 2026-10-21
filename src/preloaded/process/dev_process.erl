@@ -42,7 +42,8 @@
 -module(dev_process).
 -device_libraries([lib_process, lib_process_cache]).
 %%% Public API
--export([info/1, as/3, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
+-export([device_info/1]).
+-export([as/3, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
 -export([target_slot/2]).
 -export([default_device/3]).
 -include_lib("eunit/include/eunit.hrl").
@@ -58,15 +59,15 @@
 -define(DEFAULT_SNAPSHOT_TIME, 60).
 -endif.
 
-%% @doc When the info key is called, we should return the process exports.
-info(_Base) ->
+%% @doc Return the options of the device: the `worker', `grouper' and `await'
+%% functions of its executions, and the keys that it exports.
+device_info(_Base) ->
     #{
         worker => fun dev_process_worker:server/3,
         grouper => fun dev_process_worker:group/3,
         await => fun dev_process_worker:await/5,
         exports =>
             [
-                <<"info">>,
                 <<"as">>,
                 <<"compute">>,
                 <<"now">>,

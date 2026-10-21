@@ -2,6 +2,7 @@
 %%% (potentially multi-layer) paths as their keys, and a normal TABM binary as 
 %%% their value.
 -module(dev_flat).
+-specification("../../../specs/flat@1.0.md").
 -export([from/3, to/3, commit/3, verify/3, deserialize/3]).
 %%% Testing utilities
 -export([serialize/1, serialize/2, deserialize/1]).

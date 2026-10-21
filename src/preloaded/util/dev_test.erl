@@ -1,7 +1,8 @@
 -module(dev_test).
 -implements(<<"test-device@1.0">>).
 -export([info/3]).
--export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
+-export([device_info/1]).
+-export([test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
 -export([index/3, load/3, from/3, to/3]).
 -export([vary_projection/3, vary_wildcard/3, vary_unspecified/3, vary_inspect/3]).
@@ -20,7 +21,7 @@
 
 %% @doc Exports a default_handler function that can be used to test the
 %% handler resolution mechanism.
-info(_) ->
+device_info(_) ->
 	#{
         <<"default">> => <<"message@1.0">>,
 		handlers => #{
@@ -267,7 +268,6 @@ mangle(Base, _Req, Opts) ->
     case hb_opts:get(mode, prod, Opts) of
         prod -> {error, <<"`mangle' unavailable in `prod` mode.">>};
         debug ->
-            ?no_prod("`mangle' is not safe to use in production."),
             case hb_message:committed(Base, #{ <<"ids">> => <<"all">> }, Opts) of
                 [] ->
                     {error, <<"No committed keys to mangle found on base message.">>};
@@ -793,15 +793,15 @@ vary_projection_uses_projected_cache_key_test() ->
     FirstCtx = hb_hashpath:context(hb_path:hashpath(First, Opts), Opts),
     SecondCtx = hb_hashpath:context(hb_path:hashpath(Second, Opts), Opts),
     ?assertNotEqual(
-        maps:get(<<"base-id">>, FirstCtx), maps:get(<<"base-id">>, SecondCtx)
+        maps:get(<<"base-uri">>, FirstCtx), maps:get(<<"base-uri">>, SecondCtx)
     ),
     ?assertEqual(
-        maps:get(<<"varied-base-id">>, FirstCtx),
-        maps:get(<<"varied-base-id">>, SecondCtx)
+        maps:get(<<"varied-base-uri">>, FirstCtx),
+        maps:get(<<"varied-base-uri">>, SecondCtx)
     ),
     ?assertEqual(
-        maps:get(<<"varied-result-id">>, FirstCtx),
-        maps:get(<<"varied-result-id">>, SecondCtx)
+        maps:get(<<"varied-result-uri">>, FirstCtx),
+        maps:get(<<"varied-result-uri">>, SecondCtx)
     ),
     ?assertEqual(8, hb_ao:get(<<"base/deep/slot">>, Second, Opts)),
     ?assertEqual(9, hb_ao:get(<<"request/deep-request/slot">>, Second, Opts)).

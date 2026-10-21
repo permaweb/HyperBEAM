@@ -243,7 +243,7 @@ test_data() ->
                 #{
                     <<"$app_config$">> =>
                         #{
-                            <<"value">> => <<"theme@dark! mode">>,
+                            <<"value">> => <<"theme@dark!%20mode">>,
                             <<"attributes">> => #{ <<"Path">> => <<"/">> }
                         },
                     <<"analytics_session_data_with_very_long_name_for_tracking_purposes">> =>
@@ -808,4 +808,17 @@ malformed_cookie_pair_test() ->
     ?assertEqual(
         {ok, #{ <<"sid">> => <<"valid">> }},
         dev_cookie:extract(Msg, #{}, #{})
+    ),
+    % A `set-cookie' line without a `=' sets no cookie, and every value is read
+    % as it is.
+    ?assertEqual(
+        {ok, #{ <<"a">> => <<"x%41y">>, <<"b">> => <<"%zz">> }},
+        dev_cookie:extract(
+            #{
+                <<"cookie">> => <<"a=x%41y">>,
+                <<"set-cookie">> => [<<"novalue">>, <<"b=%zz">>]
+            },
+            #{},
+            #{}
+        )
     ).

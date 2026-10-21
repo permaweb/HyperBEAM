@@ -78,7 +78,7 @@ estimate(_Base, EstimateReq, NodeMsg) ->
 
 %% @doc If the request is for the `apply@1.0' device, we should price the
 %% inner request in addition to the price of the outer request.
-apply_price([{as, Device, Msg} | Rest], NodeMsg) ->
+apply_price([{as, Device, Msg} | Rest], NodeMsg) when is_map(Msg) ->
     apply_price([Msg#{ <<"device">> => Device } | Rest], NodeMsg);
 apply_price(
         [Req = #{ <<"device">> := <<"apply@1.0">> }, #{ <<"path">> := Path } | Rest],
@@ -259,7 +259,7 @@ ledger(NodeMsg) ->
         <<"balances">> =>
             maps:fold(
                 fun(Account, Balance, Balances) ->
-                    Balances#{ hb_util:committer(Account) => Balance }
+                    Balances#{ hb_committer:uri(Account, NodeMsg) => Balance }
                 end,
                 #{},
                 hb_opts:get(simple_pay_ledger, #{}, NodeMsg)
@@ -290,7 +290,11 @@ topup(_, Req, NodeMsg) ->
         {error, _} -> {error, <<"Unauthorized">>};
         {ok, Signed} ->
             Amount = hb_ao:get(<<"amount">>, Signed, 0, NodeMsg),
-            Recipient = hb_ao:get(<<"recipient">>, Signed, undefined, NodeMsg),
+            Recipient =
+                hb_committer:uri(
+                    hb_ao:get(<<"recipient">>, Signed, undefined, NodeMsg),
+                    NodeMsg
+                ),
             NewBalance = debit(Recipient, -Amount, NodeMsg),
             ?event(payment,
                 {topup,
@@ -410,6 +414,23 @@ get_balance_and_top_up_test() ->
             <<"/~simple-pay@1.0/topup?amount+integer=1">>,
             hb_message:commit(
                 #{ <<"amount">> => 100, <<"recipient">> => ClientAddress },
+                Opts#{ <<"priv-wallet">> => HostWallet }
+            ),
+            Opts
+        )
+    ),
+    % A top-up to the client's Arweave address credits its committer's account.
+    ?assertEqual(
+        {ok, 380},
+        hb_http:post(
+            Node,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~simple-pay@1.0/topup">>,
+                    <<"amount">> => 100,
+                    <<"recipient">> =>
+                        hb_util:human_id(ar_wallet:to_address(ClientWallet))
+                },
                 Opts#{ <<"priv-wallet">> => HostWallet }
             ),
             Opts

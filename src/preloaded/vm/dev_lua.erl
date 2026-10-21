@@ -1,10 +1,10 @@
 %%% @doc A device that calls a Lua module upon a request and returns the result.
 -module(dev_lua).
 -implements(<<"lua@5.3a">>).
--export([info/1, init/3, snapshot/3, normalize/3, functions/3]).
+-specification("../../../specs/lua@5.3a.md").
+-export([device_info/1, init/3, snapshot/3, normalize/3, functions/3]).
 %%% Public Utilities
 -export([encode/2, decode/2]).
--export([pure_lua_process_benchmark/1]).
 -include("include/hb.hrl").
 -include_lib("luerl/include/luerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -32,7 +32,7 @@
 %% resolved by calling the Lua function in the module of the same name.
 %% Additionally, we exclude the `keys', `set', `encode' and `decode' functions
 %% which are `message@1.0' core functions, and Lua public utility functions.
-info(Base) ->
+device_info(Base) ->
     #{
         default => fun compute/4,
         excludes =>
@@ -515,7 +515,7 @@ do_decode(Other, _Opts) ->
 %% @doc Decode a value of a message from Lua. Lua holds the Arweave committer
 %% of a commitment as its address, so we convert it back to its URI.
 decode_value(<<"commitments">>, Commitments) when is_map(Commitments) ->
-    map_committers(fun hb_util:committer/1, Commitments);
+    map_committers(fun hb_committer:uri/1, Commitments);
 decode_value(_Key, Value) ->
     Value.
 
@@ -540,18 +540,27 @@ do_encode(List, Opts) when is_list(List) ->
         lists:map(fun(V) -> do_encode(V, Opts) end, List),
         Opts
     );
+% Luerl holds Lua's `nil' as the atom `nil'.
+do_encode(nil, _Opts) -> nil;
 do_encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
     hb_util:bin(Atom);
 do_encode(Other, _Opts) ->
     Other.
 
-%% @doc Encode a value of a message for Lua. The Arweave committer of a
-%% commitment is given as its address.
+%% @doc Encode a value of a message for Lua. Lua sees only the signed
+%% commitments of a message: each node makes its own unsigned commitments, so
+%% a script that read them could compute differently on two nodes. The Arweave
+%% committer of a commitment is given as its address.
 encode_value(<<"commitments">>, Commitments, Opts) when is_map(Commitments) ->
-    do_encode(
-        map_committers(fun hb_util:committer_address/1, Commitments),
-        Opts
-    );
+    Signed =
+        hb_maps:filter(
+            fun(_ID, Commitment) ->
+                hb_maps:is_key(<<"committer">>, Commitment, Opts)
+            end,
+            Commitments,
+            Opts
+        ),
+    do_encode(map_committers(fun hb_util:committer_address/1, Signed), Opts);
 encode_value(_Key, Value, Opts) ->
     do_encode(Value, Opts).
 
@@ -653,6 +662,8 @@ post_invocation_message_validation_test() ->
     ?assertEqual(<<"test-value-1">>, hb_ao:get(<<"test-key">>, ReadMsg, Opts)),
     ?assert(length(hb_message:signers(Res, Opts)) == 0),
     ?assert(hb_message:verify(Res, all, Opts)),
+    % Lua sees the signed commitment of the base alone.
+    ?assertEqual({ok, 1}, hb_ao:resolve(Base, <<"commitment_count">>, Opts)),
     % A `committer' key outside of a commitment is not converted.
     Bare = #{ <<"committer">> => <<"bare">> },
     ?assertEqual(Bare, decode(encode(Bare, Opts), Opts)).
@@ -708,6 +719,11 @@ error_response_test() ->
     ?assertEqual(
         {error, <<"Very bad, but Lua caught it.">>},
         hb_ao:resolve(Base, <<"error_response">>, #{})
+    ),
+    % A key with no normalized form is a bad argument, which `pcall' catches.
+    ?assertEqual(
+        {ok, [false, <<"bad argument table,table to 'set'">>]},
+        hb_ao:resolve(Base, <<"ao_set_float_key">>, #{})
     ),
     % An exception inside the library call into the node -- here, reading a
     % message this node does not have -- depends on this node, so it is a
@@ -941,7 +957,9 @@ ao_core_resolution_from_lua_test() ->
         <<"parameters">> => []
     },
     {ok, Res} = hb_ao:resolve(Base, <<"ao_resolve">>, #{}),
-    ?assertEqual(<<"Hello, AO world!">>, Res).
+    ?assertEqual(<<"Hello, AO world!">>, Res),
+    % A key that `ao.set' sets to `nil' is removed, and `ao.get' gives `nil'.
+    ?assertEqual({ok, <<"nil">>}, hb_ao:resolve(Base, <<"ao_set_nil">>, #{})).
 
 %% @doc Benchmark the performance of Lua executions.
 direct_benchmark_test() ->
@@ -1064,8 +1082,8 @@ snapshot_excludes_node_wallet_test() ->
         hb_http:get(
             Node,
             <<
-                "/init~lua@5.3a&module=", ModuleID/binary,
-                "/hello~lua@5.3a/snapshot~lua@5.3a/body"
+                "/~lua@5.3a&module=", ModuleID/binary,
+                "/init/hello~lua@5.3a/snapshot~lua@5.3a/body"
             >>,
             #{}
         ),

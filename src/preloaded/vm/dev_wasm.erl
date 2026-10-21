@@ -35,14 +35,16 @@
 %%% </pre>
 -module(dev_wasm).
 -implements(<<"wasm-64@1.0">>).
--export([info/2, init/3, compute/3, import/3, terminate/3, snapshot/3, normalize/3]).
+-specification("../../../specs/wasm-64@1.0.md").
+-export([device_info/2]).
+-export([init/3, compute/3, import/3, terminate/3, snapshot/3, normalize/3]).
 %%% API for other devices:
 -export([instance/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Export all functions aside the `instance/3' function.
-info(_Base, _Opts) ->
+device_info(_Base, _Opts) ->
     #{
         excludes => [instance]
     }.
@@ -486,7 +488,7 @@ undefined_import_stub(Base, Req, Opts) ->
             Opts
         ),
     UndefinedCallsPath =
-        <<"state/results/", Prefix/binary, "/undefined-calls">>,
+        <<"results/", Prefix/binary, "/undefined-calls">>,
     Res = hb_ao:set(
         Base,
         #{
@@ -660,6 +662,15 @@ state_export_and_restore_test() ->
     ?assertEqual(
         {ok, [4]},
         hb_ao:resolve(NewBase, <<"compute/results/output">>, #{})
+    ),
+    % An import that no stdlib device answers is recorded beside the results.
+    ?assertMatch(
+        {ok, [#{ <<"module">> := <<"my_lib">>, <<"func">> := <<"mul">> } | _]},
+        hb_ao:resolve(
+            hb_maps:without([<<"stdlib">>], Req, #{}),
+            <<"compute/results/undefined-calls">>,
+            #{}
+        )
     ).
 
 %%% Test helpers

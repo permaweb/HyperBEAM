@@ -1,19 +1,20 @@
 %%% @doc The identity device: For non-reserved keys, it simply returns a key 
 %%% from the message as it is found in the message's underlying Erlang map. 
 %%% Private keys (`priv[.*]') are not included.
-%%% Reserved keys are: `id', `commitments', `committers', `keys', `path', 
-%%% `set', `remove', and `verify'. Their function comments describe the 
+%%% Reserved keys are: `id', `commitments', `committers', `info', `keys',
+%%% `path', `set', `remove', and `verify'. Their function comments describe the
 %%% behaviour of the device when these keys are set.
 -module(dev_message).
+-specification("../../../specs/message@1.0.md").
 %%% Base AO-Core reserved keys:
--export([info/0, keys/1, keys/2]).
+-export([device_info/0, keys/1, keys/2]).
 -export([set/3, set_path/3, remove/3, get/4]).
 %%% Commitment-specific keys:
 -export([id/1, id/2, id/3]).
 -export([commit/3, committed/3, committers/1, committers/2, committers/3, verify/3]).
 -export([with_commitments/3]).
 %%% Non-protocol enforced keys:
--export([index/3]).
+-export([index/3, info/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 -define(DEFAULT_ID_DEVICE, <<"httpsig@1.0">>).
@@ -31,8 +32,8 @@
     <<"verify">>
 ]).
 
-%% @doc Return the info for the identity device.
-info() ->
+%% @doc Return the options of the identity device.
+device_info() ->
     #{
         default => fun dev_message:get/4
     }.
@@ -70,6 +71,38 @@ index(Msg, Req, Opts) ->
                 },
                 Opts
             )
+    end.
+
+%% @doc Return the info of the device of a message, or of the device in the
+%% request's `for' key. The info is a message for the node's `docs-device', so
+%% a browser that requests it receives that device's page. It holds the schema
+%% of the device's module (`hb_types') and the device's signed specification.
+%% The info follows the implementation of the device that the node loads, so
+%% it is not stored. A device's own `info/3' answers in place of this function.
+-spec info(#{ device => _ }, #{ for => binary() }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _}.
+info(Base, Req, Opts) ->
+    For =
+        hb_maps:get(
+            <<"for">>,
+            Req,
+            hb_maps:get(<<"device">>, Base, <<"message@1.0">>, Opts),
+            Opts
+        ),
+    maybe
+        {ok, Module} ?= hb_device_load:reference(For, Opts),
+        {ok, Schema} ?= hb_device_load:schema(Module, Opts),
+        {ok, Spec} ?= hb_device_load:spec(For, Opts),
+        {ok,
+            #{
+                <<"device">> =>
+                    hb_opts:get(docs_device, <<"docs@1.0">>, Opts),
+                <<"for">> => For,
+                <<"schema">> => Schema,
+                <<"specification">> => Spec,
+                <<"cache-control">> => <<"no-store">>
+            }
+        }
     end.
 
 %% @doc Return the ID of a message, using the `committers' list if it exists.
@@ -258,7 +291,9 @@ committers(_, _, _) ->
 
 %% @doc Commit to a message, using the `commitment-device' key to specify the
 %% device that should be used to commit to the message. If the key is not set,
-%% the default device (`httpsig@1.0') is used.
+%% the default device (`httpsig@1.0') is used. A request with a `committed'
+%% list commits those keys of the message; a request without one commits every
+%% key.
 -spec commit(
     #{ _ => _ },
     #{ 'commitment-device' => binary(), type => binary(),
@@ -298,9 +333,23 @@ commit(Self, Req, Opts) ->
             Req#{ <<"device">> => AttDev },
             CommitOpts
         ),
+    % A commitment is made over the keys that the request lists, else over the
+    % keys that any commitment of the message lists, else over every key of the
+    % message. The device is given the message with those keys alone, as
+    % `verify/3' gives it.
+    Covered =
+        case keys_to_commit(Base, Req, Opts) of
+            all -> Base;
+            Keys ->
+                hb_maps:with(
+                    [<<"commitments">>, <<"priv">> | Keys],
+                    Base,
+                    Opts
+                )
+        end,
     Loaded =
         ensure_commitments_loaded(
-            hb_message:convert(Base, tabm, SourceSpec, CommitOpts),
+            hb_message:convert(Covered, tabm, SourceSpec, CommitOpts),
             Opts
         ),
     {ok, Committed} =
@@ -322,6 +371,21 @@ committed_keys(Commitment, Opts) ->
         maps:get(<<"committed">>, Commitment, []),
         Opts
     ).
+
+%% @doc Return the keys that a commitment is made over: the keys that the
+%% request lists, else the keys that any commitment of the message lists, else
+%% `all': every key of the message.
+keys_to_commit(Base, Req, Opts) ->
+    case hb_maps:find(<<"committed">>, Req, Opts) of
+        {ok, _} -> committed_keys(Req, Opts);
+        error ->
+            Committed =
+                hb_message:committed(Base, #{ <<"ids">> => <<"any">> }, Opts),
+            case Committed of
+                [] -> all;
+                Keys -> Keys
+            end
+    end.
 
 %% @doc Verify a message. By default, all commitments are verified. The
 %% `committers' key in the request can be used to specify that only the 
@@ -1118,7 +1182,7 @@ key_from_device_test() ->
     {ok, ID} = hb_cache:write(#{ <<"a">> => not_found }, #{}),
     ?assertEqual(
         {ok, not_found},
-        hb_ao:resolve(ID, <<"a">>, #{})
+        hb_ao:resolve(<<"ao:", ID/binary>>, <<"a">>, #{})
     ),
     ?assertEqual({ok, 1}, hb_ao:resolve(#{ <<"a">> => 1 }, <<"a">>, #{})),
     % A key named `get' is read like any other.
@@ -1129,6 +1193,17 @@ key_from_device_test() ->
     ?assertEqual(
         hb_ao:resolve(Msg, <<"with-commitments">>, NoCache),
         hb_ao:resolve(Msg, <<"with-commitments">>, #{})
+    ),
+    % The device answers the key `info': it is not read from the message.
+    ?assertNot(
+        hb_device:is_direct_key_access(#{ <<"info">> => 4 }, <<"info">>, #{})
+    ),
+    % The `info' of a message is the info of its device, for `docs@1.0'.
+    ?assertMatch(
+        {ok,
+            #{ <<"device">> := <<"docs@1.0">>, <<"for">> := <<"message@1.0">> }
+        },
+        hb_ao:resolve(#{ <<"info">> => <<"literal">> }, <<"info">>, #{})
     ).
 
 remove_test() ->

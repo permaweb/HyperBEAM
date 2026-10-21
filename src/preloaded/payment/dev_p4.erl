@@ -33,6 +33,7 @@
 %%% the charge must be applied to the ledger, whereas the `pre' type is used to
 %%% check whether the charge would succeed before execution.
 -module(dev_p4).
+-specification("../../../specs/p4@1.0.md").
 -export([request/3, response/3, balance/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -75,6 +76,7 @@ request(State, Raw, NodeMsg) ->
         {true, true} ->
             PricingMsg = State#{ <<"device">> => PricingDevice },
             LedgerMsg = State#{ <<"device">> => LedgerDevice },
+            Signers = hb_message:signers(Request, NodeMsg),
             PricingReq = #{
                 <<"path">> => <<"estimate">>,
                 <<"request">> => Request,
@@ -93,6 +95,14 @@ request(State, Raw, NodeMsg) ->
                     % The device has estimated the cost of the request to be
                     % zero, so we proceed.
                     {ok, Raw#{ <<"body">> => Messages }};
+                {ok, _} when length(Signers) > 1 ->
+                    % The request has multiple signers, so there is no single
+                    % account to charge. We don't proceed.
+                    {error, #{
+                        <<"status">> => 422,
+                        <<"body">> =>
+                            <<"Cannot charge a request with multiple signers.">>
+                    }};
                 {ok, Price} ->
                     % The device has estimated the cost of the request. We check
                     % the user's balance to see if they have enough funds to
@@ -100,10 +110,9 @@ request(State, Raw, NodeMsg) ->
                     BalanceReq = #{
                         <<"path">> => <<"balance">>,
                         <<"target">> =>
-                            case hb_message:signers(Request, NodeMsg) of
+                            case Signers of
                                 [Signer] -> Signer;
-                                [] -> <<"unknown">>;
-                                Multiple -> Multiple
+                                [] -> <<"unknown">>
                             end,
                         <<"request">> => Request
                     },
@@ -239,13 +248,16 @@ response(State, RawResponse, NodeMsg) ->
                                 <<"recipient">> =>
                                     case hb_opts:get(p4_recipient, undefined, NodeMsg) of
                                         Addr when is_binary(Addr) ->
-                                            hb_util:committer(Addr);
+                                            hb_committer:uri(Addr, NodeMsg);
                                         _ ->
                                             case hb_opts:get(operator, undefined, NodeMsg) of
                                                 undefined ->
                                                     <<"unknown">>;
                                                 Operator ->
-                                                    hb_util:committer(Operator)
+                                                    hb_committer:uri(
+                                                        Operator,
+                                                        NodeMsg
+                                                    )
                                             end
                                     end,
                                 <<"request">> => Request
@@ -402,7 +414,7 @@ faff_test() ->
         )
     ),
     Req = #{
-        <<"path">> => <<"/greeting">>,
+        <<"path">> => <<"//greeting">>,
         <<"greeting">> => <<"Hello, world!">>
     },
     GoodSignedReq = hb_message:commit(Req, #{ <<"priv-wallet">> => GoodWallet }),
@@ -515,6 +527,18 @@ non_chargable_route_test() ->
             ),
             #{}
         )
+    ),
+    % A request signed by two wallets has no single account to charge.
+    ?assertMatch(
+        {error, #{ <<"status">> := 422 }},
+        hb_http:get(
+            Node,
+            hb_message:commit(
+                BadSignedReq3,
+                #{ <<"priv-wallet">> => ar_wallet:new() }
+            ),
+            #{}
+        )
     ).
 
 %% @doc Ensure that Lua scripts can be used as pricing and ledger devices. Our
@@ -542,7 +566,7 @@ hyper_token_ledger() ->
         <<"ledger-",
             (integer_to_binary(erlang:unique_integer([positive])))/binary
         >>,
-    LedgerPath = <<"/", LedgerName/binary, "~node-process@1.0">>,
+    LedgerPath = <<"/~node-process@1.0/", LedgerName/binary>>,
     {ok, TokenScript} = file:read_file("scripts/hyper-token.lua"),
     {ok, ProcessScript} = file:read_file("scripts/hyper-token-p4.lua"),
     {ok, ClientScript} = file:read_file("scripts/hyper-token-p4-client.lua"),
@@ -574,7 +598,7 @@ hyper_token_ledger() ->
                 <<"p4-non-chargable-routes">> =>
                     [
                         #{
-                            <<"template">> => <<"/*~node-process@1.0/*">>
+                            <<"template">> => <<"/~node-process@1.0/*">>
                         }
                     ],
                 <<"on">> => #{
@@ -610,7 +634,7 @@ hyper_token_ledger() ->
     % To start, we attempt a request from Bob, which should fail because he
     % has no tokens.
     Req = #{
-        <<"path">> => <<"/greeting">>,
+        <<"path">> => <<"//greeting">>,
         <<"greeting">> => <<"Hello, world!">>
     },
     SignedReq = hb_message:commit(Req, #{ <<"priv-wallet">> => BobWallet }),

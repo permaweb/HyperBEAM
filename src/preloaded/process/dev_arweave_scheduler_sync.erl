@@ -496,7 +496,10 @@ confirmed_tip(Opts) ->
     maybe
         {ok, Height} ?=
             hb_ao:resolve(
-                <<?ARWEAVE_DEVICE/binary, "/current/height">>,
+                #{
+                    <<"path">> => <<?ARWEAVE_DEVICE/binary, "/current/height">>,
+                    <<"include-proofs">> => false
+                },
                 no_result_cache(Opts)
             ),
         Depth =
@@ -532,6 +535,7 @@ fetch_block_remote(Height, Attempts, Opts) ->
         #{
             <<"path">> => <<?ARWEAVE_DEVICE/binary, "/block">>,
             <<"block">> => Height,
+            <<"include-proofs">> => false,
             <<"cache-control">> => [<<"no-cache">>]
         },
         FetchOpts
@@ -1198,9 +1202,11 @@ block_cache_refresh_test_() ->
             }),
             Height = 2003806,
             Req = #{ <<"path">> => <<"~arweave@2.9/block">>,
-                <<"block">> => Height },
+                <<"block">> => Height, <<"include-proofs">> => false },
             try
                 {ok, Canonical} = fetch_block(Height, Opts),
+                ?assertNot(hb_maps:is_key(<<"poa">>, Canonical, Opts)),
+                ?assertNot(hb_maps:is_key(<<"poa2">>, Canonical, Opts)),
                 Orphan = Canonical#{ <<"indep-hash">> =>
                     <<"kOJgXHI4xd7gTjHGg5j9OimYygCIGyGrenmcGimIeR3jxBLZKXA9V2TKxP7J1V2v">> },
                 ?assertNotEqual(Orphan, Canonical),
@@ -1232,13 +1238,21 @@ block_cache_refresh_test_() ->
                 ?assertEqual({error, not_found}, hb_ao:resolve(
                     Req#{ <<"cache-control">> =>
                         [<<"no-cache">>, <<"only-if-cached">>] }, Offline
-                ))
+                )),
+                {ok, Confirmed} = confirmed_tip(Opts),
+                {ok, Tip} = hb_cache:read(
+                    [<<"~arweave@2.9/block/height">>,
+                        Confirmed + ?DEFAULT_CONFIRMATION_DEPTH],
+                    BlockOpts
+                ),
+                ?assertNot(hb_maps:is_key(<<"poa">>, Tip, BlockOpts)),
+                ?assertNot(hb_maps:is_key(<<"poa2">>, Tip, BlockOpts))
             after
                 lists:foreach(fun hb_store:stop/1, Stores)
             end
         end}.
 
-unprocessable_header_indexing_test_() ->
+unparseable_types_header_indexing_test_() ->
     {timeout, 60,
         fun() ->
             Store = hb_test_utils:test_store(hb_store_volatile),
@@ -1250,19 +1264,21 @@ unprocessable_header_indexing_test_() ->
                 <<"arweave-scheduler-fetch-attempts">> => 1
             },
             try
+                % Each header's `ao-types' is `from-process="integer"', which
+                % does not parse. The header is read with no types applied, and
+                % its target is indexed.
                 lists:foreach(
                     fun(TXID) ->
-                        ?assertEqual({ok, []}, index_transaction(1, 0, TXID, Opts))
+                        ?assertMatch(
+                            {ok, [_ | _]},
+                            index_transaction(1, 0, TXID, Opts)
+                        )
                     end,
                     [
                         <<"gbNWU2YAM9N8sxx4CGtOcmBcwgk7h_o7zgHthnP9GW0">>,
-                        <<"lZhsB-RXx5IP04sX17LlsfbGAX-FZJ19q-iKv41gbQg">>
+                        <<"lZhsB-RXx5IP04sX17LlsfbGAX-FZJ19q-iKv41gbQg">>,
+                        <<"dZ048pvZ1Osx8Kqi90uah-z1TF7GI_1I-UGt_ujpHow">>
                     ]
-                ),
-                ?assertMatch(
-                    {ok, [_ | _]},
-                    index_transaction(1, 0,
-                        <<"dZ048pvZ1Osx8Kqi90uah-z1TF7GI_1I-UGt_ujpHow">>, Opts)
                 ),
                 ?assertEqual(
                     {error, not_found},

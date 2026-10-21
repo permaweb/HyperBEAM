@@ -58,7 +58,7 @@ index_graphql(Total, Query, Vars, Node, OpName, Opts) ->
         ParsedMsgs =
             lists:filtermap(
                 fun(NodeStruct) ->
-                    Struct = hb_maps:get(<<"node">>, NodeStruct, not_found, Opts),
+                    Struct = hb_ao:get(<<"node">>, NodeStruct, not_found, Opts),
                     try
                         {ok, ParsedMsg} =
                             hb_client_gateway:result_to_message(

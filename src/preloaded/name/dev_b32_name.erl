@@ -1,11 +1,12 @@
 %%% @doc Allows Arweave message IDs to be used via their base32 encoding as
 %%% subdomains on a HyperBEAM node.
 -module(dev_b32_name).
--export([info/1]).
+-specification("../../../specs/b32-name@1.0.md").
+-export([device_info/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-info(_Opts) ->
+device_info(_Opts) ->
     #{
         default => fun get/4,
         excludes => [<<"keys">>, <<"set">>]
@@ -142,6 +143,32 @@ test_subdomain_matches_path_id() ->
             hb_http_server:start_node(Opts),
             #{
                 <<"path">> => <<ID1/binary, "/a">>,
+                <<"host">> => subdomain(ID1, Opts)
+            },
+            Opts
+        )
+    ),
+    % A stored address that refers to the message matches it as well.
+    Address = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    ok = hb_cache:link(ID1, Address, Opts),
+    ?assertMatch(
+        {ok, 1},
+        hb_http:get(
+            hb_http_server:start_node(Opts),
+            #{
+                <<"path">> => <<Address/binary, "/a">>,
+                <<"host">> => subdomain(Address, Opts)
+            },
+            Opts
+        )
+    ),
+    % A key in the first path part takes the keys of the request.
+    ?assertMatch(
+        {ok, #{ <<"x">> := <<"5">> }},
+        hb_http:get(
+            hb_http_server:start_node(Opts),
+            #{
+                <<"path">> => <<"set?x=5">>,
                 <<"host">> => subdomain(ID1, Opts)
             },
             Opts

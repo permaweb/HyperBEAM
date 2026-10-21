@@ -18,11 +18,12 @@
 %%% list of already seen items in memory, but at some point it will likely make
 %%% sense to drop them in the cache.
 -module(dev_dedup).
--export([info/1]).
+-specification("../../../specs/dedup@1.0.md").
+-export([device_info/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-info(_M1) ->
+device_info(_M1) ->
     #{
         default => fun handle/4,
         exclude => [keys, set, id, commit]

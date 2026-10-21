@@ -21,6 +21,7 @@
 %%% Additionally, this device implements the standard computation device keys,
 %%% allowing it to be used as an element of an execution stack pipeline, etc.
 -module(dev_patch).
+-specification("../../../specs/patch@1.0.md").
 -export([all/3, patches/3]).
 %%% `execution-device` standard hooks:
 -export([init/3, compute/3, normalize/3, snapshot/3]).

@@ -88,7 +88,6 @@
 -export([topup/3, topup/4]).
 -export([start_mainnet/0, start_mainnet/1]).
 %%% Debugging tools:
--export([no_prod/3]).
 -export([read/1, read/2, debug_wait/4]).
 %%% Node wallet and address management:
 -export([address/0, address/1, wallet/0, wallet/1]).
@@ -273,22 +272,6 @@ read(ID, ScopeAtom) when is_atom(ScopeAtom) ->
     read(ID, hb_store:scope(hb_opts:get(store), ScopeAtom));
 read(ID, Store) ->
     hb_cache:read(Store, hb_util:id(ID)).
-
-%% @doc Utility function to throw an error if the current mode is prod and
-%% non-prod ready code is being executed. You can find these in the codebase
-%% by looking for ?NO_PROD calls.
-no_prod(X, Mod, Line) ->
-    case hb_opts:get(mode) of
-        prod ->
-            io:format(standard_error,
-                "=== DANGER: NON-PROD READY CODE INVOKED IN PROD ===~n", []),
-            io:format(standard_error, "~w:~w:       ~p~n", [Mod, Line, X]),
-            case hb_opts:get(exit_on_no_prod) of
-                true -> init:stop();
-                false -> throw(X)
-            end;
-        _ -> X
-    end.
 
 %% @doc Utility function to get the current time in milliseconds.
 now() ->

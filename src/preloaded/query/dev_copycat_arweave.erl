@@ -696,7 +696,8 @@ index_pending(Request, IndexMode, Opts) ->
             Name = {copycat_pending, Store},
             Base = #{
                 <<"device">> => #{
-                    info => fun() -> #{ grouper => fun() -> Name end } end,
+                    device_info =>
+                        fun() -> #{ grouper => fun() -> Name end } end,
                     index =>
                         fun(_, #{ <<"request">> := Req, <<"mode">> := Mode,
                                 <<"options">> := IndexOpts }) ->
@@ -940,12 +941,25 @@ index_full_bundle_item(ItemID, ItemBinary, ItemStartOffset, IndexMode, Store, Op
         byte_size(ItemBinary)
     ) of
         ok ->
-            CacheRes = index_item(EncodedItemID, fun() ->
+            LocalOpts = hb_store:scope(Opts, local),
+            % An item that its codec refuses is refused on every pass, so we
+            % skip it and still index its bundle.
+            Converted =
                 case {IndexMode, ParseResult} of
                     {full, {ok, _, Parsed}} ->
-                        LocalOpts = hb_store:scope(Opts, local),
-                        Msg = hb_message:convert(
-                            Parsed, <<"structured@1.0">>, <<"ans104@1.0">>, LocalOpts),
+                        index_item(EncodedItemID, fun() ->
+                            {ok,
+                                hb_message:convert(
+                                    Parsed,
+                                    <<"structured@1.0">>,
+                                    <<"ans104@1.0">>,
+                                    LocalOpts)}
+                        end, refused);
+                    _ -> ok
+                end,
+            CacheRes = index_item(EncodedItemID, fun() ->
+                case Converted of
+                    {ok, Msg} ->
                         % An item whose signature does not verify is not
                         % indexed: the cache would write it without its
                         % commitment.
@@ -957,7 +971,7 @@ index_full_bundle_item(ItemID, ItemBinary, ItemStartOffset, IndexMode, Store, Op
                                 LocalOpts
                             ),
                         ok;
-                    _ -> ok
+                    Other -> Other
                 end
             end, error),
             DescendantRes =
@@ -982,6 +996,7 @@ index_full_bundle_item(ItemID, ItemBinary, ItemStartOffset, IndexMode, Store, Op
                 end,
             case {CacheRes, DescendantRes} of
                 {ok, {ok, DescendantCount}} -> {ok, 1 + DescendantCount};
+                {refused, {ok, DescendantCount}} -> {ok, DescendantCount};
                 {_, {error, _} = Error} -> Error;
                 _ -> {error, 'item-index-failed'}
             end;
@@ -1240,7 +1255,6 @@ block_transaction_pages_test() ->
     Request = fun(Vars) ->
         {ok, Reply} = hb_http:post(Node, #{ <<"path">> => <<"~query@1.0/graphql">>,
             <<"content-type">> => <<"application/json">>,
-            <<"codec-device">> => <<"json@1.0">>,
             <<"body">> => hb_json:encode(#{ <<"query">> => Query,
                 <<"variables">> => Vars }) }, #{}),
         hb_json:decode(hb_maps:get(<<"body">>, Reply))
@@ -2130,7 +2144,13 @@ pending_range_isolates_bad_child_test() ->
     Nested = ar_bundles:sign_item(#tx{data = [Bad, Good]}, ar_wallet:new()),
     Opts = pending_bundle_children([Nested]),
     ?assertMatch({ok, _}, hb_cache:read(hb_util:encode(Good#tx.id),
-        hb_store:scope(Opts, local))).
+        hb_store:scope(Opts, local))),
+    % An item whose `ao-types' its codec refuses is skipped alone.
+    Refused = ar_bundles:sign_item(
+        #tx{ tags = [{<<"ao-types">>, <<"integer=(\"a\")">>}] }, ar_wallet:new()),
+    {undefined, Bundle} = ar_bundles:serialize_bundle(list, [Refused, Good], false),
+    ?assertEqual({ok, 1}, index_full_bundle_bytes(Bundle, 0, full,
+        hb_store_arweave:store_from_opts(Opts), Opts)).
 
 pending_bundle_children(Rejected) ->
     pending_bundle_children(Rejected, hb_store_volatile).

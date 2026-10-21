@@ -9,7 +9,7 @@
 %%% are parsed again as a path.
 
 Nonterminals
-path elems elem part uri utoks utok group gtoks gtok step head key ktok ktok0
+path elems elem part utok group gtoks gtok step head key ktok ktok0
 vtoks vtok dtoks mods item ikey iktok claims equivalence.
 
 Terminals
@@ -18,7 +18,7 @@ text quoted scheme varied dependencies result extension.
 
 Rootsymbol path.
 
-path -> elems : [ Part || Part <- '$1', Part =/= empty ].
+path -> elems : path_parts('$1').
 
 elems -> elem : ['$1'].
 elems -> elems '/' elem : '$1' ++ ['$3'].
@@ -26,16 +26,9 @@ elems -> elems '/' elem : '$1' ++ ['$3'].
 elem -> '$empty' : empty.
 elem -> part : '$1'.
 
-part -> uri : '$1'.
 part -> group : {subpath, '$1'}.
 part -> step : {step, '$1', []}.
 part -> step claims : {step, '$1', '$2'}.
-
-uri -> scheme : {uri, ['$1']}.
-uri -> scheme utoks : {uri, ['$1' | '$2']}.
-
-utoks -> utok : ['$1'].
-utoks -> utoks utok : '$1' ++ ['$2'].
 
 utok -> text : '$1'.
 utok -> quoted : '$1'.
@@ -84,6 +77,7 @@ key -> key ktok : '$1' ++ ['$2'].
 
 ktok0 -> text : '$1'.
 ktok0 -> quoted : '$1'.
+ktok0 -> scheme : '$1'.
 ktok0 -> '+' : '$1'.
 ktok0 -> ' ' : '$1'.
 ktok0 -> '.' : '$1'.
@@ -93,7 +87,6 @@ ktok0 -> ';' : '$1'.
 ktok0 -> ':' : '$1'.
 
 ktok -> ktok0 : '$1'.
-ktok -> scheme : '$1'.
 ktok -> group : '$1'.
 
 vtoks -> '$empty' : [].
@@ -129,3 +122,12 @@ claims -> equivalence : ['$1'].
 
 equivalence -> result : '$1'.
 equivalence -> extension : '$1'.
+
+Erlang code.
+
+%% A path given over HTTP starts with `/', so its first element is empty. An
+%% empty path part after that `/' is kept as `empty': it is the carried
+%% message. Every other empty element is dropped.
+path_parts([empty, empty, Part | Rest]) when Part =/= empty ->
+    [empty | path_parts([Part | Rest])];
+path_parts(Elems) -> [ Part || Part <- Elems, Part =/= empty ].

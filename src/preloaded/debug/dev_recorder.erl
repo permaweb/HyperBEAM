@@ -8,13 +8,13 @@
 %%% `~recorder@1.0/maybe-append' is intended to be installed as an `on/event'
 %%% hook handler. It appends the hook request only while a flight is active.
 -module(dev_recorder).
--export([info/1, maybe_append/3, record/3, index/3]).
+-export([device_info/1, maybe_append/3, record/3, index/3]).
 -export([take_off/3, land/3, clear/0]).
 -include_lib("hb/include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEVICE, <<"recorder@1.0">>).
--define(NO_CACHE, [<<"no-cache">>, <<"no-store">>]).
+-define(NO_CACHE, <<"no-cache, no-store">>).
 -define(RECORDING_KEY, {?DEVICE, recording}).
 -define(RECORDING_EVENTS_KEY, {?DEVICE, events}).
 -define(RECORDING_SEQUENCE_KEY, {?DEVICE, sequence}).
@@ -37,7 +37,7 @@
 ]).
 
 %% @doc Export the public event recording and viewer endpoints.
-info(_) ->
+device_info(_) ->
     #{
         exports => [
             <<"take-off">>,
@@ -53,11 +53,16 @@ maybe_append(_Base, Req, Opts) ->
     maybe_record(Req, Opts),
     {ok, Req}.
 
-%% @doc Start a process-local flight and pass the base onward.
+%% @doc Start a process-local flight and pass the base onward, if the node
+%% records (`recording_enabled/1').
 take_off(Base, Req, Opts) ->
-    start_recording(recording_opts(Req, Opts)),
-    arm_event_opts(with_event_hook(Opts)),
-    {ok, pass_through(Base, Opts)}.
+    case recording_enabled(Opts) of
+        false -> {error, <<"Recording is disabled.">>};
+        true ->
+            start_recording(recording_opts(Req, Opts)),
+            arm_event_opts(with_event_hook(Opts)),
+            {ok, pass_through(Base, Opts)}
+    end.
 
 %% @doc Return and clear the current process-local flight.
 land(_Base, Req, Opts) ->
@@ -68,44 +73,57 @@ land(_Base, Req, Opts) ->
 clear() ->
     clear_recording().
 
-%% @doc Resolve a target request with process-local event recording enabled.
-%% Returns the recorded event report in the requested render format.
+%% @doc Resolve a target request with process-local event recording enabled,
+%% if the node records (`recording_enabled/1'). Returns the recorded event
+%% report in the requested render format.
 record(_Base, Req, Opts) ->
-    case record_target(Req, Opts) of
-        {ok, Target} ->
-            RecOpts = recording_opts(Req, Opts),
-            HookOpts = with_event_hook(Opts),
-            start_recording(RecOpts),
-            try
-                arm_event_opts(HookOpts),
-                Res = resolve_recorded(Target, HookOpts),
-                Report0 = report(),
-                Report1 =
-                    Report0#{
-                        <<"result">> => redact_private(Res),
-                        <<"target">> => redact_private(Target)
-                    },
-                response(Report1, Req, Opts, <<"html">>)
-            after
-                clear_recording()
-            end;
-        {error, Reason} ->
-            response(
-                #{
-                    <<"recording">> => false,
-                    <<"count">> => 0,
-                    <<"events">> => [],
-                    <<"error">> => redact_private(Reason)
-                },
-                Req,
-                Opts,
-                <<"html">>
-            )
+    case recording_enabled(Opts) of
+        false -> {error, <<"Recording is disabled.">>};
+        true ->
+            case record_target(Req, Opts) of
+                {ok, Target} ->
+                    RecOpts = recording_opts(Req, Opts),
+                    HookOpts = with_event_hook(Opts),
+                    start_recording(RecOpts),
+                    try
+                        arm_event_opts(HookOpts),
+                        Res = resolve_recorded(Target, HookOpts),
+                        Report0 = report(),
+                        Report1 =
+                            Report0#{
+                                <<"result">> => redact_private(Res),
+                                <<"target">> => redact_private(Target)
+                            },
+                        response(Report1, Req, Opts, <<"html">>)
+                    after
+                        clear_recording()
+                    end;
+                {error, Reason} ->
+                    response(
+                        #{
+                            <<"recording">> => false,
+                            <<"count">> => 0,
+                            <<"events">> => [],
+                            <<"error">> => redact_private(Reason)
+                        },
+                        Req,
+                        Opts,
+                        <<"html">>
+                    )
+            end
     end.
 
 %% @doc Return the browser UI with the current process flight embedded.
 index(_Base, Req, Opts) ->
     html_response(report(), Opts).
+
+%% @doc Return whether the node records. The node's `recording' option gives
+%% it; if the option is not set, the node records outside of `prod' mode.
+recording_enabled(Opts) ->
+    case hb_opts:get(recording, not_found, Opts) of
+        not_found -> hb_opts:get(mode, prod, Opts) =/= prod;
+        Recording -> hb_util:bool(Recording)
+    end.
 
 response(Report, Req, Opts) ->
     response(Report, Req, Opts, <<"raw">>).
@@ -752,6 +770,15 @@ ao_take_off_land_test() ->
             #{}
         ),
     ?assert(length(Events) > 0),
+    % A node in `prod' mode records if its `recording' option enables it.
+    {ok, ProdEvents} =
+        hb_ao:resolve(
+            #{
+                <<"path">> => <<"/~recorder@1.0/take-off/keys/land~recorder@1.0&format=raw">>
+            },
+            #{ <<"mode">> => prod, <<"recording">> => true }
+        ),
+    ?assert(length(ProdEvents) > 0),
     clear_recording().
 
 maybe_append_records_started_event_test() ->

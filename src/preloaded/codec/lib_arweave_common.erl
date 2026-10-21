@@ -7,7 +7,7 @@
 -export([add_commitment/4]).
 -export([with_commitments/8]).
 -export([bundle_hint/4, data/3, tags/5, excluded_tags/3]).
--export([signed_children_hint/3]).
+-export([item_hint/4, signed_children_hint/3]).
 -export([to/3, to/6, siginfo/4, fields_to_tx/4, decode/1]).
 -export([bundle_header/2, bundle_header/3]).
 -include("include/hb.hrl").
@@ -146,30 +146,13 @@ anchor_field(Item, Prefix, _Opts) ->
 %% @doc Return a TABM of the raw tags of the item, including all metadata
 %% (e.g. `ao-type', `ao-data-key', etc.)
 tags(Item, Opts) ->
-    Tags = hb_ao:normalize_keys(
+    hb_ao:normalize_keys(
         deduplicating_from_list(Item#tx.tags, Opts),
         Opts
-    ),
-    ao_types(Tags, Opts).
+    ).
 
 %% @doc Normalize a tag name as `structured@1.0' normalizes a key.
 normalize_key(Key) -> hb_util:lowercase_key(hb_ao:normalize_key(Key)).
-
-%% @doc Ensure the encoded keys in the `ao-types' field are lowercased and
-%% normalized like the other keys in the tags field, and that the field is
-%% encoded as `structured@1.0' writes it.
-ao_types(#{ <<"ao-types">> := AoTypes } = Tags, Opts) ->
-    {ok, EncodedAOTypes} =
-        hb_ao:raw(
-            <<"structured@1.0">>,
-            <<"encode-types">>,
-            decode_types(AoTypes, Opts),
-            #{},
-            Opts
-        ),
-    Tags#{ <<"ao-types">> := EncodedAOTypes };
-ao_types(Tags, _Opts) ->
-    Tags.
 
 %% @doc Return a TABM of the keys and values found in the data field of the
 %% item.
@@ -227,7 +210,7 @@ data_keys(Data, Opts) ->
     hb_util:to_sorted_keys(Data, Opts).
 
 %% @doc Return the list of the keys from the tags TABM. Filter all metadata
-%% tags: `ao-data-key', `ao-types', `bundle-format', `bundle-version'.
+%% tags: `ao-data-key', `bundle-format', `bundle-version', `bundle-map'.
 %% We also filter `data` as we don't preserve the a data *field* via
 %% `field-data` in the commitment. That means if we promote a `data` tag to
 %% a key on the TABM, it will be interpreted as the message's actual data.
@@ -255,11 +238,11 @@ tag_keys(Item, _Opts) ->
         Item#tx.tags
     ).
 
-%% @doc Return the complete message for an item, less its commitments. The
-%% precidence order for choosing fields to place into the base message is:
-%% 1. Data
-%% 2. Tags
-%% 3. Fields
+%% @doc Return the complete message for an item, less its commitments. Each
+%% committed key takes its value from `Data', then `Fields', then `Tags'. A
+%% field in `Fields' takes precedence over a tag of the same name, and the tag
+%% stays only in the commitment's `original-tags'. A field with its default
+%% value is not in `Fields', so a tag of the same name gives the key's value.
 base(CommittedKeys, Fields, Tags, Data, Opts) ->
     hb_maps:from_list(
         lists:map(
@@ -296,20 +279,20 @@ verify_identity(Item, TABM, Opts) ->
                     committer(Item, Opts)
     end.
 
-%% @doc Return the URI of the committer of an item's signature: the
-%% `did-pkh@1.0' committer of the item's owner. If the key has no account, we
-%% return `unset'.
+%% @doc Return the URI of the committer of an item's signature, as
+%% `hb_committer:uri/2' gives it for the committer of the item's owner. If the
+%% key has no account, we return `unset'.
 committer(Item, Opts) ->
+    KeyType = Item#tx.signature_type,
     Committer =
         #{
-            <<"device">> => <<"did-pkh@1.0">>,
+            <<"device">> => ar_wallet:committer_device(KeyType),
             <<"owner">> => Item#tx.owner,
-            <<"type">> => ar_tx:serialize_sig_type(Item#tx.signature_type)
+            <<"type">> => ar_tx:serialize_sig_type(KeyType)
         },
-    ToURI = #{ <<"path">> => <<"to">>, <<"type">> => <<"uri">> },
-    case hb_ao:raw(Committer, ToURI, Opts) of
-        {ok, URI} -> URI;
-        {error, _} -> unset
+    case hb_committer:uri(Committer, Opts) of
+        URI when is_binary(URI) -> URI;
+        _ -> unset
     end.
 
 %% @doc Sign the item or transaction of a message with the committer of the
@@ -367,27 +350,29 @@ order_tags(Tags, _Req, _Opts) ->
     Tags.
 
 %% @doc Check that a commitment's committed keys are the keys of the item
-%% encoded from the message, and that the message gives those keys the types the
-%% item does. The keys are the item's data keys, tags and fields, as decoding
-%% the item gives them; nested items are not decoded, as only their keys are
-%% needed. The item carries the signed types in its `ao-types' tag: an untyped
-%% signed value is a binary, so a message that lists it as another type does not
-%% verify.
+%% encoded from the message, and the keys of the message. The item's keys are
+%% its data keys, tags and fields, as decoding the item gives them; nested items
+%% are not decoded, as only their keys are needed. A key that encoding the
+%% message adds, but that the commitment does not list, is a value that the
+%% signature does not cover.
 verify_committed_keys(FieldKeys, Item, FieldsFun, TABM, Opts) ->
     [Commitment] = maps:values(maps:get(<<"commitments">>, TABM)),
     TX = ar_bundles:deserialize(Item),
     Fields = FieldsFun(TX, <<>>, Opts),
     Tags = tags(TX, Opts),
     Data = data(TX, #{}, Tags, fun(_, _, _) -> {ok, <<>>} end, Opts),
-    CommittedKeys = hb_maps:get(<<"committed">>, Commitment, #{}, Opts),
+    CommittedKeys =
+        lists:sort(
+            hb_util:message_to_ordered_list(
+                hb_maps:get(<<"committed">>, Commitment, #{}, Opts)
+            )
+        ),
     lists:sort(committed(FieldKeys, TX, Fields, Tags, Data, Opts)) =:=
-        lists:sort(hb_util:message_to_ordered_list(CommittedKeys)) andalso
-        holds_types(
-            maps:get(<<"ao-types">>, Tags, <<>>),
-            Commitment,
-            TABM,
+        CommittedKeys andalso
+        hb_util:to_sorted_keys(
+            hb_maps:without([<<"commitments">>], TABM, Opts),
             Opts
-        ).
+        ) =:= CommittedKeys.
 
 %% @doc Return a message with the appropriate commitments added to it.
 with_commitments(
@@ -395,7 +380,7 @@ with_commitments(
         Tags, Base, CommittedKeys, Opts) ->
     case Item#tx.signature of
         ?DEFAULT_SIG ->
-            case normal_tags(BaseFields, Item#tx.tags) of
+            case normal_tags(BaseFields, Item) of
                 true -> Base;
                 false ->
                     with_unsigned_commitment(
@@ -485,11 +470,13 @@ bundle_commitment_key(Tags, Opts) ->
 
 %% @doc Check whether every tag name is a key as `structured@1.0' reads it, and
 %% no name repeats. Other tags need `original-tags' to keep their bytes and
-%% order.
-normal_tags(BaseFields, Tags) ->
+%% order. The tags of a list bundle need them too: without its tags, a message
+%% of its items encodes as a map bundle.
+normal_tags(BaseFields, Item = #tx{ tags = Tags }) ->
     ReservedFields = [<<"ao-data-key">>, <<"ao-types">>, <<"data">> | BaseFields],
     Keys = [Key || {Key, _} <- Tags],
-    length(Keys) =:= length(lists:usort(Keys)) andalso
+    ar_tx:type(Item) =/= list andalso
+        length(Keys) =:= length(lists:usort(Keys)) andalso
         lists:all(
             fun({Key, _}) ->
                 normalize_key(Key) =:= Key andalso
@@ -502,7 +489,7 @@ normal_tags(BaseFields, Tags) ->
 %% @doc Return the original tags of an item if it is applicable. Otherwise,
 %% return `undefined'.
 original_tags(BaseFields, Item, _Opts) ->
-    case normal_tags(BaseFields, Item#tx.tags) of
+    case normal_tags(BaseFields, Item) of
         true -> unset;
         false -> encoded_tags_to_map(Item#tx.tags)
     end.
@@ -588,23 +575,59 @@ bundle_hint(Device, Msg, Req, Opts) ->
             },
             Msg,
             Opts) of
-        {ok, _, Commitment} ->
-            case hb_util:atom(
-                    hb_maps:get(<<"bundle">>, Commitment, not_found, Opts)) of
-                not_found -> {ok, Req};
-                Value -> {ok, Req#{ <<"bundle">> => Value }}
-            end;
+        {ok, _, Commitment} -> {ok, with_bundle(Commitment, Req, Opts)};
         _ -> not_found
+    end.
+
+%% @doc Apply `bundle_hint/4' for an item codec, and name the committed keys of
+%% the commitment, which its item holds alone: `structured@1.0' encodes the
+%% message over those keys, so keys given to it after signing do not reach the
+%% item. Returns `not_found' when no commitment for `Device' exists.
+item_hint(Device, Msg, Req, Opts) ->
+    case hb_message:commitment(
+            #{
+                <<"commitment-device">> => Device
+            },
+            Msg,
+            Opts) of
+        {ok, _, Commitment} ->
+            Committed =
+                hb_util:message_to_ordered_list(
+                    hb_maps:get(<<"committed">>, Commitment, [], Opts),
+                    Opts
+                ),
+            {ok,
+                with_bundle(
+                    Commitment,
+                    Req#{ <<"committed">> => Committed },
+                    Opts
+                )
+            };
+        _ -> not_found
+    end.
+
+%% @doc Mirror the `bundle' value of a commitment onto a request.
+with_bundle(Commitment, Req, Opts) ->
+    case hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, not_found, Opts)) of
+        not_found -> Req;
+        Value -> Req#{ <<"bundle">> => Value }
     end.
 
 %% @doc Turn off bundling for a message with a nested message signed by a
 %% device other than `ans104@1.0': its nested messages are then linked. An item
 %% in a bundle can hold only its own ANS-104 signature, so bundling would drop
-%% the nested message's other commitments.
+%% the nested message's other commitments. Of a message whose hint names its
+%% committed keys, only the nested messages of those keys are encoded.
 signed_children_hint(Msg, {ok, Req = #{ <<"bundle">> := true }}, Opts) ->
+    Encoded =
+        case Req of
+            #{ <<"committed">> := Committed } ->
+                hb_maps:with(Committed, Msg, Opts);
+            _ -> Msg
+        end,
     Children =
         hb_maps:values(
-            hb_maps:without([<<"commitments">>, <<"priv">>], Msg, Opts),
+            hb_maps:without([<<"commitments">>, <<"priv">>], Encoded, Opts),
             Opts
         ),
     case lists:any(fun(Child) -> signed_by_other(Child, Opts) end, Children) of
@@ -674,8 +697,7 @@ commitment_to_tx(Message, Commitment, FieldsFun, Opts) ->
     end.
 
 %% @doc Check that a message still holds the values of the fields and tags
-%% that its commitment restores, and the types that the tags give to its
-%% committed keys. Keys added after signing are not compared.
+%% that its commitment restores. Keys added after signing are not compared.
 holds_signed_values(Commitment, OriginalTags, TABM, Opts) ->
     Fields =
         maps:from_list(
@@ -687,66 +709,33 @@ holds_signed_values(Commitment, OriginalTags, TABM, Opts) ->
             ]
         ),
     holds(Fields, TABM, Opts) andalso
-        holds_tags(OriginalTags, maps:keys(Fields), Commitment, TABM, Opts).
+        holds_tags(OriginalTags, maps:keys(Fields), TABM, Opts).
 
-%% @doc Check that a message holds the values of its commitment's tags, and
-%% the types that the `ao-types' tag gives to its committed keys. A tag with
-%% the name of a field is skipped: decoding takes the field's value.
-holds_tags([], _FieldKeys, _Commitment, _TABM, _Opts) ->
+%% @doc Check that a message holds the values of its commitment's tags. A tag
+%% with the name of a field is skipped: decoding takes the field's value. So is
+%% a tag with the name of a nested message, such as a list bundle's tag `1':
+%% decoding takes the item in the data.
+holds_tags([], _FieldKeys, _TABM, _Opts) ->
     true;
-holds_tags(OriginalTags, FieldKeys, Commitment, TABM, Opts) ->
+holds_tags(OriginalTags, FieldKeys, TABM, Opts) ->
     Tags = deduplicating_from_list(OriginalTags, Opts),
+    Nested =
+        maps:keys(
+            maps:filter(
+                fun(_Key, Value) -> is_map(Value) orelse ?IS_LINK(Value) end,
+                TABM
+            )
+        ),
     Keys =
         hb_util:list_without(
-            [<<"ao-types">> | FieldKeys],
+            FieldKeys ++ Nested,
             tag_keys(#tx{ tags = OriginalTags }, Opts)
         ),
-    holds(maps:with(Keys, Tags), TABM, Opts) andalso
-        holds_types(
-            maps:get(<<"ao-types">>, Tags, <<>>),
-            Commitment,
-            TABM,
-            Opts
-        ).
+    holds(maps:with(Keys, Tags), TABM, Opts).
 
-%% @doc Check that a message holds the given values for their keys. Lazy
-%% values, as in a message read from a cache, are loaded before comparing.
-holds(Values, TABM, Opts) ->
-    hb_cache:ensure_all_loaded(Values, Opts) ==
-        hb_cache:ensure_all_loaded(maps:with(maps:keys(Values), TABM), Opts).
-
-%% @doc Check that the message gives its committed keys the types that the
-%% commitment's `ao-types' tag gives them. Equal `ao-types' values need no
-%% decoding.
-holds_types(Types, _Commitment, #{ <<"ao-types">> := Types }, _Opts) ->
-    true;
-holds_types(SignedTypes, Commitment, TABM, Opts) ->
-    Committed =
-        [
-            normalize_key(Key)
-        ||
-            Key <-
-                hb_util:message_to_ordered_list(
-                    hb_maps:get(<<"committed">>, Commitment, #{}, Opts)
-                )
-        ],
-    maps:with(Committed, decode_types(SignedTypes, Opts)) ==
-        maps:with(
-            Committed,
-            decode_types(hb_maps:get(<<"ao-types">>, TABM, <<>>, Opts), Opts)
-        ).
-
-%% @doc Decode an `ao-types' value to a map of normalized keys to types.
-decode_types(<<>>, _Opts) ->
-    #{};
-decode_types(Types, Opts) ->
-    {ok, Decoded} =
-        hb_ao:raw(<<"structured@1.0">>, <<"decode-types">>, Types, #{}, Opts),
-    maps:fold(
-        fun(Key, Type, Acc) -> Acc#{ normalize_key(Key) => Type } end,
-        #{},
-        Decoded
-    ).
+%% @doc Check that a message holds the given values for their keys.
+holds(Values, TABM, _Opts) ->
+    Values == maps:with(maps:keys(Values), TABM).
 
 %% @doc Convert a HyperBEAM-compatible message into an ANS-104 tag list.
 original_tags_to_tags(TagMap) ->

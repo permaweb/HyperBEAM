@@ -4,10 +4,10 @@
 %%% uses this top-level doc block as the default Device-Specification
 %%% body when packaging the device.
 -module(dev_{{name}}).
--export([info/1, echo/3]).
+-export([device_info/1, echo/3]).
 
 %% @doc Return the public device API.
-info(_Opts) ->
+device_info(_Opts) ->
     #{ exports => [<<"echo">>] }.
 
 %% @doc Echo the request's `input' field, or `body' if no input is set.

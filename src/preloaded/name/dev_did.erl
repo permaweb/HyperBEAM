@@ -14,8 +14,8 @@
     #{ type := binary(), _ => _ },
     #{ _ => _ }
 ) -> {ok, _} | {error, _}.
-from(#{ <<"body">> := Body }, #{ <<"type">> := <<"uri">> }, Opts) ->
-    hb_uri:proxy_from(<<"did">>, Body, Opts).
+from(#{ <<"body">> := Body }, Req = #{ <<"type">> := <<"uri">> }, Opts) ->
+    hb_uri:proxy_from(<<"did">>, Body, Req, Opts).
 
 %% @doc Writes the DID of a message whose device is `did-<method>@...'.
 -spec to(

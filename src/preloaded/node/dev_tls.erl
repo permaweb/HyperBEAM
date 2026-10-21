@@ -33,7 +33,8 @@
 %%% answered while the client waits for the issuer. Renewal replaces the live
 %%% certificate without closing established connections.
 -module(dev_tls).
--export([info/1, request/3, well_known/3, dns_resolve/3, csr/3, obtain/3]).
+-export([device_info/1]).
+-export([request/3, well_known/3, dns_resolve/3, csr/3, obtain/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -43,7 +44,7 @@
 -define(RENEW_RETRY_MS, 60 * 60 * 1000).
 
 %% @doc Expose the device keys while keeping certificate lifecycle helpers private.
-info(_) ->
+device_info(_) ->
     #{ exports => [
         <<"request">>, <<"well-known">>, <<"dns-resolve">>, <<"csr">>, <<"obtain">>
     ] }.
@@ -67,7 +68,7 @@ csr(_Base, Request, Opts) ->
         {ok, #{
             <<"status">> => 200,
             <<"content-type">> => <<"text/plain">>,
-            <<"cache-control">> => [<<"no-store">>],
+            <<"cache-control">> => <<"no-store">>,
             <<"body">> => public_key:pem_encode([
                 {'CertificationRequest', DER, not_encrypted}
             ])
@@ -113,7 +114,7 @@ well_known(_Base, Request, Opts) ->
                 {ok, Authorization} -> {ok, #{
                     <<"status">> => 200,
                     <<"content-type">> => <<"text/plain">>,
-                    <<"cache-control">> => [<<"no-store">>],
+                    <<"cache-control">> => <<"no-store">>,
                     <<"body">> => Authorization
                 }};
                 _ -> not_found()
@@ -122,7 +123,7 @@ well_known(_Base, Request, Opts) ->
             {error, #{
                 <<"status">> => 405,
                 <<"allow">> => <<"GET">>,
-                <<"cache-control">> => [<<"no-store">>],
+                <<"cache-control">> => <<"no-store">>,
                 <<"body">> => <<"Method not allowed.">>
             }}
     end.
@@ -131,7 +132,7 @@ well_known(_Base, Request, Opts) ->
 not_found() ->
     {error, #{
         <<"status">> => 404,
-        <<"cache-control">> => [<<"no-store">>],
+        <<"cache-control">> => <<"no-store">>,
         <<"body">> => <<"Not found.">>
     }}.
 
@@ -186,7 +187,7 @@ dns_reply(Name, Type, #{tls := TLS, challenges := Challenges}) ->
                 <<"authoritative">> => true,
                 <<"answers">> => Answers,
                 <<"authority">> => case Answers of [] -> [SOA]; _ -> [] end,
-                <<"cache-control">> => [<<"no-store">>]
+                <<"cache-control">> => <<"no-store">>
             }}
     end.
 

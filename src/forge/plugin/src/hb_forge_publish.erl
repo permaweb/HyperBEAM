@@ -118,7 +118,6 @@ upload_ans104(Bundler, Msg, Opts) ->
         path => <<"/~bundler@1.0/tx">>,
         method => <<"POST">>,
         headers => #{
-            <<"codec-device">> => <<"ans104@1.0">>,
             <<"content-type">> => <<"application/ans104">>,
             <<"accept-bundle">> => <<"true">>
         },

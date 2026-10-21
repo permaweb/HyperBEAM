@@ -1,6 +1,9 @@
 -include("ar.hrl").
 
 -define(HYPERBEAM_VERSION, <<"0.11">>).
+%% @doc The version of the AO runtime interface that this node implements. A
+%% device archive requires it as `requires-ao-runtime-version'.
+-define(AO_RUNTIME_VERSION, <<"0.11">>).
 -define(PRELOADED_INDEX_KEY, <<"~meta@1.0/preloaded-devices-index">>).
 
 %% @doc Macro for checking if a message is empty, ignoring its hashpath.
@@ -9,14 +12,12 @@
 %% human-readable ID encoding.
 -define(IS_ID(X), (is_binary(X) andalso (byte_size(X) == 42 orelse byte_size(X) == 43 orelse byte_size(X) == 32))).
 %% @doc Macro usable in guards that recognizes the hashpath URI scheme.
--define(IS_HASHPATH(X), (is_binary(X) andalso byte_size(X) >= 5 andalso binary_part(X, 0, 5) == <<"ao://">>)).
+-define(IS_HASHPATH(X), (is_binary(X) andalso byte_size(X) >= 3 andalso binary_part(X, 0, 3) == <<"ao:">>)).
 %% @doc Builds the `ni:' name of a binary from its base64url SHA-256 (RFC 6920
 %% s3, with no authority). `hb_cache' stores a binary under this name.
 -define(NI_URI(ID), <<"ni:///sha-256;", (ID)/binary>>).
 %% @doc The committer of unsigned commitments: an HMAC key known to everyone.
 -define(UNSIGNED_COMMITTER, <<"hmac:constant:ao">>).
-%% @doc The `did:pkh:' committer of an Arweave address.
--define(ARWEAVE_COMMITTER(Address), <<"did:pkh:arweave:7wIU:", (Address)/binary>>).
 %% @doc Macro for checking a term is a link.
 -define(IS_LINK(X), (is_tuple(X) andalso element(1, X) == link)).
 %% @doc List of special keys that are used in the AO-Core protocol.
@@ -60,7 +61,6 @@
 -endif.
 -define(debug_wait(T), hb:debug_wait(T, ?MODULE, ?FUNCTION_NAME, ?LINE)).
 -define(debug_print(X), hb_event:debug_print(X, ?MODULE, ?FUNCTION_NAME, ?LINE)).
--define(no_prod(X), hb:no_prod(X, ?MODULE, ?LINE)).
 
 %%% Macro shortcuts for debugging.
 %% @doc A macro for marking that you got 'here'.

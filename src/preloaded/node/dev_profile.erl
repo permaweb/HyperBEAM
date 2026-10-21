@@ -6,12 +6,12 @@
 %%% If the `eval' function is instead directly invoked via Erlang, the first
 %%% argument may be a function to profile instead.
 -module(dev_profile).
--export([info/1, eval/1, eval/2, eval/3, eval_key/4]).
+-export([device_info/1, eval/1, eval/2, eval/3, eval_key/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 %% @doc Default to the `eval' function.
-info(_) ->
+device_info(_) ->
     #{
         excludes => [<<"committers">>, <<"keys">>, <<"set">>],
         default => fun eval_key/4
@@ -112,7 +112,9 @@ find_profiling_config(Opts) ->
                 prod -> false;
                 _ -> hb_features:test()
             end;
-        EnableProfiling -> EnableProfiling
+        Signers when is_list(Signers) -> Signers;
+        % A configuration file gives `true' and `false' as binaries.
+        EnableProfiling -> hb_util:bool(EnableProfiling)
     end.
 
 %% @doc Validate that profiling is enabled. 
@@ -140,7 +142,7 @@ validate_return_mode(Req, Opts) ->
 validate_signer(Req, Opts) ->
     case find_profiling_config(Opts) of
         ValidSigners when is_list(ValidSigners) ->
-            Committers = lists:map(fun hb_util:committer/1, ValidSigners),
+            Committers = [hb_committer:uri(S, Opts) || S <- ValidSigners],
             lists:any(
                 fun(Signer) -> lists:member(Signer, Committers) end,
                 hb_message:signers(Req, Opts)
@@ -338,6 +340,27 @@ eprof_resolution_test() ->
             ),
             #{ <<"profiling">> => [] }
         )
+    ),
+    % A node in `prod' mode does not profile unless `profiling' is set.
+    ?assertEqual(
+        {error, <<"Profiling is disabled.">>},
+        hb_ao:resolve(
+            #{ <<"path">> => <<"/~profile@1.0/run?run=/~meta@1.0/build">> },
+            #{ <<"mode">> => prod }
+        )
+    ),
+    % `profiling: true' in a configuration file enables profiling.
+    {ok, Conf} = hb_opts:load_bin(<<"profiling: true">>, #{}),
+    validate_profiler_output(
+        <<"eprof">>,
+        hb_ao:resolve(
+            #{
+                <<"path">> => <<"/~profile@1.0/run?run=/~meta@1.0/build">>,
+                <<"engine">> => <<"eprof">>,
+                <<"return-mode">> => <<"message">>
+            },
+            Conf
+        )
     ).
 
 -ifdef(ENABLE_EFLAME).
@@ -358,14 +381,14 @@ test_profiler_exec(function, Engine) ->
     eval(
         fun() -> {ok, #{ <<"node">> => <<"HyperBEAM">> }} end,
         #{ <<"engine">> => Engine, <<"return-mode">> => <<"message">> },
-        #{}
+        #{ <<"profiling">> => true }
     );
 test_profiler_exec(resolution, Engine) ->
     hb_ao:resolve(
         #{
             <<"path">> => <<"/~profile@1.0/run?run=/~meta@1.0/build">>,
             <<"engine">> => Engine, <<"return-mode">> => <<"message">> },
-        #{}
+        #{ <<"profiling">> => true }
     ).
 
 %% @doc Verify the expected type of output from a profiler.

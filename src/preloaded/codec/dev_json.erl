@@ -2,16 +2,14 @@
 %%% message as TABM and returns an encoded JSON string representation.
 %%% This codec utilizes the httpsig@1.0 codec for signing and verifying.
 -module(dev_json).
+-specification("../../../specs/json@1.0.md").
 -device_libraries([lib_arweave_common]).
--export([to/3, to_hint/3, from/3, commit/3, verify/3, committed/3, content_type/1]).
+-export([to/3, to_hint/3, from/3, commit/3, verify/3, committed/3]).
 -export([deserialize/3, serialize/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 -define(MAX_SAFE_INTEGER, 9007199254740991).
-
-%% @doc Return the content type for the codec.
-content_type(_) -> {ok, <<"application/json">>}.
 
 %% @doc Apply the bundle state of the delegated HTTPSig commitment.
 to_hint(Msg, Req, Opts) ->
@@ -20,15 +18,18 @@ to_hint(Msg, Req, Opts) ->
         Hint -> Hint
     end.
 
-%% @doc Encode a message to a JSON string, using JSON-native typing.
+%% @doc Encode a message to a JSON string, using JSON-native typing. An integer
+%% that a JSON number does not hold exactly is given as a string.
 -spec to(
     binary() | number() | boolean() | null | #{ _ => _ },
     #{ bundle => boolean(), _ => _ },
     #{ _ => _ }
 ) -> {ok, binary()}.
+to(Int, Req, Opts) when is_integer(Int), abs(Int) > ?MAX_SAFE_INTEGER ->
+    to(integer_to_binary(Int), Req, Opts);
 to(Msg, _Req, _Opts) when is_binary(Msg); is_number(Msg);
         Msg =:= true; Msg =:= false; Msg =:= null ->
-    {ok, hb_util:bin(json:encode(safe_numbers(Msg, #{})))};
+    {ok, hb_util:bin(json:encode(Msg))};
 to(Msg, Req, Opts) ->
     ConvOpts = Opts#{ <<"hashpath">> => ignore },
     HintedReq = hb_util:ok(to_hint(Msg, Req, Opts)),
@@ -36,8 +37,9 @@ to(Msg, Req, Opts) ->
     % 1. Convert it to a structured message.
     % 2. Load any linked items if we are in `bundle' mode.
     % 3. Convert it back to a TABM message, this time preserving all types
-    %    aside `atom's and binaries that are not UTF-8 text -- for which JSON
-    %    has no native support.
+    %    aside `atom's, binaries that are not UTF-8 text and integers that a
+    %    JSON number does not hold exactly -- for which JSON has no native
+    %    support.
     Restructured =
         hb_message:convert(
             hb_private:reset(Msg),
@@ -60,58 +62,17 @@ to(Msg, Req, Opts) ->
             #{
                 <<"device">> => <<"structured@1.0">>,
                 <<"encode-types">> => [<<"atom">>, <<"binary">>],
+                <<"max-integer">> => ?MAX_SAFE_INTEGER,
                 <<"bundle">> => Bundle
             },
             ConvOpts
         ),
-    {ok, hb_json:encode(safe_numbers(JSONStructured, ConvOpts))}.
-
-%% @doc Preserve integers outside JSON consumers' exact range as typed strings.
-safe_numbers(Value, _) when is_integer(Value), abs(Value) > ?MAX_SAFE_INTEGER ->
-    integer_to_binary(Value);
-safe_numbers(List, Opts) when is_list(List) ->
-    case lists:any(
-        fun(V) -> is_integer(V) andalso abs(V) > ?MAX_SAFE_INTEGER end, List
-    ) of
-        true ->
-            safe_numbers(
-                (hb_util:list_to_numbered_message(List))#{
-                    <<"ao-types">> => <<"list=(\".\")">>
-                },
-                Opts
-            );
-        false -> [safe_numbers(V, Opts) || V <- List]
-    end;
-safe_numbers(Map, Opts) when is_map(Map) ->
-    {ok, Types} = hb_ao:raw(
-        <<"structured@1.0">>, <<"decode-types">>, Map, #{}, Opts
-    ),
-    {Values, NewTypes} = maps:fold(
-        fun(Key, Value, {Acc, AccTypes}) ->
-            NextTypes =
-                case is_integer(Value) andalso abs(Value) > ?MAX_SAFE_INTEGER of
-                    true -> AccTypes#{ Key => <<"integer">> };
-                    false -> AccTypes
-                end,
-            {Acc#{ Key => safe_numbers(Value, Opts) }, NextTypes}
-        end,
-        {#{}, Types},
-        Map
-    ),
-    case NewTypes =:= Types of
-        true -> Values;
-        false ->
-            {ok, EncodedTypes} = hb_ao:raw(
-                <<"structured@1.0">>, <<"encode-types">>, NewTypes, #{}, Opts
-            ),
-            Values#{ <<"ao-types">> => EncodedTypes }
-    end;
-safe_numbers(Value, _) -> Value.
+    {ok, hb_json:encode(JSONStructured)}.
 
 %% @doc Decode a JSON string to a message.
 -spec from(
     binary() | #{ _ => _ },
-    #{ 'accept-codec' => binary(), _ => _ },
+    #{ _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
 from(Map, _Req, _Opts) when is_map(Map) -> {ok, Map};
@@ -131,20 +92,16 @@ from(JSON, Req, Opts) ->
         ),
     HintedReq = hb_util:ok(to_hint(Structured, Req, Opts)),
     ?event(debug_json, {structured, Structured}, Opts),
-    case hb_maps:get(<<"accept-codec">>, HintedReq, undefined, Opts) of
-        <<"structured@1.0">> -> {ok, Structured};
-        _ ->
-            % Re-encode the structured message back to TABM for the caller.
-            TABM =
-                hb_message:convert(
-                    Structured,
-                    tabm,
-                    HintedReq#{ <<"device">> => <<"structured@1.0">> },
-                    ConvOpts
-                ),
-            ?event(debug_json, {tabm, TABM}, Opts),
-            {ok, TABM}
-    end.
+    % Re-encode the structured message back to TABM for the caller.
+    TABM =
+        hb_message:convert(
+            Structured,
+            tabm,
+            HintedReq#{ <<"device">> => <<"structured@1.0">> },
+            ConvOpts
+        ),
+    ?event(debug_json, {tabm, TABM}, Opts),
+    {ok, TABM}.
 
 %% @doc Route commitments through `httpsig@1.0'.
 -spec commit(#{ _ => _ }, #{ _ => _ }, map()) -> term().
@@ -172,10 +129,17 @@ committed(Msg, Req, Opts) when is_binary(Msg) ->
 committed(Msg, _Req, Opts) ->
     hb_message:committed(Msg, all, Opts).
 
-%% @doc Deserialize the JSON string found at the given path.
--spec deserialize(#{ _ => _ }, #{ target => binary(), _ => _ }, #{ _ => _ }) ->
+%% @doc Deserialize a JSON string to its message, a TABM with JSON's number and
+%% list types, or decode the JSON string found at the given path of a message.
+-spec deserialize(
+    binary() | #{ _ => _ },
+    #{ target => binary(), _ => _ },
+    #{ _ => _ }
+) ->
     {ok, #{ _ => _ }}
     | {error, #{ status := integer(), body := binary(), _ => _ }}.
+deserialize(JSON, _Req, _Opts) when is_binary(JSON) ->
+    {ok, json:decode(JSON)};
 deserialize(Base, Req, Opts) ->
     Payload = 
         hb_ao:get(

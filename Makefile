@@ -24,7 +24,8 @@ PRELOADED_INPUTS = \
 	src/preloaded \
 	src/forge \
 	src/core/device \
-	src/core/include
+	src/core/include \
+	specs
 CLEAN_GENERATED = \
 	priv \
 	$(WAMR_DIR) \

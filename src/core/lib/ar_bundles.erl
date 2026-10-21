@@ -468,11 +468,17 @@ deserialize_header(Binary) ->
         }
     }.
 
+%% @doc Unbundle an item whose tags say that its data is a bundle. An item whose
+%% data does not decode as a bundle is kept as it is: the item is valid with
+%% such tags, as an L1 TX is (`ar_tx:type/1').
 maybe_unbundle(Item) ->
-    case ar_tx:type(Item) of
-        list -> unbundle_list(Item);
-        binary -> Item;
-        map -> unbundle_map(Item)
+    try
+        case ar_tx:type(Item) of
+            list -> unbundle_list(Item);
+            binary -> Item;
+            map -> unbundle_map(Item)
+        end
+    catch _:_ -> Item
     end.
 
 unbundle_list(Item) ->

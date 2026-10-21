@@ -251,7 +251,7 @@ avoid_double_read_test() ->
         % The item verifies, so it is cached under its ID with its commitment.
         ?assertEqual(
             [
-                ?ARWEAVE_COMMITTER(
+                hb_committer:uri(
                     <<"TeWsA2tuo4aFnhWy-ZiP5t2FYXLisp3s4KagrX9LXEI">>
                 )
             ],
@@ -307,7 +307,7 @@ custom_raw_routes(MockServer) ->
             <<"template">> => <<"/graphql">>,
             <<"nodes">> => [
                 #{
-                    <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
+                    <<"prefix">> => <<"https://arweave.net">>,
                     <<"opts">> => #{
                         <<"http-client">> => httpc,
                         <<"protocol">> => http2
@@ -348,7 +348,7 @@ specific_route_test() ->
                         <<"template">> => <<"/graphql">>,
                         <<"nodes">> => [
                             #{
-                                <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
+                                <<"prefix">> => <<"https://arweave.net">>,
                                 <<"opts">> => #{
                                     <<"http-client">> => httpc,
                                     <<"protocol">> => http2

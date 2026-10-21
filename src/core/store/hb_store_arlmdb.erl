@@ -1254,7 +1254,7 @@ read_offset_fallback_test() ->
     ok = hb_store:start([ArweaveStore]),
     ?assertMatch(
         {ok, #{
-            <<"codec-device">> := <<"ans104@1.0">>,
+            <<"codec">> := <<"ans104@1.0">>,
             <<"version">> := 2,
             <<"start">> := 381852134215637,
             <<"length">> := 3947

@@ -643,10 +643,10 @@ relay_schedule_ans104_test() ->
                 <<"on">> => #{
                     <<"start">> => #{
                         <<"device">> => <<"location@1.0">>,
-                        <<"path">> => <<"node">>,
+                        <<"path">> => <<"//node">>,
                         <<"method">> => <<"POST">>,
                         <<"target">> => <<"self">>,
-                        <<"require-codec">> => <<"ans104@1.0">>,
+                        <<"commitment-device">> => <<"ans104@1.0">>,
                         <<"hook">> => #{
                             <<"result">> => <<"ignore">>,
                             <<"commit-request">> => true
@@ -700,7 +700,7 @@ relay_schedule_ans104_test() ->
             <<"routes">> =>
                 [
                     #{
-                        <<"template">> => <<"^/push">>,
+                        <<"template">> => <<"^//push">>,
                         <<"strategy">> => <<"Nearest">>,
                         <<"nodes">> => [
                             #{
@@ -761,11 +761,8 @@ relay_schedule_ans104_test() ->
     ScheduleRes =
         hb_http:post(
             Relay,
-            Process#{
-                <<"path">> => <<"push">>,
-                <<"codec-device">> => <<"ans104@1.0">>
-            },
-            ClientOpts
+            Process#{ <<"path">> => <<"//push">> },
+            ClientOpts#{ <<"http-codec">> => <<"ans104@1.0">> }
         ),
     ?event(debug_test, {post_result, ScheduleRes}),
     ?assertMatch({ok, #{ <<"status">> := 200, <<"slot">> := 0 }}, ScheduleRes),

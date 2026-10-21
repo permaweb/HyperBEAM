@@ -309,8 +309,8 @@ do_from(CookiesMsg, _Req, _Opts) ->
 
 %% @doc Convert the `cookie' key into a parsed cookie message. `cookie' headers
 %% are in the format of `key1=value1; key2=value2; ...'. There are no attributes
-%% or flags, so we split on `;' and return a map of key-value pairs. We also
-%% decode the values, in case they are URI-encoded.
+%% or flags, so we split on `;' and return a map of key-value pairs. The values
+%% are kept as they are, and parts without a `=' are skipped.
 from_cookie(#{ <<"cookie">> := Cookie }, Req, Opts) ->
     from_cookie(Cookie, Req, Opts);
 from_cookie(Cookies, Req, Opts) when is_list(Cookies) ->
@@ -325,17 +325,13 @@ from_cookie(Cookies, Req, Opts) when is_list(Cookies) ->
         ),
     {ok, MergedParsed};
 from_cookie(Cookie, _Req, _Opts) when is_binary(Cookie) ->
-    BinaryCookiePairs = [
-        Pair || Pair <- split(semicolon, Cookie), binary:match(Pair, <<"=">>) =/= nomatch
-    ],
     KeyValList =
-        lists:map(
-            fun(BinaryCookiePair) ->
-                {[Key, Value], _Rest} = split(pair, BinaryCookiePair),
-                {Key, hb_escape:decode(Value)}
-            end,
-            BinaryCookiePairs
-        ),
+        [
+            {Key, Value}
+        ||
+            Pair <- split(semicolon, Cookie),
+            {[Key, Value], _Rest} <- [split(pair, Pair)]
+        ],
     NormalizedMessage = maps:from_list(KeyValList),
     {ok, NormalizedMessage};
 from_cookie(_MsgWithoutCookie, _Req, _Opts) ->
@@ -362,15 +358,18 @@ from_set_cookie(Lines, Req, Opts) when is_list(Lines) ->
             Lines
         ),
     {ok, MergedParsed};
-from_set_cookie(Line, _Req, Opts) when is_binary(Line) ->
-    {[Key, Value], Rest} = split(pair, Line),
-    ValueDecoded = hb_escape:decode(Value),
+from_set_cookie(Line, Req, Opts) when is_binary(Line) ->
+    from_set_cookie(split(pair, Line), Req, Opts);
+from_set_cookie({[_Text], _Rest}, _Req, _Opts) ->
+    % The line has no `key=value' pair, so it sets no cookie (RFC 6265, 5.2).
+    {ok, #{}};
+from_set_cookie({[Key, Value], Rest}, _Req, Opts) ->
     % If there is no remaining binary after the pair, we have a simple key-value
     % pair, returning just the binary as the value. Otherwise, we split the
     % remaining binary into attributes and flags and return a message with the
     % value and those parsed elements.
     case Rest of
-        <<>> -> {ok, #{ Key => ValueDecoded }};
+        <<>> -> {ok, #{ Key => Value }};
         _ ->
             AllAttrs = split(semicolon, Rest),
             % We partition the attributes into pairs and flags, where flags are
@@ -417,7 +416,7 @@ from_set_cookie(Line, _Req, Opts) when is_binary(Line) ->
                 true -> #{}
                 end,
             MaybeAllAttributes = hb_maps:merge(MaybeAttributes, MaybeFlags, Opts),
-            {ok, #{ Key => MaybeAllAttributes#{ <<"value">> => ValueDecoded }}}
+            {ok, #{ Key => MaybeAllAttributes#{ <<"value">> => Value }}}
     end.
 
 %%% Internal helpers
@@ -520,11 +519,15 @@ join(Binaries, Separator) ->
 
 %% @doc Split a binary by a separator type (`pair', `lines', or `attributes').
 %% Separator types that are plural return a list of all parts. Singular types
-%% return a single part and the remainder of the binary.
+%% return a single part and the remainder of the binary. `pair' splits the text
+%% before the first `;' at its first `='. It returns `[Key, Value]', or
+%% `[Text]' if the text has no `='.
 split(pair, Bin) ->
-    [Key, ValueRest] = binary:split(Bin, <<"=">>),
-    {_, Value, Rest} = hb_util:split_depth_string_aware_single($;, ValueRest),
-    {[Key, unquote(Value)], trim_leading(Rest)};
+    {_, Pair, Rest} = hb_util:split_depth_string_aware_single($;, Bin),
+    case binary:split(Pair, <<"=">>) of
+        [Key, Value] -> {[Key, unquote(Value)], trim_leading(Rest)};
+        [Text] -> {[Text], trim_leading(Rest)}
+    end;
 split(lines, Bin) ->
     lists:map(fun trim_leading/1, hb_util:split_depth_string_aware($,, Bin));
 split(semicolon, Bin) ->

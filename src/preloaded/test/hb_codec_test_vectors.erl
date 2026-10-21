@@ -990,6 +990,17 @@ changed_signed_message_test(Codec, Opts) ->
     ?assertMatch(
         #{ <<"a">> := <<"1">> },
         RoundTrip(Signed#{ <<"a">> => <<"1">> })
+    ),
+    % A message given keys after signing, typed or untyped, still verifies
+    % after the round trip.
+    ?assert(
+        hb_message:verify(
+            RoundTrip(
+                Signed#{ <<"t">> => 3, <<"big">> => binary:copy(<<"z">>, 5000) }
+            ),
+            all,
+            Opts
+        )
     ).
 
 specific_order_signed_message_test(RawCodec, Opts) ->

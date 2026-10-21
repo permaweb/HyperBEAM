@@ -51,9 +51,36 @@ message for the resolution of `path2` is the result of the invocation of
 The module documentation of `hb_http_server` and `hb_http` gives these rules
 in full.
 
-- A request is decoded with the codec named by its `codec-device` key. Without
-that key, it is decoded with the codec of its `content-type`. The node's
-`default-codec` is used when the request has neither.
+- A message crosses HTTP in one of two forms. In the `httpsig@1.0` form, the
+HTTP message is the message: its keys are the headers and the body, and its
+commitments are in `signature-input` and `signature` (RFC 9421). In the form of
+any other codec, the body holds the whole message, encoded by that codec, and
+the `content-type` gives the codec. A media type of the type `application`
+gives a device by its subtype:
+```
+application/x.ao.<name>.<major>.<minor>    <name>@<major>.<minor>
+application/x.ao.<name>.<major>            <name>@<major>.0
+application/x.ao.<name>                    <name>@1.0
+application/<name>                         <name>@1.0
+```
+For example, `application/x.ao.ans104` and `application/ans104` give
+`ans104@1.0`, `application/x.ao.arweave-block.2.9` gives `arweave-block@2.9`,
+and `application/json` gives `json@1.0`. The subtype of the last form is the
+name whole: `application/vnd.api+json` gives `vnd.api+json@1.0`. A device is a
+codec if the node has it and it exports `to`, `from`, `serialize` and
+`deserialize`, as `json@1.0`, `ans104@1.0`, `tx@1.0` and `flat@1.0` do. The
+node calls only these functions of a codec.
+- A request, or a reply that a client receives, with a `signature-input`
+header is decoded with `httpsig@1.0` (RFC 9421), whatever its `content-type`.
+Otherwise, a `content-type` header that gives a codec means that the codec
+decodes the body alone. Any other `content-type`, or none, means that
+`httpsig@1.0` decodes the headers and the body. Nothing else selects the codec:
+a `content-type` in the query of a request does not. The node replies with a
+415 to a request whose `content-type` gives a device that is not a codec. A
+client decodes a reply in a codec only if a range of its request's `accept`,
+or of the `accept` in the query of its path, gives the same codec: a JSON
+document that a server sends unasked is read by `httpsig@1.0`, and its body
+keeps its bytes.
 - If a request has commitments, the node keeps only its committed keys. Every
 commitment must verify, or the node replies with a 400. The commitments of an
 unsigned request are removed.
@@ -64,13 +91,43 @@ the signer committed, after verifying them.
 - The HTTP status of a reply is the result's `status`, if that is an integer
 from 100 to 599. Otherwise, it is the code of the result's Erlang status. The
 node does not add a `status` key to the reply.
-- The codec of a reply is the request's `require-codec`, if it has one.
-Otherwise, a result with a `content-type` is sent in `httpsig@1.0`. Otherwise,
-the codec is the request's `accept-codec`, or its `accept`.
-- A result without commitments is sent with its unsigned commitment over its
-own keys. A client keeps only the keys of a reply that at least one of its
-commitments covers. If the reply has no `status` key, the client adds the HTTP
-status as `status`.
+- The codec of a reply is given by the request's `accept` (RFC 9110): its media
+ranges in order of preference, by q-value and then by their order, of which the
+first that the node can serve gives the codec. A range of the result's own
+`content-type` gives `httpsig@1.0`, which sends the result's body unchanged. A
+range that gives a codec gives that codec. Any other range, such as `*/*` or
+`text/html`, is passed over. If no range can be served, or there is no
+`accept`, the reply is in `httpsig@1.0`. For example:
+```
+accept                              computed result    stored JSON document
+application/json, text/plain, */*   json@1.0           the document
+application/x.ao.ans104             ans104@1.0         ans104@1.0
+text/html, */*;q=0.8                httpsig@1.0        the document
+```
+- A reply in `httpsig@1.0` sends the result's own `content-type` as its
+`content-type`, so a stored page or image is served as itself. A `content-type`
+of the result of the form `application/x.ao.<name>` is sent in a body part
+instead.
+A result without commitments is sent with its unsigned commitment over its own
+keys. A client keeps only the keys of an `httpsig@1.0` reply that at least one
+of its commitments covers.
+- A reply in any other codec is the result, encoded by the codec, with the type
+and subtype of the range as its `content-type`: `accept: application/json` gives
+`content-type: application/json`. `ans104@1.0` and `tx@1.0` carry their own
+signature. `json@1.0` and `flat@1.0` carry every commitment in the message's
+`commitments` key.
+- A node with `force-signed` set signs the `hashpath` of a computed result,
+committing only that key. A node without `force-signed` signs it in the same
+way for a request whose `accept-signature` (RFC 9421) asks for it: a member
+with the inner list `("hashpath")` and the URI of the node's committer as its
+`keyid`. The field is a preference: the node ignores any other member, and a
+reply without a `hashpath`, such as a stored message, is sent as it is without
+the field.
+- If the reply has no `status` key, the client adds the HTTP status as
+`status`.
+- HyperBEAM's client, `hb_http`, sends a request in the codec of its caller's
+`http-codec` option, or in `httpsig@1.0` without one. A key of the message does
+not change the codec.
 
 ## Example workflows
 

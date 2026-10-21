@@ -1,7 +1,7 @@
 -module(ar_wallet).
 -export([sign/2, sign/3, hmac/1, hmac/2, verify/3, verify/4]).
 -export([to_pubkey/1, to_pubkey/2, to_address/1, to_address/2, new/0, new_ecdsa/0, new/1]).
--export([new/3]).
+-export([new/3, committer_device/1]).
 -export([new_keyfile/2, load_keyfile/1, load_keyfile/2, load_key/1, load_key/2]).
 -export([to_json/1, from_json/1, from_json/2]).
 -export([recover_key/3]).
@@ -11,11 +11,12 @@
 
 %%% @doc Utilities for manipulating wallets.
 %%%
-%%% A wallet is the `did-pkh@1.0' committer message of a key. Its `owner' is
-%%% the public key, its `type' is the signature type of the key, and `d' in its
-%%% `priv' message is the private key, which no ID or encoding of the wallet
-%%% includes. `verify' needs only the `owner' and the `type'. Key files hold
-%%% the key in the JWK format.
+%%% A wallet is the committer message of a key: `did-ar@1.0' for an RSA,
+%%% Ed25519 or ECDSA key, and `did-pkh@1.0' for an Ethereum or Solana key. Its
+%%% `owner' is the public key, its `type' is the signature type of the key,
+%%% and `d' in its `priv' message is the private key, which no ID or encoding
+%%% of the wallet includes. `verify' needs only the `owner' and the `type'. Key
+%%% files hold the key in the JWK format.
 
 -define(WALLET_DIR, ".").
 -define(WALLET_POOL_TARGET, 6).
@@ -43,11 +44,21 @@ new_ecdsa() ->
 %% @doc Make the wallet of a key from its type, private key and public key.
 new(KeyType, Priv, Pub) ->
     #{
-        <<"device">> => <<"did-pkh@1.0">>,
+        <<"device">> => committer_device(KeyType),
         <<"type">> => ar_tx:serialize_sig_type(KeyType),
         <<"owner">> => Pub,
         <<"priv">> => #{ <<"d">> => Priv }
     }.
+
+%% @doc Return the device of the committer of a key: `did-ar@1.0' for a key
+%% whose address is its SHA-256 (RSA, Ed25519 and ECDSA), else `did-pkh@1.0'.
+committer_device(KeyType)
+        when KeyType =:= ?RSA_KEY_TYPE;
+            KeyType =:= ?EDDSA_KEY_TYPE;
+            KeyType =:= ?ECDSA_KEY_TYPE ->
+    <<"did-ar@1.0">>;
+committer_device(_KeyType) ->
+    <<"did-pkh@1.0">>.
 
 generate_wallet(KeyType = {KeyAlg, PublicExpnt}) when KeyType =:= {rsa, 65537} ->
     {[_, Pub], [_, Pub, Priv|_]} = {[_, Pub], [_, Pub, Priv|_]}
@@ -225,8 +236,8 @@ to_pubkey(PubKey, {rsa, 65537}) ->
     PubKey.
 
 %% @doc Generate an address from a wallet, or from a public key. A wallet's
-%% address is the address of its `owner' for its key type. It is the account
-%% that the wallet's `did:pkh:' URI names.
+%% address is the address of its `owner' for its key type, which the URI of
+%% its committer holds.
 to_address(#{ <<"owner">> := Owner, <<"type">> := Type }) ->
     to_address(Owner, ar_tx:deserialize_sig_type(Type));
 to_address(Pubkey) ->
@@ -305,7 +316,7 @@ to_json(Wallet = #{ <<"type">> := Type = ?RSA_SIGN_TYPE }) ->
     hb_json:encode(#{
         kty => <<"RSA">>,
         ext => true,
-        e => hb_util:encode(<<PublicExpnt:32>>),
+        e => hb_util:encode(binary:encode_unsigned(PublicExpnt)),
         n => hb_util:encode(Pub),
         d => hb_util:encode(Priv)
     });

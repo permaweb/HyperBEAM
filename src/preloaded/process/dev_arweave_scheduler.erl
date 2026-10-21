@@ -6,14 +6,14 @@
 -module(dev_arweave_scheduler).
 -implements(<<"arweave-scheduler@1.0">>).
 -device_libraries([lib_process]).
--export([info/0, router/4]).
+-export([device_info/0, router/4]).
 -export([schedule/3, next/3, slot/3, status/3, sync/3, checkpoint/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(MAX_ASSIGNMENT_QUERY_LEN, 1000).
 
-info() ->
+device_info() ->
     #{
         exports =>
             [
@@ -100,7 +100,21 @@ post_schedule(Base, Req, Opts) ->
         {ok, TX} ?= valid_transaction(Committed, Opts),
         Targets = dev_arweave_scheduler_sync:targets(TX),
         true ?= lists:member(ProcessID, Targets),
-        {ok, _} ?= dev_arweave:post_tx_header(TX, Opts),
+        {ok, _} ?=
+            hb_ao:raw(
+                <<"arweave@2.9">>,
+                <<"tx">>,
+                hb_message:with_commitments(
+                    #{ <<"commitment-device">> => <<"tx@1.0">> },
+                    Committed,
+                    Opts
+                ),
+                #{
+                    <<"method">> => <<"POST">>,
+                    <<"arweave-subject">> => <<"base">>
+                },
+                Opts
+            ),
         {ok, _} = dev_arweave_scheduler_cache:write_header(Committed, Opts),
         {ok,
             #{

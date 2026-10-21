@@ -13,6 +13,7 @@
 %%%     curl /~relay@.1.0/call?method=GET?0.path=https://www.arweave.net/
 %%% </pre>
 -module(dev_relay).
+-specification("../../../specs/relay@1.0.md").
 %%% Execute synchronous and asynchronous relay requests.
 -export([call/3, cast/3]).
 %%% Re-route requests that would be executed locally to other peers, according
@@ -130,7 +131,14 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
             not_found -> hb_maps:without([<<"device">>], TargetMod2);
             _ -> TargetMod2#{<<"device">> => RelayDevice}
         end,
-    TargetMod4 = strip_cookies(TargetMod3, Opts),
+    % A relayed request's `multirequest-*' keys configure this node's own
+    % multirequest, so remove them: the route alone chooses the peers reached.
+    TargetMod4 =
+        hb_maps:without(
+            hb_http_multi:multirequest_keys(TargetMod3, Opts),
+            strip_cookies(TargetMod3, Opts),
+            Opts
+        ),
     Commit =
         hb_ao:get_first(
             [
@@ -493,7 +501,7 @@ commit_request_test() ->
         hb_http:get(
             Node,
             #{
-                <<"path">> => <<"test-key">>,
+                <<"path">> => <<"//test-key">>,
                 <<"test-key">> => <<"value">>
             },
             #{}
@@ -590,6 +598,32 @@ relay_relative_routed_test() ->
             Relay,
             <<"/~relay@1.0/call?relay-path=/~meta@1.0/info/address">>,
             #{ <<"http-only-result">> => false }
+        ),
+    ?assertEqual(Address, hb_ao:get(<<"body">>, Res, #{})).
+
+%% @doc A relayed request's `multirequest-*' keys configure the node's own
+%% multirequest, so the relay removes them: a request on a `nodes' route cannot
+%% choose the peers it is sent to, only the route's own nodes are reached.
+relay_relative_multirequest_nodes_blocked_test() ->
+    {Target, Address} = start_relay_target(),
+    {Evil, _EvilAddress} = start_relay_target(),
+    {ok, Res} =
+        relay_call(
+            #{
+                <<"relay-path">> => <<"/~meta@1.0/info/address">>,
+                <<"multirequest-nodes">> =>
+                    [#{
+                        <<"uri">> => <<Evil/binary, "~meta@1.0/info/address">>,
+                        <<"opts">> => #{ <<"http-client">> => <<"httpc">> }
+                    }]
+            },
+            #{
+                <<"routes">> =>
+                    [#{
+                        <<"template">> => <<"/.*">>,
+                        <<"nodes">> => [#{ <<"prefix">> => Target }]
+                    }]
+            }
         ),
     ?assertEqual(Address, hb_ao:get(<<"body">>, Res, #{})).
 

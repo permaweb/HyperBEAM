@@ -1,16 +1,14 @@
 %%% @doc Codec for managing transformations from `ar_bundles'-style Arweave TX
 %%% records to and from TABMs.
 -module(dev_ans104).
+-specification("../../../specs/ans104@1.0.md").
 -device_libraries([lib_arweave_common]).
--export([to/3, to_hint/3, from/3, commit/3, verify/3, content_type/1]).
+-export([to/3, to_hint/3, from/3, commit/3, verify/3]).
 -export([serialize/3, deserialize/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(BASE_FIELDS, [<<"anchor">>, <<"target">>]).
-
-%% @doc Return the content type for the codec.
-content_type(_) -> {ok, <<"application/ans104">>}.
 
 %% @doc Serialize a message or TX to a binary.
 -spec serialize(binary() | #tx{} | #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
@@ -166,10 +164,12 @@ do_from(RawTX, Req, Opts) ->
 %% @doc Inspect a message's ans104 commitment and, if it carries an
 %% explicit `bundle' field, mirror that value onto the request `Req'. Bundling
 %% is turned off for a message with a nested message signed by another device.
+%% The message is encoded over the keys that its commitment lists; a message
+%% without one, over all of its keys, not those of the message it is in.
 to_hint(Msg, Req, Opts) ->
     Hint =
-        case lib_arweave_common:bundle_hint(<<"ans104@1.0">>, Msg, Req, Opts) of
-            not_found -> {ok, Req};
+        case lib_arweave_common:item_hint(<<"ans104@1.0">>, Msg, Req, Opts) of
+            not_found -> {ok, maps:remove(<<"committed">>, Req)};
             Found -> Found
         end,
     lib_arweave_common:signed_children_hint(Msg, Hint, Opts).

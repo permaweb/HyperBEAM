@@ -42,7 +42,7 @@
 -module(dev_carrier).
 -implements(<<"carrier@1.0">>).
 %%% AO-Core API functions:
--export([info/0, compute/3, init/3, snapshot/3, normalize/3, request/3]).
+-export([device_info/0, compute/3, init/3, snapshot/3, normalize/3, request/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -55,7 +55,7 @@
 -define(DEFAULT_THRESHOLD_BPS, 10000).
 
 %% @doc Resolve unimplemented keys through the value carried by the name.
-info() ->
+device_info() ->
     #{
         default => fun get/4,
         excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>]
@@ -372,8 +372,9 @@ debit(Base, Address, Amount, Opts) -> credit(Base, Address, -Amount, Opts).
 %% message with any other number of signers is not attributable to one party,
 %% so it can neither move the unit nor speak for the name.
 signer(Body, Opts) ->
-    case hb_message:signers(Body, Opts) of
-        [?ARWEAVE_COMMITTER(Address)] -> {ok, Address};
+    SignerURIs = hb_message:signers(Body, Opts),
+    case [hb_committer:address(SignerURI) || SignerURI <- SignerURIs] of
+        [{ok, Address}] -> {ok, Address};
         _ -> not_found
     end.
 

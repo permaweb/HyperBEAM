@@ -30,9 +30,9 @@
 %%% The result of any computation can be either a new message or a raw literal 
 %%% value (a binary, integer, float, atom, or list of such values).
 %%% 
-%%% A base that is an ID or a URI is loaded before the request is resolved on
-%%% it. An ID is read from the cache. A URI is read by the device of its
-%%% scheme (`hb_uri').
+%%% A base or a request that is a URI is loaded by the device of its scheme
+%%% (`hb_uri') before the request is resolved. A message is given by its URI,
+%%% such as `ao:<ID>'.
 %%% 
 %%% Devices can be expressed as either modules or maps. They can also be 
 %%% referenced by an Arweave ID, which can be used to load a device from 
@@ -42,50 +42,59 @@
 %%% <pre>
 %%%     DevMod:ExportedFunc : Key resolution functions. All are assumed to be
 %%%                           device keys (thus, present in every message that
-%%%                           uses it) unless specified by `DevMod:info()'.
+%%%                           uses it) unless specified by
+%%%                           `DevMod:device_info()'.
 %%%                           Each function takes a set of parameters
 %%%                           of the form `DevMod:KeyHandler(Base, Req, Opts)'.
 %%%                           Each of these arguments can be ommitted if not
 %%%                           needed. Non-exported functions are not assumed
 %%%                           to be device keys.
 %%%
-%%%     DevMod:info : Optional. Returns a map of options for the device. All 
-%%%                   options are optional and assumed to be the defaults if 
-%%%                   not specified. This function can accept a `Base' as 
-%%%                   an argument, allowing it to specify its functionality 
-%%%                   based on a specific message if appropriate.
+%%%     DevMod:device_info : Optional. Returns a map of options for the device.
+%%%                          All options are optional and assumed to be the
+%%%                          defaults if not specified. This function can
+%%%                          accept a `Base' as an argument, allowing it to
+%%%                          specify its functionality based on a specific
+%%%                          message if appropriate. It is never a key of the
+%%%                          device.
 %%% 
-%%%     info/exports : Overrides the export list of the Erlang module, such that
-%%%                   only the functions in this list are assumed to be device
-%%%                   keys. Defaults to all of the functions that DevMod 
-%%%                   exports in the Erlang environment.
+%%%     device_info/exports : Overrides the export list of the Erlang module,
+%%%                           such that only the functions in this list are
+%%%                           assumed to be device keys. Defaults to all of the
+%%%                           functions that DevMod exports in the Erlang
+%%%                           environment.
 %%%
-%%%     info/excludes : A list of keys that should not be resolved by the device,
-%%%                     despite being present in the Erlang module exports list.
+%%%     device_info/excludes : A list of keys that should not be resolved by the
+%%%                            device, despite being present in the Erlang
+%%%                            module exports list.
 %%% 
-%%%     info/handler : A function that should be used to handle _all_ keys for 
-%%%                    messages using the device.
+%%%     device_info/handler : A function that should be used to handle _all_
+%%%                           keys for messages using the device.
 %%% 
-%%%     info/default : A function that should be used to handle all keys that
-%%%                    are not explicitly implemented by the device. Defaults to
-%%%                    the `dev_message' device, which contains general keys for 
-%%%                    interacting with messages.
+%%%     device_info/default : A function that should be used to handle all keys
+%%%                           that are not explicitly implemented by the device.
+%%%                           Defaults to the `dev_message' device, which
+%%%                           contains general keys for interacting with
+%%%                           messages.
 %%% 
-%%%     info/default_mod : A different device module that should be used to
-%%%                    handle all keys that are not explicitly implemented
-%%%                    by the device. Defaults to the `dev_message' device.
+%%%     device_info/default_mod : A different device module that should be used
+%%%                               to handle all keys that are not explicitly
+%%%                               implemented by the device. Defaults to the
+%%%                               `dev_message' device.
 %%% 
-%%%     info/grouper : A function that returns the concurrency 'group' name for
-%%%                    an execution. Executions with the same group name will
-%%%                    be executed by sending a message to the associated process
-%%%                    and waiting for a response. This allows you to control 
-%%%                    concurrency of execution and to allow executions to share
-%%%                    in-memory state as applicable. Default: A derivation of
-%%%                    Base+Req. This means that concurrent calls for the same
-%%%                    output will lead to only a single execution.
+%%%     device_info/grouper : A function that returns the concurrency 'group'
+%%%                           name for an execution. Executions with the same
+%%%                           group name will be executed by sending a message
+%%%                           to the associated process and waiting for a
+%%%                           response. This allows you to control concurrency
+%%%                           of execution and to allow executions to share
+%%%                           in-memory state as applicable. Default: A
+%%%                           derivation of Base+Req. This means that concurrent
+%%%                           calls for the same output will lead to only a
+%%%                           single execution.
 %%% 
-%%%     info/worker : A function that should be run as the 'server' loop of
-%%%                   the executor for interactions using the device.
+%%%     device_info/worker : A function that should be run as the 'server' loop
+%%%                          of the executor for interactions using the device.
 %%% 
 %%% The HyperBEAM resolver also takes a number of runtime options that change
 %%% the way that the environment operates:
@@ -200,27 +209,10 @@ raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
 %% @doc Resolve a list of messages in sequence. Take the output of the first
 %% message as the input for the next message. Once the last message is resolved,
 %% return the result.
-%% A `resolve_many' call with only a single ID will attempt to read the message
-%% directly from the store. No execution is performed. A call with only a
-%% binary loads the resource associated with the binary, if it starts with a
-%% URI scheme (`hb_uri:maybe_from/2').
-resolve_many([ID], Opts) when ?IS_ID(ID) ->
-    % Note: This case is necessary to place specifically here for two reasons:
-    % 1. It is not in `do_resolve_many' because we need to handle the case
-    %    where a result from a prior invocation is an ID itself. We should not
-    %    attempt to resolve such IDs further.
-    % 2. The main AO-Core logic looks for linkages between message input
-    %    pairs and outputs. With only a single ID, there is not a valid pairing
-    %    to use in looking up a cached result.
-    ?event_debug(debug_ao_core, {stage, na, resolve_directly_to_id, ID, {opts, Opts}}, Opts),
-    try {ok, ensure_message_loaded(ID, Opts)}
-    catch _:_:_ -> {error, not_found}
-    end;
+%% A call with only a binary returns the resource associated with the binary,
+%% if it starts with a URI scheme (`hb_uri:maybe_from/2').
 resolve_many([URI], Opts) when is_binary(URI) ->
-    maybe
-        {ok, Msg} ?= hb_uri:maybe_from(URI, Opts),
-        do_resolve_many([Msg], Opts)
-    end;
+    hb_uri:maybe_from(URI, Opts);
 resolve_many(ListMsg, Opts) when is_map(ListMsg) ->
     % We have been given a message rather than a list of messages, so we should
     % convert it to a list, assuming that the message is monotonically numbered.
@@ -284,37 +276,23 @@ resolve_stage(1, Link, Req, Opts) when ?IS_LINK(Link) ->
     % continue with the resolution.
     ?event_debug(debug_ao_core, {stage, 1, resolve_base_link, {link, Link}}, Opts),
     resolve_stage(1, hb_cache:ensure_loaded(Link, Opts), Req, Opts);
-resolve_stage(1, BaseID, Req, Opts) when ?IS_ID(BaseID) ->
-    maybe
-        {ok, Base} ?= hb_cache:read(BaseID, Opts),
-        resolve_stage(1, Base, Req, Opts)
-    end;
 resolve_stage(1, Base, Link, Opts) when ?IS_LINK(Link) ->
     % If the second message is a link, we should load the message and
     % continue with the resolution.
     ?event_debug(debug_ao_core, {stage, 1, resolve_req_link, {link, Link}}, Opts),
     resolve_stage(1, Base, hb_cache:ensure_loaded(Link, Opts), Opts);
-resolve_stage(1, {as, DevID, Ref}, Req, Opts) when ?IS_ID(Ref) ->
-    % Normalize `as' requests with a raw ID as the path.
-    resolve_stage(1, {as, DevID, #{ <<"path">> => Ref }}, Req, Opts);
+resolve_stage(1, {as, DevID, <<"ao:", _/binary>> = URI}, Req, Opts) ->
+    % If the first message is an `as' of an `ao:' URI, we should load the
+    % message and set the device of the `as' on it.
+    maybe
+        {ok, Base} ?= hb_uri:from(URI, Opts),
+        resolve_stage(1, set(Base, <<"device">>, DevID, Opts), Req, Opts)
+    end;
 resolve_stage(1, {as, DevID, Link}, Req, Opts) when ?IS_LINK(Link) ->
     % If the first message is an `as' with a link, we should load the message and
     % continue with the resolution.
     ?event_debug(debug_ao_core, {stage, 1, resolve_base_as_link, {link, Link}}, Opts),
     resolve_stage(1, {as, DevID, hb_cache:ensure_loaded(Link, Opts)}, Req, Opts);
-resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Req, Opts) when ?IS_ID(ID) ->
-    % If the first message is an `as' with an ID, we should load the message and
-    % apply the non-path elements of the sub-request to it.
-    ?event_debug(debug_ao_core, {stage, 1, subresolving_with_load, {dev, DevID}, {id, ID}}, Opts),
-    RemBase = hb_maps:without([<<"path">>], Raw, Opts),
-    ?event_debug(debug_subresolution, {loading_message, {id, ID}, {params, RemBase}}, Opts),
-    Baseb = ensure_message_loaded(ID, Opts),
-    ?event_debug(debug_subresolution, {loaded_message, {msg, Baseb}}, Opts),
-    Basec = hb_maps:merge(Baseb, RemBase, Opts),
-    ?event_debug(debug_subresolution, {merged_message, {msg, Basec}}, Opts),
-    Based = set(Basec, <<"device">>, DevID, Opts),
-    ?event_debug(debug_subresolution, {loaded_parameterized_message, {msg, Based}}, Opts),
-    resolve_stage(1, Based, Req, Opts);
 resolve_stage(1, Raw = {as, DevID, SubReq}, Req, Opts) ->
     % Set the device of the message to the specified one and resolve the sub-path.
     % As this is the first message, we will then continue to execute the request
@@ -423,7 +401,14 @@ resolve_stage(1, Base, Req, Opts) when is_list(Base) ->
     );
 resolve_stage(1, Base, NonMapReq, Opts) when not is_map(NonMapReq) ->
     ?event_debug(debug_ao_core, {stage, 1, path_normalize}),
-    resolve_stage(1, Base, #{ <<"path">> => NonMapReq }, Opts);
+    % A request that is a URI is the message that it identifies. Any other
+    % request is a path.
+    case hb_uri:maybe_from(NonMapReq, Opts) of
+        {ok, NonMapReq} ->
+            resolve_stage(1, Base, #{ <<"path">> => NonMapReq }, Opts);
+        {ok, Req} -> resolve_stage(1, Base, Req, Opts);
+        Error -> Error
+    end;
 resolve_stage(1, Base, #{ <<"path">> := <<"/">> }, _Opts) ->
     % Resolving `/' returns the base message.
     {ok, Base};
@@ -823,20 +808,25 @@ subresolve_loaded(Base, DevID, Req, Opts) ->
                     hb_maps:without(?TEMP_OPTS, Opts, Opts)
                 )
         end,
-    % With no path, set the request keys on the base. If they are the same
-    % message, only the device may have changed above. With a path, apply the
-    % request without changing the base.
+    % With no path, set the request keys on the base, but not a device in place
+    % of the one set above. If they are the same message, its keys are already
+    % present. With a path, apply the request without changing the base.
     case hb_path:from_message(request, Req, Opts) of
         undefined when Base =:= Req ->
-            {ok, set(Base2, hb_maps:with([<<"device">>], Req, Opts), Opts)};
+            {ok, Base2};
         undefined ->
+            ReqKeys =
+                case DevID of
+                    undefined -> hb_maps:without([<<"path">>], Req, Opts);
+                    _ -> hb_maps:without([<<"path">>, <<"device">>], Req, Opts)
+                end,
             Base3 =
-                case map_size(hb_maps:without([<<"path">>], Req, Opts)) of
+                case map_size(ReqKeys) of
                     0 -> Base2;
                     _ ->
                         set(
 							Base2,
-							set(Req, <<"path">>, unset, Opts),
+							ReqKeys,
 							Opts#{ <<"force-message">> => false }
 						)
                 end,
@@ -936,17 +926,8 @@ maybe_profiled_apply(Func, Args, Base, Req, Opts) ->
     Res.
 -endif.
 
-%% @doc Ensure that a message is loaded from the cache if it is an ID, or 
-%% a link, such that it is ready for execution.
-ensure_message_loaded(MsgID, Opts) when ?IS_ID(MsgID) ->
-    case hb_cache:read(MsgID, Opts) of
-        {ok, LoadedMsg} ->
-            LoadedMsg;
-        failure ->
-            failure;
-        {error, not_found} ->
-            throw({necessary_message_not_found, <<"/">>, MsgID})
-    end;
+%% @doc Ensure that a message is loaded from the cache if it is a link, such
+%% that it is ready for execution.
 ensure_message_loaded(MsgLink, Opts) when ?IS_LINK(MsgLink) ->
     hb_cache:ensure_loaded(MsgLink, Opts);
 ensure_message_loaded(Msg, _Opts) ->
@@ -1351,7 +1332,11 @@ device_set(Msg, Key, Value, Mode, Opts) ->
         {device_set_result, Res},
         Opts
     ),
-    Res.
+    % A set on a list gives a list while its keys stay numbered from 1.
+    case is_list(Msg) andalso hb_util:is_ordered_list(Res, Opts) of
+        true -> hb_util:message_to_ordered_list(Res, Opts);
+        false -> Res
+    end.
 
 %% @doc Remove a key from a message, using its underlying device.
 remove(Msg, Key) -> remove(Msg, Key, #{}).

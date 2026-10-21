@@ -32,7 +32,7 @@ profile_and_stop(Fun) ->
                 <<"return-mode">> => <<"open">>,
                 <<"engine">> => <<"eflame">>
             },
-            #{}
+            #{ <<"profiling">> => true }
         ),
     io:format("Profiling complete. Res: ~p~n", [Res]),
     init:stop(),

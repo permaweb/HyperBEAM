@@ -165,6 +165,7 @@ execute_provider(Provider, Opts) ->
     ?event({execute_provider, {provider, Provider}}),
     case hb_cache:ensure_loaded(Provider, Opts) of
         Bin when is_binary(Bin) -> hb_ao:resolve(#{ <<"path">> => Bin }, Opts);
+        Msg when is_map(Msg) -> hb_ao:resolve(Msg, Opts);
         Msgs when is_list(Msgs) -> hb_ao:resolve_many(Msgs, Opts)
     end.
 
@@ -214,7 +215,7 @@ collect_ids(Bin, Acc, _Opts) when ?IS_ID(Bin) -> [hb_util:human_id(Bin) | Acc];
 collect_ids(<<Scheme:2/binary, ":", Rest/binary>>, Acc, _Opts)
         when Scheme =:= <<"ao">>; Scheme =:= <<"ni">> ->
     % The binary is an `ao:' URI or a `ni:' name. We percent-decode it as
-    % `hb_singleton' decodes the path of an `ao://' URI, then collect every ID
+    % `hb_singleton' decodes the path of an `ao:' URI, then collect every ID
     % that it contains, wherever it appears. A URI that cannot be decoded
     % cannot be read either, so we scan it as it is.
     Decoded =
@@ -308,7 +309,7 @@ ensure_cache_table(Msg, Opts) ->
                     refresh_loop(Opts)
                 end
             ),
-            case FallbackMode of 
+            case hb_util:atom(FallbackMode) of
                 continue -> {ok, Msg};
                 halt ->
                     IsInitialized = 
@@ -445,6 +446,32 @@ basic_test() ->
                 <<"x">> => <<"ao:", SignedID1/binary>>
             }
         ]
+    ),
+    % A provider given as a message is read as well.
+    MsgProviderNode =
+        hb_http_server:start_node(
+            Opts1#{
+                <<"priv-wallet">> => ar_wallet:new(),
+                <<"blacklist-providers">> => [#{ <<"path">> => BlacklistID }]
+            }
+        ),
+    ?assertMatch(
+        {error, #{ <<"status">> := 451 }},
+        hb_http:get(MsgProviderNode, SignedID1, Opts1)
+    ),
+    % A binary `blacklist-fallback', as a config file gives it, is read.
+    ?assertMatch(
+        {ok, <<"test-3">>},
+        hb_http:get(
+            hb_http_server:start_node(
+                Opts1#{
+                    <<"priv-wallet">> => ar_wallet:new(),
+                    <<"blacklist-fallback">> => <<"continue">>
+                }
+            ),
+            <<"/", UnsignedID3/binary, "/body">>,
+            Opts1
+        )
     ),
     ok.
 

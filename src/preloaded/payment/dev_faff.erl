@@ -35,10 +35,11 @@ estimate(_, Msg, NodeMsg) ->
 %% allow-list.
 is_admissible(Msg, NodeMsg) ->
     AllowList =
-        lists:map(
-            fun hb_util:committer/1,
-            hb_opts:get(faff_allow_list, [], NodeMsg)
-        ),
+        [
+            hb_committer:uri(Committer, NodeMsg)
+        ||
+            Committer <- hb_opts:get(faff_allow_list, [], NodeMsg)
+        ],
     Req = hb_ao:get(<<"request">>, Msg, NodeMsg),
     Signers = hb_message:signers(Req, NodeMsg),
     ?event(payment, {is_admissible, {signers, Signers}, {allow_list, AllowList}}),

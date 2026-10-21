@@ -33,6 +33,7 @@
 %%% 
 %%% For more details, see the HTTP Structured Fields (RFC-9651) specification.
 -module(dev_structured).
+-specification("../../../specs/structured@1.0.md").
 -export([to/3, from/3, commit/3, verify/3, encode_types/3, decode_types/3]).
 -export([encode_ao_types/2, decode_ao_types/2, is_list_from_ao_types/2]).
 -export([decode_value/3, encode_value/1]).
@@ -65,9 +66,12 @@ verify(Msg, Req, Opts) ->
     hb_ao:raw(<<"httpsig@1.0">>, <<"verify">>, Msg, Req, Opts).
 
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
+%% An integer whose magnitude is greater than the request's `max-integer' is
+%% encoded with its type, as a value of a type in `encode-types' is.
 -spec from(
     binary() | [_] | #{ _ => _ },
-    #{ 'encode-types' => [binary()], bundle => boolean(), _ => _ },
+    #{ 'encode-types' => [binary()], 'max-integer' => integer(),
+        bundle => boolean(), _ => _ },
     #{ _ => _ }
 ) -> {ok, binary() | [_] | #{ _ => _ }}.
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
@@ -116,9 +120,11 @@ from(Msg, Req, Opts) when is_map(Msg) ->
             linkify_mode(HintedReq, Opts),
             Opts
         ),
-    NormKeysMap = hb_ao:normalize_keys(NormLinks, Opts),
+    NormKeysMap =
+        hinted_keys(hb_ao:normalize_keys(NormLinks, Opts), HintedReq, Opts),
     EncodeTypes = find_encode_types(HintedReq, Opts),
     EncodeBinaries = lists:member(<<"binary">>, EncodeTypes),
+    MaxInteger = hb_maps:get(<<"max-integer">>, HintedReq, infinity, Opts),
     {Types, Values} = lists:foldl(
         fun (Key, {Types, Values}) ->
             case hb_maps:find(Key, NormKeysMap, Opts) of
@@ -142,7 +148,7 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                         orelse is_binary(Value) ->
                     BinKey = hb_ao:normalize_key(Key),
                     ?event_debug({encode_value, Value}),
-                    case maybe_encode_value(Value, EncodeTypes) of
+                    case maybe_encode_value(Value, EncodeTypes, MaxInteger) of
                         {Type, BinValue} ->
                             {
                                 [{BinKey, Type} | Types],
@@ -230,6 +236,13 @@ apply_bundle_hint(Msg, Req, Opts) ->
             end
     end.
 
+%% @doc Keep the keys of a message that the target codec's hint names, and its
+%% commitments: the codec's encoding of the message holds those keys alone.
+hinted_keys(Msg, #{ <<"committed">> := Committed }, Opts) ->
+    hb_maps:with([<<"commitments">> | Committed], Msg, Opts);
+hinted_keys(Msg, _Req, _Opts) ->
+    Msg.
+
 %% @doc Discern the linkify mode from the request and the options.
 linkify_mode(Req, Opts) ->
     case hb_util:bool(hb_maps:get(<<"bundle">>, Req, not_found, Opts)) of
@@ -266,8 +279,14 @@ decode(List, Links, Opts) when is_list(List) ->
     {ok, [ hb_util:ok(decode(Value, Links, Opts)) || Value <- List ]};
 decode(TABM0, Links, Opts) when is_map(TABM0) ->
     % `ao-types' names keys, so its names are lowercased as the keys are, and
-    % two names of one key are refused.
-    AOTypes = decode_ao_types(TABM0, Opts),
+    % two names of one key are refused. An `ao-types' that does not parse is
+    % kept as a key of the message, and no types are applied.
+    {AOTypes, TABM1} =
+        case decode_types(TABM0, #{}, Opts) of
+            {ok, Parsed} ->
+                {Parsed, maps:remove(<<"ao-types">>, decode_keys(TABM0))};
+            {error, _} -> {#{}, decode_keys(TABM0)}
+        end,
     Types =
         maps:from_list(
             [
@@ -277,7 +296,6 @@ decode(TABM0, Links, Opts) when is_map(TABM0) ->
             ]
         ),
     true = map_size(Types) == map_size(AOTypes),
-    TABM1 = decode_keys(TABM0),
     % 1. Remove 'ao-types' field
     % 2. Decode the value of each key that `ao-types' names, which holds a
     %    binary, and the other values that are links;
@@ -290,7 +308,7 @@ decode(TABM0, Links, Opts) when is_map(TABM0) ->
                     #{ Key := Encoded } = Acc,
                     Acc#{ Key := decode_value(Type, Encoded) }
             end,
-            maps:remove(<<"ao-types">>, TABM1),
+            TABM1,
             Types
         ),
     % The fold starts from the TABM, so a key that needs no decoding is not
@@ -490,9 +508,13 @@ is_list_from_ao_types(Types, _Opts) ->
         _ -> false
     end.
 
-%% @doc Encode a value if it is in the list of supported types. A binary that
-%% is UTF-8 text is not encoded.
-maybe_encode_value(Value, EncodeTypes) ->
+%% @doc Encode a value if it is in the list of supported types, or if it is an
+%% integer whose magnitude is greater than `MaxInteger'. Every integer is below
+%% `infinity', the default. A binary that is UTF-8 text is not encoded.
+maybe_encode_value(Value, _EncodeTypes, MaxInteger)
+        when is_integer(Value), abs(Value) > MaxInteger ->
+    encode_value(Value);
+maybe_encode_value(Value, EncodeTypes, _MaxInteger) ->
     case lists:member(type(Value), EncodeTypes) andalso not is_text(Value) of
         true -> encode_value(Value);
         false -> skip
@@ -626,9 +648,19 @@ malformed_types_return_error_test() ->
                 [Msg, #{ <<"nested">> => Msg }, [Msg]]
             )
         end,
+        [<<"float=(\"a\")">>, <<"integer=(\"a\")">>]
+    ),
+    % An `ao-types' that does not parse, such as `a="integer"', is kept as a
+    % key of the message, and no types are applied.
+    lists:foreach(
+        fun(Types) ->
+            Msg = #{ <<"ao-types">> => Types, <<"a">> => <<"text">> },
+            ?assertEqual({ok, Msg}, hb_ao:raw(
+                <<"structured@1.0">>, <<"to">>, Msg, #{}, #{}
+            ))
+        end,
         [<<"a=1.2345">>, <<"a=1">>, <<"a=?1">>,
-            <<"unknown-type=(\"a\")">>, <<"float=(\"a\")">>,
-            <<"integer=(\"a\")">>]
+            <<"unknown-type=(\"a\")">>, <<"a=\"integer\"">>]
     ),
     % `ao-types' in an encoding that `from/3' does not write: empty, a member
     % for each key, keys or types out of order, a key of two types, a space.

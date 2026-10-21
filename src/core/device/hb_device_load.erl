@@ -22,8 +22,12 @@
 %%%       implementation requiring a `trusted-device-signers'
 %%%       signature.</li>
 %%% </ol>
+%%%
+%%% The loader also gives its preloaded store (`store/1'), the signed
+%%% specification of a preloaded device (`spec/2'), and every implementation
+%%% of a specification in its sources (`implementations/2').
 -module(hb_device_load).
--export([reference/2, schema/2]).
+-export([reference/2, schema/2, store/1, spec/2, implementations/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -160,26 +164,21 @@ from_trusted_devices(Ref, Opts) ->
 %% so decoding their messages cannot depend on a loaded codec. The
 %% preloaded store is build-signed, so no signature check is needed.
 from_preloaded(Ref, Opts) ->
-    case preloaded(Opts) of
-        undefined ->
-            {error, not_found};
-        Store ->
-            PreOpts =
-                Opts#{ <<"store">> => [Store], <<"cache-read-mode">> => raw },
-            maybe
-                {ok, SpecID} ?= preloaded_spec(Ref, Store, PreOpts),
-                lazy_first(
-                    fun(ID) -> load_archive(ID, PreOpts) end,
-                    [
-                        fun() ->
-                            hb_util:ok_or(
-                                hb_cache:match(implementation_query(SpecID), PreOpts),
-                                []
-                            )
-                        end
-                    ]
-                )
-            end
+    Store = store(Opts),
+    PreOpts = Opts#{ <<"store">> => Store, <<"cache-read-mode">> => raw },
+    maybe
+        {ok, SpecID} ?= preloaded_spec(Ref, Store, PreOpts),
+        lazy_first(
+            fun(ID) -> load_archive(ID, PreOpts) end,
+            [
+                fun() ->
+                    hb_util:ok_or(
+                        hb_cache:match(implementation_query(SpecID), PreOpts),
+                        []
+                    )
+                end
+            ]
+        )
     end.
 
 preloaded_spec(Ref, _Store, _Opts) when ?IS_ID(Ref) ->
@@ -213,11 +212,12 @@ preloaded_literal_names_test() ->
     ),
     hb_store:stop(Store).
 
-%% @doc The preloaded store, with request-local cache keys stripped so it is
-%% visible inside a request-scoped resolution.
-preloaded(Opts) ->
+%% @doc Return the preloaded store, with request-local cache keys stripped so
+%% it is visible inside a request-scoped resolution. Without one, the store is
+%% `[]', which `hb_store' treats as no viable store.
+store(Opts) ->
     Node = maps:without([<<"cache-control">>, <<"only">>, <<"prefer">>], Opts),
-    hb_opts:get(preloaded_store, undefined, Node).
+    hb_opts:get(preloaded_store, [], Node).
 
 %%% --------------------------------------------------------------------
 %%% Low trust
@@ -392,6 +392,45 @@ put_schemas(Archive, Opts) ->
 schema_key(Module) ->
     <<"~meta@1.0/devices/schemas/", (hb_util:bin(Module))/binary>>.
 
+%% @doc Return the specification of a preloaded device: the signed
+%% `Device-Specification' message that the preloaded index gives for its name,
+%% read from the preloaded store.
+spec(Ref, Opts) ->
+    Store = store(Opts),
+    PreOpts = Opts#{ <<"store">> => Store },
+    maybe
+        {ok, SpecID} ?=
+            preloaded_spec(hb_ao:normalize_key(Ref), Store, PreOpts),
+        hb_cache:read(SpecID, PreOpts)
+    end.
+
+%% @doc Return every implementation ID of a specification in the sources of the
+%% loader: the preloaded store, the node's stores, then the items of the
+%% trusted signers on Arweave. The loader loads only the first of them that it
+%% can load.
+implementations(SpecID, Opts) ->
+    Query = implementation_query(SpecID),
+    PreOpts = Opts#{ <<"store">> => store(Opts), <<"cache-read-mode">> => raw },
+    Preloaded = hb_util:ok_or(hb_cache:match(Query, PreOpts), []),
+    Local = hb_util:ok_or(hb_cache:match(Query, Opts), []),
+    Remote =
+        case
+            trusted_signer_entries(
+                SpecID,
+                SpecID,
+                hb_opts:get(trusted_device_signers, [], Opts),
+                Opts
+            )
+        of
+            [] -> [];
+            Signers ->
+                hb_util:ok_or(
+                    hb_client_gateway:device(SpecID, Signers, Opts),
+                    []
+                )
+        end,
+    {ok, lists:uniq(Preloaded ++ Local ++ Remote)}.
+
 implementation_query(SpecID) ->
     #{
         <<"data-protocol">> => <<"ao">>,
@@ -464,10 +503,10 @@ trusted_signer_accepts(Ref, SpecID, Signer, Opts) when is_map(Signer) ->
 trusted_signer_accepts(_Ref, _SpecID, _Signer, _Opts) ->
     false.
 
-trusted_signer_address(Signer, _Opts) when is_binary(Signer) ->
-    hb_util:committer(Signer);
+trusted_signer_address(Signer, Opts) when is_binary(Signer) ->
+    hb_committer:uri(Signer, Opts);
 trusted_signer_address(Signer, Opts) when is_map(Signer) ->
-    hb_util:committer(hb_maps:get(<<"address">>, Signer, undefined, Opts));
+    hb_committer:uri(hb_maps:get(<<"address">>, Signer, undefined, Opts));
 trusted_signer_address(_Signer, _Opts) ->
     undefined.
 
@@ -478,7 +517,7 @@ trusted_signer_devices_test() ->
         [hb_util:human_id(<<N:256>>) || N <- lists:seq(1, 5)],
     ?assertEqual(
         [
-            ?ARWEAVE_COMMITTER(Address)
+            hb_committer:uri(Address)
         ||
             Address <- [Plain, Unscoped, ByRef, BySpec]
         ],
@@ -520,7 +559,10 @@ trusted_signer_devices_test() ->
         trusted_signers(Ref, SpecID, NodeOpts)
     ).
 
-%% @doc Every `requires-*' key must match this machine's `system_info'.
+%% @doc Every `requires-*' key must match this machine:
+%% `requires-ao-runtime-version' must be the version of the AO runtime that
+%% this node implements, and every other key the value of the same name in its
+%% `system_info'.
 compatible(Msg, Opts) ->
     Failed =
         lists:filtermap(
@@ -531,7 +573,7 @@ compatible(Msg, Opts) ->
                             hb_ao:normalize_key(Key), new_atoms),
                     Want = hb_cache:ensure_loaded(Value, Opts),
                     case
-                        hb_ao:normalize_key(erlang:system_info(Prop))
+                        hb_ao:normalize_key(requirement(Prop))
                             == hb_ao:normalize_key(Want)
                     of
                         true -> false;
@@ -546,8 +588,28 @@ compatible(Msg, Opts) ->
         _ -> {error, {failed_requirements, Failed}}
     end.
 
+%% @doc Return the value of a requirement on this machine.
+requirement(ao_runtime_version) -> ?AO_RUNTIME_VERSION;
+requirement(Prop) -> erlang:system_info(Prop).
+
+%% @doc An archive built for another AO runtime version is refused.
+requires_ao_runtime_version_test() ->
+    ?assertEqual(
+        ok,
+        compatible(
+            #{ <<"requires-ao-runtime-version">> => ?AO_RUNTIME_VERSION },
+            #{}
+        )
+    ),
+    ?assertMatch(
+        {error, {failed_requirements, [{ao_runtime_version, <<"0.10">>}]}},
+        compatible(#{ <<"requires-ao-runtime-version">> => <<"0.10">> }, #{})
+    ).
+
 %% @doc Loading a device memoises its modules' schemas in the shared store,
-%% where a process that never loaded the archive finds them.
+%% where a process that never loaded the archive finds them. The schemas are a
+%% message that the cache stores as it is, and the signed ID of the device's
+%% specification is the one that its implementations declare.
 schema_memoised_test() ->
     erlang:erase({?MODULE, <<"test-device@1.0">>}),
     Opts =
@@ -562,7 +624,15 @@ schema_memoised_test() ->
     receive
         {Ref, Schemas} ->
             ?assertMatch({ok, #{ <<"snapshot">> := [_] }}, Schemas)
-    end.
+    end,
+    StoreOpts = Opts#{ <<"store">> => [hb_test_utils:test_store()] },
+    {ok, ModuleSchemas} = schema(Module, Opts),
+    {ok, SchemaID} = hb_cache:write(ModuleSchemas, StoreOpts),
+    {ok, Read} = hb_cache:read(SchemaID, StoreOpts),
+    ?assertEqual(ModuleSchemas, hb_cache:ensure_all_loaded(Read, StoreOpts)),
+    {ok, Spec} = spec(<<"test-device@1.0">>, Opts),
+    SpecID = hb_message:id(Spec, signed, Opts),
+    ?assertMatch({ok, [_ | _]}, implementations(SpecID, StoreOpts)).
 
 %% @doc Resolution against a preloaded store holding no devices must fail
 %% promptly with a circular-resolution error, not recurse through `name@1.0'.
@@ -577,12 +647,10 @@ circular_name_resolution_test() ->
             <<"loaded-device-store">> => []
         },
     ?assertThrow(
-        {error,
-            {device_not_loadable,
-                <<"name@1.0">>,
-                <<"Circular device resolution detected for reference "
-                    "`name@1.0`. Check `preloaded-store` viability.">>
-            }
+        {device_not_loadable,
+            <<"name@1.0">>,
+            <<"Circular device resolution detected for reference "
+                "`name@1.0`. Check `preloaded-store` viability.">>
         },
         reference(<<"message@1.0">>, Opts)
     ).

@@ -90,6 +90,8 @@ unit(Base, <<"y">>) when Base > 0 -> unit(Base * 1000, <<"z">>).
 load_item_at_offset(ExplicitOffset, Length, Opts) when is_integer(Length) ->
     maybe
         {ok, _ChunkJSON, FirstChunk} ?= chunk_from_offset(ExplicitOffset, Opts),
+        {ok, HeaderChunk} ?=
+            header_chunk(ExplicitOffset, infinity, FirstChunk, Opts),
         ?event(
             arweave_offset_lookup,
             {loaded_explicit_offset,
@@ -98,7 +100,7 @@ load_item_at_offset(ExplicitOffset, Length, Opts) when is_integer(Length) ->
             },
             Opts
         ),
-        load_item_from_data_size(ExplicitOffset, Length, FirstChunk, Opts)
+        load_item_from_data_size(ExplicitOffset, Length, HeaderChunk, Opts)
     end;
 load_item_at_offset(TargetOffset, undefined, Opts) ->
     maybe
@@ -272,11 +274,13 @@ maybe_nested_item(
     maybe
         {ok, FirstChunk} ?=
             item_chunk(ItemStartOffset, KnownOffset, KnownChunk, Opts),
+        {ok, HeaderChunk} ?=
+            header_chunk(ItemStartOffset, ItemSize, FirstChunk, Opts),
         maybe_nested_item(
             TargetOffset,
             ItemStartOffset,
             ItemSize,
-            FirstChunk,
+            HeaderChunk,
             KnownOffset,
             KnownChunk,
             Opts
@@ -318,6 +322,26 @@ item_chunk(ItemStartOffset, _KnownOffset, _KnownChunk, Opts) ->
         {ok, _ChunkJSON, FirstChunk} -> {ok, FirstChunk};
         Error -> Error
     end.
+
+%% @doc Read on into the next chunk when an item runs past its first chunk and
+%% its header does not decode from that chunk alone.
+header_chunk(ItemStartOffset, ItemSize, FirstChunk, Opts)
+        when byte_size(FirstChunk) < ItemSize ->
+    case deserialize_header(FirstChunk) of
+        {ok, _HeaderSize, _HeaderTX} ->
+            {ok, FirstChunk};
+        {error, _} ->
+            maybe
+                {ok, _ChunkJSON, NextChunk} ?=
+                    chunk_from_offset(
+                        ItemStartOffset + byte_size(FirstChunk),
+                        Opts
+                    ),
+                {ok, <<FirstChunk/binary, NextChunk/binary>>}
+            end
+    end;
+header_chunk(_ItemStartOffset, _ItemSize, FirstChunk, _Opts) ->
+    {ok, FirstChunk}.
 
 %% @doc Locate the bundle member containing the given offset.
 find_bundle_member(TargetOffset, ItemStartOffset, _BundleIndex, Opts)
@@ -365,7 +389,7 @@ offset_item_cases_test() ->
     Opts = #{},
     Png = #{ <<"content-type">> => <<"image/png">> },
     Jpeg = #{ <<"content-type">> => <<"image/jpeg">> },
-    %% Each case fetches a live item from arweave.net; running the five
+    %% Each case fetches a live item from arweave.net; running the six
     %% cases in parallel cuts the wall time to roughly the slowest fetch.
     Cases =
         [
@@ -377,7 +401,9 @@ offset_item_cases_test() ->
             {<<"160399273000000">>, 498852, Png},
             %% A megabyte reference to the item, occurring in the middle.
             {<<"160399273m">>, 498852, Png},
-            {<<"384600234780716">>, 856691, Jpeg}
+            {<<"384600234780716">>, 856691, Jpeg},
+            %% An item whose header runs past the end of its first chunk.
+            {<<"376836294221800">>, 480, #{}}
         ],
     hb_pmap:parallel_map(
         Cases,

@@ -1,13 +1,13 @@
 %%% @doc An Arweave path manifest resolution device. Follows the v1 schema:
 %%% https://specs.ar.io/?tx=lXLd0OPwo-dJLB_Amz5jgIeDhiOkjXuM3-r0H_aiNj0
 -module(dev_manifest).
--export([index/3, info/0, request/3]).
+-export([index/3, device_info/0, request/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Use the `route/4' function as the handler for all requests, aside
 %% from `keys' and `set', which are handled by the default resolver.
-info() ->
+device_info() ->
     #{
         default => fun route/4,
         excludes => [keys, set, committers]

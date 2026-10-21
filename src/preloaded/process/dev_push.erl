@@ -2,6 +2,7 @@
 %%% pushes the resulting messages to other processes. The `push'ing mechanism
 %%% continues until the there are no remaining messages to push.
 -module(dev_push).
+-specification("../../../specs/push@1.0.md").
 -device_libraries([lib_process]).
 %%% Public API
 -export([push/3]).
@@ -226,12 +227,14 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                             hb_ao:get(
                                                 <<"scheduler">>,
                                                 PrimaryProcess,
+                                                undefined,
                                                 Opts
                                             ),
                                         <<"from-authority">> =>
                                             hb_ao:get(
                                                 <<"authority">>,
                                                 PrimaryProcess,
+                                                undefined,
                                                 Opts
                                             )
                                     },
@@ -509,7 +512,7 @@ push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
                 BaseReq#{ <<"max-depth">> => N - 1 }
         end,
     hb_ao:resolve(
-        {as, <<"process@1.0">>, TargetID},
+        {as, <<"process@1.0">>, <<"ao:", TargetID/binary>>},
         Req,
         Opts#{ <<"cache-control">> => <<"always">> }
     ).
@@ -755,7 +758,7 @@ apply_security(authority, Msg, TargetProcess, Codec, Opts) ->
             % committers. Sign with all local valid keys.
             commit_result(
                 Msg,
-                lists:map(fun hb_util:committer/1, Authorities),
+                [hb_committer:uri(A, Opts) || A <- Authorities],
                 Codec,
                 Opts
             );
@@ -765,10 +768,11 @@ apply_security(authority, Msg, TargetProcess, Codec, Opts) ->
             ?event(push, {found_authority, {authority, Authority}}, Opts),
             commit_result(
                 Msg,
-                lists:map(
-                    fun hb_util:committer/1,
-                    hb_util:binary_to_strings(Authority)
-                ),
+                [
+                    hb_committer:uri(A, Opts)
+                ||
+                    A <- hb_util:binary_to_strings(Authority)
+                ],
                 Codec,
                 Opts
             )
@@ -1115,14 +1119,9 @@ test_multi_process_push() ->
         ),
     ?event(push, {push_result, PushResult}),
     % The pushed message holds the AOS `Tags' as keys, not as a `tags' list.
-    ?assertEqual(
-        not_found,
-        hb_ao:get(
-            <<"tags">>,
-            hb_util:deep_get(<<"1/id">>, PushResult, Opts),
-            Opts
-        )
-    ),
+    {ok, Pushed} =
+        hb_cache:read(hb_util:deep_get(<<"1/id">>, PushResult, Opts), Opts),
+    ?assertEqual(not_found, hb_ao:get(<<"tags">>, Pushed, Opts)),
     ?assertEqual(
         {ok, <<"GOT PONG">>},
         hb_ao:resolve(Sender, <<"now/results/data">>, Opts)
@@ -1240,7 +1239,7 @@ test_push_prompts_encoding_change_disabled() ->
     Res =
         hb_ao:resolve_many(
             [
-                <<"QQiMcAge5ZtxcUV7ruxpi16KYRE8UBP0GAAqCIJPXz0">>,
+                <<"ao:QQiMcAge5ZtxcUV7ruxpi16KYRE8UBP0GAAqCIJPXz0">>,
                 {as, <<"process@1.0">>, <<>>},
                 Msg
             ],
@@ -1451,8 +1450,8 @@ test_cron_depth_zero_push() ->
     }),
     share_location_record(Wallet1, Node1, Node2),
     share_location_record(Wallet2, Node2, Node1),
-    {ok, _} = hb_http:post(Node1, <<"/schedule">>, Proc1, Opts),
-    {ok, _} = hb_http:post(Node2, <<"/schedule">>, Proc2, Opts),
+    {ok, _} = hb_http:post(Node1, <<"//schedule">>, Proc1, Opts),
+    {ok, _} = hb_http:post(Node2, <<"//schedule">>, Proc2, Opts),
     Trust = <<
         "ao.authorities = { \"", Address1/binary, "\",\"", Address2/binary,
         "\" }; ao.addAssignable('all', function (msg) return true end); ",
@@ -1615,7 +1614,8 @@ test_parse_max_depth() ->
 %% recursive `/push' is skipped, so the response carries an explicit
 %% `resulted-in: <<"skipped">>' marker and the target's compute is not invoked.
 test_max_depth_zero_schedules_only() ->
-    {Sender, Receiver, MsgSlot, Opts} = setup_two_process_message(),
+    {Sender, Receiver, MsgSlot, Opts} =
+        setup_two_process_message([<<"authority">>]),
     {ok, ReceiverSlotBefore} =
         hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
     {ok, PushResult} =
@@ -1639,7 +1639,17 @@ test_max_depth_zero_schedules_only() ->
     %% always runs, even when push_downstream is short-circuited.
     {ok, ReceiverSlotAfter} =
         hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
-    ?assert(ReceiverSlotAfter > ReceiverSlotBefore).
+    ?assert(ReceiverSlotAfter > ReceiverSlotBefore),
+    % A Sender with no `authority' sends a message with no `from-authority'.
+    ?assertEqual(
+        undefined,
+        hb_ao:get(
+            <<"schedule/assignments/2/body/from-authority">>,
+            Receiver,
+            undefined,
+            Opts
+        )
+    ).
 
 %% @doc `max-depth = 1' on the outer push: the outbox is scheduled and the
 %% target's `/push' runs once (depth 1 -> depth 0). When that target's own
@@ -1733,15 +1743,29 @@ test_compute_push_hook_idempotent() ->
 %% Ping message on the Sender that targets the Receiver. Returns
 %% `{Sender, Receiver, MsgSlot, Opts}' so individual tests can drive
 %% `/push' (or `/compute&push') against the staged message and observe the
-%% resulting downstream behaviour.
+%% resulting downstream behaviour. The Sender holds none of the keys in
+%% `SenderWithout'.
 setup_two_process_message() ->
+    setup_two_process_message([]).
+setup_two_process_message(SenderWithout) ->
     hb_process_test_vectors:init(),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"cache-control">> => [],
         <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
     },
-    Sender = hb_process_test_vectors:aos_process(Opts),
+    Sender =
+        hb_message:commit(
+            hb_maps:without(
+                SenderWithout,
+                hb_message:uncommitted(
+                    hb_process_test_vectors:aos_process(Opts),
+                    Opts
+                ),
+                Opts
+            ),
+            Opts
+        ),
     {ok, _} = hb_cache:write(Sender, Opts),
     {ok, _} =
         hb_ao:resolve(Sender, #{
@@ -1845,7 +1869,7 @@ test_nested_push_prompts_encoding_change() ->
     Res2 =
         hb_ao:resolve_many(
             [
-                hb_message:id(Base, all, Opts),
+                <<"ao:", (hb_message:id(Base, all, Opts))/binary>>,
                 {as, <<"process@1.0">>, <<>>},
                 Msg
             ],

@@ -15,9 +15,10 @@
 %%% </pre>
 
 -module(dev_scheduler).
+-specification("../../../specs/scheduler@1.0.md").
 -device_libraries([lib_process, lib_scheduler_formats]).
 %%% AO-Core API functions:
--export([info/0]).
+-export([device_info/0]).
 %%% Local scheduling functions:
 -export([schedule/3, router/4]).
 %%% CU-flow functions:
@@ -46,7 +47,7 @@ start() ->
 
 %% @doc This device uses a default_handler to route requests to the correct
 %% function.
-info() -> 
+device_info() -> 
     #{
         exports =>
             [
@@ -63,7 +64,7 @@ info() ->
 
 %% @doc General utility functions that are available to other modules.
 parse_schedulers(SchedLoc) when is_list(SchedLoc) ->
-    lists:map(fun hb_util:committer/1, SchedLoc);
+    lists:map(fun hb_committer:uri/1, SchedLoc);
 parse_schedulers(SchedLoc) when is_binary(SchedLoc) ->
     parse_schedulers(
         binary:split(

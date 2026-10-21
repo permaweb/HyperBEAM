@@ -200,7 +200,7 @@ generate(Base, Request, Opts) ->
             {
                 ok,
                 (hb_maps:get(<<"access-control">>, WalletDetails, #{}, Opts))#{
-                    <<"cache-control">> => [<<"no-store">>],
+                    <<"cache-control">> => <<"no-store">>,
                     <<"body">> =>
                         <<"secret:", Committer/binary>>
                 }
@@ -356,7 +356,7 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
     Committer = hb_maps:get(<<"committer">>, WalletDetails, undefined, Opts),
     KeyID = <<"secret:", Committer/binary>>,
     Base = RespBase#{
-        <<"body">> => KeyID, <<"cache-control">> => [<<"no-store">>]
+        <<"body">> => KeyID, <<"cache-control">> => <<"no-store">>
     },
     % Determine how to persist the wallet.
     case hb_maps:get(<<"persist">>, WalletDetails, <<"in-memory">>, Opts) of
@@ -515,13 +515,15 @@ verify_controllers(WalletDetails, Request, Opts) ->
     RequiredControllers =
         hb_util:int(hb_maps:get(<<"required-controllers">>, WalletDetails, 1, Opts)),
     Controllers =
-        lists:map(
-            fun hb_util:committer/1,
-            parse_controllers(
-                hb_maps:get(<<"controllers">>, WalletDetails, [], Opts),
-                Opts
-            )
-        ),
+        [
+            hb_committer:uri(Controller, Opts)
+        ||
+            Controller <-
+                parse_controllers(
+                    hb_maps:get(<<"controllers">>, WalletDetails, [], Opts),
+                    Opts
+                )
+        ],
     PresentControllers =
         lists:filter(
             fun(Signer) ->
@@ -604,7 +606,7 @@ export(Base, Request, Opts) ->
                     fun(Wallet) ->
                         Loaded = hb_cache:ensure_all_loaded(Wallet, PrivOpts),
                         ?event({exported, {priv_wallet, Loaded}}),
-                        Loaded
+                        Loaded#{ <<"cache-control">> => <<"no-store">> }
                     end,
                     Wallets
                 )
@@ -817,7 +819,7 @@ test_wallet_generate_and_verify(GeneratePath, ExpectedName, CommitParams) ->
         maps:merge(
             #{
                 <<"device">> => <<"secret@1.0">>,
-                <<"path">> => <<"commit">>,
+                <<"path">> => <<"//commit">>,
                 <<"body">> => <<"Test message">>,
                 <<"priv">> => Priv
             },
@@ -829,7 +831,7 @@ test_wallet_generate_and_verify(GeneratePath, ExpectedName, CommitParams) ->
     % transport commitments.
     hb_test_utils:assert_hashpath_reply(
         SignedMessage,
-        ?ARWEAVE_COMMITTER(WalletAddr),
+        hb_committer:uri(WalletAddr),
         <<"Test message">>
     ).
 
@@ -928,7 +930,7 @@ commit_with_cookie_wallet_test() ->
     % Use the cookie to sign a message (no wallet parameter needed).
     TestMessage = #{
         <<"device">> => <<"secret@1.0">>,
-        <<"path">> => <<"commit">>,
+        <<"path">> => <<"//commit">>,
         <<"body">> => <<"Test data">>,
         <<"priv">> => Priv
     },
@@ -937,7 +939,7 @@ commit_with_cookie_wallet_test() ->
     % transport commitments.
     hb_test_utils:assert_hashpath_reply(
         SignedMessage,
-        ?ARWEAVE_COMMITTER(WalletName),
+        hb_committer:uri(WalletName),
         <<"Test data">>
     ).
 
@@ -965,8 +967,13 @@ export_wallet_test() ->
     ?event({export_test, {export_response, ExportResponse}}),
     % Should return wallet details including key, auth, exportable, persist.
     ?assertMatch(#{<<"wallet">> := _, <<"persist">> := <<"in-memory">>}, ExportResponse),
+    % The exported key gives `e' in its fewest octets, as RFC 7518 requires.
+    #{ <<"e">> := E } = hb_json:decode(maps:get(<<"wallet">>, ExportResponse)),
+    ?assertEqual(<<"AQAB">>, E),
     ?assert(maps:is_key(<<"access-control">>, ExportResponse)),
     ?assert(maps:is_key(<<"controllers">>, ExportResponse)),
+    % A reply with the wallet's key has the header `cache-control: no-store'.
+    ?assertEqual(<<"no-store">>, maps:get(<<"cache-control">>, ExportResponse)),
     % Should return the correct wallet address in the response.
     ?assertEqual(WalletAddress, maps:get(<<"address">>, ExportResponse)),
     AccessControl = maps:get(<<"access-control">>, ExportResponse),
@@ -1042,7 +1049,7 @@ export_non_volatile_wallet_test() ->
                 Node,
                 #{
                     <<"device">> => <<"secret@1.0">>,
-                    <<"path">> => <<"export/1">>,
+                    <<"path">> => <<"//export/1">>,
                     <<"priv">> => Priv
                 },
                 #{}
@@ -1375,7 +1382,7 @@ stored_access_control_verifies_test() ->
     SignRequest =
         #{
             <<"device">> => <<"secret@1.0">>,
-            <<"path">> => <<"commit">>,
+            <<"path">> => <<"//commit">>,
             <<"keyids">> => [KeyID],
             <<"body">> => <<"Test message">>
         },
@@ -1391,6 +1398,6 @@ stored_access_control_verifies_test() ->
         hb_http:post(Node, SignRequest#{ <<"priv">> => Priv }, #{}),
     hb_test_utils:assert_hashpath_reply(
         SignedMessage,
-        ?ARWEAVE_COMMITTER(WalletAddr),
+        hb_committer:uri(WalletAddr),
         <<"Test message">>
     ).

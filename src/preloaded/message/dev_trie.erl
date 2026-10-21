@@ -14,7 +14,8 @@
 %%% `{00, 11, 01, 10}`, which is why each node in a radix-4 trie can have at-most
 %%% 4 children!)
 -module(dev_trie).
--export([info/0, keys/2, keys/3, set/3, get/3, get_key/4]).
+-specification("../../../specs/trie@1.0.md").
+-export([device_info/0, keys/2, keys/3, set/3, get/3, get_key/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -33,7 +34,7 @@
     <<"hashpath">>
 ]).
 
-info() ->
+device_info() ->
     #{
         default => fun get_key/4,
         reserved => ?RESERVED_KEYS

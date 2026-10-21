@@ -16,13 +16,14 @@
 %%% path part that starts with `base:' or `request:' as a URI, so a key with
 %%% one of these prefixes must be given as a value: `source=request:key'.
 -module(dev_apply).
--export([info/1, pair/3, default/4]).
+-specification("../../../specs/apply@1.0.md").
+-export([device_info/1, pair/3, default/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 %% @doc The device info. Forwards all keys aside `pair', `keys' and `set' are
 %% resolved with the `apply/4' function.
-info(_) ->
+device_info(_) ->
     #{
         excludes => [
             <<"committers">>,
@@ -264,7 +265,7 @@ resolve_from_request_test() ->
             Node,
             <<"/~meta@1.0/info/debug-info~apply@1.0">>,
             #{
-                <<"debug-info">> => <<"short-trace-len">>
+                <<"debug-info">> => <<"//short-trace-len">>
             },
             #{}
         )
@@ -276,7 +277,7 @@ apply_over_http_test() ->
         hb_message:commit(
             #{
                 <<"device">> => <<"apply@1.0">>,
-                <<"user-path">> => <<"/user-request/test-key">>,
+                <<"user-path">> => <<"//user-request/test-key">>,
                 <<"user-request">> =>
                     #{
                         <<"test-key">> => <<"DATA">>
@@ -287,7 +288,7 @@ apply_over_http_test() ->
     ?assertEqual(
         {ok, <<"DATA">>},
         hb_ao:resolve(
-            Signed#{ <<"path">> => <<"/user-path">> },
+            Signed#{ <<"path">> => <<"//user-path">> },
             #{ <<"priv-wallet">> => hb:wallet() }
         )
     ),
@@ -296,7 +297,7 @@ apply_over_http_test() ->
         hb_http:request(
             <<"GET">>,
             Node,
-            <<"/user-path">>,
+            <<"//user-path">>,
             Signed,
             #{ <<"priv-wallet">> => hb:wallet() }
         )

@@ -83,9 +83,9 @@ read_offset_path(StoreOpts = #{ <<"index-store">> := IndexStore }, Path) ->
         {ok, Res} when is_map(Res) ->
             {ok, Res#{
                 <<"version">> => maps:get(<<"version">>, Res, 2),
-                <<"codec-device">> =>
+                <<"codec">> =>
                     maps:get(
-                        <<"codec-device">>,
+                        <<"codec">>,
                         Res,
                         <<"ans104@1.0">>
                     )
@@ -95,7 +95,7 @@ read_offset_path(StoreOpts = #{ <<"index-store">> := IndexStore }, Path) ->
                 hb_store_arweave_offset:decode(OffsetBinary),
             {ok, #{
                 <<"version">> => Version,
-                <<"codec-device">> => CodecName,
+                <<"codec">> => CodecName,
                 <<"start">> => StartOffset,
                 <<"length">> => Length
             }};
@@ -176,7 +176,7 @@ do_read(StoreOpts, ID, Opts) ->
         {ok,
             #{
                 <<"version">> := Version,
-                <<"codec-device">> := CodecName,
+                <<"codec">> := CodecName,
                 <<"start">> := StartOffset,
                 <<"length">> := Length
             }} ->
@@ -525,7 +525,7 @@ remote_index_test() ->
     ItemID = <<"1R5QEtX53Z_RRQJwzFWf40oXiPW2FibErT_h02pu8MU">>,
     ?assertEqual(not_found, read_offset(Local, TXID, #{})),
     ?assertMatch(
-        {ok, #{ <<"codec-device">> := <<"tx@1.0">>, <<"length">> := 8387 }},
+        {ok, #{ <<"codec">> := <<"tx@1.0">>, <<"length">> := 8387 }},
         read_offset(Store, TXID, #{})
     ),
     % The offset is retained, so the routes are asked once per message.

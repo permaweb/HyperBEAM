@@ -17,15 +17,15 @@
 %%%                                 if the record is valid and newer than the
 %%%                                 known nonce for the signer.
 -module(dev_location).
--export([info/0, read/2, node/3, known/3, all/3]).
+-export([device_info/0, read/2, node/3, known/3, all/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(DEFAULT_TTL, 28 * 24 * 60 * 60). % 28 days.
+-define(DEFAULT_TTL, 28 * 24 * 60 * 60 * 1000). % 28 days, in milliseconds.
 -define(DEFAULT_CODEC, <<"httpsig@1.0">>).
 
 %% @doc Handle all requests aside `known` with the `location/4' resolver.
-info() ->
+device_info() ->
     #{
         excludes => [
             <<"committers">>,
@@ -235,12 +235,7 @@ default_url(Opts) ->
 %% `location_notify' option. Finally, we will return the signed location record
 %% to the caller.
 generate_new_location(Nonce, Base, OnlyCommitted, Opts) ->
-    DefaultTTL =
-        hb_opts:get(
-            location_ttl,
-            hb_opts:get(scheduler_location_ttl, 1000 * 60 * 60, Opts),
-            Opts
-        ),
+    DefaultTTL = hb_opts:get(location_ttl, ?DEFAULT_TTL, Opts),
     TimeToLive =
         case hb_maps:get(<<"time-to-live">>, Base, not_found, Opts) of
             not_found ->
@@ -256,9 +251,14 @@ generate_new_location(Nonce, Base, OnlyCommitted, Opts) ->
     % Construct the new scheduler location message.
     DefaultCodec = hb_opts:get(location_codec, ?DEFAULT_CODEC, Opts),
     Codec =
-        case hb_maps:get(<<"require-codec">>, Base, not_found, Opts) of
+        case hb_maps:get(<<"commitment-device">>, Base, not_found, Opts) of
             not_found ->
-                hb_maps:get(<<"require-codec">>, OnlyCommitted, DefaultCodec, Opts);
+                hb_maps:get(
+                    <<"commitment-device">>,
+                    OnlyCommitted,
+                    DefaultCodec,
+                    Opts
+                );
             CodecValue ->
                 CodecValue
         end,
@@ -271,8 +271,7 @@ generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
             <<"type">> => <<"location">>,
             <<"url">> => URL,
             <<"nonce">> => Nonce,
-            <<"time-to-live">> => TTL,
-            <<"codec-device">> => Codec
+            <<"time-to-live">> => TTL
         },
     Signed = hb_message:commit(NewSchedulerLocation, Opts, Codec),
     dev_location_cache:write(Signed, Opts),
@@ -459,12 +458,18 @@ register_scheduler_test() ->
                 <<"url">> => <<"https://hyperbeam-test-ignore.com">>,
                 <<"method">> => <<"POST">>,
                 <<"nonce">> => 1,
-                <<"require-codec">> => <<"ans104@1.0">>
+                <<"commitment-device">> => <<"ans104@1.0">>
             },
             Opts
         ),
     {ok, Res} = hb_http:post(Node, Base, Opts),
-    ?assertMatch(#{ <<"url">> := Location } when is_binary(Location), Res).
+    ?assertMatch(#{ <<"url">> := Location } when is_binary(Location), Res),
+    ?assert(
+        lists:member(
+            <<"ans104@1.0">>,
+            hb_message:commitment_devices(Res, Opts)
+        )
+    ).
 
 %% @doc Test that unsigned GET calls to `node' return the same location record
 %% once one has been generated.
@@ -520,7 +525,7 @@ register_location_on_boot_test() ->
                         <<"path">> => <<"node">>,
                         <<"method">> => <<"POST">>,
                         <<"target">> => <<"self">>,
-                        <<"require-codec">> => <<"ans104@1.0">>,
+                        <<"commitment-device">> => <<"ans104@1.0">>,
                         <<"url">> => <<"https://hyperbeam-test-ignore.com">>,
                         <<"hook">> => #{
                             <<"result">> => <<"ignore">>,
@@ -562,4 +567,14 @@ register_location_on_boot_test() ->
             <<"nonce">> := Nonce
         } when Nonce > 0,
         RemoteLocation
+    ),
+    % Records for an operator's request and an unsigned GET: 28 days in ms.
+    {ok, PeerLocation} =
+        hb_http:get(NotifiedPeer, <<"/~location@1.0/node">>, #{}),
+    ?assertEqual(
+        [2419200000, 2419200000],
+        [
+            hb_maps:get(<<"time-to-live">>, CurrentBody, not_found, #{}),
+            hb_maps:get(<<"time-to-live">>, PeerLocation, not_found, #{})
+        ]
     ).

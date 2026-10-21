@@ -28,9 +28,10 @@ optional `dev_<name>_*` helpers):
 5. Build two unsigned AO-Core messages — a `Device-Specification`
    (markdown derived from the root module's `%%% @doc` block) and an
    `Device-Implementation` (the BEAM archive, with `module-name`,
-   `archive-format`, `implements-device`, `requires-otp-release`, and
-   optional `requires-system-architecture` keys) — and sign them with the
-   configured wallet.
+   `archive-format`, `implements-device`, `requires-otp-release`,
+   `requires-ao-runtime-version`, and optional
+   `requires-system-architecture` keys)
+   — and sign them with the configured wallet.
 
 At load time, `priv/` archive entries are materialized under the
 node's implementation resource root:

@@ -244,6 +244,15 @@ boundary(_ContentType) -> false.
 is_multipart(<<"content-type">>, <<"multipart/", _/binary>>) -> true;
 is_multipart(_Key, _Value) -> false.
 
+%% @doc Check whether a key is `content-type' and its value has the form
+%% `application/x.ao.<name>', which gives the codec of an HTTP message (see
+%% `hb_http'). A value of the form `application/<name>' is also the type of a
+%% document, such as `application/json', so it is not carried in a body part: a
+%% stored document is served as itself.
+is_codec_media_type(<<"content-type">>, Value) when is_binary(Value) ->
+    string:prefix(string:lowercase(Value), <<"application/x.ao.">>) =/= nomatch;
+is_codec_media_type(_Key, _Value) -> false.
+
 %% @doc Parse a single part of a multipart body into a TABM.
 from_body_part(InlinedKey, Part, Opts) ->
     % Extract the Headers block and Body. Only split on the FIRST double CRLF
@@ -281,9 +290,10 @@ from_body_part(InlinedKey, Part, Opts) ->
             % in the multipart body
             throw({error, no_content_disposition_in_multipart, Headers});
         RawDisposition when is_binary(RawDisposition) ->
-            % Extract the name 
-            {item, {_, Disposition}, DispositionParams} =
-                hb_structured_fields:parse_item(RawDisposition),
+            % Extract the name. A `content-disposition' is not a structured
+            % field: browsers write its values in UTF-8.
+            {Disposition, DispositionParams} =
+                cow_multipart:parse_content_disposition(RawDisposition),
             {ok, PartName} =
                 case Disposition of
                     <<"inline">> ->
@@ -292,7 +302,7 @@ from_body_part(InlinedKey, Part, Opts) ->
                         % Otherwise, we need to extract the name of the part
                         % from the Content-Disposition parameters
                         case lists:keyfind(<<"name">>, 1, DispositionParams) of
-                            {_, {_type, PN}} -> {ok, PN};
+                            {_, PN} -> {ok, PN};
                             false -> no_part_name_found
                         end
                 end,
@@ -477,6 +487,7 @@ uncovered_body_keys(TABM, Commitments, Opts) ->
         Key == <<"body">> orelse Key == InlineKey orelse
             lists:member(Key, ?RESERVED_HEADERS) orelse
             is_multipart(Key, Value) orelse
+            is_codec_media_type(Key, Value) orelse
             default_where(Value) == body
     ].
 
@@ -501,10 +512,13 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
                     % header is carried in a body part. A `multipart/'
                     % `content-type' of the message is also carried in a body
                     % part, because the decoder parses such a header for the
-                    % `boundary' of the body.
+                    % `boundary' of the body. So is a `content-type' of the
+                    % form `application/x.ao.<name>', because a receiver reads
+                    % such a header as the codec of the whole body.
                     Where =
                         case lists:member(Key, ?RESERVED_HEADERS) orelse
-                                is_multipart(Key, Value) of
+                                is_multipart(Key, Value) orelse
+                                is_codec_media_type(Key, Value) of
                             true -> #{ where => body };
                             false -> #{}
                         end,
@@ -963,7 +977,7 @@ multipart_header_bytes_roundtrip_test() ->
         <<"priv-wallet">> => ar_wallet:new(), <<"store">> => hb_test_utils:test_store()
     }),
     ?assertEqual({ok, Value}, hb_http:post(Node,
-        <<"/nested/value">>, Signed, Opts)).
+        <<"//nested/value">>, Signed, Opts)).
 
 %% @doc Multipart parts distinguish an absent body from an empty binary body,
 %% including when the empty value is covered by a nested commitment.
@@ -1080,7 +1094,26 @@ multipart_content_type_test() ->
             all,
             Opts
         )
-    ).
+    ),
+    % A message's own `content-type' of the form `application/x.ao.<name>' is
+    % carried in a body part, and one of the form `application/<name>' is the
+    % `content-type' of the HTTP message.
+    ContentType =
+        fun(Type) ->
+            maps:get(
+                <<"content-type">>,
+                hb_message:convert(
+                    #{ <<"content-type">> => Type, <<"body">> => <<"{}">> },
+                    <<"httpsig@1.0">>,
+                    Opts
+                )
+            )
+        end,
+    ?assertMatch(
+        <<"multipart/form-data", _/binary>>,
+        ContentType(<<"application/x.ao.json">>)
+    ),
+    ?assertEqual(<<"application/json">>, ContentType(<<"application/json">>)).
 
 group_maps_test() ->
    Map = #{
@@ -1222,6 +1255,21 @@ nested_content_disposition_roundtrip_test() ->
             Codec,
             #{}
         )
+    ),
+    % A browser writes the `filename' of a file in UTF-8.
+    ?assertEqual(
+        #{ <<"a">> => <<"x">> },
+        hb_message:convert(
+            #{
+                <<"content-type">> => <<"multipart/form-data; boundary=b">>,
+                <<"body">> =>
+                    <<"--b\r\ncontent-disposition: form-data; name=\"a\"; "
+                        "filename=\"", 195, 169, "\"\r\n\r\nx\r\n--b--\r\n">>
+            },
+            <<"structured@1.0">>,
+            Codec,
+            #{}
+        )
     ).
 
 %% @doc A message's own keys with the names of reserved headers are served by
@@ -1238,7 +1286,7 @@ reserved_header_keys_test_() ->
             Msg =
                 hb_message:commit(
                     #{
-                        <<"path">> => <<"/", Key/binary>>,
+                        <<"path">> => <<"//", Key/binary>>,
                         <<"note">> => <<"kept">>,
                         <<"body">> => <<"hello">>,
                         Key => Value

@@ -2,23 +2,16 @@
 %%% (`info'), gives the version and build of the node (`build'), and checks
 %%% whether a request is signed by the node operator (`is-operator').
 -module(dev_meta).
+-specification("../../../specs/meta@1.0.md").
 -device_libraries([lib_meta]).
--export([info/1, info/3, build/3, adopt_node_message/2]).
+-export([device_info/1, info/3, build/3, adopt_node_message/2]).
 -export([is_operator/3]).
 -export([is_operator/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Ensure that the helper function `adopt_node_message/2' is not exported.
-%% The naming of this method carefully avoids a clash with the exported `info/3'
-%% function. We would like the node information to be easily accessible via the
-%% `info' endpoint, but AO-Core also uses `info' as the name of the function
-%% that grants device information. The device call takes two or fewer arguments,
-%% so we are safe to use the name for both purposes in this case, as the user
-%% info call will match the three-argument version of the function. If in the
-%% future the `request' is added as an argument to AO-Core's internal `info'
-%% function, we will need to find a different approach.
-info(_) -> #{ exports => [<<"info">>, <<"build">>, <<"is-operator">>] }.
+device_info(_) -> #{ exports => [<<"info">>, <<"build">>, <<"is-operator">>] }.
 
 %% @doc Utility function for determining if a request is from the `operator' of
 %% the node.
@@ -90,7 +83,7 @@ info(_, Request, NodeMsg) ->
             DynamicKeys = add_dynamic_keys(NodeMsg),
             {ok, filter_node_msg(DynamicKeys, NodeMsg)}
     end,
-    {ErlStatus, Res#{ <<"cache-control">> => [<<"no-store">>] }}.
+    {ErlStatus, Res#{ <<"cache-control">> => <<"no-store">> }}.
 
 %% @doc Remove items from the node message that are not encodable into a
 %% message.
@@ -176,7 +169,9 @@ adopt_node_message(Request, NodeMsg) ->
     end.
 
 is_permanent(NodeMsg) ->
-    hb_ao:get(<<"initialized">>, NodeMsg, not_found, NodeMsg) =:= <<"permanent">>.
+    hb_util:bin(
+        hb_ao:get(<<"initialized">>, NodeMsg, not_found, NodeMsg)
+    ) =:= <<"permanent">>.
 
 %%% Tests
 
@@ -231,10 +226,15 @@ unread_request_link_test() ->
         {ok, hb_test_utils:committer(Wallet)},
         hb_http:get(Node, <<"/~meta@1.0/info/committer">>, #{})
     ),
-    % The node's wallet is the message of that committer.
+    % The node's wallet is the message of that committer, whose URI is in host
+    % form.
     ?assertEqual(
         {ok, hb_test_utils:committer(Wallet)},
-        hb_uri:to(Wallet, #{ <<"scheme">> => <<"did">> }, #{})
+        hb_uri:to(
+            Wallet,
+            #{ <<"scheme">> => <<"did">>, <<"characters">> => <<"host">> },
+            #{}
+        )
     ).
 
 %% @doc Test that we can't set the node message if the request is not signed by
@@ -365,7 +365,7 @@ typed_authorization_test() ->
             hb_message:commit(Fields, #{ <<"priv-wallet">> => Other }), AdminOpts)),
     ?assertMatch({ok, _},
         lib_meta:is_authorized(<<"node-message">>, operator, Signed, AdminOpts)),
-    % An operator given as an address is its `did:pkh:' committer.
+    % An operator given as an address is the committer of the address.
     ?assertMatch({ok, _},
         lib_meta:is_authorized(<<"node-message">>, operator, Signed,
             #{ <<"operator">> => hb:address(Owner) })).
@@ -502,7 +502,28 @@ permanent_node_message_test() ->
     {ok, Res2} = hb_http:get(Node, #{ <<"path">> => <<"/~meta@1.0/info">> }, Opts),
     ?event({get_res, Res2}),
     ?assertEqual(<<"test2">>, hb_ao:get(<<"test-config-item">>, Res2, Opts)),
-    ?assertEqual(1, length(hb_ao:get(<<"node-history">>, Res2, [], Opts))).
+    ?assertEqual(1, length(hb_ao:get(<<"node-history">>, Res2, [], Opts))),
+    % A node given the atom `permanent', as a config file gives it, refuses too.
+    ?assertMatch(
+        {error, _},
+        hb_http:post(
+            hb_http_server:start_node(
+                Opts#{
+                    <<"initialized">> => permanent,
+                    <<"priv-wallet">> => ar_wallet:new()
+                }
+            ),
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~meta@1.0/info">>,
+                    <<"type">> => <<"node-message">>,
+                    <<"test-config-item">> => <<"bad-value">>
+                },
+                Opts#{ <<"priv-wallet">> => Owner }
+            ),
+            Opts
+        )
+    ).
 
 %% @doc An unclaimed node cannot be remotely claimed or reconfigured.
 unclaimed_node_rejects_mutation_test() ->
@@ -619,8 +640,13 @@ modify_request_test() ->
                         }
                 }
         }),
-    {ok, Res} = hb_http:get(Node, <<"/added">>, #{}),
-    ?assertEqual(<<"value">>, Res).
+    {ok, Res} = hb_http:get(Node, <<"//added">>, #{}),
+    ?assertEqual(<<"value">>, Res),
+    % The hook raises on `GET /', whose `body' is empty: 500, with its message.
+    ?assertMatch(
+        {failure, <<"Handler for hook `request` raised", _/binary>>},
+        hb_http:get(Node, <<"/">>, #{})
+    ).
 
 %% @doc Test that version information is available and returned correctly.
 buildinfo_test() ->

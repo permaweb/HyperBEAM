@@ -1,10 +1,11 @@
 %%% @doc Hashpaths: Succinct executable claims of AO-Core transitions: Their
 %%% results and dependencies, as addressable protocol values.
 %%%
-%%% A hashpath is `ao://' followed by a path in the grammar of `hb_singleton'
-%%% (see its module doc for the syntax in EBNF). Each request in the path may
-%%% be followed by claims about the result of executing it on the state
-%%% before it:
+%%% A hashpath is `ao:' followed by a path in the grammar of `hb_singleton'
+%%% (see its module doc for the syntax in EBNF), whose first part is the base.
+%%% `ao:<ID>' is the hashpath of one part: the message with the ID. Each
+%%% request in the path may be followed by claims about the result of
+%%% executing it on the state before it:
 %%% <pre>
 %%%     ;VB+VR      The IDs of the varied base and request: the inputs of the
 %%%                 execution, as the spec of the executed function selects
@@ -16,17 +17,21 @@
 %%%                 the base with `P' laid over it.
 %%% </pre>
 %%%
-%%% For example, `ao://BaseID/compute.R' claims that executing `compute' on
+%%% For example, `ao:BaseID/compute.R' claims that executing `compute' on
 %%% the message `BaseID' gives the message `R'.
+%%%
+%%% A context gives each message that it addresses by its URI: the base and
+%%% the request in `base-uri' and `request-uri', and each claim, such as
+%%% `varied-result-uri', as the `ao:' URI of its ID.
 %%%
 %%% `hb_hashpath' writes hashpaths in a compact form, omitting the claims that
 %%% can be derived: the varied pair and the dependencies of a replacement
 %%% reached by the identity vary, and the result of a request whose result
 %%% does not exist yet. A request that is only a key is written as that key,
-%%% and any other request by its ID. A base that is only a device is written
-%%% as `~Device'. A request without a varied pair is not special: `HP/**P' is
-%%% an ordinary claim that resolving the key `*' at `HP' extends its state
-%%% with the patch `P'.
+%%% and any other request as the `ao:' URI of its ID. A base that is only a
+%%% device is written as `~Device'. A request without a varied pair is not
+%%% special: `HP/**P' is an ordinary claim that resolving the key `*' at `HP'
+%%% extends its state with the patch `P'.
 -module(hb_hashpath).
 %%% Create and parse hashpaths.
 -export([from/3, format/2, format_request/2, parse/2, context/2]).
@@ -54,7 +59,7 @@ from(Singleton, contexts, Opts) -> hb_singleton:parse(Singleton, Opts).
 format([], _Opts) -> <<>>;
 format([First | Rest], Opts) ->
     lists:foldl(
-        fun(Ctx, Prior) -> format(Ctx#{ <<"base-id">> => Prior }, Opts) end,
+        fun(Ctx, Prior) -> format(Ctx#{ <<"base-uri">> => Prior }, Opts) end,
         format(First, Opts),
         Rest
     );
@@ -65,7 +70,7 @@ format(Ctx = #{ <<"varied-result">> := Result }, Opts)
     % address names the value without mistaking it for a pre-result context.
     format(
         maps:with(
-            [<<"base">>, <<"base-id">>, <<"request">>, <<"request-id">>],
+            [<<"base">>, <<"base-uri">>, <<"request">>, <<"request-uri">>],
             Ctx
         ),
         Opts
@@ -75,8 +80,8 @@ format(Ctx, Opts) ->
         {ok, Base} ?= format_base(Ctx, Opts),
         BasePart =
             case Base of
-                <<"ao://", _/binary>> -> Base;
-                _ -> <<"ao://", Base/binary>>
+                <<"ao:", _/binary>> -> Base;
+                _ -> <<"ao:", Base/binary>>
             end,
         case format_request_context(Ctx, Opts) of
             {not_found, <<"request">>} -> BasePart;
@@ -94,52 +99,63 @@ format(Ctx, Opts) ->
     end.
 
 %% @doc Utilize the `hashpath` of the prior resolution, if it is available,
-%% falling back to the `BaseID` if known, and recomputing it only if necessary.
-%% If the execution input of the base is only a device, we write it as
-%% `~Device', as we do for a request.
-format_base(#{ <<"base-id">> := ID }, _) -> {ok, ID};
+%% falling back to the URI of the base if known, and recomputing it only if
+%% necessary. If the execution input of the base is only a device, we write it
+%% as `~Device', as we do for a request. A base that is the `ao:' URI of a key
+%% with a device is written as `Key~Device'.
+format_base(#{ <<"base-uri">> := URI }, _) -> {ok, URI};
 format_base(#{ <<"base">> := Base = {as, _, Msg} }, _) when map_size(Msg) == 0 ->
     hb_singleton:to_part(Base);
+format_base(Ctx = #{ <<"base">> := {as, Device, <<"ao:", Key/binary>>} }, Opts) ->
+    case hb_singleton:to_part({as, Device, #{ <<"path">> => Key }}) of
+        {ok, Part} -> {ok, Part};
+        error -> find_uri(<<"base">>, Ctx, Opts)
+    end;
 format_base(Ctx = #{ <<"base">> := Base }, Opts) ->
     case hb_private:from_message(Base) of
         #{ <<"hashpath">> := HP, <<"hashpath-result">> := ID } ->
             case hb_message:id(Base, all, Opts) of
                 ID -> {ok, HP};
-                _ -> find_id(<<"base">>, Ctx, Opts)
+                _ -> find_uri(<<"base">>, Ctx, Opts)
             end;
         _ ->
             case hb_private:reset(hb_ao:execution_input(Base, Opts)) of
                 Input = #{ <<"device">> := _ } when map_size(Input) == 1 ->
                     case hb_singleton:to_part(Input) of
                         {ok, Part} -> {ok, Part};
-                        error -> find_id(<<"base">>, Ctx, Opts)
+                        error -> find_uri(<<"base">>, Ctx, Opts)
                     end;
-                _ -> find_id(<<"base">>, Ctx, Opts)
+                _ -> find_uri(<<"base">>, Ctx, Opts)
             end
     end;
 format_base(Ctx, Opts) ->
-    find_id(<<"base">>, Ctx, Opts).
+    find_uri(<<"base">>, Ctx, Opts).
 
-%% @doc General utility for extracting the ID of a message by its name from a
-%% context if it is already known, recomputing only if necessary.
-find_id(Name, Ctx, _Opts) when is_map_key(<<Name/binary, "-id">>, Ctx) ->
-    {ok, maps:get(<<Name/binary, "-id">>, Ctx)};
-find_id(Name, Ctx, Opts) when is_map_key(Name, Ctx) ->
+%% @doc General utility for extracting the URI of a message by its name from a
+%% context if it is already known, recomputing its ID only if necessary.
+find_uri(Name, Ctx, _Opts) when is_map_key(<<Name/binary, "-uri">>, Ctx) ->
+    {ok, maps:get(<<Name/binary, "-uri">>, Ctx)};
+find_uri(Name, Ctx, Opts) when is_map_key(Name, Ctx) ->
     case hb_cache:ensure_loaded(maps:get(Name, Ctx), Opts) of
         Value when is_map(Value); is_binary(Value); is_list(Value) ->
-            {ok, hb_message:id(Value, all, Opts)};
+            {ok, <<"ao:", (hb_message:id(Value, all, Opts))/binary>>};
         _ -> {not_found, Name}
     end;
-find_id(Name, _Ctx, _Opts) ->
+find_uri(Name, _Ctx, _Opts) ->
     {not_found, Name}.
 
 %% @doc A request consisting only of a self-describing key can omit its ID.
 format_request(Req, Opts) ->
     format_request_context(#{ <<"request">> => Req }, Opts).
 
-%% @doc Use an explicit request ID when supplied by a parsed receipt. A request
-%% that has a smallest form (see `hb_singleton:to_part/1') is written in it.
-format_request_context(#{ <<"request-id">> := ID }, _Opts) -> {ok, ID};
+%% @doc Use the request URI when supplied by a parsed receipt. A request that
+%% has a smallest form (see `hb_singleton:to_part/1') is written in it, and
+%% any other request as its URI. A request URI that is a hashpath is formatted
+%% with `to_part/1', so `ao:B/k.R' is the group `(ao:B/k.R)'.
+format_request_context(#{ <<"request-uri">> := URI }, _Opts)
+        when ?IS_HASHPATH(URI) ->
+    hb_singleton:to_part(URI);
+format_request_context(#{ <<"request-uri">> := URI }, _Opts) -> {ok, URI};
 format_request_context(Ctx = #{ <<"request">> := Req }, Opts) ->
     Input =
         case Req of
@@ -148,16 +164,16 @@ format_request_context(Ctx = #{ <<"request">> := Req }, Opts) ->
         end,
     case hb_singleton:to_part(Input) of
         {ok, Part} -> {ok, Part};
-        error -> find_id(<<"request">>, Ctx, Opts)
+        error -> find_uri(<<"request">>, Ctx, Opts)
     end;
-format_request_context(Ctx, Opts) -> find_id(<<"request">>, Ctx, Opts).
+format_request_context(Ctx, Opts) -> find_uri(<<"request">>, Ctx, Opts).
 
 %% @doc Format the varied base and requests, if given, into their hashpath
 %% components.
 format_varied(Ctx, Opts) ->
     maybe
-        {ok, VBase} ?= find_id(<<"varied-base">>, Ctx, Opts),
-        {ok, VReq} ?= find_id(<<"varied-request">>, Ctx, Opts),
+        {ok, <<"ao:", VBase/binary>>} ?= find_uri(<<"varied-base">>, Ctx, Opts),
+        {ok, <<"ao:", VReq/binary>>} ?= find_uri(<<"varied-request">>, Ctx, Opts),
         <<";", VBase/binary, "+", VReq/binary>>
     else
         {not_found, _} ->
@@ -167,11 +183,11 @@ format_varied(Ctx, Opts) ->
     end.
 
 %% @doc If the dependencies of a resolution are known, format them into the
-%% hashpath depends component. If not, return an empty string. Honors already
-%% calculated dependency IDs if provided in the context.
+%% hashpath depends component. If not, return an empty string. Honors an
+%% already calculated dependency URI if provided in the context.
 format_dependencies(Ctx, Opts) ->
-    case find_id(<<"dependencies">>, Ctx, Opts) of
-        {ok, Depends} -> <<"@", Depends/binary>>;
+    case find_uri(<<"dependencies">>, Ctx, Opts) of
+        {ok, <<"ao:", Depends/binary>>} -> <<"@", Depends/binary>>;
         {not_found, _} -> <<>>
     end.
 
@@ -179,8 +195,8 @@ format_dependencies(Ctx, Opts) ->
 %% into the hashpath equivalence component. If not, return an empty string.
 format_equivalence(RawCtx, Opts) ->
     Ctx = equivalence_context(RawCtx, Opts),
-    case find_id(<<"varied-result">>, Ctx, Opts) of
-        {ok, Result} ->
+    case find_uri(<<"varied-result">>, Ctx, Opts) of
+        {ok, <<"ao:", Result/binary>>} ->
             <<(format_normalizer(Ctx, Opts))/binary, Result/binary>>;
         {not_found, _} -> <<>>
     end.
@@ -195,7 +211,7 @@ equivalence_context(
     Ctx = #{ <<"normalizer">> := request, <<"result">> := Result },
     _Opts
 ) ->
-    maps:remove(<<"varied-result-id">>,
+    maps:remove(<<"varied-result-uri">>,
         Ctx#{ <<"normalizer">> => replace, <<"varied-result">> => Result });
 equivalence_context(Ctx = #{ <<"normalizer">> := request }, Opts) ->
     {ok, Result} = result_from_context(Ctx, Opts),
@@ -206,7 +222,7 @@ equivalence_context(Ctx, _) -> Ctx.
 %% of `hb_singleton'. The first segment will have both a base and a request
 %% part, while the latter segments will only have the request part -- the base
 %% being inferred from the result of the prior segments.
-parse(<<"ao://", _/binary>> = Hashpath, Opts) ->
+parse(<<"ao:", _/binary>> = Hashpath, Opts) ->
     try hb_singleton:parse(Hashpath, Opts) of
         [] -> {error, <<"Empty hashpath.">>};
         Parts -> Parts
@@ -221,7 +237,7 @@ context(Hashpath, Opts) ->
         [Only] -> Only;
         Parts when is_list(Parts) ->
             (lists:last(Parts))#{
-                <<"base-id">> => format(lists:droplast(Parts), Opts)
+                <<"base-uri">> => format(lists:droplast(Parts), Opts)
             };
         Error -> Error
     end.
@@ -292,7 +308,7 @@ verify_part(_Parts, _PartNum, _Opts) -> false.
 %% verification.
 verify_context(#{ <<"base">> := Base } = Ctx, Opts)
         when not is_map_key(<<"request">>, Ctx),
-             not is_map_key(<<"request-id">>, Ctx) ->
+             not is_map_key(<<"request-uri">>, Ctx) ->
     case verify_commitments(Base, Opts) of
         true -> {true, Base};
         false -> false
@@ -331,12 +347,12 @@ verify_varied(HPCtx, ExecutedCtx, Opts) ->
 %% @doc Check each dependency against the input from which Vary selected it.
 %% Coercion is determined by the selected device and checked by `verify_varied`.
 verify_dependencies(HPCtx, ExecutedCtx, Opts) ->
-    case find_id(<<"dependencies">>, HPCtx, Opts) of
+    case find_uri(<<"dependencies">>, HPCtx, Opts) of
         {not_found, _} -> true;
-        {ok, ID} ->
+        {ok, URI} ->
             DependencyMsg =
-                case find_id(<<"dependencies">>, ExecutedCtx, Opts) of
-                    {ok, ID} ->
+                case find_uri(<<"dependencies">>, ExecutedCtx, Opts) of
+                    {ok, URI} ->
                         {ok, maps:get(<<"dependencies">>, ExecutedCtx)};
                     _ -> load_field(<<"dependencies">>, HPCtx, Opts)
                 end,
@@ -478,7 +494,7 @@ select_origin([Key | Rest], Input, Opts) ->
 %% @doc Verify that the results of the execution match those in the claim.
 verify_equivalence(HPCtx, RawExecutedCtx, Opts) ->
     ExecutedCtx = equivalence_context(RawExecutedCtx, Opts),
-    case find_id(<<"varied-result">>, HPCtx, Opts) of
+    case find_uri(<<"varied-result">>, HPCtx, Opts) of
         {not_found, _} -> true;
         {ok, _} ->
             maps:get(<<"normalizer">>, HPCtx, replace) =:=
@@ -488,9 +504,9 @@ verify_equivalence(HPCtx, RawExecutedCtx, Opts) ->
 
 %% @doc An omitted claim is compact; a stated claim must be reproduced.
 verify_id(Name, Claim, Executed, Opts) ->
-    case find_id(Name, Claim, Opts) of
+    case find_uri(Name, Claim, Opts) of
         {not_found, _} -> true;
-        {ok, ID} -> find_id(Name, Executed, Opts) =:= {ok, ID}
+        {ok, URI} -> find_uri(Name, Executed, Opts) =:= {ok, URI}
     end.
 
 %% @doc Re-execute a claim through the resolver without trusting cached results.
@@ -499,7 +515,7 @@ verify_id(Name, Claim, Executed, Opts) ->
 execute(Ctx, Opts) ->
     maybe
         {ok, Base} ?= load_field(<<"base">>, Ctx, Opts),
-        {ok, Req} ?= load_request(Ctx, Opts),
+        {ok, Req} ?= load_field(<<"request">>, Ctx, Opts),
         true ?= verify_all_commitments(Base, Opts),
         true ?= verify_all_commitments(Req, Opts),
         % A transition is one key. A request message whose path has several
@@ -507,26 +523,38 @@ execute(Ctx, Opts) ->
         true =
             not is_map(Req) orelse
                 length(hb_path:from_message(request, Req, Opts)) == 1,
-        hb_ao:resolve(
-            Base,
-            Req,
-            (internal_opts(Opts))#{ <<"return-context">> => true }
-        )
+        resolve_context(Base, Req, internal_opts(Opts))
     end.
 
+%% @doc Resolve a request on a base and return the context of its execution.
+%% For a request that is only a device, `hb_ao' sets the device on the base
+%% and returns that message without a context, so the context is built here
+%% with the message as its result.
+resolve_context(Base, Req = {as, _, Msg}, ExecOpts) when map_size(Msg) == 0 ->
+    maybe
+        {ok, Res} ?= hb_ao:resolve(Base, Req, ExecOpts),
+        {ok,
+            #{
+                <<"base">> => Base,
+                <<"request">> => Req,
+                <<"result">> => Res,
+                <<"varied-result">> => Res
+            }
+        }
+    end;
+resolve_context(Base, Req, ExecOpts) ->
+    hb_ao:resolve(Base, Req, ExecOpts#{ <<"return-context">> => true }).
+
 %% @doc Load the minimal executable base for a hashpath or a given part number
-%% within it.
+%% within it. A link to a hashpath loads the hashpath, and any other link is
+%% loaded as a link.
 load(Link = {link, _, LinkOpts}, Opts) ->
     MergedOpts = hb_store:scope(
         hb_util:deep_merge(Opts, LinkOpts, Opts),
         hb_opts:get(scope, local, LinkOpts)
     ),
-    #{ <<"hashpath">> := Address } =
-        hb_link:normalize(#{ <<"hashpath">> => Link }, discard, MergedOpts),
-    case Address of
-        _ when ?IS_HASHPATH(Address) -> load(Address, MergedOpts);
-        <<"ao:", ID/binary>> when ?IS_ID(ID) -> read_id(ID, MergedOpts);
-        _ when ?IS_ID(Address) -> read_id(Address, MergedOpts);
+    case hb_link:normalize(#{ <<"hashpath">> => Link }, discard, MergedOpts) of
+        #{ <<"hashpath">> := HP } when ?IS_HASHPATH(HP) -> load(HP, MergedOpts);
         _ ->
             case hb_cache:ensure_loaded(Link, MergedOpts) of
                 Map when is_map(Map) -> {ok, Map};
@@ -535,6 +563,10 @@ load(Link = {link, _, LinkOpts}, Opts) ->
     end;
 load(Hashpath, Opts) when is_binary(Hashpath) ->
     load(parse(Hashpath, Opts), Opts);
+load([Ctx = #{ <<"base-uri">> := URI }], Opts) when map_size(Ctx) == 1 ->
+    % A hashpath of one part has no claims: it is the message that the store
+    % holds at its URI.
+    read(URI, Opts);
 load(Parts, Opts) when is_list(Parts) ->
     load(Parts, length(Parts), Opts);
 load({error, _} = Error, _Opts) -> Error.
@@ -562,10 +594,10 @@ load_context(Parts, PartNum, Ctx, Opts) ->
 %% A compact request without witnesses still denotes the request's result.
 is_context(Ctx) ->
     not maps:is_key(<<"varied-result">>, Ctx) andalso
-        not maps:is_key(<<"varied-result-id">>, Ctx) andalso
-        (maps:is_key(<<"varied-base-id">>, Ctx) orelse
+        not maps:is_key(<<"varied-result-uri">>, Ctx) andalso
+        (maps:is_key(<<"varied-base-uri">>, Ctx) orelse
             maps:is_key(<<"varied-base">>, Ctx) orelse
-            maps:is_key(<<"dependencies-id">>, Ctx) orelse
+            maps:is_key(<<"dependencies-uri">>, Ctx) orelse
             maps:is_key(<<"dependencies">>, Ctx)).
 
 %% @doc Use an available result witness, or recompute the stated claim.
@@ -585,7 +617,7 @@ load_result(Parts, PartNum, Ctx, Opts) ->
             maybe
                 {ok, Base} ?= load_base(Parts, PartNum, Opts),
                 case maps:is_key(<<"request">>, Ctx) orelse
-                        maps:is_key(<<"request-id">>, Ctx) of
+                        maps:is_key(<<"request-uri">>, Ctx) of
                     false -> {ok, Base};
                     true ->
                         case verify_context(Ctx#{ <<"base">> => Base }, Opts) of
@@ -603,40 +635,48 @@ load_base([First | _], 1, Opts) -> load_field(<<"base">>, First, Opts);
 load_base(Parts, PartNum, Opts) -> load(Parts, PartNum - 1, Opts).
 
 %% @doc Read an addressed context value, or use its supplied in-memory value.
+%% A base that is an `ao:' URI with a device is read and checked as a
+%% `base-uri' is, and the device is set on the message as `hb_ao' sets it.
+load_field(
+    <<"base">>,
+    #{ <<"base">> := {as, Device, URI = <<"ao:", _/binary>>} },
+    Opts
+) ->
+    maybe
+        {ok, Base} ?= load_field(<<"base">>, #{ <<"base-uri">> => URI }, Opts),
+        {ok, hb_ao:set(Base, <<"device">>, Device, internal_opts(Opts))}
+    end;
 load_field(Name, Ctx, Opts) when is_map_key(Name, Ctx) ->
     Value = hb_cache:ensure_loaded(maps:get(Name, Ctx), Opts),
-    case maps:find(<<Name/binary, "-id">>, Ctx) of
+    case maps:find(<<Name/binary, "-uri">>, Ctx) of
         error -> {ok, Value};
-        {ok, HP} when ?IS_HASHPATH(HP) ->
-            maybe
-                {ok, Addressed} ?= load(HP, Opts),
-                check_id(Value, hb_message:id(Addressed, all, Opts), Opts)
-            end;
-        {ok, ID} -> check_id(Value, ID, Opts)
+        {ok, URI} -> check(Value, URI, Opts)
     end;
 load_field(Name, Ctx, Opts) ->
-    case maps:find(<<Name/binary, "-id">>, Ctx) of
-        {ok, HP} when ?IS_HASHPATH(HP) -> load(HP, Opts);
-        {ok, ID} -> read_id(ID, Opts);
+    case maps:find(<<Name/binary, "-uri">>, Ctx) of
+        {ok, URI} ->
+            % A stored value must reproduce its address before it can be a
+            % witness.
+            maybe
+                {ok, Value} ?= read(URI, Opts),
+                check(Value, URI, Opts)
+            end;
         error -> {error, {missing, Name}}
     end.
 
-%% @doc A stored value must reproduce its address before it can be a witness.
-read_id(ID, Opts) ->
-    Read =
-        case hb_cache:read(ID, Opts) of
-            {error, not_found} -> hb_cache:read(?NI_URI(ID), Opts);
-            Result -> Result
-        end,
-    maybe
-        {ok, Value} ?= Read,
-        check_id(Value, ID, Opts)
-    end.
+%% @doc Read the value at a URI. The store holds the value of an `ao:' URI
+%% under its ID.
+read(<<"ao:", ID/binary>>, Opts) ->
+    case hb_cache:read(ID, Opts) of
+        {error, not_found} -> hb_cache:read(?NI_URI(ID), Opts);
+        Result -> Result
+    end;
+read(URI, Opts) -> hb_cache:read(URI, Opts).
 
 %% @doc Check the claimed content address and its attached commitments.
-check_id(Value, ID, Opts) ->
+check(Value, URI, Opts) ->
     maybe
-        true ?= hb_message:id(Value, all, Opts) =:= ID
+        true ?= <<"ao:", (hb_message:id(Value, all, Opts))/binary>> =:= URI
             orelse {error, <<"Hashpath value does not match its ID.">>},
         true ?= verify_commitments(Value, Opts)
             orelse {error, <<"Hashpath value has invalid commitments.">>},
@@ -663,20 +703,6 @@ verify_commitments(Value, Opts) when is_map(Value) ->
     hb_message:verify(Value, #{ <<"ids">> => <<"all">> }, Opts);
 verify_commitments(_Value, _Opts) -> true.
 
-%% @doc A compact request key denotes the ordinary one-key request message.
-load_request(Ctx = #{ <<"request-id">> := Key }, Opts)
-        when byte_size(Key) =/= 43 ->
-    Req = #{ <<"path">> => Key },
-    case find_id(<<"request">>, maps:remove(<<"request-id">>, Ctx), Opts) of
-        {not_found, _} -> {ok, Req};
-        {ok, ID} ->
-            case hb_message:id(Req, all, Opts) of
-                ID -> {ok, Req};
-                _ -> {error, <<"Hashpath request does not match its key.">>}
-            end
-    end;
-load_request(Ctx, Opts) -> load_field(<<"request">>, Ctx, Opts).
-
 %% @doc Extract, if we can, a workable post-exec `message` from a context either
 %% via the fully qualified result if possible or layering of the `varied-result`
 %% atop the `base` if provided explicitly.
@@ -690,7 +716,7 @@ result_from_context(Ctx, Opts) ->
                     {ok, Original} ?=
                         case Normalizer of
                             base -> load_field(<<"base">>, Ctx, Opts);
-                            request -> load_request(Ctx, Opts)
+                            request -> load_field(<<"request">>, Ctx, Opts)
                         end,
                     {ok,
                         hb_message:normalize_commitments(
@@ -839,8 +865,8 @@ full_form_round_trip_test() ->
     Opts = #{},
     HP =
         <<
-            "ao://BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4"
-            "/tYRVDkT2X7wjYYVaZWuBBWWzZatEsMoR2NBjcJ8CmZk"
+            "ao:BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4"
+            "/ao:tYRVDkT2X7wjYYVaZWuBBWWzZatEsMoR2NBjcJ8CmZk"
             ";a2Fub25pY2FsLXZhcmllZC1iYXNlLWlkLTAwMDAwMDA"
             "+a2Fub25pY2FsLXZhcmllZC1yZXEtaWQtMDAwMDAwMDA"
             "@ZGVwZW5kcy1tZXNzYWdlLWlkLTAwMDAwMDAwMDAwMDA"
@@ -856,20 +882,44 @@ compact_form_round_trip_test() ->
             ?assertEqual(HP, format(parse(HP, Opts), Opts))
         end,
         [
-            <<"ao://BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4">>,
-            <<"ao://BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4/balance">>,
-            <<"ao://BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4"
+            <<"ao:BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4">>,
+            <<"ao:BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4/balance">>,
+            % A request that is only a key is written as that key, at any
+            % length.
+            <<"ao:BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4"
+              "/tYRVDkT2X7wjYYVaZWuBBWWzZatEsMoR2NBjcJ8CmZk">>,
+            <<"ao:BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4"
               "/transfer/balance">>,
-            <<"ao://BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4/*"
+            <<"ao:BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4/*"
               "*cGF0Y2gtaWQtMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA">>,
             % A base that is only a device is written as `~Device'.
-            <<"ao://~test-device@1.0/compute">>,
+            <<"ao:~test-device@1.0/compute">>,
             % A request that holds only the value of its key is written as
             % `key=value'.
-            <<"ao://BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4/k=v">>,
+            <<"ao:BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4/k=v">>,
             % A request that is only a device is written as `~Device'.
-            <<"ao://BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4"
+            <<"ao:BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4"
               "/~test-device@1.0/compute">>
+        ]
+    ),
+    % A request that is a hashpath of several parts is formatted as a group,
+    % and a URI with a device as it is; each form then formats as itself.
+    R = <<"cGF0Y2gtaWQtMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA">>,
+    lists:foreach(
+        fun({HP, Form}) ->
+            ?assertEqual(
+                [Form, Form],
+                [ format(parse(In, Opts), Opts) || In <- [HP, Form] ]
+            )
+        end,
+        [
+            {
+                <<"ao:a/ao:b%2Fk%2E", R/binary>>,
+                <<"ao:a/(ao:b/k.", R/binary, ")">>
+            },
+            {<<"ao:a/ao:b%2Fk">>, <<"ao:a/(ao:b/k)">>},
+            {<<"ao:a/ao:b~d@1.0">>, <<"ao:a/ao:b~d@1.0">>},
+            {<<"ao:a/(ao:b~d@1.0)">>, <<"ao:a/(ao:b~d@1.0)">>}
         ]
     ),
     % A resolved base that is only a device is written as `~Device'.
@@ -881,7 +931,7 @@ compact_form_round_trip_test() ->
             StoreOpts
         ),
     ?assertMatch(
-        <<"ao://~test-device@1.0/info", _/binary>>,
+        <<"ao:~test-device@1.0/info", _/binary>>,
         hb_path:hashpath(Info, StoreOpts)
     ).
 
@@ -919,7 +969,7 @@ failed_load_test() ->
     WrongID = hb_message:id(#{ <<"wrong-result">> => 42 }, all, Opts),
     lists:foreach(
         fun({Part, Reason}) ->
-            HP = <<"ao://", ID/binary, "/", Part/binary>>,
+            HP = <<"ao:", ID/binary, "/", Part/binary>>,
             ?assertEqual({error, Reason}, load(HP, Opts)),
             ?assertEqual({error, Reason}, hb_cache:read(HP, Opts)),
             ?assertNot(verify_all(HP, Opts)),
@@ -949,6 +999,17 @@ failed_load_test() ->
                 <<"Hashpath claim does not verify.">>
             }
         ]
+    ),
+    % A hashpath in a group is resolved with its claim, as `load/2' reads it.
+    ?assertEqual(
+        {error, <<"Hashpath claim does not verify.">>},
+        hb_ao:resolve_many(
+            hb_singleton:from(
+                <<"/(ao:", ID/binary, "/value.", WrongID/binary, ")">>,
+                Opts
+            ),
+            Opts
+        )
     ).
 
 %% @doc Reject texts that are not hashpaths, and paths that do not follow the
@@ -967,13 +1028,13 @@ malformed_receipt_test() ->
             ID,
             <<ID/binary, "/">>,
             <<ID/binary, "/key">>,
-            <<"ao://">>,
-            <<"ao://", ID/binary, "/(key">>,
-            <<"ao://", ID/binary, "/key)">>,
-            <<"ao://", ID/binary, "/\"key">>,
-            <<"ao://", ID/binary, "/key~">>,
-            <<"ao://", ID/binary, "/key&=value">>,
-            <<"ao://", ID/binary, ".", ID/binary>>
+            <<"ao:">>,
+            <<"ao:", ID/binary, "/(key">>,
+            <<"ao:", ID/binary, "/key)">>,
+            <<"ao:", ID/binary, "/\"key">>,
+            <<"ao:", ID/binary, "/key~">>,
+            <<"ao:", ID/binary, "/key&=value">>,
+            <<"ao:", ID/binary, ".", ID/binary>>
         ]
     ).
 
@@ -996,7 +1057,7 @@ supplied_context_test() ->
     {ok, Overlaid} =
         result_from_context(
             #{
-                <<"request-id">> => <<"a">>,
+                <<"request">> => #{ <<"path">> => <<"a">> },
                 <<"normalizer">> => request,
                 <<"varied-result">> => #{ <<"value">> => 7 }
             },
@@ -1007,15 +1068,17 @@ supplied_context_test() ->
         hb_message:uncommitted(hb_private:reset(Overlaid), Opts)
     ),
     {ok, ID} = hb_cache:write(Base, Opts),
-    WrongBase = [#{ <<"base-id">> => ID, <<"base">> => #{ <<"a">> => 3 } }],
+    URI = <<"ao:", ID/binary>>,
+    WrongBase = [#{ <<"base-uri">> => URI, <<"base">> => #{ <<"a">> => 3 } }],
     ?assertNot(verify_all(WrongBase, Opts)),
     ?assertMatch({error, _}, load(WrongBase, Opts)),
+    {ok, KeyURI} = hb_uri:to(#{ <<"path">> => <<"a">> }, #{}, Opts),
     ?assertNot(
         verify_all(
             [
                 #{
-                    <<"base-id">> => ID,
-                    <<"request-id">> => <<"a">>,
+                    <<"base-uri">> => URI,
+                    <<"request-uri">> => KeyURI,
                     <<"request">> => #{ <<"path">> => <<"b">> }
                 }
             ],
@@ -1047,12 +1110,13 @@ overlay_receipt_test() ->
     Ctx1 = context(HP1, Opts),
     Ctx2 = context(HP2, Opts),
     ?assertEqual(base, maps:get(<<"normalizer">>, Ctx1)),
-    ?assertEqual(hb_message:id(Base, all, Opts), maps:get(<<"base-id">>, Ctx1)),
+    ?assertEqual(hb_uri:to(Base, #{}, Opts),
+        {ok, maps:get(<<"base-uri">>, Ctx1)}),
     ?assertNotEqual(HP1, HP2),
-    ?assertEqual(maps:get(<<"varied-base-id">>, Ctx1),
-        maps:get(<<"varied-base-id">>, Ctx2)),
-    ?assertEqual(maps:get(<<"varied-result-id">>, Ctx1),
-        maps:get(<<"varied-result-id">>, Ctx2)),
+    ?assertEqual(maps:get(<<"varied-base-uri">>, Ctx1),
+        maps:get(<<"varied-base-uri">>, Ctx2)),
+    ?assertEqual(maps:get(<<"varied-result-uri">>, Ctx1),
+        maps:get(<<"varied-result-uri">>, Ctx2)),
     ?assertEqual(2, maps:get(<<"counter">>, Second)),
     ?assertEqual(<<"second">>, maps:get(<<"other">>, Second)),
     {ok, Loaded} = load(HP2, Opts),
@@ -1063,7 +1127,7 @@ overlay_receipt_test() ->
     ?assert(verify_part(HP2, 1, Opts)),
     {ok, Third} = hb_ao:resolve(Loaded, Req, Opts),
     HP3 = hb_path:hashpath(Third, Opts),
-    ?assertEqual(HP2, maps:get(<<"base-id">>, context(HP3, Opts))),
+    ?assertEqual(HP2, maps:get(<<"base-uri">>, context(HP3, Opts))),
     ?assert(verify_all(HP3, Opts)),
     ?assert(verify_part(HP3, 2, Opts)),
     {ok, Reloaded} = load(HP3, Opts),
@@ -1084,8 +1148,8 @@ overlay_receipt_test() ->
         verify_all(
             format(
                 Ctx2#{
-                    <<"varied-result-id">> =>
-                        maps:get(<<"varied-base-id">>, Ctx2)
+                    <<"varied-result-uri">> =>
+                        maps:get(<<"varied-base-uri">>, Ctx2)
                 },
                 Opts
             ),
@@ -1129,21 +1193,33 @@ replacement_receipt_test() ->
         hb_maps:get(<<"value">>, Loaded, undefined, Opts)),
     Changed = hb_ao:set(Loaded, <<"another">>, #{ <<"value">> => 2 }, Opts),
     {ok, Next} = hb_ao:resolve(Changed, <<"another">>, Opts),
-    ?assertEqual(hb_message:id(Changed, all, Opts),
-        maps:get(<<"base-id">>, context(hb_path:hashpath(Next, Opts), Opts))),
+    NextCtx = context(hb_path:hashpath(Next, Opts), Opts),
+    ?assertEqual(hb_uri:to(Changed, #{}, Opts),
+        {ok, maps:get(<<"base-uri">>, NextCtx)}),
     ?assertNot(verify_part(HP, 0, Opts)),
     ?assertNot(verify_part(HP, 2, Opts)),
     ?assertMatch({error, _}, load(HP, 0, Opts)).
 
-%% @doc Hashpath verification must not trust a store alias as proof of content.
+%% @doc Hashpath verification, and a load that executes upon the base, must not
+%% trust a store alias as proof of content.
 wrong_content_address_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     Claimed = hb_message:id(#{ <<"value">> => <<"claimed">> }, all, Opts),
     {ok, Actual} = hb_cache:write(#{ <<"value">> => <<"actual">> }, Opts),
     hb_cache:link(Actual, Claimed, Opts),
-    ?assertNot(verify_all(<<"ao://", Claimed/binary>>, Opts)),
-    ?assertMatch({error, _}, load(<<"ao://", Claimed/binary>>, Opts)),
-    ?assertMatch({error, _}, load({link, Claimed, #{}}, Opts)).
+    ?assertNot(verify_all(<<"ao:", Claimed/binary>>, Opts)),
+    HP = <<"ao:", Claimed/binary, "/value">>,
+    ?assertMatch({error, _}, load(HP, Opts)),
+    ?assertMatch({error, _}, load({link, HP, #{}}, Opts)),
+    % A device as a request or on the base is set on a base that matches its ID.
+    ?assertMatch(
+        [{ok, <<"actual">>}, {ok, <<"actual">>}, {error, _}],
+        [
+            load(<<"ao:", Actual/binary, "/~message@1.0/value">>, Opts),
+            load(<<"ao:", Actual/binary, "~message@1.0/value">>, Opts),
+            load(<<"ao:", Claimed/binary, "~message@1.0/value">>, Opts)
+        ]
+    ).
 
 %% @doc The dependency shape selects the original inputs before coercion.
 coerced_dependencies_test() ->
@@ -1169,8 +1245,8 @@ coerced_dependencies_test() ->
     {ok, Deps} = load_field(<<"dependencies">>, Ctx, Opts),
     BaseID = hb_message:id(Base, all, Opts),
     ReqID = hb_message:id(Req, all, Opts),
-    BaseHP = <<"ao://", BaseID/binary>>,
-    ReqHP = <<"ao://", ReqID/binary>>,
+    BaseHP = <<"ao:", BaseID/binary>>,
+    ReqHP = <<"ao:", ReqID/binary>>,
     ExpectedDeps = #{
         <<"base">> => #{
             <<"device">> => BaseHP,
@@ -1195,14 +1271,16 @@ coerced_dependencies_test() ->
         }
     },
     {ok, WrongID} = hb_cache:write(WrongDeps, Opts),
+    WrongURI = <<"ao:", WrongID/binary>>,
     ?assertNot(verify_all(
-        format(Ctx#{ <<"dependencies-id">> => WrongID }, Opts), Opts)),
+        format(Ctx#{ <<"dependencies-uri">> => WrongURI }, Opts), Opts)),
     ?assertNot(verify_all(
-        format(Ctx#{ <<"varied-base-id">> => BaseID }, Opts), Opts)),
+        format(Ctx#{ <<"varied-base-uri">> => BaseHP }, Opts), Opts)),
     {ok, CollapsedID} = hb_cache:write(
         #{ <<"base">> => BaseHP, <<"request">> => ReqHP }, Opts),
+    CollapsedURI = <<"ao:", CollapsedID/binary>>,
     ?assertNot(verify_all(
-        format(Ctx#{ <<"dependencies-id">> => CollapsedID }, Opts), Opts)).
+        format(Ctx#{ <<"dependencies-uri">> => CollapsedURI }, Opts), Opts)).
 
 %% @doc Signed inputs retain their identity through lazy loading. A different
 %% signer is a different input, and a forged commitment is not an ID witness.
@@ -1237,9 +1315,10 @@ signed_dependencies_test() ->
     Forged = Signed#{ <<"child">> => #{ <<"value">> => <<"forged">> } },
     ID = hb_message:id(Signed, all, Opts),
     ?assertEqual(ID, hb_message:id(Forged, all, Opts)),
-    ?assertNot(
-        verify_all([#{ <<"base-id">> => ID, <<"base">> => Forged }], Opts)
-    ),
+    ?assertNot(verify_all(
+        [#{ <<"base-uri">> => <<"ao:", ID/binary>>, <<"base">> => Forged }],
+        Opts
+    )),
     % The forged messages test this module's own checks, so the cache is not
     % asked to verify them.
     ForgedOpts = Opts#{
@@ -1247,8 +1326,8 @@ signed_dependencies_test() ->
         <<"paranoid-verify">> => false
     },
     hb_cache:write(Forged, ForgedOpts),
-    ?assertNot(verify_all(<<"ao://", ID/binary>>, ForgedOpts)),
-    ?assertMatch({error, _}, load(<<"ao://", ID/binary>>, ForgedOpts)),
+    ?assertNot(verify_all(<<"ao:", ID/binary>>, ForgedOpts)),
+    ?assertMatch({error, _}, load(<<"ao:", ID/binary>>, ForgedOpts)),
     Child = hb_message:commit(#{ <<"value">> => <<"signed child">> }, Opts),
     ForgedChild = Child#{ <<"value">> => <<"forged child">> },
     lists:foreach(
@@ -1308,8 +1387,8 @@ request_overlay_receipt_test() ->
     HP = hb_path:hashpath(Result, Opts),
     Ctx = context(HP, Opts),
     ?assertEqual(replace, maps:get(<<"normalizer">>, Ctx, replace)),
-    ?assertEqual(hb_message:id(Result, all, Opts),
-        maps:get(<<"varied-result-id">>, Ctx)),
+    ?assertEqual(hb_uri:to(Result, #{}, Opts),
+        {ok, maps:get(<<"varied-result-uri">>, Ctx)}),
     {ok, Loaded} = load(HP, Opts),
     ?assertEqual(hb_private:reset(Result),
         hb_private:reset(hb_cache:ensure_all_loaded(Loaded, Opts))),
@@ -1327,7 +1406,7 @@ pre_result_context_test() ->
     Ctx = context(hb_path:hashpath(Result, Opts), Opts),
     BeforePatch =
         format(
-            maps:without([<<"varied-result-id">>, <<"normalizer">>], Ctx),
+            maps:without([<<"varied-result-uri">>, <<"normalizer">>], Ctx),
             Opts
         ),
     {ok, Prior} = load(BeforePatch, Opts),
@@ -1348,7 +1427,7 @@ literal_result_test() ->
     HP =
         format(
             #{
-                <<"base-id">> => hb_message:id(#{}, all, Opts),
+                <<"base">> => #{},
                 <<"request">> => #{ <<"path">> => <<"value">> },
                 <<"varied-result">> => Value
             },
@@ -1368,17 +1447,17 @@ literal_result_test() ->
         )
     ),
     {ok, BaseID} = hb_cache:write(#{ <<"value">> => 7 }, Opts),
-    ?assertEqual({ok, 7}, load(<<"ao://", BaseID/binary, "/value">>, Opts)),
+    ?assertEqual({ok, 7}, load(<<"ao:", BaseID/binary, "/value">>, Opts)),
     ?assertEqual(
         {ok, 7},
-        hb_cache:read(<<"ao://", BaseID/binary, "/value">>, Opts)
+        hb_cache:read(<<"ao:", BaseID/binary, "/value">>, Opts)
     ),
-    Link = {link, <<"ao://", BaseID/binary, "/value">>, #{}},
+    Link = {link, <<"ao:", BaseID/binary, "/value">>, #{}},
     ?assertEqual({ok, 7}, load(Link, Opts)),
     ?assertEqual(7, hb_cache:ensure_loaded(Link, Opts)),
-    {ok, Ctx} = hb_ao:resolve(BaseID, <<"value">>,
+    {ok, Ctx} = hb_ao:resolve(<<"ao:", BaseID/binary>>, <<"value">>,
         Opts#{ <<"return-context">> => true }),
-    ?assertEqual(<<"ao://", BaseID/binary, "/value">>, format(Ctx, Opts)),
+    ?assertEqual(<<"ao:", BaseID/binary, "/value">>, format(Ctx, Opts)),
     ?assertEqual({ok, 7}, load(format(Ctx, Opts), Opts)).
 
 %% @doc Ordinary store links and hashpath roots have distinct address syntax.
@@ -1391,7 +1470,7 @@ store_path_link_test() ->
     Loaded = hb_cache:ensure_loaded({link, Path, #{}}, Opts),
     ?assertEqual(hb_message:id(Child, all, Opts),
         hb_message:id(Loaded, all, Opts)),
-    HP = <<"ao://", ID/binary>>,
+    HP = <<"ao:", ID/binary>>,
     {ok, Root} = hb_cache:read(HP, Opts),
     ?assertEqual(ID, hb_message:id(Root, all, Opts)),
     {ok, StoredHP} = hb_cache:write(HP, Opts),
@@ -1413,7 +1492,7 @@ scoped_link_test() ->
     HP =
         format(
             #{
-                <<"base-id">> => hb_message:id(#{}, all, Opts),
+                <<"base">> => #{},
                 <<"request">> => #{ <<"path">> => <<"value">> },
                 <<"varied-result">> => Value
             },
@@ -1495,7 +1574,7 @@ identity_projection_receipt_test() ->
     {ok, Result} = hb_ao:resolve(#{ <<"a">> => 1 }, Req, Opts),
     HP = hb_path:hashpath(Result, Opts),
     ?assertEqual(
-        [<<"base-id">>, <<"request-id">>, <<"varied-result-id">>],
+        [<<"base-uri">>, <<"request-uri">>, <<"varied-result-uri">>],
         lists:sort(maps:keys(context(HP, Opts)))
     ),
     ?assert(verify_all(HP, Opts)),
@@ -1590,10 +1669,10 @@ awaited_overlay_receipt() ->
             ?assertEqual(2, maps:get(<<"counter">>, B)),
             CtxA = context(hb_path:hashpath(A, Opts), Opts),
             CtxB = context(hb_path:hashpath(B, Opts), Opts),
-            ?assertNotEqual(maps:get(<<"base-id">>, CtxA),
-                maps:get(<<"base-id">>, CtxB)),
-            ?assertEqual(maps:get(<<"varied-result-id">>, CtxA),
-                maps:get(<<"varied-result-id">>, CtxB))
+            ?assertNotEqual(maps:get(<<"base-uri">>, CtxA),
+                maps:get(<<"base-uri">>, CtxB)),
+            ?assertEqual(maps:get(<<"varied-result-uri">>, CtxA),
+                maps:get(<<"varied-result-uri">>, CtxB))
         after
             unlink(Second),
             exit(Second, kill)

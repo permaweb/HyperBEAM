@@ -93,7 +93,7 @@
         <<"preloaded-store">> =>
             {"HB_PRELOADED_STORE", fun preloaded_store_from_env/1},
         <<"port">> => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
-        <<"mode">> => {"HB_MODE", fun list_to_existing_atom/1},
+        <<"mode">> => {"HB_MODE", fun("debug") -> debug; ("prod") -> prod end},
         <<"paranoid-verify">> =>
             {"HB_PARANOID", fun topic_list_to_atoms/1, "false"},
         % Acceptable values for paranoid_verify:
@@ -244,10 +244,6 @@ raw_default_message() ->
         <<"bundler-ans104">> => <<"https://up.arweave.net:443">>,
         % Location of the wallet keyfile on disk that this node will use.
         <<"priv-key-location">> => <<"hyperbeam-key.json">>,
-        % The time-to-live that should be specified when we register
-        % ourselves as a scheduler on the network.
-        % Default: 7 days.
-        <<"scheduler-location-ttl">> => (60 * 60 * 24 * 7) * 1000,
         % Generated LMDB store of preloaded device artifacts.
         <<"preloaded-store">> =>
             #{
@@ -301,7 +297,6 @@ raw_default_message() ->
         <<"commitment-device">> => <<"httpsig@1.0">>,
         % Dev options
         <<"mode">> => debug,
-        <<"profiling">> => true,
         % Every modification to `Opts' called directly by the node operator
         % should be recorded here.
         <<"node-history">> => [],
@@ -349,19 +344,11 @@ raw_default_message() ->
                 <<"template">> => <<"/state.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
-            % GraphQL: race all gateways, take the first 200.
+            % GraphQL: send queries to the default gateway.
             #{
                 <<"template">> => <<"/graphql">>,
                 <<"nodes">> =>
                     [
-                        #{
-                            <<"prefix">> => <<"https://ao-search-gateway.goldsky.com">>,
-                            <<"opts">> => ?DEFAULT_HTTP_OPTS
-                        },
-                        #{
-                            <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
-                            <<"opts">> => ?DEFAULT_HTTP_OPTS
-                        },
                         #{
                             <<"prefix">> => ?DEFAULT_GATEWAY,
                             <<"opts">> => ?DEFAULT_HTTP_OPTS
@@ -509,6 +496,8 @@ raw_default_message() ->
                 }
             ],
         % default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
+        % The device of the `info' of a message, whose page a browser receives.
+        <<"docs-device">> => <<"docs@1.0">>,
         % Should we use the latest cached state of a process when computing?
         <<"process-now-from-cache">> => false,
         % Maximum age, in seconds, for `/now' to serve from the process cache.
@@ -852,11 +841,10 @@ committer(Default, Opts) ->
         Wallet -> uri(Wallet, Opts)
     end.
 
-%% @doc Return the URI of a wallet.
+%% @doc Return the URI of a wallet: the URI of its committer that
+%% `hb_committer:uri/2' gives.
 uri(Wallet, Opts) ->
-    ToURI = #{ <<"path">> => <<"to">>, <<"type">> => <<"uri">> },
-    {ok, URI} = hb_ao:raw(Wallet, ToURI, Opts),
-    URI.
+    hb_committer:uri(Wallet, Opts).
 
 %% @doc Find all known IDs and their sub-options from the `priv_ids' map. Allows
 %% the identities to be named, or based on addresses. The results are normalized

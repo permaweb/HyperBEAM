@@ -792,6 +792,7 @@ impl_message(Pkg, SpecID, _Opts) ->
         <<"implements-device">> => SpecID,
         <<"module-name">> => atom_to_binary(ModName, utf8),
         <<"requires-otp-release">> => OtpRel,
+        <<"requires-ao-runtime-version">> => ?AO_RUNTIME_VERSION,
         <<"body">> => Archive
     },
     case maps:get(requires_system_architecture, Pkg, undefined) of

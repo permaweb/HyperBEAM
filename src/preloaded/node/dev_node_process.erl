@@ -5,13 +5,14 @@
 %%% Definitions of singleton processes are expected to be found with their 
 %%% names in the `node_processes' section of the node message.
 -module(dev_node_process).
--export([info/1]).
+-specification("../../../specs/node-process@1.0.md").
+-export([device_info/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Register a default handler for the device. Inherits `keys' and `set'
 %% from the default device.
-info(_Opts) ->
+device_info(_Opts) ->
     #{
         default => fun lookup/4,
         excludes => [<<"committers">>, <<"set">>, <<"keys">>]

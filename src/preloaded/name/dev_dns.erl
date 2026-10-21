@@ -177,7 +177,7 @@
 %%% operations produce `NOTIMP`. Resolver failures and invalid replies produce
 %%% `SERVFAIL`; a failed query must not stop the listener.
 -module(dev_dns).
--export([info/1, start/3, resolve/3]).
+-export([device_info/1, start/3, resolve/3]).
 -include("include/hb.hrl").
 
 -type link() :: {link, binary(), map()}.
@@ -208,12 +208,12 @@
     | {failure, reply() | link() | binary()}.
 
 %% @doc Export the listener and resolution keys.
--spec info(#{ _ => _ }) -> #{ exports := [binary()] }.
-info(_) -> #{ exports => [<<"start">>, <<"resolve">>] }.
+-spec device_info(#{ _ => _ }) -> #{ exports := [binary()] }.
+device_info(_) -> #{ exports => [<<"start">>, <<"resolve">>] }.
 
 %% @doc Start the configured listener, preserving the `on/start' message body.
 -spec start(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, #{ 'dns-port' := 0..65535, 'cache-control' := [binary()], _ => _ }}
+    {ok, #{ 'dns-port' := 0..65535, 'cache-control' := binary(), _ => _ }}
     | {error, #{ status := 400 | 409, body := binary(), _ => _ }}.
 start(_Base, Req, Opts) ->
     DNS = hb_maps:get(<<"dns">>, Opts, #{}, Opts),
@@ -231,7 +231,7 @@ start(_Base, Req, Opts) ->
                                 hb_message:uncommitted(Req, Opts),
                                 #{
                                     <<"dns-port">> => BoundPort,
-                                    <<"cache-control">> => [<<"no-store">>]
+                                    <<"cache-control">> => <<"no-store">>
                                 },
                                 Opts
                             )};
@@ -459,5 +459,5 @@ native_symbol(Value) when is_integer(Value), Value >= 0, Value =< 65535 -> Value
 error_response(Status, Reason) ->
     {error, #{
         <<"status">> => Status, <<"body">> => Reason,
-        <<"cache-control">> => [<<"no-store">>]
+        <<"cache-control">> => <<"no-store">>
     }}.

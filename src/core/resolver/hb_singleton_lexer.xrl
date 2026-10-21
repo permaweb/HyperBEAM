@@ -22,6 +22,7 @@ Rules.
 \"([^\"\\\x{100}]|\\[^\x{100}])*\" : {token, {quoted, TokenLoc, TokenChars}}.
 \" : {token, {'"', TokenLoc}}.
 [A-Za-z]{S}*: : {token, {scheme, TokenLoc, TokenChars}}.
+uri\-[a-z][a-z0-9]*\-[a-z0-9\-]* : {token, {scheme, TokenLoc, TokenChars}}.
 ;{I}+\+{I}+[@.*/)?\x{100}] : claim(varied, TokenChars, TokenLoc).
 @{I}+[.*/)?\x{100}] : claim(dependencies, TokenChars, TokenLoc).
 \.{I}+[/)?\x{100}] : claim(result, TokenChars, TokenLoc).

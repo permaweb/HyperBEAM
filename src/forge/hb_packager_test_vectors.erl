@@ -136,7 +136,7 @@ trusted_device_id_matches(Pkg, Opts, SpecIDs, ImplID) ->
         <<"trusted-device-signers">> => [Other],
         % No preloaded store holds the implementation, and a config file gives
         % the key lowercase.
-        <<"preloaded-store">> => undefined,
+        <<"preloaded-store">> => [],
         <<"trusted-devices">> => #{ hb_util:lowercase_key(SpecID) => ImplID }
     },
     {ok, Mod} = hb_device_load:reference(SpecID, IDOpts),
@@ -370,6 +370,11 @@ archive_contains_ebin_and_priv_entries_test() ->
     Pkg = package_for_test(Group),
     Msg = hb_packager:impl_message(Pkg, <<"spec-id">>, #{}),
     ?assertEqual(false, maps:is_key(<<"requires-system-architecture">>, Msg)),
+    % Every implementation requires the AO runtime version that packaged it.
+    ?assertEqual(
+        ?AO_RUNTIME_VERSION,
+        maps:get(<<"requires-ao-runtime-version">>, Msg)
+    ),
     ArchPkg =
         hb_forge_seed:with_forge_bootstrap(
             #{
