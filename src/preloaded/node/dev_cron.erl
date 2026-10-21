@@ -54,10 +54,14 @@ once(_Base, Req, Opts) ->
 
 %% @doc Internal function for scheduling a one-time message.
 once_worker(Path, Req, Opts) ->
-    % Directly call the meta device on the newly constructed 'singleton', just
-    % as hb_http_server does.
+    % Resolve the singleton as `hb_http_server' resolves a request from the
+    % wire: with the node's `request' and `response' hooks.
     try
-        hb_ao:resolve(Req#{ <<"path">> => Path}, Opts)
+        hb_http_server:resolve_request(
+            Path,
+            Req#{ <<"path">> => Path },
+            hb_http_server:get_opts(Opts)
+        )
     catch
         Class:Reason:Stacktrace ->
             ?event(
@@ -202,7 +206,11 @@ every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
         }
     ),
     try
-        hb_ao:resolve(Req1, Opts),
+        hb_http_server:resolve_request(
+            CronPath,
+            Req1,
+            hb_http_server:get_opts(Opts)
+        ),
         ?event({cron_every_worker_executed, {path, CronPath}})
     catch
         Class:Reason:Stack ->
@@ -393,7 +401,12 @@ once_executed_test() ->
     receive
         {state, State} ->
             ?event({once_executed_test_received_state, State}),
-            ?assertMatch(#{ <<"test-id">> := ID }, State)
+            ?assertMatch(#{ <<"test-id">> := ID }, State),
+            % The execution is a request for its own path, as from the wire.
+            ?assertEqual(
+                <<"/~test-device@1.0/update_state">>,
+                hb_private:get(<<"http-request/path">>, State, #{})
+            )
     after 1000 ->
         FinalLookup = hb_name:lookup({<<"test">>, ID}),
         ?event(
