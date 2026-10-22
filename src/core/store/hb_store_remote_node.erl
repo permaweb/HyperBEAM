@@ -33,7 +33,8 @@ read_request(_, _) -> {error, not_found}.
 %% @doc Make an HTTP GET request for a key to the remote node and return the
 %% committed message. Unless the key is a `ni:' name, a binary is encoded with
 %% `hb_cache:encode_value/1', so that the cache reads it back as the same
-%% binary.
+%% binary. A `node' that starts with `/' is a path: the request is sent to the
+%% peer that the node's `routes' give for it.
 remote_read(Opts = #{ <<"node">> := Node }, Key) ->
     ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
     Path =
@@ -41,12 +42,21 @@ remote_read(Opts = #{ <<"node">> := Node }, Key) ->
             true -> <<"/~cache@1.0/read=", (hb_util:human_id(Key))/binary>>;
             false -> <<"/~cache@1.0/read">>
         end,
+    Request = #{ <<"path">> => Path, <<"read">> => Key },
+    HTTPOpts = Opts#{ <<"http-only-result">> => true },
     HTTPRes =
-        hb_http:get(
-            Node,
-            #{ <<"path">> => Path, <<"read">> => Key },
-            Opts#{ <<"http-only-result">> => true }
-        ),
+        case Node of
+            <<"/", _/binary>> ->
+                Prefix = string:trim(Node, trailing, "/"),
+                hb_http:request(
+                    Request#{
+                        <<"method">> => <<"GET">>,
+                        <<"path">> => <<Prefix/binary, Path/binary>>
+                    },
+                    HTTPOpts
+                );
+            _ -> hb_http:get(Node, Request, HTTPOpts)
+        end,
     case HTTPRes of
         {ok, Res} ->
             % returning the whole response to get the test-key
@@ -272,3 +282,38 @@ read_only_ids_test() ->
            <<"trusted">> => false }
 	],
     ?assertEqual({error, not_found}, hb_cache:read(ID, #{ <<"store">> => RemoteStore })).
+
+%% @doc Read a message through a remote store whose `node' is a path, which the
+%% node's `routes' send to the remote node.
+routed_read_test() ->
+    LocalStore = hb_test_utils:test_store(),
+    {ok, ID} =
+        hb_cache:write(
+            #{ <<"test-key">> => <<"routed">> },
+            #{ <<"store">> => LocalStore }
+        ),
+    Node = hb_http_server:start_node(#{ <<"store">> => LocalStore }),
+    Opts = #{
+        <<"store">> => [
+            #{
+                <<"store-module">> => hb_store_remote_node,
+                <<"node">> => <<"/peer">>
+            }
+        ],
+        <<"force-message">> => true,
+        <<"routes">> => [
+            #{
+                <<"template">> => <<"^/peer/">>,
+                <<"nodes">> => [
+                    #{
+                        <<"match">> => <<"^/peer">>,
+                        <<"with">> => string:trim(Node, trailing, "/")
+                    }
+                ]
+            }
+        ]
+    },
+    ?assertMatch(
+        {ok, #{ <<"test-key">> := <<"routed">> }},
+        hb_cache:read(ID, Opts)
+    ).
