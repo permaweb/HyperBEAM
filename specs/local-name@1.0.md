@@ -66,13 +66,11 @@ needed to operate on the bound message itself; capturing them as "names" would
 break binding the device onto a path and `set`-ing on it. (The exclude set is
 **exactly** `keys` and `set` — no more. Other reserved keys such as
 `id`/`commit`/`verify`/`set-path`/`remove` are **not** excluded: the default
-handler captures each as a name like any other key, returning the registered
-value or `not_found` — it does **not** forward them to the base device. This
-matches the sibling `name@1.0` device's minimal exclude set. A name that
-collides with a `message@1.0` operation key is a pathological, **unpinned**
-corner — resolving such a name against the names message may invoke that key's
-`message@1.0` semantics rather than a clean value/`not_found`; operators SHOULD
-NOT register names that collide with reserved keys.)
+handler captures each as a name, and resolving it against the names message
+runs that key's `message@1.0` operation on the names message — it does **not**
+forward them to the base device. The sibling `name@1.0` device also excludes
+`committers`. Operators SHOULD NOT register names that collide with reserved
+keys.)
 
 ### 3.2 Message shapes
 
@@ -116,10 +114,10 @@ All keys are lowercase, hyphenated, binary on the wire.
      lookups — §6.)
   2. Resolve `key` **against the names message** using the base identity device's
      `get` behaviour (`message@1.0` `get`): return the value stored under that
-     name. Per `message@1.0`, this lookup is exact-match first, then
-     case-insensitive on the **lookup key only** (so it reaches an upper-cased
-     stored name only by exact spelling — see §5.1); a present name returns its
-     value, an absent name yields `not_found`.
+     name. `hb_ao` lowercases the keys of the names message (`structured@1.0`),
+     and `get` lowercases `key` and matches exactly, so a name is found by any
+     case (see §5.1); a present name returns its value, an absent name yields
+     `not_found`.
 - **Returns:** `{ok, Value}` for a registered name; `{error, not_found}` for an
   unregistered name (the `not_found` arises from the base identity device's `get`
   of a missing key). The value is returned **as stored** (no dereferencing — that
@@ -147,7 +145,7 @@ All keys are lowercase, hyphenated, binary on the wire.
   1. **Authorise.** Determine whether the request is from the **operator** by
      delegating to the node-meta `is-operator` contract (§7), passing the request
      so its signers can be checked. If the node is **unclaimed** (no operator and
-     no node key), the check passes for any caller.
+     no node key), the check denies every caller.
      - If **not** the operator → return the authorisation error (§8): an error
        whose `status` is `403` and whose `message` is the binary `Unauthorized.`.
        **No** name is registered.
@@ -190,14 +188,11 @@ byte-for-byte.
 
 **Case sensitivity (consequence, normative).** Because normalisation does not
 lower-case, the registry key keeps the registrant's case. Lookups resolve against
-the names message with `message@1.0` `get` semantics (§4), which match the
-requested name **exactly first, then case-insensitively by lower-casing the
-*lookup* key** and comparing it against the **raw** (un-lowercased) stored keys.
-Therefore a name stored **lower-case** (e.g. `my-app`) is found by any case
-(`my-app`, `My-App`, `MY-APP`); but a name stored with **upper-case** letters
-(e.g. `My-App`) is found **only by its exact spelling** `My-App` — `my-app` does
-**not** find it. An operator who wants case-insensitive reach MUST register the
-name in lower case.
+the names message with `message@1.0` `get` semantics (§4): `hb_ao` decodes the
+names message with `structured@1.0`, which lowercases its keys, and `get`
+lowercases the requested name and matches it exactly. Therefore a name is found
+by any case: a name stored as `my-app` or as `My-App` is found by `my-app`,
+`My-App` and `MY-APP`.
 
 ### 5.2 Registry path
 
@@ -226,18 +221,21 @@ To build the names message from durable storage:
    `N => not_found` (the entry is recorded with a not-found sentinel rather than
    omitted).
 3. The resulting message (keys = listed entry names, values = read values or the
-   `not_found` sentinel) is the **names message**.
+   `not_found` sentinel), merged over the names of the current `local-names`
+   option, is the **names message**.
 
-The keys of the names message are the names **as enumerated from storage**;
-lookups resolve against this message via the base identity device's `get`
-(exact-then-case-insensitive). The internal representation of the names message
-is out of scope — only that it maps each registered name to its stored value (or
-`not_found`).
+The keys of the names message are the names **as enumerated from storage**, and
+the names of the `local-names` option that storage does not have; lookups
+resolve against this message via the base identity device's `get` (keys and
+requested name lowercased, then an exact match). The internal representation of
+the names message is out of scope — only that it maps each registered name to
+its stored value (or `not_found`).
 
 ### 5.4 Values and IDs
 
-- Names, the `local-names` option key, the registry namespace and path segments
-  are **plain lowercase hyphenated binaries**.
+- The `local-names` option key and the registry namespace are **plain lowercase
+  hyphenated binaries**; a name and its path segment are the registered `key`
+  as it is (§5.1).
 - Any identifier the value contains (e.g. a content ID pointer) is **base64url**,
   never hex — but the encoding of the value is the registrant's concern; this
   device stores and returns the value verbatim.
@@ -277,15 +275,15 @@ is out of scope — only that it maps each registered name to its stored value (
   the committed register request under `body` —
   `hb_ao:resolve(#{<<"device">> => <<"meta@1.0">>}, #{<<"path">> =>
   <<"is-operator">>, <<"body">> => Req}, Opts#{<<"hashpath">> => ignore})` — and
-  branches on the contract's return: `{ok, true}` (operator, **or** unclaimed
-  node) → register; `{ok, false}` → deny. The signer extraction from `body` is
+  branches on the contract's return: `{ok, true}` (operator) → register;
+  `{ok, false}` → deny. The signer extraction from `body` is
   `meta@1.0`'s concern (see its spec); this device only reads the boolean.
-- **Unclaimed node.** If the node has **no** configured operator **and no** signing
-  key (it is *unclaimed*), the operator check passes for **any** caller, so an
-  unclaimed node permits registration by anyone. (This mirrors the node-meta
-  `is-operator` semantics; on a claimed node, registration requires the operator's
-  signature.) Reimplementers MUST NOT add an independent authority model — the
-  gate is exactly "is the request from the operator (or is the node unclaimed)".
+- **Unclaimed node.** If the node has **no** configured operator **and no**
+  signing key (it is *unclaimed*), the operator check fails for **every**
+  caller, so no one can register a name. (This mirrors the node-meta
+  `is-operator` semantics; registration requires the operator's signature.)
+  Reimplementers MUST NOT add an independent authority model — the gate is
+  exactly "is the request from the operator".
 - **Lookup is unauthenticated.** Resolving a name (`lookup` / default / via
   `name@1.0`) requires **no** commitment and is answerable for any caller. It
   discloses only values the operator chose to register. An unregistered name
@@ -332,14 +330,13 @@ is out of scope — only that it maps each registered name to its stored value (
   default handler, binding `~local-name@1.0` onto a message and resolving **those
   two keys** reaches the base identity device (`message@1.0`) for that message,
   not the registry. The other reserved keys (`id`/`commit`/`verify`/`set-path`/
-  `remove`) are **NOT** excluded — the default handler captures them as names and
-  returns the registered value or `not_found`, not the base device's operation
-  (§3.1).
-- **Operator tooling.** Other node-internal components MAY perform an
-  **unconditional** registration (the §5.2 register without the operator check) to
-  seed names programmatically; this bypass is not exposed as a resolvable key and
-  is not part of the public request surface. The public `register` key always
-  enforces the operator gate.
+  `remove`) are **NOT** excluded — the default handler captures them as names,
+  and resolving them against the names message runs their `message@1.0`
+  operation on the names message, not on the bound message (§3.1).
+- **Operator tooling.** No other component can call the **unconditional**
+  registration (the §5.2 register without the operator check): it is not
+  exported, not exposed as a resolvable key and not part of the public request
+  surface. The public `register` key always enforces the operator gate.
 
 ## 10. Conformance (normative checklist)
 
@@ -353,11 +350,9 @@ An implementation MUST exhibit the following externally observable behaviours:
    value `V`, and `{error, not_found}` when `N` is not registered. The same holds
    for the default handler reached as `~local-name@1.0/N`.
 3. Name lookup against the names message follows base-identity-device `get`
-   semantics: an exact match first, then a case-insensitive match that lower-cases
-   the **lookup** key only (§5.1). Because the device does NOT lower-case on
-   register, a name stored **lower-case** (`my-app`) is found by `my-app`,
-   `My-App`, and `MY-APP`; a name stored with upper-case (`My-App`) is found
-   **only** by the exact `My-App`.
+   semantics: the keys of the names message and the lookup key are lowercased,
+   then matched exactly (§5.1). A name stored as `my-app` or as `My-App` is
+   found by `my-app`, `My-App`, and `MY-APP`.
 4. `register`, when the request is **committed by the operator**, writes the
    `value` to the content store, links it at the durable path
    `local-name@1.0/<normalised-key>`, refreshes the in-node names index, and
@@ -366,8 +361,8 @@ An implementation MUST exhibit the following externally observable behaviours:
 5. `register` from a **non-operator** caller (on a claimed node) registers nothing
    and returns the structured error with `status = 403` and `message =
    Unauthorized.`.
-6. On an **unclaimed** node (no operator and no node key), `register` succeeds for
-   any caller (the operator gate passes).
+6. On an **unclaimed** node (no operator and no node key), `register` returns
+   the `403` error for every caller (the operator gate fails).
 7. `register` returns the bare atom `not_found` if the durable write of the value
    fails, and in that case stores no name and creates no link.
 8. The registry namespace is the literal binary `local-name@1.0`; each name is
@@ -380,8 +375,8 @@ An implementation MUST exhibit the following externally observable behaviours:
 10. `lookup` requires **no** authentication; `register` is the only authority-
     gated key; an unregistered-name lookup yields `not_found` rather than an
     error exposing the registry.
-11. The device produces no commitments/IDs of its own; all names, the namespace,
-    and the `local-names` option key are lowercase hyphenated binaries; any
+11. The device produces no commitments/IDs of its own; the namespace and the
+    `local-names` option key are lowercase hyphenated binaries; any
     identifier inside a value is base64url, never hex; the exact `403` /
     `Unauthorized.` error and the exact `Registered.` success binary are used.
 12. When listed as a `name@1.0` resolver, resolving a name through `name@1.0`
@@ -398,8 +393,7 @@ An implementation MUST exhibit the following externally observable behaviours:
   normative).
 - The cryptographic details of the operator/signer check (see `message@1.0`
   commitment/`signers` semantics and the node-meta `is-operator` contract) — only
-  that registration succeeds iff the request is the operator's (or the node is
-  unclaimed).
+  that registration succeeds iff the request is the operator's.
 - The mechanics of `name@1.0` resolver iteration, matching, and the `load`
   dereferencing of a resolved pointer (see `name@1.0`) — this spec constrains only
   what value this device returns for a given name.
