@@ -156,8 +156,8 @@ Given a `Mode` (`all` or `patches`), `Base`, and `Req`:
    - **`patches`:** iterate the **direct entries** of `Source` (each entry is a
      key → submessage). For each submessage decide whether it is a **patch**
      (§4.4):
-     - If it **is** a patch: collect it (with `commitments` and `Tags`
-       **stripped**, §4.4) into the set of patches to write. It is removed from
+     - If it **is** a patch: collect it (with `commitments` **stripped**,
+       §4.4) into the set of patches to apply. It is removed from
        the source.
      - If it is **not** a patch: keep it in the *new source* under its entry
        key. It stays where it was.
@@ -174,12 +174,12 @@ Given a `Mode` (`all` or `patches`), `Base`, and `Req`:
    all collected patches into a single message**, additionally stripping each
    patch's `method` key (so the relocated content no longer advertises itself as
    a `PATCH`). Concretely, fold the patches by deep-merging each (method-stripped)
-   patch **body** onto an accumulator that starts empty, using `message@1.0`
-   deep-merge semantics governed by the **accumulator** (a plain message) — **not**
-   by each patch body's own top-level `device`. A patch body's own `device` (e.g.
-   `patch@1.0`) is carried through as ordinary data and governs nothing in this
-   fold; it survives only for the step-7 destination write. (A *nested*
-   device-typed sub-value inside a body still merges through its own device,
+   patch **body** onto an accumulator that starts empty, with the `set` of the
+   **accumulator**'s `device` (`message@1.0` while it has none). A patch body's
+   `device` is merged as data, and the keys merged after it use the `set` of
+   that `device`; `patch@1.0` has no `set`, so `message@1.0`'s `set` applies.
+   The `device` stays in the merged message. (A sub-value merged onto
+   a device-typed sub-value of the accumulator merges through that device,
    exactly as `message@1.0` deep-merge does for any nested typed value.) The
    source-entry keys (`1`, `2`, …) are **discarded** and only the patch bodies
    survive, with later patches deep-merging onto earlier ones where keys coincide
@@ -269,11 +269,10 @@ For every recognised patch, before it is written to the destination the device
 MUST remove the following keys from it:
 - `commitments` — the relocated content is merged into another message and must
   not carry a signature that no longer covers it;
-- `Tags` — the capitalised legacy tag list;
 - `method` — so the moved submessage is no longer itself treated as a `PATCH`.
 
-`commitments` and `Tags` are stripped in the partition step; `method` is
-stripped in the normalisation step. Keys other than these three are carried
+`commitments` is stripped in the partition step; `method` is stripped in
+step 6 (§4.1). Keys other than these two are carried
 through unchanged. Recognition reads `method`/`device` with exact binary
 equality; a submessage missing both keys, or with a different `method`/`device`
 value, is **not** a patch and is left at the source.
@@ -348,9 +347,9 @@ into the message at `ToPath`. Consequently:
 - Writing onto a sub-path (e.g. `/state`) deep-merges the moved value into the
   existing submessage there, recursing into nested message values; scalars at a
   key are replaced.
-- If a moved submessage carries its own `device` whose `set` differs from the
-  default deep-merge (a custom set handler), the destination application honours
-  that device's `set` behaviour for that submessage — patching is expressed
+- If a moved message is merged onto an existing message whose `device` has a
+  `set` that differs from the default deep-merge (a custom set handler), the
+  destination application uses that device's `set` — patching is expressed
   through resolution, so a device-specific `set` participates. (This is the
   mechanism by which, e.g., a `trie@1.0`-typed sub-state accumulates entries
   across successive patches rather than being wholesale replaced.)
@@ -361,9 +360,7 @@ commitment, or any bookkeeping key.
 
 ## 5. Data formats & encodings
 
-- All keys are **lowercase, hyphenated, binary** on the wire, with the sole
-  exception of the legacy **`Tags`** key (capitalised) which the device only
-  ever *strips*, never produces.
+- All keys are **lowercase, hyphenated, binary** on the wire.
 - Path values are binaries, `/`-delimited, with empty segments trimmed; the root
   is `/`. A path that serialises to empty MUST be normalised to `/`.
 - The relative-prefix tokens are the exact lowercase binaries `base` and `req`,
@@ -407,8 +404,8 @@ commitment, or any bookkeeping key.
   if required, MUST be enforced by the surrounding pipeline (e.g. an upstream
   device that only emits trusted patches), not by `patch@1.0`.
 - **Commitment hygiene.** When `patches` mode relocates a patch submessage it
-  **strips that submessage's `commitments`** (and `Tags`) before merging it
-  elsewhere, so a signature is never carried onto content it no longer covers.
+  **strips that submessage's `commitments`** before merging it
+  elsewhere, so a signature is never carried onto content it does not cover.
   The destination write itself uses message-`set` semantics, which independently
   drop commitments on a committed message whose committed keys change (per
   `message@1.0`); the device does not re-sign anything.
@@ -447,10 +444,11 @@ commitment, or any bookkeeping key.
   patches supplied in the request (e.g. resolving a base state with a request
   that carries `results/outbox` and `patch-from = req:/results/outbox/1`),
   decoupling where the patch data lives from where the state lives.
-- **Device-switching in moved values.** Because the destination write goes
-  through resolution, a moved submessage's own `device` governs how it is
-  merged (§4.7). This lets specialised state sub-trees (e.g. trie-typed
-  balances) accumulate correctly under repeated patching.
+- **Device-switching in moved values.** Because the destination application
+  goes through resolution, the `device` of the existing message that a moved
+  message is merged onto governs the merge (§4.7). This lets specialised state
+  sub-trees (e.g. trie-typed balances) accumulate correctly under repeated
+  patching.
 - **Fall-through keys.** Being an explicit-keys device, `patch@1.0` inherits all
   reserved message operations (`set`, `keys`, `id`, `commit`, `verify`, …) from
   `message@1.0`; resolving any of those on a `patch@1.0` message behaves exactly
@@ -475,7 +473,7 @@ the device against constructed messages:
    `GET` result) remain at the source and are NOT written to the destination.
 5. Recognition of `method`/`device` is exact and case-sensitive: `PATCH`
    matches, `patch`/`Patch` do not; `patch@1.0` matches exactly.
-6. Each moved patch submessage has its `commitments`, `Tags`, and `method` keys
+6. Each moved patch submessage has its `commitments` and `method` keys
    removed before being merged into the destination; its other keys are
    preserved. A signed patch submessage thus contributes its content without its
    signature.
@@ -499,10 +497,9 @@ the device against constructed messages:
 13. Leading-slash/trailing-slash variants of a path are equivalent (segments are
     trimmed); a path that serialises to empty is treated as `/` (the whole
     message).
-14. When a moved submessage carries its own `device`, the destination merge
-    honours that device's `set` semantics rather than forcing a plain replace
-    (observable: a custom-typed sub-state accumulates across successive
-    `compute` calls rather than overwriting).
+14. When a moved message is merged onto an existing message with a `device`,
+    the destination merge uses the `set` of that `device` (observable: a
+    custom-typed sub-state accumulates across successive `compute` calls).
 
 ## 11. Out of scope
 
@@ -510,7 +507,7 @@ the device against constructed messages:
 - The exact wire/byte layout of any value (delegated to the substrate and to the
   `message@1.0`/structured encodings).
 - The cryptographic behaviour of commitments (the device only *strips*
-  `commitments`/`Tags` from moved patches; it neither creates nor verifies any).
+  `commitments` from moved patches; it neither creates nor verifies any).
 - The substrate's generic result-cache and node configuration (which govern
   freshness of cached resolutions, not this device's logic).
 - Performance, storage strategy, and concurrency.
