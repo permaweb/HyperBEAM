@@ -218,6 +218,8 @@ cache_source_to_cache_settings(Msg, Opts) ->
 %% A header separates its directives with commas. Directives are ASCII tokens,
 %% compared without regard to case. A value that cannot be read as a list (its
 %% bytes are not UTF-8) names no directive.
+%% Only binaries and atoms are directives: any other value, such as a message,
+%% is ignored.
 specifiers_to_cache_settings(CCSpecifier) when is_binary(CCSpecifier) ->
     specifiers_to_cache_settings(
         try hb_util:binary_to_strings(CCSpecifier)
@@ -230,7 +232,7 @@ specifiers_to_cache_settings(RawCCList) ->
     CCList =
         lists:map(
             fun(CC) -> hb_util_string:lowercase(hb_ao:normalize_key(CC)) end,
-            RawCCList
+            [ CC || CC <- RawCCList, is_binary(CC) orelse is_atom(CC) ]
         ),
     #{
         <<"store">> =>
@@ -290,6 +292,9 @@ msg_precidence_overrides_test() ->
 no_store_directive_test() ->
     Msg = msg_with_cc([<<"no-store">>]),
     Result = derive_cache_settings([Msg], opts_with_cc([])),
+    % A message in the list is ignored: `no-store' still applies.
+    WithMsg = msg_with_cc([<<"no-store">>, #{ <<"x">> => 1 }]),
+    ?assertEqual(Result, derive_cache_settings([WithMsg], opts_with_cc([]))),
     ?assertEqual(#{<<"store">> => false, <<"lookup">> => ?DEFAULT_LOOKUP_OPT}, Result).
 
 no_cache_directive_test() ->
