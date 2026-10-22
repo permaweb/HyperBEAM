@@ -1448,9 +1448,10 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                     ),
                 Committed
         end,
-    % Remove the commitments of an unsigned request, as `hb_ao' does for every
-    % execution input.
-    Input = hb_ao:execution_input(Decoded, Opts),
+    % Reset the request's private keys, which a codec can restore from the
+    % wire, before the node sets its own. Then remove the commitments of an
+    % unsigned request, as `hb_ao' does for every execution input.
+    Input = hb_ao:execution_input(hb_private:reset(Decoded), Opts),
     % Cookie-backed commitments need the request's cookie and peer context.
     Normalized = normalize_unsigned(PrimitiveMsg, Req, Input, Opts),
     maybe
@@ -2097,6 +2098,22 @@ ingress_json_links_test() ->
     ?assertMatch(
         {link, <<"ao:", ID/binary>>, _},
         maps:get(<<"reference">>, Decoded)
+    ),
+    % A request cannot give the node a private key: a crafted `priv/hook-caller'
+    % does not reach the kernel-only gate that reads it.
+    ?assertEqual(
+        not_found,
+        hb_private:get(
+            <<"hook-caller">>,
+            req_to_tabm_singleton(
+                Req,
+                hb_json:encode(
+                    #{ <<"priv">> => #{ <<"hook-caller">> => <<"kernel">> } }
+                ),
+                Opts
+            ),
+            Opts
+        )
     ),
     % An unsigned request carries no commitment once it is decoded.
     Unsigned = hb_message:normalize_commitments(#{ <<"a">> => <<"1">> }, Opts),
