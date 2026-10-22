@@ -854,8 +854,10 @@ data(MaybeCommitment, TABM, Req, Opts) ->
 
 %% @doc Calculate data messages for large tag values or nested messages. A
 %% message's own `ao-type: binary' is carried in the data too, so that only the
-%% item of a bare binary has that tag. A `target' that is an ID is the item's
-%% target field: it is neither carried in the data nor counted as a tag.
+%% item of a bare binary has that tag. So is its own `ao-data-key': decoding
+%% reads an `ao-data-key' tag as the key of the item's data. A `target' that is
+%% an ID is the item's target field: it is neither carried in the data nor
+%% counted as a tag.
 data_messages(TABM, Opts) when is_map(TABM) ->
     #tx{ target = Target } = fields_to_tx(#tx{}, <<>>, TABM, Opts),
     UncommittedTABM =
@@ -873,6 +875,7 @@ data_messages(TABM, Opts) when is_map(TABM) ->
                     byte_size(Value) > ?MAX_TAG_VALUE_SIZE
                     orelse byte_size(Key) > ?MAX_TAG_NAME_SIZE
                     orelse {Key, Value} =:= {<<"ao-type">>, <<"binary">>}
+                    orelse Key =:= <<"ao-data-key">>
             end
         end,
         UncommittedTABM,
@@ -977,15 +980,13 @@ bundle_tags_to_tags({ok, _, Commitment}) ->
 bundle_tags_to_tags(_) ->
     [].
 
-%% @doc Return the key whose value is the data of a message's item: the
-%% message's `ao-data-key', or `data' if the message has a `data'. Otherwise,
-%% a message with a commitment uses the value of the `ao-data-key' tag in the
-%% commitment's `original-tags', or `data'. A message without a commitment
-%% uses `body' if its `body' is not a link, or `data'.
+%% @doc Return the key whose value is the data of a message's item: `data' if
+%% the message has a `data'. Otherwise, a message with a commitment uses the
+%% value of the `ao-data-key' tag in the commitment's `original-tags', or
+%% `data'. A message without a commitment uses `body' if its `body' is not a
+%% link, or `data'.
 inline_key(MaybeCommitment, Msg, Opts) ->
-    InlineKey = maps:get(<<"ao-data-key">>, Msg, undefined),
     case {
-        InlineKey,
         maps:get(<<"data">>, Msg, ?DEFAULT_DATA) == ?DEFAULT_DATA,
         MaybeCommitment,
         maps:is_key(<<"body">>, Msg)
@@ -993,15 +994,13 @@ inline_key(MaybeCommitment, Msg, Opts) ->
                 hb_link:decode(maps:get(<<"body">>, Msg, undefined))
             )
     } of
-        {Explicit, _, _, _} when Explicit =/= undefined ->
-            InlineKey;
-        {_, true, {ok, _, Commitment}, _} ->
+        {true, {ok, _, Commitment}, _} ->
             OriginalTags =
                 hb_maps:get(<<"original-tags">>, Commitment, #{}, Opts),
             Tags =
                 tags(#tx{ tags = original_tags_to_tags(OriginalTags) }, Opts),
             maps:get(<<"ao-data-key">>, Tags, <<"data">>);
-        {_, true, _, true} ->
+        {true, _, true} ->
             <<"body">>;
         _ ->
             <<"data">>

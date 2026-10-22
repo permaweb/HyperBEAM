@@ -495,7 +495,18 @@ ao_data_key_test() ->
         ),
     TagDec =
         hb_message:convert(TagTX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
-    ?assert(hb_message:verify(TagDec, all, #{})).
+    ?assert(hb_message:verify(TagDec, all, #{})),
+    % A message with its own `ao-data-key' verifies once committed.
+    Own =
+        hb_message:commit(
+            #{
+                <<"ao-data-key">> => <<"other-key">>,
+                <<"other-key">> => <<"Normal value">>
+            },
+            #{ <<"priv-wallet">> => hb:wallet() },
+            <<"ans104@1.0">>
+        ),
+    ?assert(hb_message:verify(Own, all, #{})).
         
 simple_signed_to_httpsig_test() ->
     Structured =

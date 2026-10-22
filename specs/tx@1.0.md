@@ -395,9 +395,11 @@ value-transfer header that commits to a data root without inlining the bytes.
 - **`ao-data-key`:** if a tag `ao-data-key = K` is present, the transaction's
   data binary is exposed in the message under key `K` (and `to` re-adds the
   `ao-data-key` tag whenever the data key is not `data`). The encoder chooses the
-  data key as: an explicit `ao-data-key` if the message carries one; else `body`
-  if the message has a `body` key (non-link) and no or an empty `data`; else
-  `data`.
+  data key as: `data` if the message has a non-empty `data` key; else, if the
+  message has a commitment of this codec, the value of the `ao-data-key` tag
+  in the commitment's `original-tags`, or `data`; else `body` if the message
+  has a `body` key (non-link); else `data`; a message's own `ao-data-key` is
+  never the data key, and is carried in the data as a nested item.
 - **`bundle = false`:** `structured@1.0` replaces each nested sub-message with a
   link, which the transaction carries as a tag whose value is an `ao:` URI. A
   key whose value or name exceeds the tag-size limits in §5.12 is still put
