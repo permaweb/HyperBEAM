@@ -580,6 +580,22 @@ host_fallthrough(Ctx = #{broker := Broker, first := First, caller := Opts}) ->
         hb_maps:get(<<"body">>, Reply, Opts)),
     ?assertEqual(1, atomics:get(Calls, 1)),
     connect(Broker, First, 2),
+    % The origin serves a signed request with its signed host, as it verifies.
+    ?assertEqual(
+        {#{ <<"value">> => <<"unchanged">> }, 1},
+        {
+            hb_maps:get(
+                <<"body">>,
+                success(
+                    hb_http:post(maps:get(url, Broker), Path, Request, Opts),
+                    Opts
+                ),
+                not_found,
+                Opts
+            ),
+            atomics:get(Calls, 1)
+        }
+    ),
     Before = atomics:get(Calls, 1),
     lists:foreach(
         fun(Code) ->

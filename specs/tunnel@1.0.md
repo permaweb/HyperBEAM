@@ -176,10 +176,13 @@ may have executed the request; the tunnel never retries application work.
      not present, return `{ok, Hook}` unchanged: the next handler serves it.
   5. Prepare the forwarded request: load the request with its links, check that
      its commitments verify, remove the keys `tunnel-target` and
-     `tunnel-timeout`, and `host` for host routing, and remove the query
-     parameters `tunnel-target` and `tunnel-timeout` from its `path`. If the
-     result does not verify, the request ends with `400`
-     (`Tunnel routing must preserve the request commitments.`).
+     `tunnel-timeout`, and, for host routing, `host` unless a commitment of
+     the request covers it, and remove the query parameters `tunnel-target`
+     and `tunnel-timeout` from its `path`. If the result does not verify, the
+     request ends with `400`
+     (`Tunnel routing must preserve the request commitments.`). The first
+     label of a routing `host` is the base32 form of the origin's address,
+     which an origin with `name@1.0` would read as a name.
   6. The wait is `tunnel-timeout` of the request, then of the base, then of the
      query, then the node option `tunnel-response-timeout`. A host-routed
      request MUST NOT wait for `infinity` (`400`,
@@ -425,8 +428,9 @@ address that is not present also has `reason` (`tunnel-unavailable`) and
 - **Exceptions.** A request whose resolution raises an exception at the origin
   has the body `Tunnel execution failed.`, rather than the error message that
   the origin's HTTP server gives it.
-- **Host routing removes `host`.** A reply that depends on the request's
-  `host` differs from a direct reply.
+- **Host routing removes `host`.** An origin receives a host-routed request
+  without its `host`, unless the request signed it, so a reply that depends on
+  the request's `host` differs from a direct reply.
 - **No execution deadline at the origin.** A request that never ends occupies
   its worker until the worker is retired or stopped.
 - **Registrations can be posted again.** A signed registration is not bound

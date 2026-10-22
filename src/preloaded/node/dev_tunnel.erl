@@ -305,16 +305,21 @@ target(Base, Req, Opts) ->
         _ -> {host, HostAddress}
     end.
 
-%% @doc Remove routing controls only when doing so preserves all commitments.
+%% @doc Remove routing controls only when doing so preserves all commitments. A
+%% `host' that routes a request is removed, as an origin with `name@1.0' would
+%% read its first label as a name, unless a commitment of the request covers it.
 forward(Mode, Raw, Opts) ->
     try
         Keys = [<<"tunnel-target">>, <<"tunnel-timeout">>],
+        Loaded = load(Raw, Opts),
+        Committed =
+            hb_message:committed(Loaded, #{ <<"ids">> => <<"any">> }, Opts),
         Removed =
-            case Mode of
-                host -> [<<"host">> | Keys];
-                explicit -> Keys
+            case {Mode, lists:member(<<"host">>, Committed)} of
+                {host, false} -> [<<"host">> | Keys];
+                _ -> Keys
             end,
-        Clean = maps:without(Removed, load(Raw, Opts)),
+        Clean = maps:without(Removed, Loaded),
         {Path, Pairs} = split_path(Clean, Opts),
         Forwarded =
             case [{K, V} || {K, V} <- Pairs, not lists:member(K, Keys)] of
