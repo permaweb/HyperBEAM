@@ -70,12 +70,12 @@ content digests, commitment maps, and IDs for the same input.
 ### 3.1 Dispatch shape
 
 **Explicit-keys.** The device answers a fixed set of keys, each by its own
-behaviour: the codec keys `to` and `from`; the commitment keys `commit` and
-`verify`; and the proxy keys `proxy-commit` and `proxy-verify` (§4.5). It does
-**not** install a default handler and does not capture arbitrary keys — message
-inspection/mutation (`keys`, `set`, …) and the `id` / `committers` / `committed`
-surface remain with `message@1.0`, which calls into this device's `commit` /
-`verify` for the cryptography.
+behaviour: the codec keys `to`, `to-hint`, `from` and `serialize`; the
+commitment keys `commit` and `verify`; and `add-content-digest` and
+`normalize-for-encoding`. It does **not** install a default handler and does
+not capture arbitrary keys — message inspection/mutation (`keys`, `set`, …) and
+the `id` / `committers` / `committed` surface remain with `message@1.0`, which
+calls into this device's `commit` / `verify` for the cryptography.
 
 This device is reached two ways:
 
@@ -84,7 +84,7 @@ This device is reached two ways:
 2. As a **commitment device** (`commit` / `verify`), invoked by `message@1.0`'s
    `id` / `commit` / `verify` when `commitment-device` (or the node default) is
    `httpsig@1.0`. `message@1.0` converts the target to TABM **before** calling
-   here, and converts the result back afterwards.
+   here, and puts the `commitments` of the result on the original message.
 
 ### 3.2 Message shapes
 
@@ -97,31 +97,35 @@ This device is reached two ways:
   - `bundle` (OPTIONAL, default `false`): if true, the commitment is computed over
     the **fully-inlined** form of the message (linked sub-messages resolved into
     the body) and the commitment carries a `bundle = "true"` parameter (§5.8).
-  - For HMAC commitments, the keyid scheme inputs `keyid`, `scheme`, `secret`
-    (§5.7). For signed commitments, the signing key is the node's configured
-    private wallet.
-- **`verify` request** carries the commitment to check, merged into the request:
-  at minimum `type`, `signature`, `committed`, and the keyid material (`keyid`,
-  or `scheme`+`secret` for the secret scheme). The base is the TABM-form message.
+  - `committer` (OPTIONAL): the committer that signs, as a committer message
+    or its URI (§5.7); for an HMAC commitment, `hmac:constant:ao` if none. The
+    secret of an `hmac:secret:` committer is `secret` in its `priv`. For a
+    `type` other than `unsigned`, `message@1.0` gives the node's `priv-wallet`
+    if the request has none.
+- **`verify` request** is the commitment to check, with the `priv` of the
+  `message@1.0` `verify` request: at minimum `type`, `signature`, `committed`,
+  and the keyid material (`keyid`, and for an `hmac:secret:` keyid, `secret` in
+  `priv`). The base is the TABM-form message.
 - **`to` / `from`** take the message (TABM, for `to`) or HTTP message (for `from`)
-  as the base; `to` honours an optional `bundle` and `index` flag (§4.4).
+  as the base; `to` honours an optional `index` flag (§4.4).
 
 ## 4. Resolved keys (normative)
 
 ### 4.1 `commit` — produce a commitment
 
-- **Reads:** the TABM-form `Base`; `type`, `committed`, `bundle` and keyid inputs
-  from `Req`; the node's private wallet (for signed commitments).
+- **Reads:** the TABM-form `Base`; `type`, `committed`, `bundle` and `committer`
+  from `Req`.
 - **Behaviour:**
   1. Normalise `type`: `signed` → `rsa-pss-sha512`; `unsigned` → `hmac-sha256`.
   2. For **`rsa-pss-sha512`**:
-     a. The signing key is the node's configured private wallet. If none is
-        configured the request MUST fail (`no_viable_wallet`).
+     a. The signing key is the request's `committer` (§3.2). If it has none, the
+        request MUST fail: `throw({cannot_commit, {error, not_found}, Msg})`.
      b. Build the **unsigned commitment skeleton** (§5.2): `commitment-device`,
         `type = rsa-pss-sha512`, `keyid` and `committer` (both the URI of the
-        wallet's committer, §5.7), and `committed` (§5.3). If the message
-        carries a private `hashpath`, add it as `tag` (§5.8). If `bundle` is true,
-        add `bundle = "true"`.
+        request's committer, §5.7), `public-key` (the committer's `owner`, in
+        base64url), and `committed` (§5.3). If the message carries a private
+        `hashpath`, add it as `tag` (§5.8). If `bundle` is true, add
+        `bundle = "true"`.
      c. Normalise for encoding (§5.4) to obtain the encoded message, the
         wire-form `committed` list, and the AO-Core-form `committed` list.
      d. Build the **signature base** (§5.5) and sign it with RSA-PSS / SHA-512
@@ -129,9 +133,6 @@ This device is reached two ways:
      e. Insert the commitment under that ID into `commitments`, with `signature`
         set to `base64url(signature)` and `committed` set to the **AO-Core-form**
         list.
-     f. **Then also add an HMAC commitment** over the resulting message (recurse
-        into the `hmac-sha256` branch). A signed message therefore always carries
-        **both** a signed commitment and the content (HMAC) commitment.
   3. For **`hmac-sha256`**:
      a. The keyid is the URI of the request's `committer`, `hmac:constant:ao` if
         it gives none (§5.7); the `committer` is the keyid unless it is an
@@ -139,7 +140,7 @@ This device is reached two ways:
      b. Remove any existing HMAC commitment for the same keyid from the message.
      c. Build the unsigned commitment skeleton: `commitment-device`,
         `type = hmac-sha256`, `keyid`, `committed` (§5.3), `committer` (unless
-        the keyid is `hmac:constant:`), and `bundle`/`tag` as above.
+        the keyid is `hmac:constant:`), and `bundle` as above.
      d. Normalise for encoding (§5.4); build the signature base (§5.5); compute
         `mac = base64url(HMAC-SHA256(key, signature-base))`.
      e. The commitment ID **is** `mac`. Insert the commitment under `mac`, with
@@ -155,22 +156,24 @@ This device is reached two ways:
 - **Reads:** the TABM-form `Base`; from `Req`: `type`, `signature`, `committed`,
   and keyid material; the commitment's other parameters.
 - **Behaviour:**
-  1. Normalise for encoding (§5.4) and rebuild the **signature base** (§5.5) from
-     the request's `committed` list, exactly as `commit` would.
+  1. If a `committed` key is absent from the base, or the ID that §5.9 derives
+     from `signature` is not a key of the base's `commitments`, return `false`.
+     Normalise for encoding (§5.4) and rebuild the **signature base** (§5.5)
+     from the request's `committed` list, exactly as `commit` would.
   2. Read the committer from the keyid with `hb_uri` (§5.7). A keyid that is not
      its committer's URI, or a `committer` other than the keyid (none for an
      `hmac:constant:` keyid), gives `false`.
   3. For **`rsa-pss-sha512`**: decode `signature` from base64url and return the
      boolean result of RSA-PSS / SHA-512 verification of that signature over the
      signature base, against the commitment's `public-key`, which must be a key
-     of the committer's address.
+     of the committer's address, of at least 2048 bits.
   4. For **`hmac-sha256`**: recompute
      `base64url(HMAC-SHA256(key, signature-base))` and return whether it is
      **byte-equal** to the commitment's `signature` value.
   5. If keyid resolution fails, return `false` (an *unverifiable* commitment is
      not a *verified* one). A genuine processing failure surfaces as a failure
      result, not `true`.
-- **Returns:** `{ok, Boolean}` (or a failure result on keyid-material failure).
+- **Returns:** `{ok, Boolean}`.
   `message@1.0`'s `verify` requires **every** selected commitment to return
   `true`.
 - **Side effects:** none.
@@ -189,20 +192,21 @@ ID is `base64url(sha256(signature))`.
 ### 4.4 `to` / `from` — the HTTP-message codec
 
 #### `to` — TABM → HTTP message
-- **Reads:** the TABM `Base`; optional `bundle` and `index` in `Req`.
+- **Reads:** the TABM `Base`; optional `index` in `Req`.
 - **Behaviour:** Encode the TABM as an HTTP message per §6, attaching the
   `commitments` as `signature` / `signature-input` fields (§5.9) and, if a body is
-  present, a `content-digest` field (§5.4). With `bundle = true`, linked
-  sub-messages are inlined first. With `index = true`, if the encoded message has
-  no `body` and no `content-type`, the device resolves the message's `index` key
-  and merges that result under the encoding (preferring the original message's
-  keys on conflict); a binary or link base is returned unchanged.
+  present, a `content-digest` field (§5.4). With `bundle = true`,
+  `hb_message:convert` has `structured@1.0` inline linked sub-messages in the
+  TABM before `to`. With `index = true`, if the encoded message has no `body`
+  and no `content-type`, the device resolves the message's `index` key and
+  merges that result under the encoding (preferring the original message's keys
+  on conflict); a binary or link base is returned unchanged.
 - **Returns:** `{ok, HTTPMessage}`.
 
 #### `from` — HTTP message → TABM
 - **Reads:** the HTTP message `Base`.
 - **Behaviour:** Decode per §6: parse the body (multipart or inline) back into
-  fields, percent-decode ID-valued field names, reconstruct `commitments` from
+  fields, percent-decode field names, reconstruct `commitments` from
   the `signature` / `signature-input` fields (§5.9), and drop the wire-only fields
   (`signature`, `signature-input`, `content-digest`, a `multipart/*`
   `content-type`, and `ao-body-key` unless it was a covered key). A binary or link
@@ -210,39 +214,9 @@ ID is `base64url(sha256(signature))`.
 - **Returns:** `{ok, TABM}`.
 
 The codec MUST round-trip: `from(to(M))` reproduces `M`'s TABM (including its
-`commitments`) for any message `M`.
-
-### 4.5 `proxy-commit` / `proxy-verify` — borrowed HMAC under another device
-
-These let a *different* commitment device borrow this device's HMAC machinery
-with a caller-supplied secret, then relabel the resulting commitment's
-`commitment-device`. Used by devices that authenticate a user and then commit on
-their behalf.
-
-#### `proxy-commit`
-- **Reads:** `commitment-device` (the device to relabel the commitment as),
-  `secret`, `message` (the base to commit), plus the `Req`.
-- **Behaviour:**
-  1. If the base already carries commitments, reduce it to its **committed,
-     uncommitted** form first (keep only signed content, then strip the
-     commitments) so the proxy commits exactly that content.
-  2. Commit with `type = hmac-sha256`, `scheme = secret`, `secret = <secret>`,
-     `commitment-device = httpsig@1.0` (§5.7 secret scheme).
-  3. Take the resulting HMAC commitment and **overwrite its `commitment-device`**
-     with the supplied device name, leaving everything else (including the ID)
-     unchanged.
-- **Returns:** `{ok, Message}` with the relabelled commitment.
-
-#### `proxy-verify`
-- **Reads:** `secret`, `message`, plus the `Req`.
-- **Behaviour:** Verify `message` with `commitment-device = httpsig@1.0`,
-  `secret = <secret>`, i.e. re-derive the secret key and re-run the HMAC check
-  (§4.2.4) over the same signature base.
-- **Returns:** `{ok, Boolean}`.
-
-A relabelled commitment is therefore byte-identical to a native `httpsig@1.0`
-HMAC commitment except for its `commitment-device` field; an implementation MUST
-keep its ID and `signature` equal to what the native HMAC path produced.
+`commitments`) for any message `M`, other than what `to` does not send: in a
+message with commitments, a key that no commitment covers and that would be
+placed in the body (§6.1), and the unsigned commitments of its nested messages.
 
 ## 5. Data formats & encodings (normative — byte-exact)
 
@@ -271,20 +245,21 @@ values are RFC 9651 Structured Fields. The serialisation MUST be exactly:
 
 ### 5.2 The commitment message (the entry inside `commitments`)
 
-A commitment produced by this device is a map with these keys. All values are
-binaries.
+A commitment produced by this device is a map with these keys. All values other
+than `committed`, `created` and `expires` are binaries.
 
 | Key | Present when | Value |
 |---|---|---|
-| `commitment-device` | always | `httpsig@1.0` (or, for proxied commitments, the relabelled device name). |
+| `commitment-device` | always | `httpsig@1.0`. |
 | `type` | always | `rsa-pss-sha512` or `hmac-sha256`. |
 | `committed` | always | the **AO-Core-form** covered-key list, as a **plain ordered Erlang/AO list of key-name binaries** (e.g. `[<<"basic">>, <<"num">>]`), in covered order (§5.4). Reading `committed` from a commitment in-memory yields this LIST — NOT a numbered message. (The numbered-message form is only how a *list* is serialised when the whole message is TABM-encoded to the wire; the commitment field itself is a list.) |
 | `signature` | always | **signed:** `base64url(signature-bytes)`. **HMAC:** the 43-char base64url MAC (equal to the commitment ID). |
-| `keyid` | always for signed; for HMAC iff a keyid was used | §5.7. |
+| `keyid` | always | §5.7. |
 | `committer` | unless the keyid is `hmac:constant:` | the keyid (§5.7). |
-| `tag` | iff committing a message with a `hashpath` | the hashpath value (§5.8). |
-| `bundle` | iff `bundle` requested | `"true"` (§5.8). |
-| `nonce`,`created`,`expires` | iff supplied by the caller | RFC 9421 signature parameters carried through (§5.8). |
+| `public-key` | signed | the committer's public key, in base64url (§5.7). |
+| `tag` | iff signing a message with a private `hashpath` | the hashpath value (§5.8). |
+| `bundle` | iff `bundle` requested, or the message's `httpsig@1.0` commitment has it | `"true"` (§5.8). |
+| `nonce`,`created`,`expires` | iff decoded from a `signature-input` with them | RFC 9421 signature parameters carried through (§5.8). |
 
 The **map key** under which the commitment is stored in `commitments` is the
 **commitment ID** (§5.6). `commitment-device`, `committer`, and `committed` are
@@ -296,20 +271,17 @@ decode (§5.9); the rest are carried in `signature-input` parameters.
 Given the base message and the `commit`/`verify` request, the covered keys are
 chosen as follows (first matching case):
 
-1. **Explicit.** If the request carries `committed`, use exactly those keys —
-   **sorted into ascending byte order**, NOT the caller's argument order. (The
-   covered list feeds the wire encoder, which emits fields byte-sorted; the stored
-   `committed` matches that order. A request `committed = [c, a]` therefore yields
-   `committed = [a, c]`.)
+1. **Explicit.** If the request carries `committed`, use exactly those keys, in
+   the caller's order. A request `committed = [c, a]` yields
+   `committed = [c, a]`.
 2. **Replicate existing.** Else, if the base already has commitments, use the
    union of keys those commitments cover (so a second signature "stacks" on the
-   same fields and the message stays representable in one HTTP encoding), also in
-   ascending byte-sorted order.
+   same fields and the message stays representable in one HTTP encoding).
 3. **All content.** Else, cover **every** key of the TABM-form base **except**
-   `commitments` and the private section, in **ascending byte-sorted** key order.
-   Any `+link` TABM suffix is stripped from the names at this stage.
+   `commitments` and the private section.
 
-In **every** case the covered-key list is **ascending byte-sorted**.
+In cases 2 and 3 the covered-key list follows the order of the encoded
+message's keys (§5.4).
 
 The chosen list is stored as a numbered message and is the input to §5.4.
 
@@ -320,24 +292,30 @@ names to **wire** (`httpsig@1.0`) names, and a parallel **AO-Core** list is
 produced for the commitment's `committed` key. The mapping is deterministic:
 
 1. Order the covered keys by their numbered-message order → `RawInputs`.
-2. For each key, if neither it nor its `+link` variant is a key of the message,
-   keep it; if the bare name is absent but `<name>+link` is present, use
-   `<name>+link`. → `Inputs`.
-3. Restrict the message to `Inputs` (and their percent-encoded forms, §`structured@1.0`)
-   and encode that restricted message to an HTTP message via `to` (with the same
-   `bundle` flag). Replace a binary `body` with a `content-digest` field (§below).
+2. Every key of `RawInputs` must be a key of the message, as it is or
+   percent-encoded, else `throw({committed_key_missing, {keys, Missing},
+   {commitment, Commitment}, {msg, Msg}})` (`verify` returns `false`, §4.2).
+   → `Inputs`.
+3. Encode the message, which `message@1.0` restricts to `Inputs`, to an HTTP
+   message via `to` (with the same `bundle` flag). Replace a binary `body` with
+   a `content-digest` field (§below).
 4. The **wire** covered list (`KeysForEncoding`) is the encoded message's field
    names, with:
    - the inlined body field name replaced by `body` (and `ao-body-key` recorded
      if the inline key was renamed), and
    - `body` replaced by `content-digest`.
-5. The **AO-Core** covered list (the commitment's `committed`) is built **directly
-   from `Inputs` (step 2)** — NOT by reverse-mapping the wire list (that round-trip
-   is error-prone). Take each `Inputs` key name, strip any `+link` suffix and any
-   `@`-prefix, percent-decode it, and keep them in **ascending byte-sorted order**
-   (the wire-encoder order; §5.3 sorts the covered list in *all* cases). This is a
-   **plain ordered list** of the **original AO-Core key names** (NOT a numbered
-   message — the commitment's `committed` field is a list; §5.2). Crucially:
+   It follows the order of the `committed` keys (`content-digest` takes the
+   place of the first body key, and a field that the list does not contain,
+   such as `ao-types`, keeps its place), except for a `commit` request without
+   `committed`, where it follows the order of the encoded message's keys.
+5. The **AO-Core** covered list (the commitment's `committed`) is built from the
+   wire list: `content-digest` is replaced by the covered keys carried in the
+   body that the list does not contain, in ascending byte order; each other
+   name has any `@`-prefix stripped and is percent-decoded; and, if the list
+   contains `ao-body-key`, `body` is replaced by its value and `ao-body-key` is
+   removed. This is a **plain ordered list** of the **original AO-Core key
+   names** (NOT a numbered message — the commitment's `committed` field is a
+   list; §5.2). Crucially:
    - When a binary `body` (or a body-lifted field) was replaced by `content-digest`
      on the **wire**, the AO-Core `committed` list still names the **original body
      key(s)** (e.g. `body`, and any field whose value was lifted into the body) —
@@ -345,10 +323,10 @@ produced for the commitment's `committed` key. The mapping is deterministic:
      only; covering it on the wire covers those body keys by reference.
    - A `multipart/*` `content-type` field, present only on the wire, is NOT in the
      AO-Core `committed` list.
-   So: `committed` is the **byte-sorted** AO-Core key names of all covered keys in
-   every case — default (case 3) = all content keys; explicit (case 1) = the
-   requested keys byte-sorted (NOT caller order); a body-bearing message's
-   `committed` includes `body`.
+   So: `committed` is the AO-Core key names of all covered keys, in the order of
+   the wire list — default (case 3) = all content keys; explicit (case 1) = the
+   requested keys in the caller's order; a body-bearing message's `committed`
+   includes `body`.
 
 **`content-digest` computation (RFC 9530).** When the (restricted) message has a
 binary `body`, it is removed and replaced by:
@@ -376,11 +354,12 @@ The signature base is a single binary built from the wire covered list
 ```
 
 - One **component line** per covered field, in `KeysForEncoding` order, formatted
-  as the field name wrapped in double quotes, then `: ` (colon + single space),
-  then the field's value **verbatim** as it appears in the encoded message. Lines
-  are joined by a single `\n` (LF, 0x0A — **not** CRLF). If a listed component is
-  absent from the encoded message, signing MUST fail
-  (`missing-key-for-signature-component-line`).
+  as the component name (`@`-prefixed if derived, below) wrapped in double
+  quotes, then `: ` (colon + single space), then the field's value **verbatim**
+  as it appears in the encoded message. Lines are joined by a single `\n` (LF,
+  0x0A — **not** CRLF). If a listed component is absent from the encoded
+  message, signing MUST fail (`throw({missing_key_for_signature_component_line,
+  Name, {message, Msg}, {commitment, Commitment}})`).
 - Then a literal `\n`, then the fixed token `"@signature-params": ` (note the
   quotes, colon, single space), then the **params line**.
 
@@ -393,15 +372,16 @@ The signature base is a single binary built from the wire covered list
 - The inner list's items are the covered components, each an SF-string, in
   `KeysForEncoding` order, **after `add_derived_specifiers`**: any component name
   equal to one of the RFC 9421 derived components — `method`, `target-uri`,
-  `authority`, `scheme`, `request-target`, `path`, `query`, `query-param` — is
-  prefixed with `@` (e.g. `path` → `@path`). All other names are unchanged.
+  `authority`, `scheme`, `request-target`, `path`, `query` — is prefixed with
+  `@` (e.g. `path` → `@path`). All other names are unchanged.
   (`status` is intentionally NOT in this set.)
 - The inner list's **parameters**, emitted in **ascending byte-sorted parameter-
-  name order**, drawn from this fixed set when present on the commitment:
-  `alg`, `created`, `expires`, `keyid`, `nonce`, `tag`, `bundle`. `alg` is always
-  present and its value is the commitment's `type` (`rsa-pss-sha512` /
-  `hmac-sha256`); each value is an SF-string except `created`/`expires`, which are
-  SF-integers. `signature` and `signature-input` themselves are never parameters.
+  name order**, are `alg` and every other key of the commitment except
+  `committed`, `signature`, `type`, `commitment-device`, `committer` and its
+  private keys (§5.8). `alg` is always present and its value is the
+  commitment's `type` (`rsa-pss-sha512` / `hmac-sha256`); each integer value
+  is an SF-integer and each other value an SF-string (§5.8). `signature` and
+  `signature-input` themselves are never parameters.
 
 This base string is what `commit` signs/HMACs and what `verify` recomputes. Two
 implementations that order the covered list and the parameters identically (both
@@ -435,17 +415,17 @@ verify the commitment (§4.2). Its form follows the commitment `type`:
   `hmac:constant:` in the keyid. The default keyid when none is supplied is
   `hmac:constant:ao`, so the default content key is the byte string `ao`. This
   scheme yields **no committer** (content commitments have no signer).
-- **`hmac:secret:`** (proxy / authenticated HMAC): the HMAC key is the SHA-256
+- **`hmac:secret:`** (authenticated HMAC): the HMAC key is the SHA-256
   of `hmac:secret:` followed by a caller-supplied `secret`; the keyid is
   `hmac:secret:<ID>` where `ID = base64url(SHA-256(secret))`, as
   `hb_util:secret_key_to_committer/1` gives it, and that keyid is the
   commitment's `committer`.
 
-If a request supplies both a keyid (carrying a scheme) and a `scheme` field, they
-MUST agree (`scheme_mismatch` otherwise). If a recomputed keyid disagrees with a
-supplied keyid, fail (`key_mismatch`). An unknown scheme is `unknown_scheme`; an
-unsupported `type` for default-scheme selection is `unsupported_scheme` /
-`unsupported-scheme`.
+A keyid that `hb_uri` cannot read, or that is not the URI of the committer it
+reads, verifies as `false`. A `commit` whose committer cannot be read fails:
+`throw({cannot_commit, Error, Msg})` for `rsa-pss-sha512`, and
+`error({badmatch, Error})` for `hmac-sha256`. A `commit` of another `type`
+fails with `error(function_clause)`.
 
 The committer of an RSA, Ed25519 or ECDSA (secp256k1) key is the `did-ar@1.0`
 label of `base64url(SHA-256(public-key))`, and that of an Ethereum or Solana key
@@ -454,25 +434,33 @@ type produced by the `signed` alias.
 
 ### 5.8 Carried RFC 9421 parameters
 
-- **`tag`.** If the message being committed carries a private `hashpath`, the
+- **`tag`.** If a message being signed carries a private `hashpath`, the
   commitment records it as `tag` and it appears as a `;tag="<hashpath>"` signature
   parameter. (This binds a commitment to the computation that produced the
   message.)
-- **`bundle`.** If `bundle` was requested, the commitment records `bundle = "true"`
-  and it appears as `;bundle="true"`. The signature base is then built over the
-  fully-inlined message (§4.4).
-- **`created`, `expires`, `nonce`.** If the caller supplies these, they are
+- **`bundle`.** If `bundle` is requested, or the message's `httpsig@1.0`
+  commitment has it, the commitment records `bundle = "true"` and it appears as
+  `;bundle="true"`. The signature base is then built over the fully-inlined
+  message (§4.4).
+- **`created`, `expires`, `nonce`.** If a commitment has these, they are
   carried through verbatim as signature parameters (`created`/`expires` as
   SF-integers, `nonce` as SF-string) and reconstructed on decode. This device does
   not itself generate or enforce them.
 - **Unknown extra parameters.** Any commitment key not in the reserved set
   (`alg`, `keyid`, `tag`, `created`, `expires`, `nonce`, `committed`, `signature`,
-  `type`, `id`, `commitment-device`, `committer`) is serialised as an additional
-  signature parameter: atom → SF-string of its name; binary → SF-string; list →
-  SF-string of the elements joined by `", "`; a nested
-  `name`/`value` map → SF-string `"<k>:<name>:<base64url(value)>"` joined by
-  `", "`. This is how non-`httpsig` commitment devices (e.g. ANS-104 original
-  tags) carry their extra fields through the `signature-input`.
+  `type`, `id`, `commitment-device`, `committer` of an `httpsig@1.0`
+  commitment, and private keys) is serialised as an additional signature
+  parameter: integer →
+  SF-integer; atom → SF-string of its name; binary → SF-string with `%`, each
+  byte outside printable ASCII and a leading `,` or `:` percent-encoded; list
+  → SF-string of `,` followed by `:<element>` for each element; map →
+  SF-string of `:` followed by its `<key>:<value>` pairs joined by `", "`. A
+  key has `%`, `:`, `,` and each byte outside printable ASCII percent-encoded;
+  an element or a value is its own encoding (for a binary, with those bytes
+  percent-encoded), with those bytes percent-encoded again (`encode_param/1`
+  in `dev_httpsig_siginfo`). This is how non-`httpsig` commitment devices
+  (e.g. ANS-104 original tags) carry their extra fields through the
+  `signature-input`.
 
 ### 5.9 `commitments` ⇄ `signature` / `signature-input` (codec)
 
@@ -515,16 +503,19 @@ multipart) body. This is the form actually transmitted and the form the body
 
 ### 6.1 Field placement
 
-For each TABM key (excluding `commitments`, `signature`, `signature-input`, and
-the private section):
+For each TABM key (excluding `commitments`, the private section, and, in a
+message with commitments, a key that no commitment covers and that would be
+placed in the body):
 
-- A **binary** value of at most **4096 bytes** is emitted as a header field
-  `name: value` (the name normalised to lowercase). ID-valued field names (the
-  43/44-char base64url forms and the like) are **percent-encoded** on the wire
-  (so they survive HTTP's lowercase-header rule) and decoded on `from`
-  (§`structured@1.0` key-escaping).
-- A **binary** value **larger than 4096 bytes** is lifted into the multipart body
-  as its own part.
+- A **binary** value of at most **4096 bytes** that does not start or end with a
+  space or tab is emitted as a header field `name: value`, unless the name is
+  `signature`, `signature-input`, `content-digest`, `content-length`,
+  `connection`, `keep-alive`, `proxy-connection`, `te`, `trailer`,
+  `transfer-encoding` or `upgrade`, or the value is a `multipart/*` or
+  `application/x.ao.*` `content-type`. Every name is **percent-encoded** on the
+  wire: a byte other than `a-z`, `0-9` and the RFC 9110 `tchar` punctuation
+  other than `%` is encoded as `%xx` in lowercase hex. `from` decodes it.
+- Any other **binary** value is lifted into the multipart body as its own part.
 - A **map** (nested message) value is encoded as a part of the multipart body,
   recursively, preserving hierarchy.
 - The **inline body field** — `ao-body-key` if set, else `body`, else `data` — is
@@ -539,12 +530,12 @@ When more than one body part exists (or a single nested part), the body is
 
 - Each part is preceded by `--<boundary>` then CRLF, has at least a
   `content-disposition` header (`inline` for the body part, otherwise
-  `form-data;name="<part-name>"`), a blank line, then the part's bytes; nested
-  message parts recurse. Header lines within a part use CRLF separators and `: `
+  `form-data;name="<part-name>"`), then, if the part has a body, a blank line
+  and the body's bytes. Header lines within a part use CRLF separators and `: `
   between name and value.
-- The **boundary** is `base64url(SHA-256(<concatenation of the part bodies joined
-  by CRLF>))` — deterministic and content-derived, so the encoding is reproducible
-  without knowing the message ID in advance.
+- The **boundary** is `base64url(SHA-256(<the encoded parts, with their headers,
+  joined by CRLF>))` — deterministic and content-derived, so the encoding is
+  reproducible without knowing the message ID in advance.
 - The terminating delimiter is `CRLF--<boundary>--`.
 - `content-type` is set to `multipart/form-data; boundary="<boundary>"`.
 - A part whose sole key is `body` is named `<key>/body` to preserve the nesting
@@ -552,7 +543,7 @@ When more than one body part exists (or a single nested part), the body is
 
 ### 6.3 `content-digest` on the encoded message
 
-After the body is determined, if the HTTP message has a non-empty body, a
+After the body is determined, if the HTTP message has a body, empty or not, a
 `content-digest` field is added per §5.4 (`sha-256=:…:`). This happens on **every**
 `to` of a body-bearing message — independent of any commitment (it is NOT gated on
 `commit`/signing): a plain `to` of `#{body => B}` MUST attach `content-digest`. This
@@ -565,13 +556,14 @@ message).
 
 ### 6.4 Round-trip guarantees
 
-- `from(to(M))` yields `M`'s TABM, including reconstructed `commitments`.
+- `from(to(M))` yields `M`'s TABM, including reconstructed `commitments`, other
+  than what `to` does not send (§4.4).
 - The wire-only fields `signature`, `signature-input`, `content-digest`, a
   `multipart/*` `content-type`, and an unsigned `ao-body-key` are NOT present in
   the decoded TABM.
-- Header-name casing on the wire is **lowercase**; ID-bearing names are
-  percent-encoded; values are emitted verbatim (structured values were already
-  encoded by `structured@1.0`).
+- Header-name casing on the wire is **lowercase**; names are percent-encoded
+  (§6.1); values are emitted with `\`, CR and LF escaped as `\\`, `\r` and `\n`
+  (structured values were already encoded by `structured@1.0`).
 
 ## 7. Ordering, freshness & caching
 
@@ -605,30 +597,28 @@ message).
   committed field invalidates the commitment because the base — and thus the
   signature/HMAC — no longer matches; `message@1.0`'s `set` drops commitments when
   a committed field changes.)
-- **Private wallet.** Signed commitments require the node's configured private
-  wallet; absence is a hard failure, not a silent unsigned result.
+- **Private wallet.** Signed commitments require a `committer` in the request or
+  the node's `priv-wallet`; absence is a hard failure, not a silent unsigned
+  result.
 - **Secret keys never travel.** In the secret scheme the keyid carries only
   `base64url(SHA-256(secret))`, never the secret; verification re-derives the key
   from a separately-supplied secret.
 
 ## 9. Errors
 
-- `no_viable_wallet` — `commit` of a signed/`rsa-pss-sha512` commitment with no
-  private wallet configured.
-- `missing-key-for-signature-component-line` — a covered component named in
-  `committed` is absent from the encoded message when building the signature base.
-- `key_mismatch` — a supplied keyid disagrees with the keyid recomputed from the
-  scheme's material.
-- `scheme_mismatch` — a request's `scheme` field disagrees with the scheme encoded
-  in its keyid prefix.
-- `unknown_scheme` — a keyid names a scheme outside `{constant, publickey,
-  secret}`.
-- `unsupported_scheme` / `unsupported-scheme` — no default scheme exists for the
-  request `type`, or the scheme cannot produce key material.
-- `no_request_type` — default-scheme selection was attempted with no `type` in the
-  request.
-- `no_content_disposition_in_multipart` — `from` met a multipart part lacking a
-  `content-disposition` header.
+- `throw({cannot_commit, {error, not_found}, Msg})` — `commit` of a
+  signed/`rsa-pss-sha512` commitment with no `committer` in the request and no
+  `priv-wallet` configured.
+- `throw({missing_key_for_signature_component_line, Name, {message, Msg},
+  {commitment, Commitment}})` — a covered component named in `committed` is
+  absent from the encoded message when building the signature base.
+- `throw({cannot_commit, Error, Msg})` — the committer of an `rsa-pss-sha512`
+  `commit` cannot be read from its URI, or is not an RSA key.
+- `error({badmatch, Error})` — the committer of an `hmac-sha256` `commit`
+  cannot be read from its URI.
+- `error(function_clause)` — `commit` with no `type`, or a `type` outside §4.1.
+- `throw({error, no_content_disposition_in_multipart, Headers})` — `from` met a
+  multipart part lacking a `content-disposition` header.
 - A `verify` over malformed/unresolvable keyid material returns `false` (not an
   error atom); only genuine processing failures propagate as a failure result.
 
@@ -639,10 +629,10 @@ An implementation MUST exhibit all of the following, each observable through
 
 1. **Type aliasing.** `commit` with `type = signed` behaves identically to
    `type = rsa-pss-sha512`; `type = unsigned` identically to `type = hmac-sha256`.
-2. **Dual commitment on sign.** A signed `commit` yields a message carrying
-   **both** a `rsa-pss-sha512` commitment and a `hmac-sha256` content commitment.
+2. **One commitment on sign.** A signed `commit` adds only a `rsa-pss-sha512`
+   commitment to the message, no `hmac-sha256` content commitment.
 3. **Commitment shape.** Every commitment carries `commitment-device =
-   httpsig@1.0`, `type`, `committed` (numbered message of AO-Core key names),
+   httpsig@1.0`, `type`, `committed` (list of AO-Core key names),
    `signature`; signed commitments also carry `keyid` and `committer`; a
    constant-key HMAC commitment carries **no** `committer`.
 4. **Signed commitment ID** = `base64url(SHA-256(signature-bytes))` (43 chars);
@@ -658,7 +648,7 @@ An implementation MUST exhibit all of the following, each observable through
    SF-list params line; component order is the encoded covered-key order;
    parameters are byte-sorted by name; `alg` is always present and equals `type`;
    derived components (`method`, `path`, … per §5.5) are `@`-prefixed in the
-   `signature-input`/params but the field-line names are not.
+   field lines and in the `signature-input`/params.
 7. **Body coverage via content-digest.** A binary body is covered as
    `content-digest = sha-256=:<standard-base64(SHA-256(body))>:`; the `committed`
    list stores `body` (AO-Core form) while the base/`signature-input` use
@@ -675,33 +665,32 @@ An implementation MUST exhibit all of the following, each observable through
    keyids are `hmac:secret:<base64url(SHA-256(secret))>`, use the SHA-256 of
    `hmac:secret:` followed by the secret as the HMAC key, and are the committer.
 10. **Verification.** `verify` recomputes the signature base from the commitment's
-    `committed` list and returns `true` iff the RSA-PSS check passes (signed) or
-    the recomputed MAC byte-equals `signature` (HMAC); tampering with any covered
-    field makes `verify` `false`; a commitment whose keyid material cannot be
-    resolved verifies as `false`.
+    `committed` list and returns `true` iff the RSA-PSS check passes with a
+    `public-key` of at least 2048 bits (signed) or the recomputed MAC
+    byte-equals `signature` (HMAC); tampering with any covered field makes
+    `verify` `false`; a commitment whose keyid material cannot be resolved
+    verifies as `false`.
 11. **Covered-key defaults.** With no `committed` request key: an uncommitted
-    message covers all TABM keys except `commitments`/private, byte-sorted; a
-    message with existing commitments covers the same keys those commitments cover.
-    An explicit `committed` list is honoured verbatim and in order.
+    message covers all TABM keys except `commitments`/private, in the order of
+    the encoded keys; a message with existing commitments covers the same keys
+    those commitments cover. An explicit `committed` list is honoured verbatim
+    and in order.
 12. **`signature`/`signature-input` codec.** Commitments encode to `comm-<lower-
     base64url(sha256(sig))>` members of the `signature` and `signature-input`
     dictionaries (same member name in both); an `id` parameter is emitted **only**
     when the ID is not re-derivable from the signature; decode is the exact inverse
     and `committer` is re-derived from `keyid`.
-13. **Codec round-trip.** `from(to(M))` reproduces `M`'s TABM and `commitments`;
-    the wire-only fields (`signature`, `signature-input`, `content-digest`, a
-    `multipart/*` `content-type`, an unsigned `ao-body-key`) are absent from the
-    decoded TABM.
+13. **Codec round-trip.** `from(to(M))` reproduces `M`'s TABM and `commitments`,
+    other than what `to` does not send (§4.4); the wire-only fields
+    (`signature`, `signature-input`, `content-digest`, a `multipart/*`
+    `content-type`, an unsigned `ao-body-key`) are absent from the decoded TABM.
 14. **Multipart determinism.** The multipart boundary is
     `base64url(SHA-256(parts joined by CRLF))`; the same message always yields the
     same boundary and the same encoded bytes.
 15. **bundle / tag.** A `bundle`-requested commitment carries `bundle = "true"`,
-    is computed over the inlined message, and emits `;bundle="true"`; a message
-    with a `hashpath` emits `;tag="<hashpath>"` and records `tag`.
-16. **proxy.** `proxy-commit` produces an HMAC commitment via the secret scheme,
-    then overwrites only its `commitment-device`; the ID and `signature` equal the
-    native HMAC path's. `proxy-verify` re-derives the secret key and re-checks the
-    same base.
+    is computed over the inlined message, and emits `;bundle="true"`; a signed
+    commitment of a message with a private `hashpath` emits `;tag="<hashpath>"`
+    and records `tag`.
 
 ## 11. Out of scope
 
@@ -739,8 +728,3 @@ An implementation MUST exhibit all of the following, each observable through
   commitment would carry (and whether `verify` dispatches on it) is not exercised
   by the signed/unsigned aliases and should be pinned if EdDSA signing via this
   device is required.
-- **Keyid base64 variant on encode.** Decoding accepts both standard and url-safe
-  base64 for the `publickey:` material, but only standard base64 is reproducible
-  in the signature base. Implementations MUST emit standard base64; a stricter
-  spec might forbid the url-safe acceptance on decode to avoid two byte strings
-  mapping to one key.
