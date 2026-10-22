@@ -411,7 +411,8 @@ with_unsigned_commitment(
                             <<"type">> => <<"unsigned-sha256">>,
                             <<"bundle">> => bundle_commitment_key(Tags, Opts),
                             <<"original-tags">> => original_tags(
-                                BaseFields, Item, Opts)
+                                BaseFields, Item, Opts),
+                            <<"avro-form">> => avro_form(Item)
                         },
                         Opts
                     ),
@@ -444,7 +445,8 @@ with_signed_commitment(
                     <<"type">> => ar_tx:serialize_sig_type(Item#tx.signature_type),
                     <<"bundle">> => bundle_commitment_key(Tags, Opts),
                     <<"original-tags">> => original_tags(
-                        BaseFields, Item, Opts)
+                        BaseFields, Item, Opts),
+                    <<"avro-form">> => avro_form(Item)
                 },
                 Opts
             ),
@@ -494,6 +496,11 @@ original_tags(BaseFields, Item, _Opts) ->
         true -> unset;
         false -> encoded_tags_to_map(Item#tx.tags)
     end.
+
+%% @doc Return the base64url of the Avro form of an item's tags
+%% (`ar_bundles_avro'), or `unset' for an empty Avro form.
+avro_form(#tx{ avro_form = <<>> }) -> unset;
+avro_form(#tx{ avro_form = AvroForm }) -> hb_util:encode(AvroForm).
 
 %% @doc Convert an ANS-104 encoded tag list into a HyperBEAM-compatible map.
 encoded_tags_to_map(Tags) ->
@@ -683,7 +690,8 @@ request_fields(Req, Message, FieldsFun, Opts) ->
 %% @doc Convert a commitment to a base TX record. Its fields and tags are the
 %% commitment's while the message holds their values. A message changed after
 %% signing is given its own fields and committed keys' values instead, so the
-%% commitment's signature does not verify the item.
+%% commitment's signature does not verify the item. The Avro form of the tags
+%% is the commitment's, or empty for a changed message.
 commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts) ->
     Signature =
         hb_util:decode(
@@ -699,6 +707,8 @@ commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts) ->
             {ok, OriginalTags} -> original_tags_to_tags(OriginalTags);
             error -> []
         end,
+    AvroForm =
+        hb_util:decode(hb_maps:get(<<"avro-form">>, Commitment, <<>>, Opts)),
     SignatureType = ar_tx:deserialize_sig_type(
         maps:get(<<"type">>, Commitment)
     ),
@@ -710,11 +720,13 @@ commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts) ->
         owner = Owner,
         signature = Signature,
         signature_type = SignatureType,
-        tags = Tags
+        tags = Tags,
+        avro_form = AvroForm
     },
     case holds_signed_values(Commitment, Tags, Message, Data, Opts) of
         true -> FieldsFun(TX, ?FIELD_PREFIX, Commitment, Opts);
-        false -> FieldsFun(TX#tx{ tags = [] }, <<>>, Message, Opts)
+        false ->
+            FieldsFun(TX#tx{ tags = [], avro_form = <<>> }, <<>>, Message, Opts)
     end.
 
 %% @doc Check that a message still holds the values of the fields and tags

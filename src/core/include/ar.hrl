@@ -45,6 +45,9 @@
     owner_address = not_set,
     %% A list of arbitrary key-value pairs. Keys and values are binaries.
     tags = [],
+    %% The Avro form of the tags of an ANS-104 item (`ar_bundles_avro'): empty
+    %% when they are in the form that `ar_bundles_avro:encode/1' gives.
+    avro_form = <<>>,
     %% The address of the recipient, if any. The SHA2-256 hash of the public key.
     target = ?DEFAULT_TARGET,
     %% The amount of Winstons to send to the recipient, if any.

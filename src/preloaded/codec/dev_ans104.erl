@@ -990,3 +990,45 @@ unbundled_with_large_value_test() ->
         ),
     ?assert(hb_message:verify(Outer, all, Opts)).
 
+%% @doc An item whose two tags are one Avro block with a negative count
+%% verifies, as its signature is over its own bytes. Its message, read back
+%% from the cache, verifies and encodes to those bytes: its commitment gives
+%% the Avro form of the tags.
+negative_count_tags_test() ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
+    Bytes = negative_count_tags_item(),
+    TX = ar_bundles:deserialize(Bytes),
+    ?assert(ar_bundles:verify_item(TX)),
+    Msg = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
+    {ok, _} = hb_cache:write(Msg, Opts),
+    {ok, Read} =
+        hb_cache:read(<<"HPp5H2XTmvAiK876viOXKSPfjVaaGZMv9lVRVZLwRbs">>, Opts),
+    ?assert(hb_message:verify(Read, all, Opts)),
+    Item =
+        hb_message:convert(Read, <<"ans104@1.0">>, <<"structured@1.0">>, Opts),
+    ?assertEqual(Bytes, ar_bundles:serialize(Item)).
+
+%% @doc Return the bytes of item `HPp5H2XTmvAiK876viOXKSPfjVaaGZMv9lVRVZLwRbs'
+%% of block 2015345, signed with an Ethereum key. Its two tags are one Avro
+%% block with the count -2, then 0.
+negative_count_tags_item() ->
+    hb_util:decode(<<
+        "AwB--B5F_av9ekG13exbP2yJnDmsS-cB-qZL9TJrnQ2sqV9S_PN0p0DTVEzNCzQf2M1Flg"
+        "tsYpESbQaniUCZ5SfWHATXm1gfiCt0U3j5kbDqEdiIKLS0o4rrzjVRq5tzfnQpI_1yzwlv"
+        "bfs2pdN7dCbqjLYPqZ75uc80agUpHBx2Rdk1AAACAAAAAAAAAHcAAAAAAAAAA-YBEklQRl"
+        "MtSGFzaHZiYWZrcmVpY3J0bnUzcG5zYWF0YW12M2hsc3hxYmo0NTM3bGZvc3V3aGZvdmEz"
+        "MnIybmlqdmlxZGxvdRhDb250ZW50LVR5cGU-YXBwbGljYXRpb24vanNvbjsgY2hhcnNldD"
+        "11dGYtOAB7ImFkZHJlc3MiOiIweGI1M0Y1MWVGYTMxNkM3NzYxODgwZjJlYzBhZDRlNzBm"
+        "NzVhMjNFNzkiLCJzaWciOiIweDA1ODlmY2NhZWZiZjFjNGUwNGQxZTQ5MWQ3ZDY0MDYzMj"
+        "M5OWJjMGMyM2FjMWJiMTMwZTFhODk1MjVmNDAxZjAxNTlmNTRmMjgwNjlmMDc3MDNiYjU3"
+        "NzhhNzc3MjI3M2EwNDdmMzkxODlkYTQ2ZGMxZTYxZmEyMGY1ZmUyMWRkMWMiLCJoYXNoIj"
+        "oiMHg0NGRjYjkwMWMzY2QxZTcyYWVjMjU5MjE4ZTg3ZjRjZmY1MmMxNDAxY2YyN2ExNDdm"
+        "MzRiNTA4NzE3MjJkYjg5IiwiZGF0YSI6eyJkb21haW4iOnsibmFtZSI6InNuYXBzaG90Ii"
+        "widmVyc2lvbiI6IjAuMS40In0sInR5cGVzIjp7IkFsaWFzIjpbeyJuYW1lIjoiZnJvbSIs"
+        "InR5cGUiOiJhZGRyZXNzIn0seyJuYW1lIjoiYWxpYXMiLCJ0eXBlIjoiYWRkcmVzcyJ9LH"
+        "sibmFtZSI6InRpbWVzdGFtcCIsInR5cGUiOiJ1aW50NjQifV19LCJtZXNzYWdlIjp7ImZy"
+        "b20iOiIweGI1M0Y1MWVGYTMxNkM3NzYxODgwZjJlYzBhZDRlNzBmNzVhMjNFNzkiLCJhbG"
+        "lhcyI6IjB4MTExM0JFMGEyODEyMzQyMThmOTdkRjEyQkE0RkVDQTQ1ZDgwOTQ3NyIsInRp"
+        "bWVzdGFtcCI6MTc5MTIzNTU4N319fQ"
+    >>).
+

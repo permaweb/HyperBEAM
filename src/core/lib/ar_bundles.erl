@@ -199,7 +199,7 @@ data_item_signature_data(RawItem) ->
         <<(Item#tx.owner)/binary>>,
         <<(Item#tx.target)/binary>>,
         <<(Item#tx.anchor)/binary>>,
-        ar_bundles_avro:encode(Item#tx.tags),
+        ar_bundles_avro:encode(Item#tx.tags, Item#tx.avro_form),
         <<(Item#tx.data)/binary>>
     ]).
 
@@ -243,7 +243,7 @@ serialize(TX) when is_binary(TX) -> TX;
 serialize(RawTX) when is_record(RawTX, tx) ->
     true = enforce_valid_tx(RawTX),
     {_, TX} = ar_tx:serialize_data(RawTX),
-    EncodedTags = ar_bundles_avro:encode(TX#tx.tags),
+    EncodedTags = ar_bundles_avro:encode(TX#tx.tags, TX#tx.avro_form),
     <<
         (encode_signature_type(TX#tx.signature_type))/binary,
         (TX#tx.signature)/binary,
@@ -393,7 +393,7 @@ deserialize_header(Binary) ->
     {SignatureType, Signature, Owner, Rest} = decode_signature(Binary),
     {Target, Rest2} = decode_optional_field(Rest),
     {Anchor, Rest3} = decode_optional_field(Rest2),
-    {Tags, RemainingData} = decode_tags(Rest3),
+    {Tags, AvroForm, RemainingData} = decode_tags(Rest3),
     HeaderSize = byte_size(Binary) - byte_size(RemainingData),
     {
         ok,
@@ -406,6 +406,7 @@ deserialize_header(Binary) ->
             target = Target,
             anchor = Anchor,
             tags = Tags,
+            avro_form = AvroForm,
             data = RemainingData,
             data_size = byte_size(RemainingData)
         }
@@ -530,15 +531,16 @@ decode_signature(Other) ->
         {sig_type, {explicit, SigType}}}),
     {unsupported_tx_format, SigType}.
 
-%% @doc Decode tags from a binary format using Apache Avro.
+%% @doc Decode tags from a binary format using Apache Avro, with their Avro
+%% form.
 decode_tags(<<0:64/little-integer, 0:64/little-integer, Rest/binary>>) ->
-    {[], Rest};
+    {[], <<>>, Rest};
 decode_tags(<<TagCount:64/little-integer, TagSize:64/little-integer, Binary/binary>>)
         when byte_size(Binary) >= TagSize ->
     <<TagsBinary:TagSize/binary, Rest/binary>> = Binary,
-    {Tags, _AvroForm} = ar_bundles_avro:decode(TagsBinary),
+    {Tags, AvroForm} = ar_bundles_avro:decode(TagsBinary),
     case length(Tags) of
-        TagCount -> {Tags, Rest};
+        TagCount -> {Tags, AvroForm, Rest};
         _ -> throw({invalid_ans104_tags, tag_count_mismatch})
     end;
 decode_tags(<<_TagCount:64/little-integer, _TagSize:64/little-integer, _/binary>>) ->
@@ -578,7 +580,7 @@ encode_tags_test() ->
                     (byte_size(Encoded)):64/little,
                     Encoded/binary
                 >>,
-            {DecodedTags, <<>>} = decode_tags(Wrapped),
+            {DecodedTags, <<>>, <<>>} = decode_tags(Wrapped),
             ?assertEqual(InputTags, DecodedTags, Label)
         end,
         TestCases
@@ -588,7 +590,7 @@ encode_tags_test() ->
     EncodedEmpty = ar_bundles_avro:encode(EmptyTags),
     ?assertEqual(<<>>, EncodedEmpty),
     WrappedEmpty = <<0:64/little, 0:64/little>>,
-    {[], <<>>} = decode_tags(WrappedEmpty).
+    {[], <<>>, <<>>} = decode_tags(WrappedEmpty).
 
 tag_size_boundary_test() ->
     Tags = [{<<"Content-Type">>, <<"application/json">>}],
@@ -601,7 +603,7 @@ tag_size_boundary_test() ->
             EncodedTags/binary,
             Body/binary
         >>,
-    ?assertEqual({Tags, Body}, decode_tags(Wrapped)).
+    ?assertEqual({Tags, <<>>, Body}, decode_tags(Wrapped)).
 
 missing_avro_tag_terminator_test() ->
     Tags = [{<<"Content-Type">>, <<"application/json">>}],
