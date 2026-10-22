@@ -6,7 +6,7 @@
 -include("include/hb_opts.hrl").
 -include("include/hb_http_client.hrl").
 %% Public API
--export([request/2, response_status_to_atom/1, setup_conn/1, receipt/3]).
+-export([request/2, response_status_to_atom/1, receipt/3]).
 %% GenServer
 -export([start_link/1, init/1]).
 -export([handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
@@ -19,18 +19,6 @@
 %%% ==================================================================
 %%% Public interface.
 %%% ==================================================================
-
-%% @doc Recreate the startup pool with configured settings in its child spec.
-setup_conn(Opts) ->
-    MaxConnections =
-        hb_opts:get(http_client_hackney_max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS, Opts),
-    KeepAlive = hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
-    ?event(connection_pool, {http_client_hackney_max_connections, MaxConnections}),
-    ok = hackney_pool:stop_pool(?HACKNEY_POOL),
-    hackney_pool:start_pool(?HACKNEY_POOL, [
-        {max_connections, MaxConnections},
-        {timeout, KeepAlive}
-    ]).
 
 start_link(Opts) ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
@@ -219,8 +207,17 @@ hackney_req(Args, Opts) ->
             ConnTimeout = hb_opts:get(http_client_connect_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
             RecvTimeout = hb_opts:get(http_client_hackney_recv_timeout, ?DEFAULT_HACKNEY_RECEIVE_TIMEOUT, Opts),
             CheckoutTimeout = hb_opts:get(http_client_hackney_checkout_timeout, ?DEFAULT_HACKNEY_CHECKOUT_TIMEOUT, Opts),
+            MaxConnections =
+                hb_opts:get(http_client_hackney_max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS, Opts),
+            KeepAlive = hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
+            % Each peer has a pool of its own, which its first request starts
+            % with these limits. hackney gives a freed connection only to the
+            % requests for its own peer, so a peer that fills a shared pool
+            % stops the requests to every other peer.
             HackneyOpts = [with_body,
-                {pool, ?HACKNEY_POOL},
+                {pool, {?HACKNEY_POOL, Scheme, Host, Port}},
+                {max_connections, MaxConnections},
+                {timeout, KeepAlive},
                 {connect_timeout, ConnTimeout},
                 {connect_options, [{nodelay, true}]},
                 {checkout_timeout, CheckoutTimeout},
@@ -258,14 +255,6 @@ gun_req(Args, Opts) ->
 			end
 	end.
 
-%% @doc Start the hackney connection pool with default settings.
-%% Replaced by setup_conn/1 once node config is available.
-init_hackney_pool() ->
-    hackney_pool:start_pool(?HACKNEY_POOL, [
-        {max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS},
-        {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
-    ]).
-
 %% @doc Invoke a receipt hook with signed details in its `body'. The reference
 %% comes from the selected peer's options, never its response. Callers run this
 %% outside the request process so handlers cannot delay or replace its result.
@@ -298,7 +287,6 @@ receipt(Hook, Details, Opts) ->
 %%% ==================================================================
 
 init(Opts) ->
-    init_hackney_pool(),
     case prometheus_enabled(Opts) of
         true ->
             ?event({starting_prometheus_application,

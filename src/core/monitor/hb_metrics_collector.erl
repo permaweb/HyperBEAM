@@ -106,15 +106,26 @@ safe_avg5() ->
         0
     end.
 
-%% @doc Read hackney pool stats at scrape time.
+%% @doc Read the stats of every peer's hackney pool at scrape time, summed.
 hackney_pool_stats() ->
-    try hackney_pool:get_stats(?HACKNEY_POOL) of
-        Stats ->
-            {proplists:get_value(in_use_count, Stats, 0),
-             proplists:get_value(free_count, Stats, 0),
-             proplists:get_value(queue_count, Stats, 0)}
-    catch _:_ -> {0, 0, 0}
-    end.
+    lists:foldl(
+        fun(Pool, {InUse, Free, Queue}) ->
+            try hackney_pool:get_stats(Pool) of
+                Stats ->
+                    {InUse + proplists:get_value(in_use_count, Stats, 0),
+                     Free + proplists:get_value(free_count, Stats, 0),
+                     Queue + proplists:get_value(queue_count, Stats, 0)}
+            catch _:_ -> {InUse, Free, Queue}
+            end
+        end,
+        {0, 0, 0},
+        [
+            Pool
+        ||
+            {Pool = {?HACKNEY_POOL, _, _, _}, _, _, _} <-
+                supervisor:which_children(hackney_sup)
+        ]
+    ).
 
 create_gauge(Name, Help, Data) ->
     prometheus_model_helpers:create_mf(Name, Help, gauge, ?MODULE, Data).
