@@ -154,7 +154,11 @@ httpc_req(Args, Opts) ->
                             List when is_list(List) ->
                                 List
                         end
-                ],
+                ] ++
+                % Close each connection after its request: httpc sends a
+                % request again when a connection that it reuses closes before
+                % the reply.
+                [{"connection", "close"}],
             Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
             ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>, Opts),
             Request =
@@ -180,6 +184,9 @@ httpc_req(Args, Opts) ->
             HTTPOptions =
                 [
                     {autoredirect, false},
+                    % Turn off httpc's retry: by default it sends the request
+                    % again after a `503' with `retry-after'.
+                    {autoretry, 0},
                     {timeout, SendTimeout},
                     {connect_timeout, ConnectTimeout}
                 ],

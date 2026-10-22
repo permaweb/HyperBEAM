@@ -571,6 +571,22 @@ relay_peer_allowed_test() ->
                 <<"http-client-send-timeout">> => 100
             }
         )
+    ),
+    % The peer answers `503' with `retry-after: 3600': the call returns the
+    % `503' and does not wait to send the request again.
+    ?assertMatch(
+        {failure, #{ <<"status">> := 503 }},
+        relay_call(
+            #{
+                <<"peer">> => Target,
+                <<"relay-path">> =>
+                    <<"/~message@1.0/set?status+integer=503&retry-after=3600">>
+            },
+            #{
+                <<"relay-block-internal">> => false,
+                <<"http-client-send-timeout">> => 1000
+            }
+        )
     ).
 
 %% @doc A `call' whose `relay-path' is an absolute URL on an internal host is
