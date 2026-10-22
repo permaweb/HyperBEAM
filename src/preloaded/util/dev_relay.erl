@@ -134,10 +134,25 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
         end,
     % A relayed request's `multirequest-*' keys configure this node's own
     % multirequest, so remove them: the route alone chooses the peers reached.
+    % The keys that configure this call are removed too, unless a commitment
+    % covers them.
     TargetMod4 =
-        hb_maps:without(
-            hb_http_multi:multirequest_keys(TargetMod3, Opts),
-            strip_cookies(TargetMod3, Opts),
+        hb_message:without_unless_signed(
+            [
+                <<"peer">>,
+                <<"relay-path">>,
+                <<"relay-method">>,
+                <<"relay-body">>,
+                <<"relay-device">>,
+                <<"relay-route">>,
+                <<"relay-commit-request">>,
+                <<"commit-request">>
+            ],
+            hb_maps:without(
+                hb_http_multi:multirequest_keys(TargetMod3, Opts),
+                strip_cookies(TargetMod3, Opts),
+                Opts
+            ),
             Opts
         ),
     Commit =
@@ -586,6 +601,17 @@ relay_peer_allowed_test() ->
                 <<"relay-block-internal">> => false,
                 <<"http-client-send-timeout">> => 1000
             }
+        )
+    ),
+    % The call's own keys are not sent: the peer has no `peer' to read.
+    ?assertMatch(
+        {error, #{ <<"status">> := 404 }},
+        relay_call(
+            #{
+                <<"peer">> => Target,
+                <<"relay-path">> => <<"/~message@1.0/peer">>
+            },
+            #{ <<"relay-block-internal">> => false }
         )
     ).
 
