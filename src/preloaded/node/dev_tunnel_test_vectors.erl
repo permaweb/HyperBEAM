@@ -8,6 +8,7 @@ registration_test_() -> vector(fun registration/1).
 transport_codec_test_() -> vector(fun transport_codec/1).
 scoped_host_test_() -> vector(fun scoped_host/1).
 host_fallthrough_test_() -> vector(fun host_fallthrough/1).
+call_wait_bound_test_() -> vector(fun call_wait_bound/1).
 request_lifecycle_test_() -> vector(fun request_lifecycle/1).
 request_errors_test_() -> vector(fun request_errors/1).
 linked_direct_test_() -> vector(fun linked_direct/1).
@@ -619,6 +620,59 @@ host_fallthrough(Ctx = #{broker := Broker, first := First, caller := Opts}) ->
             ?assertEqual(Before, atomics:get(Calls, 1))
         end,
         [200, 404]
+    ),
+    drained(Ctx).
+
+%% @doc Check that a `call' cannot occupy an origin's worker past the origin's
+%% own response limit. One call carries a nested `call' to an absent target that
+%% asks to wait for `infinity'; the origin's single worker runs it and waits on
+%% the origin's own broker. The wait is bounded by the origin's limit, so the
+%% worker serves the next request. Before the fix the inner call waits forever
+%% and the next request is never served.
+call_wait_bound(Ctx = #{broker := Broker, first := First, caller := Opts}) ->
+    URL = maps:get(url, Broker),
+    hb_http_server:set_opts(
+        (hb_http_server:get_opts(maps:get(opts, First)))#{
+            <<"tunnel-response-timeout">> => 500
+        }
+    ),
+    connect(Broker, First, 1),
+    Absent = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Attack =
+        async(
+            fun() ->
+                hb_http:post(
+                    URL,
+                    <<"/~tunnel@1.0/call">>,
+                    #{
+                        <<"tunnel-target">> => maps:get(id, First),
+                        <<"request">> => #{
+                            <<"path">> => <<"/~tunnel@1.0/call">>,
+                            <<"tunnel-target">> => Absent,
+                            <<"tunnel-timeout">> => <<"infinity">>,
+                            <<"request">> =>
+                                #{ <<"path">> => <<"/~meta@1.0/info/address">> }
+                        }
+                    },
+                    Opts
+                )
+            end
+        ),
+    await(fun() -> registered(URL, maps:get(id, First), Opts) =:= 0 end),
+    ?assertEqual(
+        maps:get(id, First),
+        hb_maps:get(
+            <<"body">>,
+            success(get(Ctx, First, <<"/~meta@1.0/info/address">>), Opts),
+            not_found,
+            Opts
+        )
+    ),
+    ?assertEqual(
+        504,
+        hb_maps:get(
+            <<"status">>, response(collect(Attack), Opts), not_found, Opts
+        )
     ),
     drained(Ctx).
 

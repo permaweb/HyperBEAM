@@ -148,7 +148,10 @@ may have executed the request; the tunnel never retries application work.
   2. `request` MUST be present (`400`, `A tunnel request is required.`).
   3. Load `request` with its links and check that its commitments, and those
      of the messages that it contains, verify. It is carried unchanged.
-  4. Queue the request for the address, whether or not the address is present,
+  4. Bound the wait by the node option `tunnel-response-timeout`: a request's
+     `tunnel-timeout` of `infinity`, or a wait past the limit, becomes the
+     limit, so a request cannot occupy a worker past the node's own limit.
+  5. Queue the request for the address, whether or not the address is present,
      and wait for its response or the end of the wait (§6).
 - **Returns:** `{ok, Response}` with the origin's reply, or an error of §8.
 
@@ -184,9 +187,9 @@ may have executed the request; the tunnel never retries application work.
      label of a routing `host` is the base32 form of the origin's address,
      which an origin with `name@1.0` would read as a name.
   6. The wait is `tunnel-timeout` of the request, then of the base, then of the
-     query, then the node option `tunnel-response-timeout`. A host-routed
-     request MUST NOT wait for `infinity` (`400`,
-     `Invalid tunnel request controls.`).
+     query, then the node option `tunnel-response-timeout`, bounded by that
+     node option: a request's `infinity`, or a wait past the limit, becomes the
+     limit, so a request cannot occupy a worker past the node's own limit.
   7. Queue the request and wait for its response (§6).
   8. Return `{error, Response}` with the origin's reply, or with the error of
      §8. The request ends: the HTTP server replies with this message, and no
@@ -431,8 +434,11 @@ address that is not present also has `reason` (`tunnel-unavailable`) and
 - **Host routing removes `host`.** An origin receives a host-routed request
   without its `host`, unless the request signed it, so a reply that depends on
   the request's `host` differs from a direct reply.
-- **No execution deadline at the origin.** A request that never ends occupies
-  its worker until the worker is retired or stopped.
+- **No execution deadline for other blocking.** A tunneled request's wait is
+  bounded by the node's `tunnel-response-timeout` (§4), so a nested tunnel call
+  to an absent target cannot occupy a worker past the node's limit. An
+  execution that blocks for another reason has no deadline, and occupies its
+  worker until the worker is retired or stopped.
 - **Registrations can be posted again.** A signed registration is not bound
   to a broker or a time, so a copy of one can be posted again, to its broker
   or another, and receive a request for its address. Only the origin can

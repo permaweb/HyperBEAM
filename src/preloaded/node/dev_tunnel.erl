@@ -102,7 +102,7 @@ call(Base, Req, Opts) ->
             broker(Opts),
             Address,
             load(Request, Opts),
-            timeout(tunnel_response_timeout, 300_000, Base, Req, Opts),
+            response_timeout(Base, Req, Opts),
             explicit
         )
     end.
@@ -132,13 +132,7 @@ request(Base, Hook, Opts) ->
                         Broker,
                         Address,
                         Forwarded,
-                        timeout(
-                            tunnel_response_timeout,
-                            300_000,
-                            Base,
-                            Raw,
-                            Opts
-                        ),
+                        response_timeout(Base, Raw, Opts),
                         Mode
                     ),
                 {error, Result}
@@ -363,6 +357,23 @@ address(Value) ->
 %% @doc Read a request override before its base-message default.
 value(Key, Base, Req, Default, Opts) ->
     hb_maps:get_first([{Req, Key}, {Base, Key}], Default, Opts).
+
+%% @doc Bound a request's response wait by the node's own
+%% `tunnel-response-timeout', so a request cannot occupy a worker past the
+%% node's limit, nor ask it to wait for `infinity'. A request's `infinity', or
+%% a wait past the limit, becomes the limit.
+response_timeout(Base, Req, Opts) ->
+    Limit = integer(hb_opts:get(tunnel_response_timeout, 300_000, Opts)),
+    shorter(timeout(tunnel_response_timeout, 300_000, Base, Req, Opts), Limit).
+
+%% @doc Return the shorter of a request's wait and the node's limit, treating
+%% `infinity' as the longer. An invalid wait passes through for the broker to
+%% refuse.
+shorter(infinity, Limit) -> Limit;
+shorter(Wait, infinity) -> Wait;
+shorter(Wait, Limit) when is_integer(Wait), is_integer(Limit) ->
+    min(Wait, Limit);
+shorter(Wait, _Limit) -> Wait.
 
 %% @doc Let the broker validate timeouts before registering state.
 timeout(Key, Default, Base, Req, Opts) ->
