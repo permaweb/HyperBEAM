@@ -63,10 +63,10 @@ The device defines no content-addressed artefacts of its own beyond reusing
 
 ## 3. Device interface
 
-- **Dispatch shape:** **explicit-keys.** The device answers exactly one resolved
-  key: **`push`**. It is not a default-handler device and imposes no `excludes`;
-  message-manipulation keys (`set`, `keys`, …) resolve through the base
-  `message@1.0` device as for any message.
+- **Dispatch shape:** **explicit-keys.** The device answers two resolved keys:
+  **`push`** and **`schedule`** (§4.5). It is not a default-handler device and
+  imposes no `excludes`; message-manipulation keys (`set`, `keys`, …) resolve
+  through the base `message@1.0` device as for any message.
 
 - **Base message.** `push` operates on a **process** as its base. The base is
   treated as a `process@1.0` message (its `device` is interpreted as
@@ -102,10 +102,11 @@ Push a process's outbox (the recursive driver).
 **Source authentication (failure-closed — §7).** A push proceeds only for an
 authenticated source: deriving the base process's signed id REQUIRES it to
 **verify** and carry **≥1 signer**, so an unverified or signerless base fails the
-whole push (`process-not-verified` / `process-has-no-signers`) before any message
-is scheduled. This holds in **both** request modes — it is a property of id
-derivation, inherited by any push that delegates to the process device, not a
-separate pre-dispatch gate.
+whole push (`throw({process_not_verified, Process})` /
+`throw({process_has_no_signers, Process})`) before any outbox message is
+scheduled. In Mode B a `body` with a `target` is scheduled before the id is
+derived. The gate is a property of id derivation, inherited by any push that
+delegates to the process device, not a separate pre-dispatch gate.
 
 The two request modes:
 
@@ -150,15 +151,15 @@ In both modes the loop result is returned per §4.1 (sync vs async).
 Given a source process `P` and source slot `S`, with inherited `result-depth`
 `D` (default 1) and `max-depth` `M` (default unbounded):
 
-1. **Identify the source.** Derive (§5.6): the source process **signed id** `ID`
-   (over its signed commitments); the **uncommitted id** `UNCOMMITTED`; and the
-   **base id** `BASE`. Deriving `ID` is itself the source-auth gate (§7) — it
-   REQUIRES `P` to verify and carry ≥1 signer, so an unauthenticated source fails
-   here, before any message is scheduled. These become provenance fields (§5.4).
-   Also read the source process's `scheduler` and `authority` values for
-   provenance. (The recursive step re-views each target as a `process@1.0`
-   message — §4.5, §9 — so every downstream source is re-authenticated the same
-   way when its id is derived.)
+1. **Identify the source.** Derive (§5.6) the source process **signed id** `ID`
+   (over its signed commitments). Deriving `ID` is itself the source-auth gate
+   (§7) — it REQUIRES `P` to verify and carry ≥1 signer, so an unauthenticated
+   source fails here, before any message is scheduled. The **uncommitted id**
+   `UNCOMMITTED`, the **base id** `BASE`, and the `scheduler` and `authority`
+   values (provenance, §5.4) are read when each entry is scheduled (§4.5), from
+   the process read from the cache by `ID`. (The recursive step re-views each
+   target as a `process@1.0` message — §4.5, §9 — so every downstream source is
+   re-authenticated the same way when its id is derived.)
 
 2. **Compute the slot's outbox.** Resolve `compute/results` on `P` (as a
    `process@1.0` message) for slot `S`, with hashpath updating disabled. This
@@ -174,9 +175,9 @@ Given a source process `P` and source slot `S`, with inherited `result-depth`
    `slot = S`, `process = ID`, and — if `D > 0` — the full computed result
    merged in (§5.5). Recursion stops here.
 
-4. **Non-empty outbox ⇒ fan out.** Normalise the outbox (lower-case its keys,
-   strip any private section) and, for **each** outbox entry `K ⇒ Entry`
-   (§4.3), in the outbox's key order:
+4. **Non-empty outbox ⇒ fan out.** Normalise the outbox (convert its keys to
+   binaries, strip any private section) and, for **each** outbox entry
+   `K ⇒ Entry` (§4.3), in the outbox's key order:
    - Determine `Entry`'s `target` (§5.3). If the entry has **no** `target`, it
      contributes a **no-target** placeholder to the trace — a per-entry **404**
      placeholder (`status = 404`, `outbox-index`, `reason`; §8), NOT an empty
@@ -184,8 +185,8 @@ Given a source process `P` and source slot `S`, with inherited `result-depth`
      whole still succeeds); the loop continues with the next entry.
    - **Maybe evaluate** the entry first (§4.4): if it carries a `resolve` key,
      resolve that path to obtain the message to schedule; otherwise the entry is
-     the message to schedule unchanged. An evaluation failure is recorded as an
-     error placeholder for that entry but does not abort the others.
+     the message to schedule unchanged. An evaluation failure gives an error
+     message to schedule in its place (§4.4) and does not abort the others.
    - **Load the target process.** Look up the target id in the message cache.
      - If **not found locally**, the entry contributes a `target-not-found`
        placeholder to the trace (§8) and the loop continues. (Remote delivery is
@@ -208,10 +209,10 @@ Given a source process `P` and source slot `S`, with inherited `result-depth`
   binary decimal strings — preserving emission order. An implementation MUST
   preserve each entry under its original outbox key in the trace (the trace's
   per-entry keys mirror the outbox keys).
-- Before iterating, the outbox is normalised: keys lower-cased, any private
-  section removed. Entries that are **not** messages with a `target` (e.g. a
-  scalar, or a message lacking `target`) MUST be handled by the no-target /
-  not-available placeholder path (§8) rather than scheduled.
+- Before iterating, the outbox is normalised: keys converted to binaries, any
+  private section removed. Entries that are **not** messages with a `target`
+  (e.g. a scalar, or a message lacking `target`) MUST be handled by the
+  no-target / not-available placeholder path (§8) rather than scheduled.
 
 #### 4.4 Maybe-evaluate an outbox entry (`resolve`)
 - **Reads:** the entry; its optional `resolve` key.
@@ -224,10 +225,12 @@ Given a source process `P` and source slot `S`, with inherited `result-depth`
   2. Resolve it, forcing a message result.
   3. On success, take the evaluation's result message and **re-attach** the
      entry's original `target` to it; that becomes the message to schedule.
-  4. On failure, the entry is recorded as an error placeholder (§8,
-     `resolve-error`): a message with `resolve = error`, `status = 400`, the
-     `outbox-index = K`, the failure `reason`, and the original entry as
-     `source`. The other entries are unaffected.
+  4. On failure, the message to schedule is an error message (§8,
+     `resolve-error`): `resolve = error`, `status = 400`, `target = ID` (the
+     source process), the `outbox-index = K`, the failure `reason`, and the
+     original entry as `source`. It is scheduled as in §4.5: the scheduler
+     assigns it a slot on the process in its `target`, and the entry's trace
+     `target` is `ID`. The other entries are unaffected.
 - This lets a process emit an outbox entry that says "resolve this AO-Core path,
   then schedule the result on `target`", rather than scheduling a literal
   payload.
@@ -236,11 +239,15 @@ Given a source process `P` and source slot `S`, with inherited `result-depth`
 Given the loaded target process `T`, the message-to-schedule `Msg` (target id
 `TARGET`), and the inherited controls:
 
-1. **Schedule onto the target.** Schedule `Msg` onto `T` (§5.4): augment it with
-   provenance + protocol keys, apply the target's security policy (sign it,
-   §7), verify it, write it to the message cache, then POST it to `T`'s
-   `schedule`. This **assigns the message a slot** on the target (the target's
-   slot count advances). Let `NEXTSLOT` be the assignment's slot. This step
+1. **Schedule onto the target.** Resolve
+   `~push@1.0&process=ID/schedule&slot=S&outbox-key=K` with cache-control
+   `always`; it schedules `Msg` onto `T` (§5.4): augment it with provenance +
+   protocol keys, apply the target's security policy (sign it, §7), verify it,
+   write it to the message cache, then POST it to `T`'s `schedule`. This
+   **assigns the message a slot** on the target (the target's slot count
+   advances). Let `NEXTSLOT` be the assignment's slot. The assignment is stored
+   as the result of `schedule` (`cache-control: store`), so a repeat push of
+   slot `S` returns it and does not schedule the message again. This step
    **always runs** for an entry with a target — even when recursion is later
    skipped — so the message is durably enqueued on the target (§6.3).
    - Scheduling failures (status not `200`, or an error) are recorded as an
@@ -329,8 +336,8 @@ this device, decides whether to act on the message.)
     recursively-produced sub-trace of pushing that slot, **or** the binary
     `<<"skipped">>` when the depth bound stopped the recursion (§6.3);
   - a **placeholder** for a non-delivered entry (errors / no target), as
-    specified in §8 (carrying `response`/`resolve` = `error`, a `status`, an
-    `outbox-index` or `target`, and a `reason`).
+    specified in §8 (carrying `response = error`, an `outbox-index` or
+    `target`, a `reason`, and for a `404` the `status`).
 - **`slot`** — the source slot `S` that was pushed at this level.
 - **`process`** — the source process signed id `ID`.
 - **The full computed result** of this level's slot, **inlined only when**
@@ -473,8 +480,8 @@ placeholders.
   termination relies on application logic eventually producing empty outboxes
   (or on `max-depth`) rather than on cycle detection (§6.4).
 
-### 6.4 No deduplication / cycle detection
-- The device performs **no** deduplication of outbox messages and **no** cycle
+### 6.4 No cycle detection
+- The device schedules each outbox message once (§4.5) and performs **no** cycle
   detection across the recursion. A process that emits a message to itself (or a
   cycle of processes that reply to each other) will be pushed repeatedly, each
   emission producing a new slot, until the application stops emitting outbox
@@ -518,15 +525,15 @@ placeholders.
   3. **Default:** sign with the node's default identity (its configured wallet).
 - After signing, the message MUST **verify** before it is written to cache and
   scheduled; a message whose signing produced **no** committers (the policy /
-  authority named only identities the node does not hold) MUST fail with a
-  "no matching authority" error (§8, `no-matching-authority`) rather than be
-  scheduled unsigned — **unless** the node is configured to permit unsigned
-  pushes, in which case the default identity signs.
+  authority lists only identities the node has no wallet for) is signed by the
+  default identity — **unless** the node option `push-always-sign` is `false`,
+  in which case it MUST fail with a "no matching authority" error (§8,
+  `no-matching-authority`) rather than be scheduled unsigned.
 - *Platform note (not protocol):* the exact option keys — where `policy` is read
-  from, the node's identity-set lookup, and the permit-unsigned-pushes switch —
-  are node/platform configuration. The **normative, observable** contract is the
-  3-step precedence above plus the failure-closed "no committers ⇒
-  `no-matching-authority`" rule.
+  from, the node's identity-set lookup, and the `push-always-sign` option — are
+  node/platform configuration. The **normative, observable** contract is the
+  3-step precedence above plus the "no committers ⇒ default identity, or
+  `no-matching-authority` when `push-always-sign` is `false`" rule.
 - The provenance keys (§5.4) are set **before** signing, so the signature covers
   the `from-*` source attestation; a recipient can therefore rely on the
   committed `from-process`/`from-base`/`from-authority` to decide trust.
@@ -548,18 +555,18 @@ placeholders.
 ## 8. Errors
 
 Two error surfaces: **top-level errors** that fail the whole push (returned as
-`{error, …}`), and **per-entry placeholders** embedded in the trace (the push as
-a whole still succeeds; individual entries record their failure). The table pins
-each condition and the canonical hyphenated atom name; current payloads are
-human-readable structured messages, so the **condition** is normative and the
-exact payload text is not.
+`{error, …}`, or thrown), and **per-entry placeholders** embedded in the trace
+(the push as a whole still succeeds; individual entries record their failure).
+The table lists each condition and the thrown term or the canonical hyphenated
+atom name; current payloads are human-readable structured messages, so the
+**condition** is normative and the exact payload text is not.
 
 **Top-level (fail the push):**
 
 | atom | condition |
 |---|---|
-| `process-not-verified` | the base process fails verification when deriving its id. |
-| `process-has-no-signers` | the base process verifies but carries no signer. |
+| `throw({process_not_verified, Process})` | the base process fails verification when deriving its id. |
+| `throw({process_has_no_signers, Process})` | the base process verifies but carries no signer. |
 | `compute-failed` | computing the source slot's outbox **raised**; the result carries the process id, slot, and reason. (Returned as `{error, …}` for that level.) |
 | `initial-schedule-wrong-format` | Mode B: scheduling the initial `body` returned status `422`. |
 
@@ -567,10 +574,10 @@ exact payload text is not.
 
 | atom | condition | placeholder shape (keys) |
 |---|---|---|
-| `no-target` | an outbox entry is a map but carries no `target` key (and none after maybe-evaluate). | `response = error`, `status = 404`, `outbox-index`, `reason` — recorded as a **404** placeholder, nothing scheduled. (NOT an empty `{}`.) |
+| `no-target` | an outbox entry is a map but carries no `target` key (checked before maybe-evaluate). | `response = error`, `status = 404`, `outbox-index`, `reason`, `message` — recorded as a **404** placeholder, nothing scheduled. (NOT an empty `{}`.) |
 | `target-not-found` | the target id is well-formed but not loadable from the cache. | `response = error`, `status = 404`, `target`, `reason`. |
 | `target-not-available` | an outbox value is not a schedulable message **at all** (e.g. not a map). | `response = error`, `status = 404`, `outbox-index`, `reason`, `message`. |
-| `resolve-error` | maybe-evaluate (`resolve`) of an entry failed. | `resolve = error`, `status = 400`, `target` (source process id), `outbox-index`, `reason`, `source`. |
+| `resolve-error` | maybe-evaluate (`resolve`) of an entry failed. | not a placeholder: a message with `resolve = error`, `status = 400`, `target` (source process id), `outbox-index`, `reason`, `source` is scheduled in place of the entry (§4.4). |
 | `schedule-error` | scheduling the result onto the target failed (status ≠ 200 / error, and any codec downgrade also failed). | `response = error`, `target`, `reason`. |
 | `push-error` | the recursive downstream `/push` of a scheduled slot returned an error. | `response = error`, `target`, `reason`. |
 
@@ -598,8 +605,9 @@ whose own compute failed).
 - **Post-compute push hook.** `process@1.0/compute` accepts a `push` request key:
   when a **fresh** slot is computed with a truthy `push`, the process fires an
   **async** `push@1.0/push` for that slot. `push = true` (or `<<"true">>`) ⇒
-  unbounded; `push = N` (non-negative integer) ⇒ `max-depth = N`; anything else
-  ⇒ no-op. The hook forwards the originating request's payload keys
+  unbounded; `push = N` (non-negative integer, or decimal binary) ⇒
+  `max-depth = N`; anything else ⇒ no-op. The hook forwards the originating
+  request's payload keys
   (e.g. `result-depth`, `async`) into the push. Because the hook fires **only**
   on a fresh compute (cache hits short-circuit before it), repeatedly polling a
   process (`/now`, `/compute`, a cron tick) triggers the push for each slot **at
@@ -623,8 +631,9 @@ whose own compute failed).
 An implementation MUST exhibit every behaviour below; each is observable via the
 resolution/HTTP surface or the side effects on target processes' schedules.
 
-1. `push` is the **only** resolved key; the device is explicit-key (no default
-   handler, no `excludes`); `set`/`keys` on a push message reach `message@1.0`.
+1. `push` and `schedule` are the **only** resolved keys; the device is
+   explicit-key (no default handler, no `excludes`); `set`/`keys` on a push
+   message reach `message@1.0`.
 2. **Mode B, message body:** with no `slot` and a message `body`, the device
    schedules the body onto the base process (POST `schedule`), takes the assigned
    slot, and pushes it — driving its outbox.
@@ -668,14 +677,16 @@ resolution/HTTP surface or the side effects on target processes' schedules.
     synchronously and returns the trace.
 14. **`resolve` entries:** an outbox entry carrying `resolve = Path` is resolved
     (with its `target` removed during evaluation, re-attached to the result)
-    before scheduling; a failed evaluation produces a `resolve = error`
-    placeholder (`status = 400`, `outbox-index`, `reason`, `source`) without
-    aborting sibling entries.
+    before scheduling; a failed evaluation produces a `resolve = error` message
+    (`status = 400`, `target` = source process id, `outbox-index`, `reason`,
+    `source`) that is scheduled in place of the entry, without aborting sibling
+    entries.
 15. **Recipient signing policy:** scheduled messages are signed per the target's
     `policy` (`accept-committers`) → `authority` → default-identity precedence;
     the signed message must verify before scheduling; signing that yields no
-    committers errors (`no-matching-authority`) unless the node permits unsigned
-    pushes.
+    committers falls back to the default identity, or errors
+    (`no-matching-authority`) when the node option `push-always-sign` is
+    `false`.
 16. **Codec downgrade:** a `422` from a target scheduler causes an `httpsig@1.0`
     message to be re-signed as `ans104@1.0` and retried once; an already-`ans104`
     `422` fails.
@@ -684,14 +695,14 @@ resolution/HTTP surface or the side effects on target processes' schedules.
     if no route matches or the route is self, it pushes locally; a result-schedule
     `307` redirect re-signs and POSTs to the redirect location.
 18. **Source authentication (failure-closed):** a base process that does not
-    verify (`process-not-verified`) or has no signers (`process-has-no-signers`)
-    fails the push.
+    verify (`throw({process_not_verified, Process})`) or has no signers
+    (`throw({process_has_no_signers, Process})`) fails the push.
 19. **Compute resilience:** a compute that raises while reading the outbox does
     not crash the push; it returns a `compute-failed` error carrying the process
     id, slot, and reason.
-20. **No dedup / cycle detection:** repeated/self-addressed outbox messages are
-    each scheduled and (unless bounded by `max-depth`) pushed; the device adds no
-    cycle detection — termination is via empty outboxes or `max-depth`.
+20. **No cycle detection:** repeated/self-addressed outbox messages are each
+    scheduled once and (unless bounded by `max-depth`) pushed; the device adds
+    no cycle detection — termination is via empty outboxes or `max-depth`.
 21. **Compute hook idempotence:** `process@1.0/compute` with a truthy `push` on a
     **fresh** slot fires exactly one async push for that slot (`push = N` ⇒
     `max-depth = N`); recomputing the same slot is a cache hit that does not
@@ -747,12 +758,10 @@ resolution/HTTP surface or the side effects on target processes' schedules.
    traversal, or strictly only the inlining? This spec takes the latter
    (traversal bounded only by empty outboxes / `max-depth`); a future revision
    SHOULD confirm no implementation prunes children when `result-depth` hits 0.
-4. **Provenance under codec downgrade / redirect.** On a `307` redirect (and in
-   the `ans104` downgrade path) the message is **re-normalised** and re-signed;
-   the spec should confirm that the `from-*` provenance survives those re-encodings
-   intact (the redirect path uses a normalised message that re-derives `target`
-   but may not re-attach every `from-*` key). If any provenance key can be lost on
-   a redirect, that is a divergence reimplementers would need pinned.
+4. **Provenance under codec downgrade / redirect.** On a `307` redirect the
+   augmented message is given the bare target id as its `target` and re-signed;
+   the `ans104` downgrade augments the outbox message again and re-signs it.
+   Both keep every `from-*` key.
 5. **Async return value.** The synchronous path returns the trace; the async path
    returns an opaque handle to the spawned activity. The handle's form (and
    whether a caller can later join/observe the async push) is left out of scope —
