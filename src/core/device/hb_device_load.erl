@@ -33,9 +33,10 @@
 
 %% @doc A message is already a device. A binary reference is resolved,
 %% then memoised in the process cache unless it is a forge seed.
+%% An empty binary or any other value returns `{error, not_found}'.
 reference(Loaded, _Opts) when is_map(Loaded) ->
     {ok, Loaded};
-reference(<<>>, _Opts) ->
+reference(Ref, _Opts) when Ref == <<>>; not is_binary(Ref) ->
     {error, not_found};
 reference(Ref, Opts) when is_binary(Ref) ->
     NormRef = hb_ao:normalize_key(Ref),
@@ -46,7 +47,13 @@ reference(Ref, Opts) when is_binary(Ref) ->
     end.
 
 do_not_try_to_load_empty_device_test() ->
-    ?assertEqual({error, not_found}, reference(<<>>, #{})).
+    ?assertEqual({error, not_found}, reference(<<>>, #{})),
+    % `false' is not a device, and `name@1.0' gets the name `%zz' as it is.
+    ?assertEqual({error, not_found}, reference(false, #{})),
+    ?assertEqual(
+        {error, <<"device-name-not-resolvable">>},
+        reference(<<"%zz">>, #{})
+    ).
 
 %% @doc Resolve and memoise a reference, refusing re-entrant resolutions:
 %% a reference whose resolution requires resolving itself (for example,
@@ -276,7 +283,10 @@ resolve_spec(Ref, Opts) ->
     case
         hb_ao:raw(
             #{ <<"device">> => <<"name@1.0">> },
-            #{ <<"path">> => Ref, <<"load">> => false },
+            #{
+                <<"path">> => hb_escape:encode_path_component(Ref),
+                <<"load">> => false
+            },
             Opts
         )
     of
