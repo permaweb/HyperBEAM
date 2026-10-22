@@ -10,8 +10,9 @@
 field of a message using the gzip format (RFC 1952, DEFLATE per RFC 1951). It is
 a transport/representation transform, not a typed-message converter: it touches
 exactly one key (`body`) and a marker key (`content-encoding`), leaving every
-other key of the message untouched. `zip` shrinks a body and records that it did
-so; `unzip` reverses that, restoring the original bytes and clearing the marker.
+other key of the message but `commitments` (§4) untouched. `zip` shrinks a body
+and records that it did so; `unzip` reverses that, restoring the original bytes
+and clearing the marker.
 
 It is the codec used to put a message body on the wire in compressed form and to
 recover it on the other side. Unlike `structured@1.0`, this device does **not**
@@ -56,7 +57,8 @@ mandate is out of scope (see §11).
   - `body` — OPTIONAL, binary. The payload to (de)compress.
   - `content-encoding` — OPTIONAL, binary. The current encoding marker. Read by
     `unzip`; written/removed as described in §4.
-  - All other keys — arbitrary; passed through verbatim by both operations.
+  - All other keys — arbitrary; passed through verbatim by both operations,
+    except `commitments` (§4).
 - Both operations are invoked as a single resolution step that takes the message
   as the base and returns a new message; neither reads any field from the
   request message, and neither reads any node option that affects output (see
@@ -76,10 +78,12 @@ mandate is out of scope (see §11).
      - `body` set to the gzip-compressed bytes.
      - `content-encoding` set to the binary `gzip` (added if absent, overwritten
        if present).
-  3. All other keys of `Base` are preserved unchanged. The device MUST NOT add,
-     remove, or alter any key other than `body` and `content-encoding`.
+  3. All other keys of `Base` are preserved unchanged, except `commitments`:
+     the device sets `body` and `content-encoding` with `message@1.0`'s `set`,
+     which removes `commitments` when it adds a key or changes a committed key.
 - **Returns:** `{ok, Message}` where `body` is the compressed bytes and
-  `content-encoding` is `gzip`; or `{error, <<"no-body-to-zip">>}`.
+  `content-encoding` is `gzip`; or
+  ``{error, <<"No `body' key to zip found in message.">>}``.
 - **Side effects:** none. No cache or store writes, no commitments, no external
   calls. (Compressing a `body` that is covered by an existing commitment will
   change its value; the consequences of that for the message's commitments are
@@ -105,7 +109,8 @@ mandate is out of scope (see §11).
        result message equal to `Base` with two changes:
        - `body` set to the decompressed bytes.
        - the `content-encoding` key **removed**.
-  4. All other keys of `Base` are preserved unchanged.
+  4. All other keys of `Base` are preserved unchanged, except `commitments`, as
+     for `zip`.
 - **Returns:** `{ok, Message}`. On the decompress path, `body` holds the
   decompressed bytes and `content-encoding` is absent. On either pass-through
   path, the original message is returned verbatim.
@@ -222,9 +227,9 @@ mandate is out of scope (see §11).
   (and the gzip default) to decide whether to decompress, then clears it so a
   downstream consumer sees a plain, unmarked body. A non-`gzip` marker is the
   contract for "leave this body for a different decoder".
-- The device does **not** chain via a returned `device` key (it returns plain
-  messages bound to no particular device), so there is no device-switching or
-  self-recursion behaviour to manage.
+- The device does **not** chain via a returned `device` key (it does not set
+  `device`; the result keeps the `device` key of the base), so there is no
+  device-switching or self-recursion behaviour to manage.
 
 ## 10. Conformance (normative checklist)
 
@@ -235,8 +240,8 @@ An implementation MUST exhibit all of the following, each checkable by resolving
 1. `zip` of a message with `body = B` returns a message whose `content-encoding`
    is the binary `gzip` and whose `body` is a single valid gzip member (begins
    with bytes `0x1f 0x8b 0x08`) that decompresses to exactly `B`.
-2. `zip` preserves every other key of the input unchanged and adds/changes only
-   `body` and `content-encoding`.
+2. `zip` preserves every other key of the input but `commitments` (§4) unchanged
+   and adds/changes only `body` and `content-encoding`.
 3. `zip` of a message with **no** `body` key signals an error
    (`no-body-to-zip` condition) and does not produce a body.
 4. The gzip output embeds a **zero modification-time** field (no wall-clock
@@ -244,7 +249,8 @@ An implementation MUST exhibit all of the following, each checkable by resolving
    yields byte-identical output.
 5. `unzip` of a message with `content-encoding = gzip` and a gzip `body`
    returns a message whose `body` is the decompressed bytes and from which the
-   `content-encoding` key has been **removed**; all other keys are unchanged.
+   `content-encoding` key has been **removed**; all other keys but `commitments`
+   (§4) are unchanged.
 6. `unzip` of a message that has a `body` but **no** `content-encoding` key
    treats it as `gzip` (the default) and decompresses it as in (5).
 7. `unzip` of a message whose `content-encoding` is any binary **other than**
