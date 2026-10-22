@@ -756,8 +756,6 @@ async_computation_writes_test() ->
         <<"cache-control">> => [<<"always">>],
         <<"async-cache">> => true
     },
-    % Start the store: two processes that first use it at once get two tables.
-    hb_store:start(Opts),
     Base = #{ <<"a">> => 1 },
     lists:foreach(fun(X) ->
         Req = #{ <<"path">> => <<"set">>, <<"x">> => X },
