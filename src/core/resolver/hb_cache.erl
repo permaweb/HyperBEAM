@@ -1085,7 +1085,15 @@ prepare_typed_values(Target, RootPath, Subpaths, Values, Store, Opts) ->
                             {commitments_path, CommPath}
                         }
                     ),
-                    case do_read_commitment(CommPath, Opts) of
+                    % If the message is read by its unsigned ID (`Target' is
+                    % `RootPath'), we read the commitment of that ID from the
+                    % local stores only.
+                    CommOpts =
+                        case Target of
+                            RootPath -> hb_store:scope(Opts, local);
+                            _ -> Opts
+                        end,
+                    case do_read_commitment(CommPath, CommOpts) of
                         {ok, Commitment} ->
                             LoadedCommitment =
                                 ensure_all_loaded(
@@ -1546,6 +1554,13 @@ test_store_simple_signed_message(Store) ->
     ?assertEqual(
         {ok, <<"base-test-value">>},
         read(KeyPath, Opts#{ <<"store">> => [Store, Remote] })
+    ),
+    % A read of the unsigned ID asks no remote store for its commitment.
+    UnsignedCommitment = <<UID/binary, "/commitments/", UID/binary>>,
+    ok = hb_store:write(Remote, #{ UnsignedCommitment => <<"remote">> }, Opts),
+    ?assertNotMatch(
+        {ok, #{ <<"commitments">> := _ }},
+        read(UID, Opts#{ <<"store">> => [Store, Remote] })
     ),
     {ok, RetrievedItemSigned} = read(CommittedID, Opts),
     ?event_debug({retrieved_signed_message, {expected, Item}, {got, RetrievedItemSigned}}),
