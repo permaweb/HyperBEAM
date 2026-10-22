@@ -84,7 +84,7 @@ The device defines no content-addressed artefacts of its own beyond reusing
   | `slot` | integer (or decimal binary) | Push the **already-scheduled** message at this slot of the base process. Selects the *push existing slot* mode. |
   | `body` | message | Schedule this message (or process) onto the base **first**, then push the resulting slot. Selects the *schedule-then-push* mode. Used when `slot` is absent. |
   | `result-depth` | non-negative integer | How deep the **full** computed result is inlined into the trace. Default `1`. Decrements by 1 at each recursion level (§5.5, §6.2). |
-  | `max-depth` | non-negative integer (or decimal binary) | Bounds the **recursive fan-out**. Absent ⇒ unbounded. `0` ⇒ schedule each target but do not drive its compute/push. `N>0` ⇒ recurse, inner push inheriting `N−1` (§4, §6.3). |
+  | `max-depth` | non-negative integer (or decimal binary), or `infinity` | Bounds the **recursive fan-out**; it can only lower the node's `push-max-depth` (§6.3). Absent ⇒ the node's `push-max-depth`. `0` ⇒ schedule each target but do not drive its compute/push. `N>0` ⇒ recurse, inner push inheriting `N−1` (§4, §6.3). |
   | `async` | boolean (`true`/`false`) | When `true`, run the push detached and return immediately; otherwise run synchronously and return the trace. Default `false`. MAY also be read from the base process (§4.1). |
 
   Keys other than those the device consumes are **carried through** in two
@@ -149,7 +149,7 @@ In both modes the loop result is returned per §4.1 (sync vs async).
 #### 4.2 The push loop (one level)
 
 Given a source process `P` and source slot `S`, with inherited `result-depth`
-`D` (default 1) and `max-depth` `M` (default unbounded):
+`D` (default 1) and `max-depth` `M` (§6.3):
 
 1. **Identify the source.** Derive (§5.6) the source process **signed id** `ID`
    (over its signed commitments). Deriving `ID` is itself the source-auth gate
@@ -264,7 +264,7 @@ Given the loaded target process `T`, the message-to-schedule `Msg` (target id
      (e.g. a cron tick or an explicit caller) will pick it up.
    - Otherwise: **push the target's `NEXTSLOT`** — resolve `push` on `T` (as a
      `process@1.0` message) with `slot = NEXTSLOT`, `result-depth = D−1`, and
-     (if `max-depth` was a positive integer `N`) `max-depth = N−1`. This may run
+     `max-depth = M−1` (`infinity` when `M` is `infinity`). This may run
      **locally** or be **routed to a remote node** (§5.10). The returned
      sub-trace becomes the entry's `resulted-in`.
 
@@ -418,12 +418,12 @@ placeholders.
 - **Recursive push routing.** When driving a target's slot (§4.5 step 2), the
   device MAY route the `/push` to a **remote node**:
   - It asks the node's router to resolve a route for the path
-    `/<target-id>/push&slot=<NEXTSLOT>`.
+    `/<target-id>/push&slot=<NEXTSLOT>&max-depth=<M−1>`.
   - If **no route matches**, or the route resolves to **this same node**, the
     push runs **locally** (resolve `push` on the target, as in §4.5 step 2).
-  - If the route resolves to **another node**, the device POSTs that
-    `/<target-id>/push&slot=<NEXTSLOT>` path to that node and uses its response
-    as the sub-trace.
+  - If the route resolves to **another node**, the device POSTs that path to
+    that node and uses its response as the sub-trace. That node pushes to the
+    lower of that `max-depth` and its own `push-max-depth` (§6.3).
   - Whether routing is attempted at all is a node option (default: attempt
     remote routing); a node MAY be configured to always push locally.
 - Remote-push responses are HTTP and are spliced into the trace exactly as a
@@ -435,8 +435,9 @@ placeholders.
 - All keys are lowercase, hyphenated binaries on the wire. Provenance keys are
   exactly `from-process`, `from-uncommitted`, `from-base`, `from-scheduler`,
   `from-authority`. The skip marker is the literal binary `<<"skipped">>`.
-- `slot`/`max-depth`/`result-depth` are integers; on the wire they MAY arrive as
-  decimal binaries and MUST be parsed as base-10 integers.
+- `slot`/`max-depth`/`result-depth` are integers, and `max-depth` MAY also be
+  `infinity`; on the wire they MAY arrive as decimal binaries and MUST be
+  parsed as base-10 integers.
 
 ## 6. Ordering, freshness & caching
 
@@ -461,10 +462,15 @@ placeholders.
 ### 6.3 `max-depth` (fan-out bound) and termination
 - `max-depth` bounds how far the **recursive compute/push** fans out from a
   source slot's outbox. Parsing: a non-negative integer (verbatim or as a decimal
-  binary) is taken as-is; **any** other value (absent, negative, non-numeric,
-  boolean, empty) is treated as `undefined` ⇒ **unbounded**.
+  binary) is taken as-is; **any** other value (absent, `infinity`, negative,
+  non-numeric, boolean, empty) is `infinity`.
+- The bound of a push is the lower of the request's `max-depth` and the node's
+  `push-max-depth` option (default `30`), parsed the same way: a request's
+  `max-depth` can lower the node's bound, but not raise it. A node with
+  `push-max-depth` `infinity` recurses until outboxes run dry.
 - Semantics:
-  - **unbounded** (`undefined`): recurse until outboxes run dry.
+  - **`infinity`**: recurse until outboxes run dry, the inner `/push`
+    inheriting `max-depth = infinity`.
   - **`0`**: for each outbox entry, still **schedule** the message on its target
     (the target's slot advances), but **skip** the recursive `/push`; the entry's
     `resulted-in` is `<<"skipped">>`. The target's compute is **not** invoked
@@ -485,10 +491,10 @@ placeholders.
   detection across the recursion. A process that emits a message to itself (or a
   cycle of processes that reply to each other) will be pushed repeatedly, each
   emission producing a new slot, until the application stops emitting outbox
-  messages or a `max-depth` bound halts the fan-out. Implementations MUST NOT
-  silently coalesce or drop "duplicate" outbox messages; each is scheduled and
-  (unless bounded) pushed. Bounding non-terminating message loops is the caller's
-  responsibility (via `max-depth`, or via the application's own stop condition).
+  messages or the `max-depth` bound (§6.3) halts the fan-out. Implementations
+  MUST NOT silently coalesce or drop "duplicate" outbox messages; each is
+  scheduled and (unless bounded) pushed. A node with `push-max-depth` `infinity`
+  pushes such a loop until the application stops it.
 
 ### 6.5 Freshness / caching
 - The recursive `/push` and the result-scheduling resolutions run with
@@ -605,7 +611,8 @@ whose own compute failed).
 - **Post-compute push hook.** `process@1.0/compute` accepts a `push` request key:
   when a **fresh** slot is computed with a truthy `push`, the process fires an
   **async** `push@1.0/push` for that slot. `push = true` (or `<<"true">>`) ⇒
-  unbounded; `push = N` (non-negative integer, or decimal binary) ⇒
+  no `max-depth` (the node's `push-max-depth` applies, §6.3); `push = N`
+  (non-negative integer, or decimal binary) ⇒
   `max-depth = N`; anything else ⇒ no-op. The hook forwards the originating
   request's payload keys
   (e.g. `result-depth`, `async`) into the push. Because the hook fires **only**
@@ -625,6 +632,8 @@ whose own compute failed).
   hook) can bound the synchronous fan-out with `max-depth`, scheduling the
   immediate hop(s) but deferring deeper propagation to each target's own push
   cycle. `max-depth = 0` is the "schedule only, let targets self-drive" mode.
+  With no `max-depth`, the node's `push-max-depth` (default `30`, §6.3) bounds
+  the fan-out; a node MAY set it to `infinity`.
 
 ## 10. Conformance (normative checklist)
 
@@ -666,9 +675,11 @@ resolution/HTTP surface or the side effects on target processes' schedules.
     and the entry's `resulted-in` is the binary `<<"skipped">>`; the target's
     compute is not invoked by this push.
 11. **`max-depth = N > 0`:** the device recurses, the inner push inheriting
-    `N−1`, unwinding at most `N` levels before the `0`/skip rule applies; absent
-    or unparseable `max-depth` ⇒ unbounded; negative/non-numeric/boolean/empty ⇒
-    unbounded.
+    `N−1`, unwinding at most `N` levels before the `0`/skip rule applies. The
+    bound is the lower of `max-depth` and the node's `push-max-depth` (default
+    `30`); an absent, `infinity`, negative, non-numeric, boolean or empty
+    `max-depth` gives the node's `push-max-depth`, and a `push-max-depth` of
+    `infinity` recurses until outboxes run dry.
 12. **`result-depth`:** defaults to `1`; the full computed result is inlined at a
     level iff `result-depth > 0` there, decrementing by 1 per level; it does not
     bound the traversal (children are always walked to termination).
@@ -691,7 +702,8 @@ resolution/HTTP surface or the side effects on target processes' schedules.
     message to be re-signed as `ans104@1.0` and retried once; an already-`ans104`
     `422` fails.
 17. **Remote routing:** when driving a scheduled slot, if a route resolves the
-    `/<target>/push&slot=<n>` path to another node the device POSTs to that node;
+    `/<target>/push&slot=<n>&max-depth=<m>` path to another node the device
+    POSTs to that node;
     if no route matches or the route is self, it pushes locally; a result-schedule
     `307` redirect re-signs and POSTs to the redirect location.
 18. **Source authentication (failure-closed):** a base process that does not
@@ -701,8 +713,9 @@ resolution/HTTP surface or the side effects on target processes' schedules.
     not crash the push; it returns a `compute-failed` error carrying the process
     id, slot, and reason.
 20. **No cycle detection:** repeated/self-addressed outbox messages are each
-    scheduled once and (unless bounded by `max-depth`) pushed; the device adds
-    no cycle detection — termination is via empty outboxes or `max-depth`.
+    scheduled once and (unless bounded, §6.3) pushed; the device adds no cycle
+    detection — termination is via empty outboxes or the bound of `max-depth`
+    and the node's `push-max-depth`.
 21. **Compute hook idempotence:** `process@1.0/compute` with a truthy `push` on a
     **fresh** slot fires exactly one async push for that slot (`push = N` ⇒
     `max-depth = N`); recomputing the same slot is a cache hit that does not
