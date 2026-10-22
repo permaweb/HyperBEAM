@@ -2257,7 +2257,7 @@ raw_published_index_id_test_parallel() ->
 
 head_raw_ans104_invalid_tags_test() ->
     Tags = [{<<"Content-Type">>, <<"application/json">>}],
-    EncodedTags = ar_bundles:encode_tags(Tags),
+    EncodedTags = ar_bundles_avro:encode(Tags),
     TagsWithoutTerminator = binary:part(EncodedTags, 0, byte_size(EncodedTags) - 1),
     Body = <<"{\"$schema\":\"https://example.invalid/schema\"}">>,
     DataItem =
