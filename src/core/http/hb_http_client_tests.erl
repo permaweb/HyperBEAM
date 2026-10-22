@@ -156,6 +156,41 @@ hackney_bad_peer_test_() ->
         {ok, 200, _, _} = hb_http_client:request(ValidArgs, Opts)
     end}.
 
+%% @doc A reply with a malformed chunk size is an error, and its connection is
+%% closed rather than kept checked out of the pool.
+hackney_bad_chunk_test() ->
+    application:ensure_all_started(hb),
+    {ok, Listener} =
+        gen_tcp:listen(0, [binary, {active, false}, {ip, {127, 0, 0, 1}}]),
+    {ok, Port} = inet:port(Listener),
+    Test = self(),
+    spawn_link(
+        fun() ->
+            {ok, Socket} = gen_tcp:accept(Listener),
+            {ok, _} = gen_tcp:recv(Socket, 0),
+            ok =
+                gen_tcp:send(
+                    Socket,
+                    <<"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\nzz\r\n">>
+                ),
+            Test ! {peer, gen_tcp:recv(Socket, 0, 5000)}
+        end
+    ),
+    ?assertMatch(
+        {error, _},
+        hb_http_client:request(
+            #{
+                peer => <<"http://127.0.0.1:", (hb_util:bin(Port))/binary>>,
+                path => <<"/">>,
+                method => <<"GET">>,
+                headers => #{},
+                body => <<>>
+            },
+            #{ <<"http-client">> => hackney, <<"http-retry">> => 0 }
+        )
+    ),
+    receive {peer, Read} -> ?assertEqual({error, closed}, Read) end.
+
 hackney_post_test_() ->
     {timeout, 30, fun() ->
         application:ensure_all_started(hb),
