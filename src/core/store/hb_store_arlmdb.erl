@@ -1280,9 +1280,9 @@ invalid_container_test() ->
 
 %% @doc Retained chunks serve repeated reads without the weave: a key looked
 %% up once answers again through a store whose routes are gone, while an
-%% indexed key whose leaf chunk was never fetched cannot. The second key's
-%% unavailability reaches the store manager, which reports an exhausted
-%% store list as its terminal miss.
+%% indexed key whose leaf chunk was never fetched cannot. The read of the
+%% second key raises, as the store has no route to fetch its chunk, so the
+%% store manager returns a failure, not a miss.
 chunk_retention_test_() ->
     {timeout, 120, fun chunk_retention/0}.
 chunk_retention() ->
@@ -1297,7 +1297,7 @@ chunk_retention() ->
     Fresh =
         <<"~arweave@2.9/offset="
             "KgADUJYkEY0dbUKTI3aDZy2c_nb4WLh7VDh2ZHrb1yY">>,
-    ?assertMatch({error, _}, hb_store:read([Unrouted], Fresh, #{})),
+    ?assertMatch({failure, _}, hb_store:read([Unrouted], Fresh, #{})),
     ?assertMatch(
         {ok, #{ <<"start">> := 381838173656091 }},
         hb_store:read([Store], Fresh, #{})
