@@ -542,7 +542,7 @@ do_gun_request(PID, Args, Opts) ->
 await_response(Args, Opts) ->
 	#{ pid := PID, stream_ref := Ref, timer := Timer, limit := Limit,
 			counter := Counter, acc := Acc, method := Method, path := Path } = Args,
-	case gun:await(PID, Ref, inet:timeout(Timer)) of
+	case gun_await(PID, Ref, Timer) of
 		{response, fin, Status, Headers} ->
 			upload_metric(Args, Opts),
 			?event(http, {gun_response, {status, Status}, {priv_headers, Headers}, {body, none}}),
@@ -602,6 +602,16 @@ await_response(Args, Opts) ->
 			log(warning, gun_await_unknown, Args, Response, Opts),
 			Response
 	end.
+
+%% @doc Return the next result of `gun:await/3' for the request. A `1xx' reply
+%% comes before the reply, so we wait for the next result. Trailers come after
+%% the reply's data and end it, so we return `{data, fin, <<>>}'.
+gun_await(PID, Ref, Timer) ->
+    case gun:await(PID, Ref, inet:timeout(Timer)) of
+        {inform, _Status, _Headers} -> gun_await(PID, Ref, Timer);
+        {trailers, _Trailers} -> {data, fin, <<>>};
+        Message -> Message
+    end.
 
 %% @doc Debug `http` state logging.
 log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) ->

@@ -252,7 +252,16 @@ hackney_post_test_() ->
 
 gun_final_frame_limit_test() ->
     {ok, Peer, Server} = hb_mock_server:start([
-        {"/body", body, {200, <<"four">>}}
+        {"/body", body, {200, <<"four">>}},
+        {"/inform", inform,
+            fun(#{ <<"pid">> := Pid, <<"streamid">> := StreamID }) ->
+                cowboy_req:inform(
+                    103,
+                    #{ <<"link">> => <<"</a>; rel=preload">> },
+                    #{ pid => Pid, streamid => StreamID }
+                ),
+                {200, <<"four">>}
+            end}
     ]),
     try
         ?assertEqual(
@@ -260,6 +269,14 @@ gun_final_frame_limit_test() ->
             hb_http_client:request(#{
                 peer => Peer, path => <<"/body">>, method => <<"GET">>,
                 headers => #{}, body => <<>>, limit => 3
+            }, #{ <<"http-client">> => gun, <<"protocol">> => http1 })
+        ),
+        % The peer sends `103' before its reply: the request returns the reply.
+        ?assertMatch(
+            {ok, 200, _, <<"four">>},
+            hb_http_client:request(#{
+                peer => Peer, path => <<"/inform">>, method => <<"GET">>,
+                headers => #{}, body => <<>>
             }, #{ <<"http-client">> => gun, <<"protocol">> => http1 })
         )
     after
