@@ -66,15 +66,29 @@ int erl_term_to_wasm_val(wasm_val_t* val, ei_term* term) {
     DRV_DEBUG("Converting erl term to wasm val. Term: %d. Size: %d", term->value.i_val, term->size);
     switch (val->kind) {
         case WASM_I32:
+            if(term->ei_type != ERL_SMALL_INTEGER_EXT
+                    && term->ei_type != ERL_INTEGER_EXT) {
+                return -1;
+            }
             val->of.i32 = (int) term->value.i_val;
             break;
         case WASM_I64:
+            if(term->ei_type != ERL_SMALL_INTEGER_EXT
+                    && term->ei_type != ERL_INTEGER_EXT) {
+                return -1;
+            }
             val->of.i64 = (long) term->value.i_val;
             break;
         case WASM_F32:
+            if(term->ei_type != ERL_FLOAT_EXT) {
+                return -1;
+            }
             val->of.f32 = (float) term->value.d_val;
             break;
         case WASM_F64:
+            if(term->ei_type != ERL_FLOAT_EXT) {
+                return -1;
+            }
             val->of.f64 = term->value.d_val;
             break;
         default:

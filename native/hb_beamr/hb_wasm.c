@@ -307,6 +307,15 @@ void wasm_execute_function(void* raw) {
     const wasm_valtype_vec_t* param_types = wasm_functype_params(func_type);
     const wasm_valtype_vec_t* result_types = wasm_functype_results(func_type);
 
+    // Refuse a call whose argument count is not the one the signature takes.
+    // Building the value vector reads one decoded term per parameter, so a
+    // shorter list would read past its end and end the node's VM.
+    if (proc->current_args_length != (int) param_types->size) {
+        send_error(proc, "Function %s takes %d parameters", function_name, (int) param_types->size);
+        drv_unlock(proc->is_running);
+        return;
+    }
+
     wasm_val_vec_t args, results;
     wasm_val_vec_new_uninitialized(&args, param_types->size);
     args.num_elems = param_types->num_elems;
