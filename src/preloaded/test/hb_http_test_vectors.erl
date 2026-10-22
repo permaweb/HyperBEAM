@@ -4,8 +4,8 @@
 %%% `hb_store_remote_node' store, through a `~relay@1.0' node, from a node that
 %%% received it by POST, from a second or third node that downloaded and cached
 %%% it, through a `~tunnel@1.0' broker to which the primary connects, and
-%%% through a broker to which a node that reads the primary through its store
-%%% connects. Each path is read with every codec, both `accept-bundle' settings
+%%% through the same broker to a node that reads the primary through its
+%%% store. Each path is read with every codec, both `accept-bundle' settings
 %%% and both `http-only-result' settings, from volatile, LMDB and filesystem
 %%% primaries. Each read is checked against the message that was written: its
 %%% values and types, its signatures and its IDs.
@@ -795,16 +795,20 @@ options(Store) ->
 
 %% @doc Start the primary node and prepare each case with its host and options:
 %% write each message to its cache, or what each execution reads. A case that
-%% fails to prepare becomes a failing test, not a failed setup.
+%% fails to prepare becomes a failing test, not a failed setup. The cases that
+%% read through a tunnel share one broker, to which the primary stays
+%% connected.
 primary(Prepare, Cases, Store) ->
     Opts =
         (options(Store))#{
             <<"priv-wallet">> => ar_wallet:new(),
             <<"priv-second-wallet">> => ar_wallet:new(),
-            <<"priv-peer-wallets">> => [ar_wallet:new(), ar_wallet:new()]
+            <<"priv-peer-wallets">> => [ar_wallet:new(), ar_wallet:new()],
+            <<"priv-test-broker">> => start_broker()
         },
     hb_store:start(maps:get(<<"store">>, Opts)),
     Host = hb_http_server:start_node(Opts),
+    connect(Opts),
     Prepared =
         [
             {element(1, Case), Prepare(Case, Host, Opts)}
@@ -845,7 +849,11 @@ prepare_execution({_Name, Status, Request}, Host, Opts) ->
     catch Class:Reason:Stacktrace -> {error, {Class, Reason, Stacktrace}}
     end.
 
-stop_primary({_Host, Opts, _Prepared}) -> stop_node(Opts).
+stop_primary({_Host, Opts, _Prepared}) ->
+    {_, BrokerOpts} = broker(Opts),
+    disconnect(Opts),
+    stop_node(BrokerOpts),
+    stop_node(Opts).
 
 stop_node(Opts) ->
     cowboy:stop_listener(
@@ -1002,20 +1010,17 @@ exercise(relay, {Host, PrimaryOpts}, {ID, _}, Expected, Transport, ClientOpts) -
         end
     );
 exercise(tunnel, {_, OriginOpts}, Message, Expected, Transport, ClientOpts) ->
-    % The client reads the message from a broker, as a direct read, and the
+    % The client reads the message from the broker, as a direct read, and the
     % broker carries the request to the origin.
-    with_tunnel(
-        OriginOpts,
-        fun(Broker, Address) ->
-            exercise(
-                direct,
-                Broker,
-                Message,
-                Expected,
-                Transport#{ headers => route(#{}, Address, ClientOpts) },
-                ClientOpts
-            )
-        end
+    exercise(
+        direct,
+        broker(OriginOpts),
+        Message,
+        Expected,
+        Transport#{
+            headers => route(#{}, hb_opts:address(OriginOpts), ClientOpts)
+        },
+        ClientOpts
     );
 exercise(tunnel_remote, {Host, PrimaryOpts}, {ID, _} = Message, Expected,
         Transport, ClientOpts) ->
@@ -1073,23 +1078,20 @@ exercise(Path, {Host, PrimaryOpts}, {ID, _} = Message, Expected, Transport,
 execute(direct, {Host, _}, Request, Status, Transport, ClientOpts) ->
     send(Host, Request, Status, Transport, ClientOpts);
 execute(tunnel, {Host, OriginOpts}, Request, Status, Transport, ClientOpts) ->
-    with_tunnel(
-        OriginOpts,
-        fun({BrokerHost, _}, Address) ->
-            validate(
-                send(Host, Request, Status, Transport, ClientOpts),
-                send(
-                    BrokerHost,
-                    Request,
-                    Status,
-                    Transport#{
-                        headers => route(Request, Address, ClientOpts)
-                    },
-                    ClientOpts
-                ),
-                ClientOpts
-            )
-        end
+    {BrokerHost, _} = broker(OriginOpts),
+    validate(
+        send(Host, Request, Status, Transport, ClientOpts),
+        send(
+            BrokerHost,
+            Request,
+            Status,
+            Transport#{
+                headers =>
+                    route(Request, hb_opts:address(OriginOpts), ClientOpts)
+            },
+            ClientOpts
+        ),
+        ClientOpts
     );
 execute(tunnel_remote, {Host, PrimaryOpts}, Request, Status, Transport,
         ClientOpts) ->
@@ -1160,15 +1162,12 @@ with_node(PrimaryOpts, Options, Fun) ->
     after stop_node(Opts)
     end.
 
-%% @doc Run `Fun' with a broker that has the `tunnel@1.0' request hook, to which
-%% the origin connects. `Fun' is given the broker's host and options, and the
-%% origin's address. A broker routes a request by its `host' only while the
-%% origin is connected, so we wait for the origin to register. The origin
-%% disconnects before the broker stops.
-with_tunnel(OriginOpts, Fun) ->
-    with_node(
-        OriginOpts,
+%% @doc Start a broker with the `tunnel@1.0' request hook, and return its host
+%% and options.
+start_broker() ->
+    Opts =
         (options())#{
+            <<"priv-wallet">> => ar_wallet:new(),
             <<"on">> =>
                 #{
                     <<"request">> =>
@@ -1178,79 +1177,74 @@ with_tunnel(OriginOpts, Fun) ->
                         }
                 }
         },
-        fun(BrokerHost, BrokerOpts) ->
-            Connect =
-                fun(Workers) ->
-                    {ok, _} =
-                        hb_ao:resolve(
-                            #{ <<"device">> => <<"tunnel@1.0">> },
-                            #{
-                                <<"path">> => <<"connect">>,
-                                <<"peer">> => BrokerHost,
-                                <<"workers">> => Workers
-                            },
-                            OriginOpts
-                        )
-                end,
-            Address = hb_opts:address(OriginOpts),
-            Connect(1),
-            try
-                hb_util:until(
-                    fun() ->
-                        {ok, Status} =
-                            hb_http:get(
-                                BrokerHost,
-                                <<"/~tunnel@1.0/status">>,
-                                BrokerOpts
-                            ),
-                        hb_ao:get(
-                            <<"registered/", Address/binary>>,
-                            Status,
-                            0,
-                            BrokerOpts
-                        ) > 0
-                    end,
-                    fun() -> receive after 10 -> 1 end end,
-                    0
-                ),
-                Fun({BrokerHost, BrokerOpts}, Address)
-            after
-                Connect(0),
-                % A worker that waits on the broker with a registration stops
-                % only once the registration ends, and a broker that stops
-                % waits 4 seconds for an open HTTP/2 stream. Until the worker
-                % stops, we send it a request that expires at once, which ends
-                % its registration.
-                hb_util:until(
-                    fun() ->
-                        hb_http:get(
-                            BrokerHost,
-                            #{
-                                <<"path">> => <<"/~meta@1.0/info/address">>,
-                                <<"tunnel-target">> => Address,
-                                <<"tunnel-timeout">> => 0
-                            },
-                            BrokerOpts
-                        ),
-                        {ok, Status} =
-                            hb_ao:resolve(
-                                #{ <<"device">> => <<"tunnel@1.0">> },
-                                #{ <<"path">> => <<"status">> },
-                                OriginOpts
-                            ),
-                        hb_maps:get(
-                            <<"retiring-client-workers">>,
-                            Status,
-                            0,
-                            OriginOpts
-                        ) == 0
-                    end,
-                    fun() -> receive after 10 -> 1 end end,
-                    0
-                )
-            end
-        end
+    hb_store:start(maps:get(<<"store">>, Opts)),
+    {hb_http_server:start_node(Opts), Opts}.
+
+%% @doc Return the host and options of the suite's broker.
+broker(Opts) -> maps:get(<<"priv-test-broker">>, Opts).
+
+%% @doc Connect a node to the suite's broker with one worker. A broker routes a
+%% request by its `host' only while the origin is connected, so we wait for the
+%% origin to register.
+connect(Opts) ->
+    {BrokerHost, BrokerOpts} = broker(Opts),
+    Address = hb_opts:address(Opts),
+    resize(BrokerHost, 1, Opts),
+    hb_util:until(
+        fun() ->
+            {ok, Status} =
+                hb_http:get(BrokerHost, <<"/~tunnel@1.0/status">>, BrokerOpts),
+            hb_ao:get(<<"registered/", Address/binary>>, Status, 0, BrokerOpts)
+                > 0
+        end,
+        fun() -> receive after 10 -> 1 end end,
+        0
     ).
+
+%% @doc Disconnect a node from the suite's broker. A worker that waits on the
+%% broker with a registration stops only once the registration ends, and a
+%% broker that stops waits 4 seconds for an open HTTP/2 stream. Until the worker
+%% stops, we send it a request that expires at once, which ends its
+%% registration.
+disconnect(Opts) ->
+    {BrokerHost, BrokerOpts} = broker(Opts),
+    Address = hb_opts:address(Opts),
+    resize(BrokerHost, 0, Opts),
+    hb_util:until(
+        fun() ->
+            hb_http:get(
+                BrokerHost,
+                #{
+                    <<"path">> => <<"/~meta@1.0/info/address">>,
+                    <<"tunnel-target">> => Address,
+                    <<"tunnel-timeout">> => 0
+                },
+                BrokerOpts
+            ),
+            {ok, Status} =
+                hb_ao:resolve(
+                    #{ <<"device">> => <<"tunnel@1.0">> },
+                    #{ <<"path">> => <<"status">> },
+                    Opts
+                ),
+            hb_maps:get(<<"retiring-client-workers">>, Status, 0, Opts) == 0
+        end,
+        fun() -> receive after 10 -> 1 end end,
+        0
+    ).
+
+%% @doc Resize the pool of workers with which a node connects to a broker.
+resize(BrokerHost, Workers, Opts) ->
+    {ok, _} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"tunnel@1.0">> },
+            #{
+                <<"path">> => <<"connect">>,
+                <<"peer">> => BrokerHost,
+                <<"workers">> => Workers
+            },
+            Opts
+        ).
 
 %% @doc Return the headers that ask a broker for an origin. An unsigned request
 %% gives the origin's address as its `tunnel-target'. A node keeps only the keys
@@ -1265,7 +1259,8 @@ route(Request, Address, Opts) ->
     end.
 
 %% @doc Run `Fun' with an origin that has no messages of its own: it reads them
-%% from the primary through its store.
+%% from the primary through its store. The origin is connected to the suite's
+%% broker while `Fun' runs.
 with_remote_origin(Host, PrimaryOpts, Fun) ->
     Origin = #{ <<"store">> := Store } = options(),
     with_node(
@@ -1279,9 +1274,15 @@ with_remote_origin(Host, PrimaryOpts, Fun) ->
                         <<"node">> => Host,
                         <<"access">> => [<<"read">>]
                     }
-                ]
+                ],
+            <<"priv-test-broker">> => broker(PrimaryOpts)
         },
-        Fun
+        fun(OriginHost, OriginOpts) ->
+            connect(OriginOpts),
+            try Fun(OriginHost, OriginOpts)
+            after disconnect(OriginOpts)
+            end
+        end
     ).
 
 %% @doc The transport as a query string. A remote store builds its own request
