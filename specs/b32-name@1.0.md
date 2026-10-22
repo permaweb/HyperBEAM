@@ -56,9 +56,9 @@ decoded ID, or reports not-found so the next resolver may try.
   identity device (`message@1.0`). This prevents binding the device onto a path or
   mutating a message from being swallowed and misinterpreted as a name. The
   exclude set is **exactly** `[keys, set]` — do **not** add `set-path`/`remove`
-  (the reference and the sibling `name@1.0` exclude only these two), and do **not**
-  exclude ordinary data-like keys, because every other key is exactly what the
-  handler is meant to receive.
+  (the reference excludes only these two; the sibling `name@1.0` also excludes
+  `committers`), and do **not** exclude ordinary data-like keys, because every
+  other key is exactly what the handler is meant to receive.
 - **Message shape:** the device reads **only the key**. It does not read the base
   message, the request message, or node options. The base and request messages
   MAY be anything (including empty); their contents do not affect the result.
@@ -229,10 +229,11 @@ same bytes is `4NUOJS5TW6XTFJBQ47DQK6AK7N6TQYR3UXGEMKQ5Z5VMUNHXPHYA====`.)
   message it addresses (vs. using the ID verbatim) is the consumer's choice — for
   `name@1.0`, governed by its `load` request flag — and is outside this device's
   contract.
-- **Base identity for other keys.** Because the device excludes `keys`/`set` (and
-  installs no behaviour for the commitment surface `id`/`commit`/`verify`),
-  binding `~b32-name@1.0` onto a message and resolving any of those keys resolves
-  under `message@1.0` semantics for that message, not under this device.
+- **Base identity for other keys.** Because the device excludes `keys`/`set`,
+  binding `~b32-name@1.0` onto a message and resolving either of those keys
+  resolves under `message@1.0` semantics for that message. The commitment
+  surface `id`/`commit`/`verify` is not excluded: those keys reach this
+  device's default handler, which returns the not-found result.
 
 ## 10. Conformance (normative checklist)
 
