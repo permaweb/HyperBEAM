@@ -261,6 +261,15 @@ gun_final_frame_limit_test() ->
                     #{ pid => Pid, streamid => StreamID }
                 ),
                 {200, <<"four">>}
+            end},
+        {"/upgrade", upgrade,
+            fun(#{ <<"pid">> := Pid, <<"streamid">> := StreamID }) ->
+                cowboy_req:inform(
+                    101,
+                    #{ <<"upgrade">> => <<"websocket">> },
+                    #{ pid => Pid, streamid => StreamID }
+                ),
+                {200, <<"four">>}
             end}
     ]),
     try
@@ -276,6 +285,15 @@ gun_final_frame_limit_test() ->
             {ok, 200, _, <<"four">>},
             hb_http_client:request(#{
                 peer => Peer, path => <<"/inform">>, method => <<"GET">>,
+                headers => #{}, body => <<>>
+            }, #{ <<"http-client">> => gun, <<"protocol">> => http1 })
+        ),
+        % The peer sends `101' with `upgrade: websocket', which the request
+        % does not ask for: the request returns an error.
+        ?assertMatch(
+            {error, {upgrade, [<<"websocket">>], _}},
+            hb_http_client:request(#{
+                peer => Peer, path => <<"/upgrade">>, method => <<"GET">>,
                 headers => #{}, body => <<>>
             }, #{ <<"http-client">> => gun, <<"protocol">> => http1 })
         )
