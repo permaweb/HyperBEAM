@@ -201,17 +201,27 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
         },
     % Decide where the request goes and whether the host was chosen by the
     % node. A relative `relay-route' the node resolves through its own routes
-    % is trusted. A request `peer' or absolute `relay-path' is checked, and so
-    % is an absolute `relay-route', which the router sends to its own URL; a
-    % relative `relay-path' gives no host and is routed by `hb_http:request/2',
-    % which fails closed when no route matches.
+    % is trusted. A request `peer' is checked, and so is an absolute
+    % `relay-route', which the router sends to its own URL. With no peer,
+    % `hb_http:request/2' routes the message by its `route-path', else its
+    % `path' (the `relay-path'): an absolute one is checked, and a relative one
+    % gives no host and fails closed when no route matches.
+    RoutePath = hb_maps:get(<<"route-path">>, TargetMod5, RelayPath, Opts),
     {RelayPeer, Destination, RouteOpts} =
         case RelayRoute of
             not_found ->
-                {RequestPeer, relay_destination(RequestPeer, RelayPath), HTTPOpts};
+                {RequestPeer, relay_destination(RequestPeer, RoutePath), HTTPOpts};
             _ ->
-                {Node, NodeOpts} = route_node(RelayRoute, RelayMethod, HTTPOpts),
-                {Node, relay_destination(not_found, RelayRoute), NodeOpts}
+                case route_node(RelayRoute, RelayMethod, HTTPOpts) of
+                    {not_found, NodeOpts} ->
+                        {
+                            not_found,
+                            relay_destination(not_found, RoutePath),
+                            NodeOpts
+                        };
+                    {Node, NodeOpts} ->
+                        {Node, relay_destination(not_found, RelayRoute), NodeOpts}
+                end
         end,
     RequestOpts = RouteOpts#{ <<"http-redirects">> => 0 },
     case is_blocked_host(Destination, Opts) of
@@ -246,9 +256,9 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
     end.
 
 %% @doc The host the relay will contact: the `peer' when the request gives one,
-%% otherwise an absolute `relay-path' or `relay-route'. A relative path gives
-%% no host, so the node routes it through its own routes and there is nothing
-%% for `is_blocked_host/2' to vet: return `undefined'.
+%% otherwise an absolute `route-path', `relay-path' or `relay-route'. A relative
+%% path gives no host, so the node routes it through its own routes and there
+%% is nothing for `is_blocked_host/2' to vet: return `undefined'.
 relay_destination(not_found, <<"http://", _/binary>> = Path) -> Path;
 relay_destination(not_found, <<"https://", _/binary>> = Path) -> Path;
 relay_destination(not_found, _RelativePath) -> undefined;
@@ -655,6 +665,17 @@ relay_absolute_internal_blocked_test() ->
             Node,
             <<"/~meta@1.0/info/address">>,
             #{ <<"path">> => <<Target/binary, "~meta@1.0/info/address">> },
+            #{}
+        )
+    ),
+    % The same URL as a `route-path' is refused too.
+    ?assertEqual(
+        {error, blocked_host},
+        relay_call(
+            #{
+                <<"route-path">> => <<Target/binary, "~meta@1.0/info/address">>,
+                <<"relay-path">> => <<"/~meta@1.0/info/address">>
+            },
             #{}
         )
     ).
