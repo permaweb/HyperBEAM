@@ -40,31 +40,35 @@ pins the wire format exactly.
 - **Dispatch shape:** codec. The device answers the codec keys `from` (rich →
   TABM) and `to` (TABM → rich), plus helper keys `encode-types`,
   `decode-types`, and the commitment passthrough keys `commit` / `verify`.
-- **`from` / `to`** each take the value to convert as the base and an optional
-  request carrying `encode-types` and `bundle` (see §6).
+- **`from` / `to`** each take the value to convert as the base; `from` reads an
+  optional request carrying `encode-types` and `bundle` (see §6).
 
 ## 4. Resolved keys (normative)
 
 ### `from` — rich → TABM
 - **Reads:** the value; optional `encode-types` list in the request (default:
-  all supported types — `integer`, `float`, `atom`, `list`); optional `bundle`
-  flag (affects link handling, §6).
+  `integer`, `float`, `atom`, `list`; `binary` is typed only when listed);
+  optional `bundle` flag (affects link handling, §6).
 - **Behaviour:**
   - A **binary** value converts to itself.
   - A **map** converts field-by-field:
-    1. Drop **private** keys and the regenerated keys `unsigned_id` and
-       `content-digest`. Preserve a `commitments` field **verbatim** — it is
-       never re-encoded by this codec.
-    2. Process keys in **ascending sorted order** (byte-wise on the normalised,
-       lower-cased key names) so the output is deterministic.
-    3. Binary values pass through. Nested maps/lists recurse via `from`.
-       Integer/float/atom/list values whose type is in `encode-types` are
+    1. Drop **private** keys and the regenerated key `unsigned_id`. Preserve a
+       `commitments` field **verbatim** — it is never re-encoded by this codec.
+    2. Process keys in **ascending sorted order** (byte-wise on the normalised
+       key names; `from` keeps their case, and `to` lowercases every key but
+       private keys, the keys in their values, and the IDs in `commitments`)
+       so the output is deterministic.
+    3. Binary values pass through, unless `binary` is in `encode-types` and the
+       binary is not UTF-8 text. Nested maps/lists recurse via `from`.
+       Integer/float/atom/binary values whose type is in `encode-types` are
        encoded to a binary (see §5) and the key→type pair is recorded; a value
-       whose type is **not** in `encode-types` passes through in its rich form.
+       whose type is **not** in `encode-types` passes through in its rich form,
+       except an integer whose magnitude is greater than the request's
+       `max-integer`.
     4. If any types were recorded, emit an **`ao-types`** field: an SF
-       **dictionary** whose members are `escaped-key` ⇒ SF-string(type-name)
-       (a **double-quoted** string, e.g. `n="integer"`), ordered by sorted key.
-       `escaped-key` is the key percent-encoded per §5.
+       **dictionary** with a member for each type, whose value is an inner list
+       of the keys of that type as SF strings (e.g. `integer=("n")`), the types
+       and the keys of each type ordered by their bytes (§5).
   - A **list** converts by first turning it into a numbered message (`1`,`2`,…)
     and encoding that as a map; then, if `list` ∈ `encode-types` or the encoded
     map already carries an `ao-types`, the result is a map with `.` ⇒ `list`
@@ -72,7 +76,7 @@ pins the wire format exactly.
 - **Returns:** `{ok, TABM}`.
 
 ### `to` — TABM → rich
-- **Reads:** the TABM; optional request (same shape).
+- **Reads:** the TABM.
 - **Behaviour:** Parse `ao-types` to a map of key→type. For each field other than
   `ao-types`: a binary whose key has a recorded type is decoded per that type
   (§5); a nested map/list recurses via `to`; any already-rich value passes
@@ -86,37 +90,41 @@ pins the wire format exactly.
   Both operate on the request `body` (default: the base).
 
 ### `commit` / `verify`
-- Delegate to **`message@1.0`** with `commitment-device` forced to `httpsig@1.0`,
-  and return its result (see "Commit/verify (anti-recursion)" below and the
-  `httpsig@1.0` spec for the leaf crypto). `message@1.0` does the commitment
-  selection/merge; do NOT call `httpsig@1.0` directly (its `verify` needs the
-  commitment fields merged in first).
+- `commit` delegates to **`message@1.0`** with `commitment-device` forced to
+  `httpsig@1.0`, and returns its result (see "Commit/verify (anti-recursion)"
+  below and the `httpsig@1.0` spec for the leaf crypto). `verify` calls
+  `httpsig@1.0`'s `verify` with the base and the request, and returns its
+  result.
 
 ## 5. Data formats & encodings (normative — byte-exact)
 
-### Key escaping (for `ao-types` dictionary keys)
-Percent-encoding: bytes `a`–`z`, `0`–`9`, and the literals `. - _ / ? &` are
-emitted as-is; **every other byte** (including all uppercase letters) is emitted
-as `%` followed by **two lowercase hex digits**. Decoding reverses this. (This
-exists so keys are valid lowercase HTTP header names on the wire.)
+### Key escaping (for the keys in `ao-types`)
+Each key is an SF **string**: bytes `0x20`–`0x7e` are emitted as-is, except `"`
+and `\`, which are emitted as `\"` and `\\`. `from` throws
+`{invalid_ao_types_key, Key}` for a typed key with any other byte. Decoding
+reverses this, and `to` lowercases the key.
 
 ### `ao-types` field
-An SF **dictionary**: members are `escaped-key` ⇒ a member value that is an SF
-**string** (a **double-quoted** string) naming the type — e.g. `n="integer"`,
-`flag="atom"` — where the type name is `integer`, `float`, `atom`, `list`, or an
-`empty-*` marker (§below). Members are ordered by sorted (unescaped) key and
-serialised joined by `, ` (comma-space). A key absent from `ao-types` is a plain
-binary. (Note: the type name is carried as a quoted SF *string*, NOT a bare SF
-token — the quotes are part of the content-addressed bytes.)
+An SF **dictionary** with a member for each type: the type name ⇒ an inner list
+of the keys of that type, each an SF **string** (a **double-quoted** string) —
+e.g. `integer=("1" "n"), list=(".")` — where the type name is `atom`, `binary`,
+`float`, `integer`, or `list`. Members are ordered by type name and the keys of
+each member by their bytes; members are joined by `, ` (comma-space) and keys by
+a space. A key absent from `ao-types` is a plain binary, which `to` decodes to a
+link if it starts with `ao:`, except under `path`, `hashpath`, a private key or
+in `commitments`. (Note: the keys are quoted SF *strings* — the quotes are part
+of the content-addressed bytes.)
 
 ### Per-type value encoding (`from`)
 - **integer** → SF integer (decimal text). Type name `integer`.
-- **float** → the platform default float-to-text form: a fixed-width ~20-
-  significant-digit scientific notation (equivalent to Erlang's `float_to_binary/1`
-  default). Examples (normative): `3.14` → `3.14000000000000012434e+00`, `2.0` →
-  `2.00000000000000000000e+00`, `100.0` → `1.00000000000000000000e+02`, `0.1` →
-  `1.00000000000000005551e-01`. Type name `float`. (This is reproducible and
-  content-addressable; it is NOT the shortest-round-trip form.)
+- **float** → an SF Decimal of the float rounded to three places (to the even
+  digit when halfway), with no trailing zero after the first fractional digit
+  and at most 12 integer digits (a larger float gives the largest Decimal of its
+  sign), then the parameter `binary64`: the float's 8 IEEE 754 bytes,
+  big-endian, as base64url with no padding, in double quotes. Examples
+  (normative): `0.0625` → `0.062;binary64="P7AAAAAAAAA"`, `0.1` →
+  `0.1;binary64="P7mZmZmZmZo"`. Type name `float`. (This is reproducible and
+  content-addressable.)
 - **atom** → SF token of the atom's name (e.g. atom `ok` → token `ok`). Type name
   `atom`. On decode, the token is interned back to the atom; an atom name
   the decoder does not already know is an error.
@@ -124,56 +132,49 @@ token — the quotes are part of the content-addressed bytes.)
   "Lists as numbered messages" below), whether it is the whole operand OR the
   value of a map field. There is **NO** separate inline-list form emitted by
   `from`: a list-valued field `l => [E1,E2,…]` becomes a nested message
-  `l => #{ "1" => from(E1), "2" => from(E2), …, "ao-types" => "...,.=\"list\"" }`,
+  `l => #{ "1" => from(E1), "2" => from(E2), …, "ao-types" => "…, list=(\".\")" }`,
   recursively, all the way down. Type name (on the *field carrying the numbered
   sub-message*, when that field itself is what `ao-types` annotates) is the
-  numbered-message’s own `.`-marker, not a `key="list"` entry on the parent.
-  (Note: a standalone SF-list form `(ao-type-<type>) <enc>` exists only as a
-  **decode-robustness** path — `to`/`decode` MUST accept it — but `from` MUST NOT
-  emit it. The reference never produces it.)
-- **binary** values are never typed (no `ao-types` entry).
+  numbered-message’s own `.`-marker, not a `list=("key")` entry on the parent.
+  (Note: `to` refuses a standalone SF-list form `(ao-type-<type>) <enc>`, and
+  `from` MUST NOT emit it.)
+- **binary** → typed only when `binary` is in `encode-types` and the value is
+  not UTF-8 text: base64url with no padding. Type name `binary`.
 
 ### Per-type value decoding (`to`)
-Inverse of the above: integer via SF item parse; float via float text parse;
-atom via SF token parse then intern; list via SF list parse, decoding any
-`(ao-type-T) V` element recursively and reading bare elements as SF bare items.
+Inverse of the above, refusing any other encoding (§8): integer from decimal
+digits with no leading zero and `-` before any value but zero; float from its
+`binary64` parameter, whose rounding must be the Decimal; atom via SF token
+parse then intern; binary from base64url, refused if UTF-8 text; `list` only as
+the type of the key `.`.
 
 ### Empty / implicit values
-A key may appear **only** in `ao-types` with a marker type `empty-binary` /
-`empty-list` / `empty-message` and **no corresponding value field**. Such keys are
-the message's **implicit keys**. Confirmed reference behaviour (validated by blind
-reimplementation): on **decode**, an `empty-*`-typed key with no value field is
-**dropped** — it does NOT appear in the decoded message (e.g. a TABM with
-`x="empty-binary"` and no `x` field decodes to a message without `x`). On
-**encode**, a plain empty binary value (`<<>>`) is **NOT** marked `empty-binary`;
-it passes through as an ordinary (untyped) empty-binary value field. (The exact
-conditions under which `from` emits an `empty-*` marker are not exercised by the
-common path; see Open questions.)
+There are no `empty-*` marker types: an `ao-types` with an `empty-binary`,
+`empty-list` or `empty-message` member does not parse, so `to` keeps it as a key
+of the message and applies no types, and a type for a key with no value is
+refused (§8). On **encode**, a plain empty binary value (`<<>>`) is **NOT**
+typed; it passes through as an ordinary (untyped) empty-binary value field.
 
 ### Lists as numbered messages
 An ordered list is encoded as a message with 1-based numeric string keys
 (`1`,`2`,…) in order, plus `.` ⇒ `list` in `ao-types`. Decoding reverses this,
 restoring element order from the numeric keys.
 
-**`.` marker ordering (normative, byte-load-bearing).** When the `.` ⇒ `list`
-marker is present in `ao-types`, it MUST be the **first** member of the
-serialised dictionary. The SF (RFC 9651) dictionary grammar does not accept `.`
-as a key *start* in a non-leading position — a parser will reject
-`a="integer", .="list"`. Because `.` (byte 0x2E) sorts before all digits and
-letters, simply **including `.` in the same sorted-key ordering** as the other
-members places it first automatically; an implementation MUST NOT append the
-`.` marker after the already-built dictionary (that produces an `ao-types` string
-that fails to re-parse). Sort the full member set (including `.`) together.
+**`.` marker ordering (normative).** The `.` ⇒ `list` marker
+is the member `list=(".")`, placed by its type name as every member is, so it is
+the **last** member: `integer=("1" "2"), list=(".")`.
 
 ## 6. Ordering, freshness & caching
 
-- **Determinism:** key processing and `ao-types` membership are both in sorted
-  key order, so `from` is a pure deterministic function of its input (modulo the
-  float caveat). This determinism is what makes TABM safe to hash.
+- **Determinism:** key processing is in sorted key order, and `ao-types` in
+  sorted type and key order, so `from` is a deterministic function of its input.
+  This determinism is what makes TABM safe to hash.
 - **Links / bundling:** when converting a map, link-valued fields are normalised;
   a request `bundle = true` keeps sub-messages inline (does not offload to
-  links), `bundle = false`/absent may offload large sub-messages to links. This
-  affects representation, not logical content.
+  links), `bundle = false`/absent gives each sub-message (a map or a list) as
+  its link, the value `ao:<ID>`, and writes it to the cache; the `linkify-mode`
+  option `discard` gives the link without the write, and `false` keeps the
+  sub-message inline. This affects representation, not logical content.
 - The codec performs no result caching of its own.
 
 ## 7. Security & authority
@@ -181,15 +182,23 @@ that fails to re-parse). Sort the full member set (including `.`) together.
 - The codec is unprivileged: it transforms representation only. It does not
   sign, verify, or grant authority — except that its `commit`/`verify` keys are
   thin pass-throughs to `httpsig@1.0`.
-- `commitments` are copied verbatim and never altered by `from`/`to`, so a
-  round-trip through the codec cannot silently change a message's signatures.
+- `from` copies `commitments` verbatim; `to` keeps their IDs and decodes each
+  commitment without links, so a round-trip through the codec cannot silently
+  change a message's signatures.
 
 ## 8. Errors
 
-- `unexpected-type` — `to`/decode encountered an `ao-types` type token it does
-  not recognise.
-- atom-decode failure — decoding an `atom` whose name is unknown to the decoder.
-  (Implementations MAY surface this as a generic decode error.)
+- `to` returns
+  `{error, #{<<"status">> => 400, <<"body">> => <<"Invalid AO types.">>}}` for
+  a typed value in any other encoding than §5's (an `atom` whose name is
+  unknown to the decoder included), a type for a key with no binary value, or
+  two keys of `ao-types` that lowercase to one key. `decode-types` returns the
+  same for an `ao-types` in any other encoding than §5's.
+- An `ao-types` type name that `to` does not recognise is no error: the
+  `ao-types` does not parse, so `to` keeps it as a key of the message and
+  applies no types.
+- `from` throws `{invalid_ao_types_key, Key}` for a typed key with a byte
+  outside `0x20`–`0x7e`.
 
 ## 9. Composition
 
@@ -200,23 +209,26 @@ that fails to re-parse). Sort the full member set (including `.`) together.
 
 ## 10. Conformance (normative checklist)
 
-1. A binary-only message round-trips unchanged through `from` then `to`.
-2. `from` of a map with an integer/atom/list value produces a TABM whose value
-   is the SF encoding of §5 and whose `ao-types` dictionary records the key with
-   the correct type as a quoted SF string (`key="<type>"`); `to` reverses it
-   exactly.
-3. `ao-types` is an SF dictionary, ordered by sorted key, members joined by
-   `, `, with keys percent-encoded per §5 (uppercase/non-`[a-z0-9.-_/?&]` bytes
-   → `%xx` lowercase hex) and each value a double-quoted type name.
+1. A binary-only message with lowercase keys and no value that starts with
+   `ao:` round-trips unchanged through `from` then `to`.
+2. `from` of a map with an integer/atom value produces a TABM whose value
+   is the SF encoding of §5 and whose `ao-types` dictionary records the key as a
+   quoted SF string in the member of its type (`<type>=("key")`); `to` reverses
+   it exactly.
+3. `ao-types` is an SF dictionary with a member for each type, ordered by type
+   name, members joined by `, `; each member's value is an inner list of the
+   keys of that type as SF strings, ordered by their bytes and joined by a
+   space.
 4. Integer encoding is SF-integer decimal text; atom encoding is an SF token of
-   the atom name; float encoding is the platform default ~20-digit scientific form
-   (§5). `from` NEVER emits the standalone `(ao-type-<type>)` SF-list form.
+   the atom name; float encoding is the SF Decimal of its rounding to three
+   places with its `binary64` parameter (§5). `from` NEVER emits the standalone
+   `(ao-type-<type>)` SF-list form.
 5. EVERY list — whether the whole operand or the value of a map field — encodes as
    a **numbered sub-message** (`1`,`2`,… keys) with `.` ⇒ `list` in `ao-types`,
-   recursively; decoding restores the original ordered list. (`to` MUST also accept
-   the standalone SF-list form on decode, but it is never produced by `from`.)
-6. Private keys, `unsigned_id`, and `content-digest` are dropped by `from`; a
-   `commitments` field is preserved byte-for-byte.
+   recursively; decoding restores the original ordered list. (`to` refuses the
+   standalone SF-list form, and `from` never produces it.)
+6. Private keys and `unsigned_id` are dropped by `from`; a `commitments` field
+   is preserved byte-for-byte.
 7. `from` is deterministic: the same rich message always yields byte-identical
    TABM (so identical message IDs), floats included (the float form is pinned, §5).
 8. `commit`/`verify` behave exactly as `httpsig@1.0`'s `commit`/`verify`.
@@ -228,23 +240,19 @@ that fails to re-parse). Sort the full member set (including `.`) together.
 - The cryptography of `httpsig@1.0`.
 
 ## Open questions
-- Exact set and spelling of `empty-*` markers (`empty-binary`, `empty-list`,
-  `empty-message`) and the precise conditions under which `from` emits one (the
-  common path never does; a plain `<<>>` passes through untyped).
-- Keys whose bytes contain `/`, `?`, or `&` are NOT escaped by the `ao-types`
-  key-escaping (§5) yet are invalid in the SF dictionary-key grammar, so such a
-  key produces an unparseable `ao-types`. Edge case (such keys are unusual); a
-  future revision should either escape them too or declare them unsupported.
+- None.
 
 ## Commit/verify (anti-recursion)
-`commit`/`verify` delegate to **`message@1.0`** with `commitment-device` forced to
-`httpsig@1.0` — i.e. invoke `message@1.0`'s `commit`/`verify` (which performs
-commitment **selection + field-merge + `type` defaulting**, then forwards the leaf
-crypto to `httpsig@1.0`). Do NOT call `httpsig@1.0`'s `commit`/`verify` *directly*:
-its `verify` needs each commitment's `type`/`signature`/`committed`/keyid merged in
-first, so a direct call on a not-yet-merged base raises `badkey <<"type">>`; only
-`message@1.0` does that selection. Do NOT re-resolve the `commit`/`verify` key on a
+`commit` delegates to **`message@1.0`** with `commitment-device` forced to
+`httpsig@1.0` — i.e. invokes `message@1.0`'s `commit` (which selects the keys to
+commit and defaults `type`, then forwards the leaf crypto to `httpsig@1.0`).
+`verify` calls `httpsig@1.0`'s `verify` *directly*, with the base and the
+request: `message@1.0`'s `verify` calls this codec's `verify` for a commitment
+whose `commitment-device` is `structured@1.0`, with the commitment as the
+request, so calling `message@1.0`'s `verify` from here would call this codec
+again, without end. Do NOT re-resolve the `commit`/`verify` key on a
 `structured@1.0`-deviced message either (that re-enters this codec and recurses
-without bound) — delegate to `message@1.0` (≠ this codec, so no recursion) via the
-`build-device` skill's "delegating to another device without recursion" primitive.
+without bound) — delegate to `message@1.0`'s `commit` or `httpsig@1.0`'s
+`verify` (≠ this codec, so no recursion) via the `build-device` skill's
+"delegating to another device without recursion" primitive.
 </content>
