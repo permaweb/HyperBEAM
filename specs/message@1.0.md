@@ -25,11 +25,10 @@ precondition for almost every other device.
   numbers, or nested messages). The internal representation is out of scope; the
   behaviour below is defined over the message's logical key/value content.
 - **Private keys (normative — exact rule):** a key is **private** iff its binary
-  form **begins with the literal prefix `priv`** (a case-sensitive byte-prefix
-  test). So `priv`, `priv_foo`, `priv.bar`, `priv-x`, `private`, `private.data`,
-  `privacy`, and `privateer` are ALL private (they start with `priv`), while
-  `Private` (capital `P`) is NOT private (the test is case-sensitive) and neither
-  is `pri`. There is **no** lower-casing and **no** delimited-segment logic —
+  form **begins with `priv` in any ASCII case** (a byte-prefix test). So `priv`,
+  `priv_foo`, `priv.bar`, `priv-x`, `private`, `private.data`, `privacy`,
+  `privateer` and `Private` are ALL private (they start with `priv`), while
+  `pri` is NOT private. There is **no** delimited-segment logic —
   it is a plain `priv`-prefix match. Private keys are **never** returned by `get`,
   never listed by `keys`, and never committed.
 - **Commitment:** an entry attesting to (a subset of) a message's keys. A
@@ -63,10 +62,9 @@ precondition for almost every other device.
 - **Reserved keys:** `id`, `commitments`, `committers`, `committed`, `keys`,
   `path`, `set`, `set-path`, `remove`, `verify`, `commit`. (`commit` is reached
   through the commitment surface; see §4.) `path` is the reserved key carrying
-  the current path segment being resolved and is never returned as data by
-  `get`.
+  the current path segment being resolved.
 - **Anti-recursion (normative — a naïve delegation infinite-loops):** the
-  cryptographic keys `id`, `commit`, `verify`, `committed` delegate to a
+  cryptographic keys `id`, `commit`, `verify` delegate to a
   **commitment device** (default `httpsig@1.0`). An implementation MUST perform
   this delegation by invoking the **commitment device directly** (resolve the
   `commit`/`verify` key with the commitment device bound, e.g. against a message
@@ -82,14 +80,14 @@ precondition for almost every other device.
 - **Reads:** the requested key name; the message (`Base`).
 - **Behaviour:** Return the value stored under the key.
   1. If the key is **private** (§2), MUST return error `not_found`.
-  2. Else if the key is present **exactly**, return its value.
-  3. Else perform a **case-insensitive** lookup: lower-case the **requested** key
-     only, then look it up against the message's keys **as stored** — the stored
-     keys are NOT lower-cased (key normalisation coerces a key's type to binary
-     but does not case-fold). Consequently a key stored **lower-case** is matched
-     by a request of any case, whereas a key stored with **upper-case** letters is
-     matched **only** by its exact spelling. On a match return that value.
-  4. Else return error `not_found`.
+  2. Else lower-case the **requested** key (ASCII `A`-`Z` only), then look it up
+     against the message's keys **as stored** — `get` does not lower-case the
+     stored keys. Consequently a key stored **lower-case** is matched by a
+     request of any case, whereas a key stored with **upper-case** letters is
+     matched by no request. The resolver gives `get` the message in
+     `structured@1.0` form, whose keys are lower-case. On a match return that
+     value.
+  3. Else return error `not_found`.
 - **Returns:** `{ok, Value}` or error `not_found`.
 - Hyphen and underscore are NOT folded by `get` (only case is); however callers
   routinely normalise keys before lookup, so an implementation SHOULD treat keys
@@ -113,18 +111,17 @@ precondition for almost every other device.
      new values are both messages, recursively `set` the new sub-message onto the
      base sub-message; otherwise the new value replaces the base value.
   4. **Private** keys of the base are preserved across the merge.
-  5. **Commitment invalidation:** if any key being set is a **committed** key
-     (appears in the message's committed-key set, §`committed`) AND its new value
+  5. **Commitment invalidation:** if any key being set is not in the base, or
+     is a **committed** key (a key that any commitment covers) AND its new value
      differs from the committed value, the result MUST have its `commitments`
-     removed (the message is no longer validly signed). If every overwritten
-     committed key keeps an equal value, commitments are retained.
+     removed (the message is not validly signed). If every key being set
+     is in the base and every overwritten committed key keeps an equal value,
+     commitments are retained.
 - **Returns:** `{ok, NewMessage}`.
 
 ### `set-path` — set the reserved `path` key
-- **Reads:** the new path value from the request's **`value`** field (primary);
-  if `value` is absent, fall back to the request `body`. (The `value` field is the
-  canonical source — a request `#{ <<"path">> => <<"set-path">>, <<"value">> => V }`
-  sets `path` to `V`.)
+- **Reads:** the new path value from the request's **`value`** field. (A request
+  `#{ <<"path">> => <<"set-path">>, <<"value">> => V }` sets `path` to `V`.)
 - **Behaviour:** Sets the `path` key to that value, which `set` cannot do because
   `path` is reserved. If the new value differs from the current `path` and `path`
   is a committed key, commitments MUST be removed. `unset` removes `path`.
@@ -142,39 +139,36 @@ precondition for almost every other device.
 - **Returns:** `{ok, NewMessage}`.
 
 ### `id` — content/commitment identifier
-- **Reads:** `Base`; optional `committers` and `commitment-ids` selectors in
-  `Req`; optional `id-device` in `Base`.
+- **Reads:** `Base`; optional `committers` and `ids` selectors in `Req`.
 - **Behaviour:**
-  1. Select the **relevant commitments** per the selector rules in §4.`committers`/`commitment-ids`
-     resolution (the "commitment selection" algorithm). Default selection when
-     no selector is given: the commitments produced by the default commitment
-     device that have **no** `committer` (i.e. the unsigned/content commitment).
+  1. Select the **relevant commitments** per the selector rules in
+     §4.`committers`/`ids` resolution (the "commitment selection" algorithm).
+     Default selection when no selector is given: the commitments produced by
+     the default commitment device that have **no** `committer` (i.e. the
+     unsigned/content commitment).
   2. **If the selected set is empty:** (re)compute the ID. Convert the message
      (without `commitments`) to TABM and ask the **ID device** to produce an
      `unsigned` commitment; the ID is that commitment's ID. The ID device is
-     `id-device` if set, else the `commitment-device` shared by all commitments,
-     else `httpsig@1.0`. If the resolved ID device is `message@1.0` itself, use
-     `httpsig@1.0` (avoid infinite recursion).
+     `httpsig@1.0`.
   3. **If the selected set is non-empty:** the ID is the **accumulation** of the
-     selected commitment IDs: decode each ID to its 32-byte native form and
-     combine by modular addition over a 256-bit accumulator (initial value 0),
-     then re-encode (base64url, 43 chars). This accumulation is **commutative
-     and associative**: the combined ID is independent of commitment order, a
-     single ID accumulates to itself, and the combined ID does NOT encode
-     ordering.
+     selected commitment IDs: a single ID accumulates to itself; for several,
+     the SHA-256 of their base64url forms, sorted and joined with newlines,
+     encoded as base64url (43 chars). The combined ID is independent of
+     commitment order and does NOT encode ordering.
 - **Returns:** `{ok, Id}` — a 43-character base64url string.
 - For a **binary** base (an ID/path string rather than a map), `id` returns the
   human-readable form of that value's hashpath.
 - For a **list** base, `id` returns the id of the list's **TABM form** — convert
-  the list *through the structured codec* (`to_tabm` via `structured@1.0`), which
-  renders a numbered message **including its `.="list"` `ao-types` marker**, then
-  take the (unsigned content) id of that. Do NOT use a bare `list_to_numbered_message`
-  that omits the `.="list"` marker: the id would differ, and since the codec offloads
-  a committed list to a `committed+link` whose target id **is** this list-id, a wrong
-  id stores the list under one id but links it under another → cache reads hit a
-  dangling link (`necessary_message_not_found`). The platform invokes `id` with a
-  *list* exactly when content-addressing such a key list (e.g. a commitment's
-  `committed`); this clause must be byte-exact with the codec's link-id derivation.
+  the list *through the structured codec* (`to_tabm` via `structured@1.0`),
+  which renders a numbered message **including its `list=(".")` `ao-types`
+  marker**, then take the (unsigned content) id of that. Do NOT use a bare
+  `list_to_numbered_message` that omits the `list=(".")` marker: the id would
+  differ, and the codec offloads a list value to a link `ao:<ID>` whose ID
+  **is** this list-id, so a wrong id stores the list under one id but links it
+  under another → cache reads hit a dangling link
+  (`necessary_message_not_found`). The platform invokes `id` with a *list* when
+  it gives a list value its link (`hb_link:normalize/3`); this clause must be
+  byte-exact with the codec's link-id derivation.
 - **Loading lazy commitments (cache reads):** before selecting commitments, if the
   base's `commitments` field is an unresolved **link** (the base was read back from
   a store, where the codec offloaded the commitments sub-message to a link), it
@@ -189,27 +183,26 @@ precondition for almost every other device.
 
 ### `committers` — list signer URIs
 - **Reads:** `Base` (its `commitments`).
-- **Behaviour:** Return the `committer` value of every commitment that has one.
+- **Behaviour:** Return the `committer` value of every commitment that has one,
+  each value once.
 - **Returns:** `{ok, [URI]}` (empty if uncommitted). Order unspecified.
 
 ### `committed` — list committed keys
-- **Reads:** `Base`; the same `committers`/`commitment-ids` selectors as `id`;
-  optional `raw` flag in `Req`.
+- **Reads:** `Base`; the same `committers`/`ids` selectors as `id`.
 - **Behaviour:** For each selected commitment, take its `committed` key list
   (a TABM-encoded ordered list, decode to the ordered key list). Return the keys
-  that appear in **every** selected commitment's list (intersection). Unless
-  `raw` is true, strip any TABM link suffix (`+link`) from each key so the result
-  matches the keys' ordinary device-level names.
+  that appear in **every** selected commitment's list (intersection).
 - **Returns:** `{ok, [Key]}`.
 
 ### `verify` — check commitments
-- **Reads:** the target message (from `Req` body / `target`, else `Base`); the
-  `committers`/`commitment-ids` selectors.
+- **Reads:** the target message (the key of `Req` that `target` gives, else
+  `Base`); the `committers`/`ids` selectors.
 - **Behaviour:** Select the commitment IDs to verify (same selection rules; the
-  default for `verify` is **all** commitments). For each, merge the
-  commitment's keys into the request and ask that commitment's
-  `commitment-device` to `verify` the TABM-form base. Return `true` only if
-  **every** selected commitment verifies; `false` if any fails.
+  default for `verify` is **all** commitments). For each, give the commitment,
+  with the private element of the request, as the request, and ask that
+  commitment's `commitment-device` to `verify` the TABM form of the keys that
+  the commitment lists. Return `true` only if **every** selected commitment
+  verifies; `false` if any fails.
 - **Lazy commitments (cache round-trip):** the target may be read back from a
   store, in which case its `commitments` field is an unresolved **link**. Before
   selecting/verifying, the device MUST apply the shared lazy-load rule from §`id`:
@@ -226,14 +219,16 @@ precondition for almost every other device.
 - **Reads:** the target message; optional `commitment-device` in `Req` (else the
   node's configured default commitment device); optional `type`
   (`signed` default, or `unsigned`).
-- **Behaviour:** Convert the target to TABM, then delegate to the named
-  commitment device's `commit`, passing `type`. The device adds a commitment to
-  the `commitments` map. Re-encode the result from TABM back to structured form.
+- **Behaviour:** Convert the target to TABM — only the keys that the request's
+  `committed` list gives, else the keys that the target's commitments cover,
+  else every key — then delegate to the commitment device's `commit`, passing
+  `type`. The device adds a commitment to the `commitments` map. Return the
+  target with the `commitments` of the device's result.
   The device key is NOT written into the message — it is recorded inside the
   commitment as `commitment-device`.
 - **Returns:** `{ok, CommittedMessage}`.
 
-### Commitment selection (`committers` + `commitment-ids`) — normative
+### Commitment selection (`committers` + `ids`) — normative
 The reserved selector keywords `all` and `none` arrive **as binaries**
 (`<<"all">>` / `<<"none">>`) when they come over the wire or from another device
 (e.g. the commitment device asking this device for `committed` with
@@ -241,23 +236,25 @@ The reserved selector keywords `all` and `none` arrive **as binaries**
 is also a binary. An implementation MUST treat `<<"all">>`/`<<"none">>` as the
 keywords (not as committers) and any other binary as a literal URI/ID.
 Given `Req` selectors, compute the set of commitment IDs to operate on:
-- `commitment-ids`: `none` → none; `all` → every commitment ID; a list/single ID
+- `ids`: `none` → none; `all` → every commitment ID; a list/single ID
   → those IDs.
 - `committers`: `none` → none; `all` → the IDs of all commitments that have a
   `committer`; a list/single URI → the IDs of commitments whose `committer` is
-  that URI. If a requested committer has **no** commitment, the operation
-  MUST error (`requested-committers-not-found`).
-- The result is the **union** of the two. Default when neither selector is
-  given: `id`/`committed` default to the unsigned default-device commitment (the
-  one with `commitment-device = httpsig@1.0` and no `committer`); `verify`
-  defaults to **all** commitments.
+  that URI. If a requested committer has **no** commitment, `id` and
+  `committed` throw `{verify, {requested_committers_not_found,
+  {missing_commitments, Missing}}}`, and `verify` returns `false`, as it does
+  for `all` on a message with no `committer`.
+- The result is the **union** of the two. When the union is empty (as when
+  neither selector is given), `id`/`committed` use the unsigned default-device
+  commitment (the one with `commitment-device = httpsig@1.0` and no
+  `committer`); `verify` with neither selector uses **all** commitments.
 
 ## 5. Data formats & encodings
 
 - IDs are **base64url** (43 chars for 32-byte values), never hex; a committer is
   a URI (§2).
-- The combined-ID accumulation operates on the 32-byte native decodings of the
-  IDs, modular-added into a 256-bit big-endian accumulator initialised to 0.
+- The combined-ID accumulation is the SHA-256 of the base64url IDs, sorted and
+  joined with newlines (`\n`).
 - IDs are computed over the **TABM** form of the message with `commitments`
   removed (the content ID) or as reported by the commitment device (signed IDs).
 - `committed` lists are stored TABM-encoded as a numbered/ordered map; decode to
@@ -266,8 +263,9 @@ Given `Req` selectors, compute the set of commitment IDs to operate on:
 ## 6. Ordering, freshness & caching
 
 - `id` accumulation is order-independent and deterministic.
-- The device performs no caching of its own; it operates purely on the supplied
-  message and request.
+- The device performs no caching of its own, except that a `signed` `commit`
+  without `bundle` writes the nested messages of its target to the cache; it
+  operates on the supplied message and request.
 - `keys`/`committers` return order is unspecified; callers MUST NOT depend on it.
 
 ## 7. Security & authority
@@ -277,16 +275,15 @@ Given `Req` selectors, compute the set of commitment IDs to operate on:
   must never appear to cover content it does not.
 - Private keys are never exposed (`get`/`keys`) and never committed.
 - `verify` is failure-closed: any selected commitment that does not verify makes
-  the whole result `false`. A request naming a committer with no commitment is an
-  error, not a silent `false`.
+  the whole result `false`. A request for a committer with no commitment also
+  gives `false`.
 
 ## 8. Errors
 
 - `not_found` — `get` of a missing or private key.
-- `requested-committers-not-found` — `verify`/`id`/`committed` named a committer
-  with no matching commitment.
-- `multiple-id-devices` — the message's commitments disagree on `commitment-device`
-  and no `id-device` disambiguates, so an ID device cannot be chosen.
+- `throw({verify, {requested_committers_not_found, {missing_commitments,
+  Missing}}})` — `id`/`committed` with a requested committer that has no
+  matching commitment.
 
 ## 9. Composition
 
@@ -305,8 +302,9 @@ Given `Req` selectors, compute the set of commitment IDs to operate on:
    `commitments`.
 2. Key lookup is case-insensitive **on the request side** (RFC-9110): for a key
    stored lower-case (the §2 convention), `GET .../Key` and `.../key` return the
-   same value; a key stored with upper-case letters is matched only by its exact
-   spelling (§4 `get` step 3 — stored keys are not case-folded).
+   same value; `get` alone matches a key stored with upper-case letters by no
+   request (§4 `get` step 2), and the resolver lower-cases the message's keys
+   before `get`.
 3. `set` of a new key adds it; `set` of an existing **uncommitted** key
    overwrites it; `set` to `unset` removes it; deep-merge recurses into nested
    message values; `explicit` mode shallow-merges.
@@ -324,13 +322,12 @@ Given `Req` selectors, compute the set of commitment IDs to operate on:
 8. `committers` returns exactly the `committer` URIs of commitments that
    have one; `[]` for an uncommitted message.
 9. `committed` returns the intersection of selected commitments' committed-key
-   lists, with `+link` suffixes stripped unless `raw` is set.
+   lists.
 10. `verify` returns `true` iff every selected commitment verifies under its own
     `commitment-device`; tampering with any committed key makes `verify` `false`;
-    naming a committer with no commitment errors.
-11. The default commitment/ID device is `httpsig@1.0`; a message may override the
-    ID device via `id-device`, and per-commitment via `commitment-device`; an ID
-    device that resolves back to `message@1.0` falls back to `httpsig@1.0`.
+    a request for a committer with no commitment gives `false`.
+11. The default commitment device and the ID device are `httpsig@1.0`; `verify`
+    uses each commitment's own `commitment-device`.
 
 ## 11. Out of scope
 
