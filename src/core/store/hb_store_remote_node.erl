@@ -88,7 +88,8 @@ has_id(Bin, ID, Opts) ->
 %% node's signature over `hashpath', and its unsigned commitment over the keys
 %% of its reply, once the keys that it does not cover are removed. The reply's
 %% `hashpath' is removed with them, unless a signed commitment of the message
-%% covers it. A reply without commitments loses its `hashpath' and `status'.
+%% covers it. A message without signed commitments has no `commitments' key.
+%% A reply without commitments loses its `hashpath' and `status'.
 without_transport_commitment(Msg = #{ <<"commitments">> := _ }, Opts) ->
     {ok, Committed} =
         hb_message:with_only_committed(
@@ -99,13 +100,14 @@ without_transport_commitment(Msg = #{ <<"commitments">> := _ }, Opts) ->
             ),
             Opts
         ),
+    Signed =
+        hb_message:commitments(#{ <<"committer">> => '_' }, Committed, Opts),
     hb_message:without_unless_signed(
         [<<"hashpath">>],
-        hb_message:with_commitments(
-            #{ <<"committer">> => '_' },
-            Committed,
-            Opts
-        ),
+        case hb_maps:size(Signed, Opts) of
+            0 -> hb_message:uncommitted(Committed, Opts);
+            _ -> Committed#{ <<"commitments">> => Signed }
+        end,
         Opts
     );
 without_transport_commitment(Msg, _Opts) when is_map(Msg) ->
@@ -190,7 +192,8 @@ read_test() ->
 		}
 	],
     {ok, RetrievedMsg} = hb_cache:read(ID, #{ <<"store">> => RemoteStore }),
-    ?assertMatch(#{ <<"test-key">> := Rand }, hb_cache:ensure_all_loaded(RetrievedMsg)),
+    % An unsigned message reads back as it was written, without commitments.
+    ?assertEqual(#{ <<"test-key">> => Rand }, hb_cache:ensure_all_loaded(RetrievedMsg)),
     % The store reads the list regardless of the HTTP result option.
     ?assertEqual(
         {ok, []},
