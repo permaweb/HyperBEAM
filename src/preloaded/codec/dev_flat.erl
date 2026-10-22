@@ -103,7 +103,7 @@ serialize(Map) when is_map(Map) ->
     serialize(Map, #{}).
 
 serialize(Map, Opts) when is_map(Map) ->
-    Flattened = hb_message:convert(Map, <<"flat@1.0">>, #{}),
+    Flattened = hb_message:convert(hb_private:reset(Map), <<"flat@1.0">>, #{}),
     {ok,
         iolist_to_binary(lists:foldl(
                 fun(Key, Acc) ->

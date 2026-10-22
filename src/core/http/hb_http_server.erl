@@ -2230,6 +2230,16 @@ binary_codec_reply_headers_test() ->
     ?assertEqual(
         Message,
         hb_message:convert(Body, <<"structured@1.0">>, <<"json@1.0">>, Opts)
+    ),
+    % A reply in `flat@1.0' has the keys of the result, without its `priv'.
+    ?assertMatch(
+        {200, _, <<"body: value\nresult: ok\n">>},
+        encode_reply(
+            200,
+            #{ <<"accept">> => <<"application/x.ao.flat">> },
+            Message#{ <<"priv">> => #{ <<"hashpath">> => <<"hidden">> } },
+            Opts
+        )
     ).
 
 %% @doc The first media range of the request's `accept', by q-value and then by

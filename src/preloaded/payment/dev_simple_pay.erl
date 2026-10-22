@@ -238,7 +238,7 @@ balance(_, RawReq, NodeMsg) ->
                     [] -> undefined;
                     [Signer | _] -> Signer
                 end;
-            Explicit -> Explicit
+            Explicit -> hb_committer:uri(Explicit, NodeMsg)
         end,
     {ok, get_balance(Target, NodeMsg)}.
 
@@ -285,8 +285,7 @@ get_balance(Signer, NodeMsg) ->
 ) -> {ok, integer()} | {error, binary()}.
 topup(_, Req, NodeMsg) ->
     ?event({topup, {req, Req}, {node_msg, NodeMsg}}),
-    Operator = hb_opts:get(operator, undefined, NodeMsg),
-    case lib_meta:authorized(Operator, Req, NodeMsg) of
+    case lib_meta:authorized(lib_meta:role(operator, NodeMsg), Req, NodeMsg) of
         {error, _} -> {error, <<"Unauthorized">>};
         {ok, Signed} ->
             Amount = hb_ao:get(<<"amount">>, Signed, 0, NodeMsg),
@@ -380,6 +379,19 @@ get_balance_and_top_up_test() ->
     % not have generated a charge in itself. The top-up did not generate a charge
     % because it is the operator that performed it, and not a user.
     ?assertEqual(180, NewBalance),
+    % A node with no `operator' takes a top-up signed by its own wallet.
+    ?assertEqual(
+        {ok, 100},
+        hb_http:post(
+            hb_http_server:start_node(#{ <<"priv-wallet">> => HostWallet }),
+            <<"/~simple-pay@1.0/topup">>,
+            hb_message:commit(
+                #{ <<"amount">> => 100, <<"recipient">> => ClientAddress },
+                Opts#{ <<"priv-wallet">> => HostWallet }
+            ),
+            Opts
+        )
+    ),
     % A charge of a negative quantity is refused, even from the operator.
     ?assertMatch(
         {error, #{ <<"status">> := 400, <<"key">> := <<"quantity">> }},
@@ -429,6 +441,22 @@ get_balance_and_top_up_test() ->
                     <<"path">> => <<"/~simple-pay@1.0/topup">>,
                     <<"amount">> => 100,
                     <<"recipient">> =>
+                        hb_util:human_id(ar_wallet:to_address(ClientWallet))
+                },
+                Opts#{ <<"priv-wallet">> => HostWallet }
+            ),
+            Opts
+        )
+    ),
+    % A balance whose `target' is that address reads its committer's account.
+    ?assertEqual(
+        {ok, 380},
+        hb_http:get(
+            Node,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~simple-pay@1.0/balance">>,
+                    <<"target">> =>
                         hb_util:human_id(ar_wallet:to_address(ClientWallet))
                 },
                 Opts#{ <<"priv-wallet">> => HostWallet }

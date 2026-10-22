@@ -1528,7 +1528,19 @@ schedule_message_and_get_slot_test_parallel() ->
     ?event({getting_schedule, {msg, Res}}),
     ?assertMatch({ok, #{ <<"current">> := CurrentSlot }}
             when CurrentSlot > 0,
-        hb_ao:resolve(Base, Res, #{})).
+        hb_ao:resolve(Base, Res, #{})),
+    % If the store cannot list the slots after a restart (its `from-list'
+    % raises), the request fails, and slot 0 is not assigned again.
+    Server = dev_scheduler_registry:find(hb_util:id(Base, all)),
+    Monitor = monitor(process, Server),
+    dev_scheduler_server:stop(Server),
+    receive {'DOWN', Monitor, process, Server, _} -> ok end,
+    [Store | _] = hb_opts:get(store, [], #{}),
+    Raising = Store#{ <<"from-list">> => <<"~json@1.0/deserialize">> },
+    ?assertError(
+        function_clause,
+        hb_ao:resolve(Base, Req, #{ <<"store">> => Raising })
+    ).
 
 redirect_to_hint_test_parallel() ->
     start(),

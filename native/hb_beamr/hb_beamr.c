@@ -69,8 +69,11 @@ static void wasm_driver_stop(ErlDrvData raw) {
         DRV_DEBUG("Deleted WASM instance");
         wasm_module_delete(proc->module);
         DRV_DEBUG("Deleted WASM module");
+        wasm_extern_vec_delete(&proc->externs);
+        wasm_importtype_vec_delete(&proc->imports);
         wasm_store_delete(proc->store);
         DRV_DEBUG("Deleted WASM store");
+        wasm_engine_delete(proc->engine);
     }
     DRV_DEBUG("Freeing proc");
     driver_free(proc);

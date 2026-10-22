@@ -142,6 +142,8 @@ location(Committer, Variant, Opts) ->
         % available and `scheduler-legacy-locations' is enabled.
         Error = {error, _} ?=
             do_location(Address, Variant, <<"type">>, [<<"location">>], Opts),
+        % Return the error of a lower-case record that does not verify.
+        true ?= Error =/= {error, unverifiable_item} orelse Error,
         true ?= hb_opts:get(scheduler_legacy_locations, true, Opts)
             orelse Error,
         do_location(

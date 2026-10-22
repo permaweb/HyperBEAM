@@ -178,7 +178,7 @@ move(Mode, Base, Req, Opts) ->
                 Opts
             ),
         % If the `mode` is `patches`, we need to remove the `method` key from
-        % them, if present.
+        % them, if present, and apply them in the numeric order of their keys.
         ToWriteMod =
             case Mode of
                 all -> ToWrite;
@@ -196,7 +196,10 @@ move(Mode, Base, Req, Opts) ->
                             Res
                         end,
                         #{},
-                        ToWrite
+                        maps:iterator(
+                            ToWrite,
+                            fun(A, B) -> hb_util:int(A) =< hb_util:int(B) end
+                        )
                     )
             end,
         ?event({to_write, ToWriteMod}),
@@ -232,7 +235,9 @@ uninitialized_patch_test() ->
                     <<"prices">> => #{
                         <<"apple">> => 1000
                     }
-                }
+                },
+                <<"3">> => #{ <<"method">> => <<"PATCH">>, <<"n">> => 3 },
+                <<"10">> => #{ <<"method">> => <<"PATCH">>, <<"n">> => 10 }
             }
         },
         <<"other-message">> => <<"other-value">>,
@@ -253,7 +258,9 @@ uninitialized_patch_test() ->
     ?assertMatch(
         not_found,
         hb_ao:get(<<"results/outbox/1">>, ResolvedState, #{})
-    ).
+    ),
+    % Patches apply in the numeric order of their keys: `10' after `3'.
+    ?assertEqual(10, hb_ao:get(<<"n">>, ResolvedState, #{})).
 
 patch_to_submessage_test() ->
     InitState = #{

@@ -17,6 +17,16 @@
 wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_vec_t* results);
 
 /*
+ * Function:  wasm_free_import_hook
+ * --------------------
+ * Frees an import hook and its signature, as the finalizer of the function
+ * linked to the import.
+ * 
+ *  env: The import hook.
+ */
+void wasm_free_import_hook(void* env);
+
+/*
  * Function:  wasm_initialize_runtime
  * --------------------
  * Initializes the WASM module asynchronously.

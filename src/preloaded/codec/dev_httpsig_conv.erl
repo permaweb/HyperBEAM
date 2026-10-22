@@ -924,8 +924,8 @@ field_to_http(Httpsig, {Name, Value}, Opts) when is_map(Value) ->
 field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
     NormalizedName = hb_ao:normalize_key(Name),
     % The default location where the value is encoded within the HTTP
-    % message depends on its size, and on whether it starts or ends with a
-    % space or tab.
+    % message depends on its size, and on whether it starts or ends with
+    % whitespace.
     % 
     % So we check whether the size of the value is within the threshold
     % to encode as a header, and otherwise default to encoding in the body.
@@ -941,7 +941,7 @@ field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
     end.
 
 %% @doc Return where a value is sent by default: in a header if it is a
-%% binary that fits in one, and does not start or end with a space or tab.
+%% binary that fits in one, and does not start or end with whitespace.
 %% Any other value is sent in the body.
 default_where(Value)
         when is_binary(Value), byte_size(Value) =< ?MAX_HEADER_LENGTH ->
@@ -952,12 +952,13 @@ default_where(Value)
 default_where(_Value) ->
     body.
 
-%% @doc Whether a value starts or ends with a space or tab. HTTP strips them
-%% from a header value, so such a value is not sent as one.
+%% @doc Whether a value starts or ends with a space, tab, vertical tab or form
+%% feed. HTTP strips spaces and tabs from a header value, and hackney strips
+%% the other two as well, so such a value is not sent as one.
 edge_whitespace(<<>>) -> false;
 edge_whitespace(Value) ->
-    lists:member(binary:first(Value), " \t")
-        orelse lists:member(binary:last(Value), " \t").
+    lists:member(binary:first(Value), " \t\v\f")
+        orelse lists:member(binary:last(Value), " \t\v\f").
 
 %% @doc Multipart headers preserve literal backslashes and line breaks.
 multipart_header_bytes_roundtrip_test() ->
@@ -977,7 +978,17 @@ multipart_header_bytes_roundtrip_test() ->
         <<"priv-wallet">> => ar_wallet:new(), <<"store">> => hb_test_utils:test_store()
     }),
     ?assertEqual({ok, Value}, hb_http:post(Node,
-        <<"//nested/value">>, Signed, Opts)).
+        <<"//nested/value">>, Signed, Opts)),
+    % hackney strips a vertical tab or form feed at either end of a header.
+    ?assertMatch(
+        {ok, #{ <<"k">> := <<"\va\f">> }},
+        hb_http:post(
+            Node,
+            <<"//nested">>,
+            #{ <<"nested">> => #{ <<"k">> => <<"\va\f">> } },
+            Opts
+        )
+    ).
 
 %% @doc Multipart parts distinguish an absent body from an empty binary body,
 %% including when the empty value is covered by a nested commitment.

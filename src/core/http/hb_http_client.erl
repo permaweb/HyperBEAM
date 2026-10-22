@@ -597,10 +597,13 @@ await_response(Args, Opts) ->
 			record_response_status(Method, Response, Path),
 			log(warning, gun_await_process_down, Args, Reason, Opts),
 			Response;
+		% Return any other result of `gun:await/3' as an error. It is
+		% not a reply: it is an upgrade, after a `101' reply, or a
+		% pushed stream, which HyperBEAM never asks for.
 		Response ->
 			record_response_status(Method, Response, Path),
 			log(warning, gun_await_unknown, Args, Response, Opts),
-			Response
+			{error, Response}
 	end.
 
 %% @doc Return the next result of `gun:await/3' for the request. A `1xx' reply

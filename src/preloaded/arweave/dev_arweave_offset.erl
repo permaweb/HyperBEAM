@@ -182,10 +182,9 @@ load_item_from_header(StartOffset, HeaderSize, HeaderTX, DataSize, Opts) ->
 chunk_from_offset(StartOffset, Opts) ->
     case dev_arweave:get_chunk(StartOffset + 1, Opts) of
         {ok, ChunkJSON} ->
-            ChunkSize = hb_util:int(maps:get(<<"chunk_size">>, ChunkJSON)),
             AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, ChunkJSON)),
             Chunk = hb_util:decode(maps:get(<<"chunk">>, ChunkJSON)),
-            ChunkStart = AbsEnd - ChunkSize + 1,
+            ChunkStart = AbsEnd - byte_size(Chunk) + 1,
             Skip = (StartOffset + 1) - ChunkStart,
             {ok, ChunkJSON, binary:part(Chunk, Skip, byte_size(Chunk) - Skip)};
         Error ->

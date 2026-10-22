@@ -95,6 +95,8 @@ is_match(Msg, Opts) ->
                         [] -> {ok, Msg1};
                         [ID|_] -> {blocked_txid, ID}
                     end;
+                continue ->
+                    {ok, Msg};
                 {error, Msg1} ->
                     {error, Msg1}
             end;
@@ -279,7 +281,10 @@ insert_ids([ID | IDs], Value, Table, Opts) when ?IS_ID(ID) ->
         _ -> insert_ids(IDs, Value, Table, Opts)
     end.
 
-%% @doc Ensure the cache table exists.
+%% @doc Ensure the cache table exists. While the blacklist loads, `halt' waits
+%% for it up to `blacklist-timeout', then gives 503, and `continue' returns
+%% `continue': the request is served without a check, as the table may not
+%% exist yet.
 ensure_cache_table(Msg, Opts) ->
     %% Options: 
     %% - continue: Don't wait for blacklist to be initialized
@@ -310,7 +315,7 @@ ensure_cache_table(Msg, Opts) ->
                 end
             ),
             case hb_util:atom(FallbackMode) of
-                continue -> {ok, Msg};
+                continue -> continue;
                 halt ->
                     IsInitialized = 
                         hb_util:wait_until(
@@ -459,13 +464,19 @@ basic_test() ->
         {error, #{ <<"status">> := 451 }},
         hb_http:get(MsgProviderNode, SignedID1, Opts1)
     ),
-    % A binary `blacklist-fallback', as a config file gives it, is read.
+    % A binary `blacklist-fallback', as a config file gives it, is read. With
+    % `continue', a request is served while the blacklist loads, also before
+    % its table exists: the test process takes the name of the process that
+    % loads the blacklist, so the table is not created.
+    Wallet = ar_wallet:new(),
+    Table = cache_table_name(#{ <<"priv-wallet">> => Wallet }),
+    ok = hb_name:register(Table, self()),
     ?assertMatch(
         {ok, <<"test-3">>},
         hb_http:get(
             hb_http_server:start_node(
                 Opts1#{
-                    <<"priv-wallet">> => ar_wallet:new(),
+                    <<"priv-wallet">> => Wallet,
                     <<"blacklist-fallback">> => <<"continue">>
                 }
             ),
@@ -473,6 +484,7 @@ basic_test() ->
             Opts1
         )
     ),
+    hb_name:unregister(Table),
     ok.
 
 %% @doc Ensure that the default provider does not block any requests.

@@ -760,21 +760,52 @@ load_bin(Device, Bin, Opts) ->
         {
             ok,
             mimic_default_types(
-                hb_cache:ensure_all_loaded(
-                    hb_message:convert(
-                        Bin,
-                        <<"structured@1.0">>,
-                        Device,
-                        Opts#{ <<"linkify-mode">> => false }
-                    ),
-                    Opts
-                ),
+                hb_cache:ensure_all_loaded(decode(Device, Bin, Opts), Opts),
                 false,
                 Opts
             )
         }
     catch error:B -> {error, B}
     end.
+
+%% @doc Decode a config file to a message, with its private keys. A JSON file
+%% is decoded from the TABM that `json@1.0''s `deserialize' gives, as
+%% `hb_http:decode/3' decodes a JSON request body: `json@1.0''s `from' gives
+%% the TABM without the private keys.
+decode(<<"json@1.0">>, Bin, Opts) ->
+    {ok, TABM} = hb_ao:raw(<<"json@1.0">>, <<"deserialize">>, Bin, #{}, Opts),
+    decode_tabm(TABM, Opts);
+decode(Device, Bin, Opts) ->
+    hb_message:convert(
+        Bin,
+        <<"structured@1.0">>,
+        Device,
+        Opts#{ <<"linkify-mode">> => false }
+    ).
+
+%% @doc Decode a TABM with `structured@1.0', and the map or list of each of its
+%% private keys as a TABM too: `to' keeps those as they are, and the private
+%% values of a config file are TABMs.
+decode_tabm(TABM, Opts) ->
+    {ok, Msg} = hb_ao:raw(<<"structured@1.0">>, <<"to">>, TABM, #{}, Opts),
+    decode_private(Msg, Opts).
+
+%% @doc Decode the map or list of each private key of a message, at any depth,
+%% with `decode_tabm/2'.
+decode_private(Msg, Opts) when is_map(Msg) ->
+    maps:map(
+        fun(Key, Value) when is_map(Value) orelse is_list(Value) ->
+            case hb_private:is_private(Key) of
+                true -> decode_tabm(Value, Opts);
+                false -> decode_private(Value, Opts)
+            end;
+           (_Key, Value) -> Value
+        end,
+        Msg
+    );
+decode_private(List, Opts) when is_list(List) ->
+    [ decode_private(Value, Opts) || Value <- List ];
+decode_private(Value, _Opts) -> Value.
 
 %% @doc Mimic the types of the default message for a given map.
 mimic_default_types(Map, _Mode, Opts) ->
@@ -1075,6 +1106,11 @@ load_json_test() ->
     ?assertEqual(<<"https://ao.computer">>, hb_maps:get(<<"node-host">>, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
     ?assertEqual(false, hb_maps:get(<<"await-inprogress">>, Conf)),
+    % A private key is kept, and its value is decoded as the others are.
+    ?assertMatch(
+        [#{ <<"store-module">> := hb_store_fs }],
+        hb_maps:get(<<"priv-store">>, Conf)
+    ),
     % Ensure that a store with `ao-types' is loaded correctly.
     ?assertMatch(
         [#{ <<"store-module">> := hb_store_fs }|_],
