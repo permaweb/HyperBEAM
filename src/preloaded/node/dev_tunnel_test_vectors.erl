@@ -365,7 +365,8 @@ parameter(Key, Base, Default, Opts) ->
     Params = hb_maps:get(<<"fixture-params">>, Base, #{}, Opts),
     hb_maps:get(Key, Raw, hb_maps:get(Key, Params, Default, Opts), Opts).
 
-%% @doc Reject each posted response while the test's `reject' flag is set.
+%% @doc Reject each posted response while the test's `reject' flag is 1, and
+%% fail the next one with 503 when it is 2.
 reject_response(_, Hook = #{<<"request">> := Raw}, Opts) ->
     Reject = hb_maps:get(<<"priv-test-reject-response">>, Opts),
     case {hb_maps:get(<<"path">>, Raw, <<>>, Opts), atomics:get(Reject, 1)} of
@@ -373,6 +374,12 @@ reject_response(_, Hook = #{<<"request">> := Raw}, Opts) ->
             {error, #{
                 <<"status">> => 403,
                 <<"body">> => <<"Response policy rejected.">>
+            }};
+        {<<"/~tunnel@1.0/response", _/binary>>, 2} ->
+            atomics:put(Reject, 1, 0),
+            {failure, #{
+                <<"status">> => 503,
+                <<"body">> => <<"Response policy failed once.">>
             }};
         _ -> {ok, Hook}
     end.
@@ -1335,7 +1342,18 @@ rejected_response(Ctx = #{
     ?assertEqual(1, writes(First)),
     atomics:put(Reject, 1, 0),
     drained(Ctx),
-    success(get(Ctx, First, <<"/~meta@1.0/info/address">>), Opts).
+    success(get(Ctx, First, <<"/~meta@1.0/info/address">>), Opts),
+    % A response that the broker fails once is posted again and delivered.
+    atomics:put(Reject, 1, 2),
+    ?assertEqual(
+        maps:get(id, First),
+        hb_maps:get(
+            <<"body">>,
+            success(get(Ctx, First, <<"/~meta@1.0/info/address">>), Opts),
+            not_found,
+            Opts
+        )
+    ).
 
 %% @doc Return the number of times that an origin has run the `write' fixture.
 writes(#{opts := Opts}) ->

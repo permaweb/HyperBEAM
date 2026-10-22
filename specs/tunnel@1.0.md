@@ -249,8 +249,11 @@ may have executed the request; the tunnel never retries application work.
      `tunnel-target` MUST be the node's address.
   4. Execute `request` (§4.1) and post the envelope `codec-device:
      httpsig@1.0`, `tunnel-request-id`, `status` and `response`, signed by the
-     node, to `<peer>/~tunnel@1.0/response`. A reply other than `202` is not
-     retried.
+     node, to `<peer>/~tunnel@1.0/response`. A post that gets a 5xx reply, or
+     whose connection fails, is made again, up to 3 times, after
+     `tunnel-retry-time` ms, then twice and three times that. A post that gets
+     any other reply is not made again: a 404 after a failed post means that
+     the broker delivered the response.
   5. After any failure, wait `tunnel-retry-time` ms and continue.
 
   A worker that ends for any other reason than retirement is replaced after
@@ -430,9 +433,6 @@ address that is not present also has `reason` (`tunnel-unavailable`) and
   to a broker or a time, so a copy of one can be posted again, to its broker
   or another, and receive a request for its address. Only the origin can
   answer that request.
-- **Responses are posted once.** A response that a broker does not accept,
-  for example after a network failure, is not posted again; its caller waits
-  until its wait ends.
 - **One commitment per control.** When several commitments of a control
   message qualify, the device uses the first in the order of the commitments
   map, and does not try the others.

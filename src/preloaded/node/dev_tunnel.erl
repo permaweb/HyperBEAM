@@ -484,12 +484,23 @@ client(Peer, Address, Stop, Opts) ->
                             },
                             Current
                         ),
+                    % A response is posted again after a server error or a
+                    % failed connection, up to 3 times, waiting longer each
+                    % time. A broker answers a response that it has delivered
+                    % with 404, which is not posted again.
+                    ResponseOpts =
+                        HTTPOpts#{
+                            <<"http-retry">> => 3,
+                            <<"http-retry-response">> => [failure],
+                            <<"http-retry-time">> =>
+                                hb_opts:get(tunnel_retry_time, 1_000, Current)
+                        },
                     case
                         hb_http:post(
                             Peer,
                             <<"/~tunnel@1.0/response">>,
                             Envelope,
-                            HTTPOpts
+                            ResponseOpts
                         )
                     of
                         {ok, #{ <<"status">> := 202 }} -> ok;
