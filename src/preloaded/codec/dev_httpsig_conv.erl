@@ -46,7 +46,7 @@
         C == $| orelse C == $~)
 ).
 % The headers that HTTP and this codec set themselves: the signatures, the
-% digest and length of the body, and the fields of the connection and its
+% digest, length and key of the body, and the fields of the connection and its
 % framing, which HTTP servers and clients act on or remove. A key of a message
 % with one of these names is carried in a body part, and a header with one of
 % them is not a key of the message.
@@ -54,6 +54,7 @@
     <<"signature">>,
     <<"signature-input">>,
     <<"content-digest">>,
+    <<"ao-body-key">>,
     <<"content-length">>,
     <<"connection">>,
     <<"keep-alive">>,
@@ -119,12 +120,7 @@ from(HTTP, _Req, Opts) ->
     ?event_debug({message_with_commitments, MsgWithSigs}),
     Res =
         hb_maps:without(
-            Removed =
-                hb_maps:keys(Commitments) ++
-                case hb_message:is_signed_key(<<"ao-body-key">>, MsgWithSigs, Opts) of
-                    true -> [];
-                    false -> [<<"ao-body-key">>]
-                end,
+            Removed = hb_maps:keys(Commitments),
             MsgWithSigs,
             Opts
         ),
@@ -136,7 +132,7 @@ body_to_tabm(HTTP, Opts) ->
     % Extract the body and content-type from the HTTP message.
     Body = hb_maps:get(<<"body">>, HTTP, no_body, Opts),
     ContentType = hb_maps:get(<<"content-type">>, HTTP, undefined, Opts),
-    {_, InlinedKey} = inline_key(HTTP),
+    InlinedKey = hb_maps:get(<<"ao-body-key">>, HTTP, <<"body">>, Opts),
     ?event_debug({inlined_body_key, InlinedKey}),
     % Parse the body into a TABM.
     {OrderedBodyKeys, BodyTABM} =
@@ -307,11 +303,12 @@ from_body_part(InlinedKey, Part, Opts) ->
                         end
                 end,
             % The headers of a part are keys of the message that it holds. Its
-            % commitments are encoded as its `commitments' parts, so headers
-            % named `signature' and `signature-input' are data.
+            % commitments are encoded as its `commitments' parts, and its body
+            % is its `body' key, so its headers `signature', `signature-input'
+            % and `ao-body-key' are data.
             RestHeaders =
                 hb_maps:without(
-                    [<<"ao-body-key">>, <<"content-disposition">>],
+                    [<<"content-disposition">>],
                     Headers,
                     Opts
                 ),
@@ -339,12 +336,8 @@ from_body_part(InlinedKey, Part, Opts) ->
                         RawBody;
                     {_, _, _} ->
                         % There are other headers, so we need to parse
-                        % the body as a TABM. Its key is chosen from the
-                        % part with its body, so a `data' header in the
-                        % part does not take it.
-                        {_, RawBodyKey} =
-                            inline_key(Headers#{ <<"body">> => RawBody }),
-                        RestHeaders#{ RawBodyKey => RawBody }
+                        % the body as a TABM.
+                        RestHeaders#{ <<"body">> => RawBody }
                 end,
             {PartName, ParsedPart}
     end.
@@ -858,29 +851,22 @@ inline_key(Msg) ->
     inline_key(Msg, #{}).
 
 inline_key(Msg, Opts) ->
-    % The message can name a key whose value will be placed in the body as the
-    % inline part. Otherwise, the Msg <<"body">> is used. If not present, the
-    % Msg <<"data">> is used.
-    InlineBodyKey = hb_maps:get(<<"ao-body-key">>, Msg, false, Opts),
-    ?event_debug({inlined, InlineBodyKey}),
+    % The Msg <<"body">> is placed in the body as the inline part. If not
+    % present, the Msg <<"data">> is used. A message's own `ao-body-key' is
+    % carried in a body part.
     case {
-        InlineBodyKey,
         hb_maps:is_key(<<"body">>, Msg, Opts)
             andalso not ?IS_LINK(maps:get(<<"body">>, Msg, Opts)),
         hb_maps:is_key(<<"data">>, Msg, Opts)
             andalso not ?IS_LINK(maps:get(<<"data">>, Msg, Opts))
     } of
-        % ao-body-key already exists, so no need to add one
-        {Explicit, _, _} when Explicit =/= false -> {#{}, InlineBodyKey};
         % ao-body-key defaults to <<"body">> (see below)
         % So no need to add one
-        {_, true, _} -> {#{}, <<"body">>};
+        {true, _} -> {#{}, <<"body">>};
         % We need to preserve the ao-body-key, as the <<"data">> field,
         % so that it is preserved during encoding and decoding
-        {_, _, true} -> {#{<<"ao-body-key">> => <<"data">>}, <<"data">>};
+        {_, true} -> {#{<<"ao-body-key">> => <<"data">>}, <<"data">>};
         % default to body being the inlined part.
-        % This makes this utility compatible for both encoding
-        % and decoding httpsig@1.0 messages
         _ -> {#{}, <<"body">>}
     end.
 
@@ -1340,6 +1326,8 @@ reserved_header_keys_test_() ->
                 {<<"te">>, <<"gzip">>},
                 {<<"trailer">>, <<"x-note">>},
                 {<<"transfer-encoding">>, <<"gzip">>},
-                {<<"upgrade">>, <<"websocket">>}
+                {<<"upgrade">>, <<"websocket">>},
+                % The `ao-body-key' header gives the key of the body.
+                {<<"ao-body-key">>, <<"note">>}
             ]
     ].
