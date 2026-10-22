@@ -697,8 +697,8 @@ load_paths([P | Rest], Opts, Acc) ->
 %% @doc Convert a path to a device from its file extension. If no extension is
 %% provided, we default to `flat@1.0'.
 path_to_device(Path) ->
-    case binary:split(hb_util:bin(Path), <<".">>, []) of
-        [_, Extension] ->
+    case filename:extension(hb_util:bin(Path)) of
+        <<".", Extension/binary>> ->
             ?event(debug_node_msg,
                 {path_to_device,
                     {path, Path},
@@ -1057,6 +1057,8 @@ load_flat_test() ->
     % await-inprogress: false
     {ok, Conf} = load("test/config.flat", #{}),
     ?event({loaded, {explicit, Conf}}),
+    % A `.' in a directory of the path does not change the file's codec.
+    ?assertEqual({ok, Conf}, load("./test/config.flat", #{})),
     % Ensure we convert types as expected.
     ?assertEqual(1234, hb_maps:get(<<"port">>, Conf)),
     % A binary
