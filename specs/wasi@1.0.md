@@ -55,9 +55,8 @@ into guest memory, the values returned to the guest) is normative.
   `file-descriptors` of the device's state. Its keys are the **decimal-string**
   fd numbers (`"0"`, `"1"`, `"2"`, …); each value is a **descriptor record**, a
   message with at least `filename` (the VFS path the fd refers to) and `offset`
-  (a non-negative integer byte cursor), and optionally `index` (the fd's own
-  number, set by `path_open`). A descriptor record MAY additionally carry a
-  `data` field (see §4 `fd_write` and §8 Open questions).
+  (a non-negative integer byte cursor). A descriptor record MAY additionally
+  carry a `data` field (see §4 `fd_write` and §8 Open questions).
 - **iovec:** the WASI-preview-1 scatter/gather descriptor: a 16-byte structure in
   guest memory holding a little-endian 64-bit **buffer pointer** followed by a
   little-endian 64-bit **buffer length**. A vectored I/O call is given a pointer
@@ -86,10 +85,8 @@ not redefined here.
   exposes its named keys and nothing else; any unimplemented key falls through to
   the base identity device `message@1.0`, and any *WASI* function it does not
   implement is handled by `wasm-64@1.0`'s undefined-import stub, not by this
-  device — see §9.) Realise this in `info/1` with **either** an `exports` list of
-  the named keys (unlisted keys auto-delegate to `message@1.0`) **or** a
-  `default => message@1.0` handler (the `dev_test` idiom — named functions resolve
-  by arity, everything else delegates); both give the same fall-through. The
+  device — see §9.) The module exports the named keys as functions and has no
+  `device_info`, so every other key resolves with `message@1.0`. The
   message-manipulation keys (`keys`, `set`, `set-path`, `remove`) are inherited
   unmodified from `message@1.0` and MUST NOT be shadowed.
 
@@ -101,10 +98,10 @@ not redefined here.
   - **State-wrapped keys** — `fd_write`, `fd_read`, `clock_time_get`. The import
     bridge (see below) delivers these a `Base` that is **not** the execution
     state itself but a wrapper carrying the execution state under the key
-    `state`. These handlers MUST read the execution state from `Base/state`, MUST
-    read the live WASM instance from that state's **private** `wasm/instance`
-    key, and MUST return their result as a wrapper `{ok, #{ state => NewState,
-    results => [...] }}` (§5).
+    `state`. These handlers MUST read the execution state from `Base/state`
+    (`fd_write` and `fd_read` also read the live WASM instance from that state's
+    **private** `wasm/instance` key), and MUST return their result as a wrapper
+    `{ok, #{ state => NewState, results => [...] }}` (§5).
   - **Direct-state keys** — `path_open`. This handler treats `Base` **as** the
     execution state directly: it reads the fd table from `Base/file-descriptors`
     and the WASM instance from `Base`'s **private** `wasm/instance` key (the
@@ -133,8 +130,10 @@ not redefined here.
      request path's final segment being `F` (so key `F` is resolved here) and the
      `Base` carrying the execution state under `state`;
   4. if this device does not implement `F`, the resolution returns
-     `not_found` and `wasm-64@1.0` falls back to its undefined-import stub, which
-     records the call and returns errno `0` with no state change (§9).
+     `{error, not_found}` and `wasm-64@1.0` falls back to its undefined-import
+     stub, which adds the call request to
+     `results/<output-prefix>/undefined-calls` of the state and returns errno
+     `0` (§9).
 
 - **Message shape (the device's own state).** After `init`, the execution
   message carries (publicly):
@@ -144,11 +143,10 @@ not redefined here.
   | `vfs` | message | the virtual filesystem (§5); after init contains `dev/stdin`, `dev/stdout`, `dev/stderr`, each an empty binary `<<>>` |
   | `file-descriptors` | message | the fd table (§5); after init contains fds `0`,`1`,`2` |
 
-  and (under the `wasm-64@1.0` standard-library wiring, written by `init`) the key
-  `<output-prefix>/stdlib/wasi_snapshot_preview1` set to the sub-message
-  `#{ device => "wasi@1.0" }`. With the canonical `wasm` output-prefix this key is
-  `wasm/stdlib/wasi_snapshot_preview1`; an implementation MUST write it under the
-  same output-prefix `wasm-64@1.0` uses so that the bridge path matches.
+  and (under the `wasm-64@1.0` standard-library wiring, set by `init`) the key
+  `wasm/stdlib/wasi_snapshot_preview1` set to the sub-message
+  `#{ device => "wasi@1.0" }`, whatever the output-prefix. The bridge path
+  matches only when `wasm-64@1.0` uses the output-prefix `wasm`.
 
 - **Request shape (the bridge request, for an implemented WASI call).** The
   request message this device's handlers read carries:
@@ -176,15 +174,14 @@ For each key: **Reads** (inputs from `Base`/`Req`/state), **Behaviour**,
 - **Behaviour:** Initialise the WASI environment on the message by writing three
   things (the result is the augmented message):
   1. **Standard-library wiring.** Set the key
-     `<output-prefix>/stdlib/wasi_snapshot_preview1` to the sub-message
+     `wasm/stdlib/wasi_snapshot_preview1` to the sub-message
      `#{ <<"device">> => <<"wasi@1.0">> }`, so that `wasm-64@1.0`'s import bridge
      routes `wasi_snapshot_preview1` calls to this device. **"Set the key" means an
      AO-Core `set` (e.g. `hb_ao:set`) that NESTS the slashed path into a walkable
      sub-message — NOT a flat top-level binary key `<<"wasm/stdlib/...">>`, which
-     the bridge cannot path-resolve into.** With the canonical output-prefix
-     `wasm`, the written key is `wasm/stdlib/wasi_snapshot_preview1`. An
-     implementation MUST use the same output-prefix as the surrounding
-     `wasm-64@1.0` device (typically `wasm`).
+     the bridge cannot path-resolve into.** The key does not depend on the
+     output-prefix, so the surrounding `wasm-64@1.0` device must use the
+     output-prefix `wasm`.
   2. **The fd table.** Set the public key `file-descriptors` to the initial fd
      table:
      - `"0"` → `#{ filename => "/dev/stdin",  offset => 0 }`
@@ -360,19 +357,16 @@ WASI-preview-1 `clock_time_get(clock_id, precision, time_ptr) -> errno`.
 - **VFS layout.** The VFS is a message at the `vfs` key. A file is addressed by
   its absolute path with the leading `/` folded into the key path:
   `/dev/stdout` ⇄ `vfs/dev/stdout`. File content is a **binary**; directories are
-  nested messages. Reading/writing a file is `get`/`set` of the key
-  `vfs/<path-without-leading-slash>`: **normalise away the leading `/`** so the key
-  is `vfs/dev/stdout` (single slash), matching what `init` writes. A descriptor's
-  stored filename and the key its content is read/written under MUST address the
-  same leaf — strip the leading `/` on both; do **not** concatenate `vfs/` ++
-  `/dev/stdout` into a `vfs//dev/stdout` double-slash key (normalise first). See §8.
+  nested messages. A file is read and set with `get`/`set` of the path `vfs/`
+  ++ the filename, e.g. `vfs//dev/stdout`; `hb_path:term_to_path_parts/2`
+  drops the empty part, so the path is `vfs/dev/stdout`, matching what `init`
+  sets. A descriptor's stored filename and the path its content is read and
+  set under MUST address the same leaf. See §8.
 - **fd table layout.** `file-descriptors` is a message whose keys are the
   **decimal-string** fd numbers (`"0"`, `"1"`, …). Each value is a descriptor
   record message with:
   - `filename` — binary, the VFS path the fd refers to (e.g. `/dev/stdout`);
   - `offset` — non-negative integer, the byte cursor;
-  - `index` — integer, the fd's own number (present on descriptors created by
-    `path_open`; not required on the initial `0`/`1`/`2` descriptors);
   - `data` — (optional) the file content the write path splices into (§8).
   The fd number used to index this table is the integer argument from the guest,
   rendered as its base-10 decimal string (no leading zeros; `0` renders as `"0"`).
@@ -414,8 +408,9 @@ WASI-preview-1 `clock_time_get(clock_id, precision, time_ptr) -> errno`.
   - **Entropy:** the device implements **no** randomness function (`random_get`
     is not provided). A guest call to `random_get` (or any other unimplemented
     WASI function) is handled by `wasm-64@1.0`'s undefined-import stub, which
-    returns errno `0` and changes no state — so it injects no entropy either. An
-    implementation MUST NOT add a host-entropy source.
+    returns errno `0` and only adds the call request to
+    `results/<output-prefix>/undefined-calls` — so it injects no entropy
+    either. An implementation MUST NOT add a host-entropy source.
   - **No other host I/O:** there is no real filesystem, network, environment, or
     args access; `fd_write`/`fd_read` operate solely on in-message VFS state.
   Consequently a `wasm-64@1.0` + `wasi@1.0` execution is reproducible: the same
@@ -451,9 +446,10 @@ WASI-preview-1 `clock_time_get(clock_id, precision, time_ptr) -> errno`.
   message surface. `message@1.0`'s private-key rules apply (the instance is never
   returned by `keys`/`get` of public keys, never committed).
 - **Unknown calls are inert, not fatal.** A WASI function this device does not
-  implement does not crash the guest; `wasm-64@1.0`'s stub records it and returns
-  success (errno `0`) with no state change. An implementation MUST NOT turn an
-  unimplemented WASI call into a hard error at this layer.
+  implement does not crash the guest; `wasm-64@1.0`'s stub records it in
+  `results/<output-prefix>/undefined-calls` and returns success (errno `0`). An
+  implementation MUST NOT turn an unimplemented WASI call into a hard error at
+  this layer.
 
 ## 8. Errors
 
@@ -465,11 +461,11 @@ This device originates very few errors; most "error" signalling is via WASI
   `results => [1]`.
 - **errno `0`** — success, returned by `fd_write`, `fd_read`, `path_open`, and
   the undefined-import stub.
-- **`not_found`** — returned (via `message@1.0`) when resolving a key the device
-  does not implement and that does not exist on the message (e.g. `stdout` when
-  the VFS has no `dev/stdout`). The import bridge interprets a `not_found` for an
-  unimplemented WASI **function** as "fall through to the undefined-import stub"
-  (§3, §9).
+- **`{error, not_found}`** — returned (via `message@1.0`) when resolving a key
+  the device does not implement and that does not exist on the message.
+  (`stdout/1` returns `not_found` when the VFS has no `dev/stdout`.) The import
+  bridge interprets `{error, not_found}` for an unimplemented WASI **function**
+  as "fall through to the undefined-import stub" (§3, §9).
 - **No hyphenated error atoms are defined by this device.** (It performs no
   validation that produces named errors; malformed guest memory or
   out-of-range pointers manifest as failures of the underlying memory-access
@@ -483,7 +479,7 @@ This device originates very few errors; most "error" signalling is via WASI
 - **Driven by `wasm-64@1.0` as its standard library.** This device is designed to
   be composed with `wasm-64@1.0`, not used alone. The canonical composition is a
   **`stack@1.0` fold** of `[wasi@1.0, wasm-64@1.0]` (in that order) whose
-  `output-prefix`/`input-prefix` are set to `wasm`, running the keys `init` then
+  `output-prefix` is set to `wasm`, running the keys `init` then
   `compute`. Concretely (the reference test wiring):
   - `device-stack = [wasi@1.0, wasm-64@1.0]`,
   - `output-prefixes = [wasm, wasm]`, `input-prefixes` as needed,
@@ -499,8 +495,8 @@ This device originates very few errors; most "error" signalling is via WASI
   under `wasm/stdlib/wasi_snapshot_preview1/state`; the handler returns
   `{state, results}`; the bridge extracts both and returns `results` to the guest
   while continuing with `state`. For an **un**implemented call, the bridge gets
-  `not_found`, records the call (under a results/undefined-calls list in the
-  state), and returns errno `0`.
+  `{error, not_found}`, records the call (under `results/wasm/undefined-calls`
+  in the state), and returns errno `0`.
 - **Output capture.** Because fds `1`/`2` map to VFS files `/dev/stdout` /
   `/dev/stderr`, a guest's stdout/stderr are observable after `compute` as
   `vfs/dev/stdout` / `vfs/dev/stderr` (or via the `stdout` convenience key). This
@@ -527,10 +523,10 @@ resolving the device's own keys directly.
 2. **Only the four host functions are implemented.** The device answers exactly
    `path_open`, `fd_write`, `fd_read`, `clock_time_get` as WASI host functions
    (plus the lifecycle/inspection keys `init`, `compute`, `stdout`). Any other
-   WASI function resolves to `not_found` at this device and is handled by
-   `wasm-64@1.0`'s undefined-import stub (errno `0`, no state change) — verifiable
-   by a guest that imports an unimplemented WASI call and observes it succeed
-   inertly.
+   WASI function resolves to `{error, not_found}` at this device and is handled
+   by `wasm-64@1.0`'s undefined-import stub (errno `0`; the call request is
+   added to `results/<output-prefix>/undefined-calls`) — verifiable by a guest
+   that imports an unimplemented WASI call and observes it succeed inertly.
 3. **fd_write captures stdout.** A guest that writes bytes `B` to fd `1` causes
    `vfs/dev/stdout` to equal `B` (for a single write from offset 0); `nwritten`
    in guest memory equals `byte_size(B)` (little-endian u64); the call returns
@@ -613,14 +609,12 @@ behaviour is under-pinned or where the standard WASI ABI is not followed.
    "current file content" it splices into from the **descriptor record's `data`
    field** (`file-descriptors/<fd>/data`), but writes the spliced result to the
    **VFS file** (`vfs/<filename>`). The initial descriptors (`0`/`1`/`2`) have no
-   `data` field, and nothing in the reference populates it, so the first write to
-   stdout/stderr splices into an absent/empty `data` (effectively starting from
-   `<<>>`). A reimplementer SHOULD treat the file's prior content as the VFS file
+   `data` field, and nothing in the reference populates it, so every write with
+   an iovec fails with `badarg` in `binary:part(not_found, 0, StartOffset)`.
+   A reimplementer SHOULD treat the file's prior content as the VFS file
    content (which is what readers and the `stdout` accessor observe); the
-   reference's use of `data` here appears to be a latent inconsistency. The
-   observable result for the common case (sequential writes to stdout from
-   offset 0) is the concatenation of the written bytes, which both readings agree
-   on. Pin the **VFS file** as the authoritative captured output.
+   reference's use of `data` here appears to be a latent inconsistency. Pin the
+   **VFS file** as the authoritative captured output.
 
 2. **VFS path key construction (double slash).** Filenames are stored **with**
    their leading `/` (e.g. `/dev/stdout`), and file content is read/written under

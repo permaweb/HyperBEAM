@@ -24,10 +24,10 @@ additional passes.
 ## 2. Concepts & terminology
 
 - **Subject:** the value whose identity is deduplicated. The subject is chosen by
-  the `dedup-subject` configuration (§3). By default it is the request's `body`;
-  it may be set to the literal string `request` to deduplicate the **entire
-  request message**, or to any other key name to deduplicate the value found
-  under that key.
+  the `dedup-subject` configuration (§3). By default it is the `body` of the
+  base, else of the request; it may be set to the literal string `request` to
+  deduplicate the **entire request message**, or to any other key name to
+  deduplicate the value found under that key.
 - **Subject ID:** the content/commitment identifier of the subject, as computed
   by `message@1.0`'s `id` over the subject selecting its signed commitments where
   present and otherwise its content (a 43-character base64url string). Two
@@ -251,7 +251,7 @@ All keys are **lowercase, hyphenated, binary on the wire**.
   `{error, _}` from its own logic; its outcomes are `{ok, _}` or `{skip, _}`.
 - Errors arising in delegated work propagate unchanged to the caller:
   - `message@1.0` ID-derivation errors for the subject (see the `message@1.0`
-    spec, e.g. `multiple-id-devices`).
+    spec).
   - `trie@1.0` operation errors (see the `trie@1.0` spec).
   - The delegated reserved keys (`keys`, `set`, `id`, `commit`) return exactly
     what `message@1.0` returns, including its error atoms (e.g. `not_found`).
@@ -300,8 +300,9 @@ observing the returned control signal / message / store writes:
 3. **First-pass gating.** With `pass` = 1 (or no `pass` key), the device performs
    the dedup check. With `pass` ≠ 1, the device returns `{ok, Base}` unchanged and
    does not consult or modify the seen set.
-4. **Subject default.** With no `dedup-subject`, the subject is the request's
-   `body`. (E.g. two requests with the same `body` ID dedup against each other.)
+4. **Subject default.** With no `dedup-subject`, the subject is the `body` of
+   the base, else of the request. (E.g. two requests with the same `body` ID
+   dedup against each other.)
 5. **`request` subject.** With `dedup-subject = request` (exact, case-sensitive),
    the subject is the entire request; two requests with the same `message@1.0` ID
    are treated as the same subject. A value such as `Request`/`REQUEST` is NOT the

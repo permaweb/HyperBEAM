@@ -182,10 +182,40 @@ do_find(StoreOpts = #{ <<"store-module">> := Mod }) ->
                     put(LookupName, EnsuredInstance),
                     EnsuredInstance
             catch
-                error:badarg -> spawn_instance(StoreOpts)
+                error:badarg -> start_via_singleton(StoreOpts, LookupName)
             end;
         InstanceMessage ->
             ensure_instance_alive(StoreOpts, InstanceMessage)
+    end.
+
+%% @doc Start a store in a process registered under its name, unless another
+%% process has, and return its instance. Others wait for that process to exit,
+%% then find the store again. A start that fails raises in the caller.
+start_via_singleton(StoreOpts, LookupName) ->
+    Caller = self(),
+    Starter =
+        hb_name:singleton(
+            LookupName,
+            fun() ->
+                Result =
+                    try {ok, persistent_term:get(LookupName)}
+                    catch error:badarg ->
+                        try {ok, spawn_instance(StoreOpts)}
+                        catch Class:Reason:Stack -> {Class, Reason, Stack}
+                        end
+                    end,
+                Caller ! {store_started, self(), Result}
+            end
+        ),
+    Ref = erlang:monitor(process, Starter),
+    receive
+        {store_started, Starter, {ok, Instance}} ->
+            erlang:demonitor(Ref, [flush]),
+            Instance;
+        {store_started, Starter, {Class, Reason, Stack}} ->
+            erlang:demonitor(Ref, [flush]),
+            erlang:raise(Class, Reason, Stack);
+        {'DOWN', Ref, process, Starter, _} -> do_find(StoreOpts)
     end.
 
 %% @doc Create a new instance of a store and return its term.
@@ -1411,6 +1441,8 @@ prefix_pipeline_test() ->
 %% @doc Resetting a store preserves visibility for existing readers.
 reset_shared_instance_test() ->
     Store = hb_test_utils:test_store(hb_store_volatile),
+    % Two processes that first use a store at once find one instance of it.
+    ?assertMatch([I, I], hb_pmap:parallel_map([Store, Store], fun find/1, 2)),
     ok = write(Store, #{ <<"before">> => <<"old">> }, #{}),
     {PID, Ref} =
         spawn_monitor(

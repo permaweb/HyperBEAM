@@ -50,21 +50,22 @@ of scope.
   optionally `Error` (§5.2). Consumed by `from` and on the second pass.
 - **Handler envelope (JSON):** when read out of a WASM environment, the result
   structure is wrapped as `{ "ok": <bool>, "response": <result-structure> }`
-  (success) or `{ "ok": false, "error": <value> }` (failure) — see §4.2, §5.3.
+  (success) or `{ "ok": false, "response": <value> }` (failure) — see §4.2,
+  §5.3.
 - **Pass:** one full sweep of the surrounding execution stack, tracked by the
   message key `pass` (1-based). This device branches on `pass`: `1` = stage,
   `2` = collect. (See `multipass@1.0` for the pass mechanism.)
-- **Output prefix:** an optional key `output-prefix` on the base message naming
-  the sub-namespace under `results/` where the cooperating WASM device places
-  its `type` and `output`, and under which the staged call arguments and read
-  hooks live. Defaults to the **empty binary** (so paths are `results/type`,
-  `results/output`). Read with case-insensitive message semantics.
+- **Output prefix:** an optional key `output-prefix` on the base message: the
+  sub-namespace under `results/` where the cooperating WASM device places its
+  `type` and `output`, and the prefix of the keys of its private `write` and
+  `read` hooks. Defaults to the **empty binary** (so paths are `results/type`,
+  `results/output`). Read with `message@1.0` semantics.
 - **results message:** the AO-Core message this device produces from a result
   structure: a map with keys `outbox`, `patches`, `data` (§4.2/§5.2). On the
   compute path it is written under the base message's `results` key.
-- **Owner / signer address:** the 43-character base64url address of the
-  message's primary committer (first signer). "base64url" is used everywhere on
-  the wire — never hex.
+- **Owner / signer address:** `hb_util:committer_address/1` of the message's
+  primary committer (first signer): the 43-character base64url address of a
+  `did-ar@1.0` committer; any other committer as it is.
 - **Printable string:** a binary that is valid UTF-8 (decodes without error).
   Used to decide whether `Data` is emitted as a string or as JSON `null` (§5.1).
 
@@ -97,7 +98,7 @@ schemas, the resolved-key contracts, and the result-mapping rules are normative.
   | `process` | message | yes | the process definition message |
   | `process/image` | binary (id) | yes | the WASM image/module id → JSON `Module` |
   | `output-prefix` | binary | no (default `<<>>`) | sub-namespace under `results/` (§2) |
-  | `results/<prefix>/type` | binary | yes on pass 2 | `ok` or `error` (from the WASM device) |
+  | `results/<prefix>/type` | atom \| binary | yes on pass 2 | `ok` or `error` (the WASM device gives the atom `ok`) |
   | `results/<prefix>/output` | binary | yes on pass 2 | the handler's raw JSON output |
   | a private staging area | — | optional | per-prefix `write`/`read` hooks the WASM device installs (§4.1) |
 
@@ -118,13 +119,14 @@ schemas, the resolved-key contracts, and the result-mapping rules are normative.
 - **Reads:** the base message only.
 - **Behaviour:** Initialise the device for use in a stack. It MUST set the base
   message's `function` key to the binary `handle` (the legacy entrypoint name)
-  and return the resulting message. No other change is made.
+  and return the resulting message. As with any `message@1.0` `set`, adding
+  `function` drops the base's `commitments`; no other change is made.
 - **Returns:** `{ok, BaseMessage'}` where `BaseMessage'` has `function => handle`.
 - **Side effects:** none external.
 
 ### `compute` (Base, Req → result)
-- **Reads:** `pass` from the base message (case-insensitive); then, depending on
-  pass, the inputs listed under each sub-behaviour below.
+- **Reads:** `pass` from the base message; then, depending on pass, the inputs
+  listed under each sub-behaviour below.
 - **Behaviour:** Branch on the integer value of `pass`:
   - `pass == 1` → **stage** (§4.1).
   - `pass == 2` → **collect** (§4.2).
@@ -168,7 +170,7 @@ schemas, the resolved-key contracts, and the result-mapping rules are normative.
 - **Reads:**
   - `output-prefix` from the base message (default `<<>>`).
   - `results/<prefix>/type` from the base message — the WASM device's status
-    (`ok` or `error`, compared case-insensitively).
+    (`ok` or `error`, as an atom or a binary; compared case-sensitively).
   - `results/<prefix>/output` from the base message — the handler's raw JSON.
   - `process` from the base message — for outbox post-processing (§5.2).
   - any per-prefix read hook in the private area (§9): if present, the raw
@@ -187,14 +189,18 @@ schemas, the resolved-key contracts, and the result-mapping rules are normative.
         `from-process => <process id>` and `from-image => <process image>`.
      c. Set the base message's `results` key to the post-processed results
         message and return `{ok, BaseMessage'}`.
-     d. **If parsing throws** (the output is not valid JSON / not the expected
-        envelope) → return an error: set `results/outbox` to the unset sentinel
-        and `results/body` to `"JSON error parsing result output."` on the base
-        message, and return it as an error.
+     d. **If parsing throws** (the output is not valid JSON) → return an error:
+        set `results/outbox` to the unset sentinel and `results/body` to
+        `"JSON error parsing result output."` on the base message, and return
+        it as an error.
+     e. If the envelope is `{ "ok": false, … }` → return `{error, Response}`,
+        where `Response` is its `response` (`<<"AOS execution error.">>` if it
+        has none). Any other envelope raises `error({try_clause, Envelope})`.
   3. A `type` that is neither `ok` nor `error` is unspecified by this device
      (the cooperating WASM device is expected to produce one of the two).
-- **Returns:** `{ok, BaseMessage'}` on success (with `results` populated), or an
-  error carrying the base message annotated as in steps 1/2d.
+- **Returns:** `{ok, BaseMessage'}` on success (with `results` populated), an
+  error carrying the base message annotated as in steps 1/2d, or the
+  `{error, Response}` of step 2e.
 - **Side effects:** whatever the read hook performs. No commitments are created.
 
 ### `to` (Base, Req → result) — message → JSON Message structure
@@ -218,8 +224,7 @@ schemas, the resolved-key contracts, and the result-mapping rules are normative.
   applied only on the compute path, which has the process in hand).
 - **Returns:** `{ok, ResultsMessage}` on a normal result; or, for the failure
   shapes, the error values of §8 (`{error, <Error>}` for an explicit
-  `{ "ok": false, "error": … }`; an `invalid-json-message-input` style error for
-  an unrecognised shape).
+  `{ "ok": false, "error": … }`; `{error, ErrorMap}` for an unrecognised shape).
 - **Side effects:** none.
 
 ## 5. Data formats & encodings (normative)
@@ -234,15 +239,15 @@ For a subject message, emit a JSON object with **exactly** these members
 
 | JSON field | Type | Value |
 |---|---|---|
-| `Id` | string \| `""` | The message's **default** id — `hb_ao:get(<<"id">>, Msg)` (`hb_message:id/1`, no selector): the content (unsigned) id, **not** the signed id — human-readable (base64url). Empty string if absent. |
+| `Id` | string \| `""` | `hb_message:id(Msg, all)`: the ID of the message's signed commitments, or its unsigned ID if it has none — human-readable (base64url). Empty string if absent. |
 | `Anchor` | string | The message's `anchor` value (legacy "last_tx"); `""` if absent. |
-| `Owner` | string \| `""` | base64url of the **primary signer's address** (native id of the first committer). `""` if the message is unsigned. |
+| `Owner` | string \| `""` | `hb_util:committer_address/1` of the **primary signer** (the first committer): the base64url address of a `did-ar@1.0` committer; any other committer as it is. `""` if the message is unsigned. |
 | `From` | string | The message's `from-process` tag if present; otherwise **`Owner` itself** (the signer's human-readable address — NOT `base64url(Owner)`, which would double-encode). If the value is an id (binary of 32/42/43 bytes), normalised to human-readable id form (an address already is). |
 | `Tags` | array | The message's tags as an ordered list (§5.5). |
 | `Target` | string | The message's `target` value, human-readable id; `""` if absent. |
 | `Data` | string \| `null` | The message's `data` value if it is a printable (valid-UTF-8) string; otherwise JSON `null`. `""`-equivalent empty data is emitted as `""` if printable. |
 | `Signature` | string \| `""` | `""` if the message is unsigned (0-byte signature); the base64url of the signature if it is a 512-byte (RSA-2048) signature; otherwise the signature value as-is. |
-| `PublicKey` | string \| `""` | The primary commitment's signing public key id, with any `scheme:` prefix removed; `""` if unsigned. |
+| `PublicKey` | string \| `""` | The primary commitment's `public-key`, or else its `owner`; `""` if it has neither or the message is unsigned. |
 
 Field-derivation rules (MUST):
 
@@ -251,9 +256,10 @@ Field-derivation rules (MUST):
   `Signature`, and `PublicKey` are all `""`, and `From` defaults from the
   (empty) owner.
 - **`Owner` encoding.** With the `owner-as-address` rule (used by both the
-  compute staging path and the `to` key), `Owner` is the base64url of the
-  signer's **native address** (the account address, 43-char base64url). The
-  device MUST NOT place a full public key in `Owner` on these paths.
+  compute staging path and the `to` key), `Owner` is
+  `hb_util:committer_address/1` of the signer: the address of a `did-ar@1.0`
+  committer (43-char base64url); any other committer as it is. The device MUST
+  NOT place a full public key in `Owner` on these paths.
 - **`Id` and `Target` and `From`-when-id** are passed through a *safe id*
   normalisation: an empty value stays `""`; otherwise it is rendered as a
   human-readable id (32-byte → base64url-encoded; an already-human id of
@@ -301,16 +307,14 @@ Given a parsed **result structure** object, produce a results message with keys
    `#{1 => Msg1, 2 => Msg2, …}`), in `Messages` input order — mapping to each
    outgoing message, each passed through **outbox-message preprocessing** (step 4).
    The list order of `Messages` is preserved by the ascending integer keys.
-3. **`patches`** is the list of each patch passed through **patch
-   normalisation** (step 4's tag-folding + unset-conversion, but **without** the
-   key-dropping/normalisation that outbox messages get): for each patch, fold its
-   `tags` into top-level key/value pairs (§5.5 inverse) and convert any
-   `"__ao-unset__"` value to the unset sentinel (§5.6).
+3. **`patches`** is the list of each patch's `Tags` as a key/value map (§5.5
+   inverse), with any `"__ao-unset__"` value converted to the unset sentinel
+   (§5.6). The other keys of a patch are dropped.
 4. **Outbox-message preprocessing** (per outgoing message, MUST):
-   a. Lower-case-normalise the message's keys; read its `tags` (a list of
-      `{name,value}`; §5.5) into a flat key/value map.
-   b. Remove the keys `from-process`, `from-image`, `anchor`, and `tags` from the
-      message.
+   a. Read its `Tags` (a list of `{name,value}`; §5.5) into a flat key/value
+      map.
+   b. Remove the keys `from-process`, `from-image`, `anchor`, and `Tags` from
+      the message.
    c. Merge the folded tag key/values **over** the remaining (normalised) message
       keys (tags win on conflict).
    d. Convert any `"__ao-unset__"` value (recursively, into nested maps) to the
@@ -324,7 +328,8 @@ Given a parsed **result structure** object, produce a results message with keys
    (`hb_message:id(Process, signed, …)`) even when the process is committed, and
    it is NOT re-normalised through any id-coercion helper — stamp it verbatim.**
    The `from`/codec key does **not** perform this step (no process is available);
-   the compute path does.
+   the compute path does. On the compute path, `message@1.0` `set` of the
+   post-processed `outbox` gives it the binary keys `<<"1">>`, `<<"2">>`, ….
 6. **`data`** is the `Data` from step 1.
 
 The produced results message is therefore:
@@ -338,10 +343,10 @@ the JSON object:
 
 - **Success:** `{ "ok": true, "response": <result-structure> }` — the device
   converts `<result-structure>` per §5.2.
-- Any other parsed shape, or a parse failure, is a JSON/result error (§8). In
-  particular `{ "ok": false, "error": <value> }` read directly by the `from`
-  key maps to `{error, <value>}` (§8); on the compute path a non-`{ok:true}`
-  envelope is treated as a parse error and yields the JSON-error result.
+- On the compute path a parse failure yields the JSON-error result (§8);
+  `{ "ok": false, "response": <value> }` yields `{error, <value>}`; any other
+  envelope raises `error({try_clause, Envelope})`. The `from` key maps
+  `{ "ok": false, "error": <value> }` to `{error, <value>}` (§8).
 
 ### 5.4 Denormalisation (compute staging only)
 
@@ -351,14 +356,11 @@ Before building the message structure on pass 1, the scheduled message is
 - Add `id => <message id>` (the full message id; human-readable base64url).
 - If the message has **no** signers, leave owner/signature untouched.
 - If the message has signers, add:
-  - `owner => <primary signer address, human-readable>` (base64url account
-    address), and
+  - `owner => hb_util:committer_address(<primary signer>)` (§2), and
   - `signature => <primary commitment's signature value, or "" if none>`.
 
-(The `to` key does not denormalise; it derives `Owner`/`Signature` directly from
-the commitments as in §5.1. Denormalisation exists so that an already-evaluated /
-relayed message that carries `owner`/`signature` as plain fields surfaces them to
-the legacy handler.)
+(The `to` key does not denormalise. Both paths derive `Owner`/`Signature` from
+the commitments as in §5.1.)
 
 ### 5.5 Tags serialisation (`Tags` field)
 
@@ -370,23 +372,25 @@ A message's `Tags` array is produced as follows (MUST):
   preserves duplicate keys and exact original casing/order from a re-encoded
   ANS-104 item.)
 - **Otherwise** (no original-tags) → emit one `{ "name": <Header-Case-Name>,
-  "value": <Value> }` object **per remaining message field**, where:
+  "value": <Value> }` object **per remaining field of the message's TABM**
+  (`structured@1.0`; a field whose value in the message is a list gives one
+  object per element), where:
   - the fields `id`, `anchor`, `owner`, `data`, `target`, `signature`, and
     `commitments` are **excluded** (they are represented by their own structure
     fields, not as tags);
-  - each remaining key is rendered in **HTTP header case**: split the
-    normalised (lower-cased) key on `-`, title-case each segment, and re-join
-    with `-` (e.g. `block-height` → `Block-Height`, `from-process` →
-    `From-Process`, `action` → `Action`);
+  - each remaining key is rendered in **HTTP header case**: split the key on
+    `-`, title-case the first character of each segment, and re-join with `-`
+    (e.g. `block-height` → `Block-Height`, `from-process` → `From-Process`,
+    `action` → `Action`);
   - values are emitted as-is (binary → JSON string).
   - The order of non-`original-tags` entries is **unspecified** (derived from
     map iteration); consumers MUST NOT depend on it. Only the `original-tags`
     path guarantees order.
 
 The **inverse** (folding a JSON message's `Tags` back into a flat map, used in
-§5.2 step 4a and for patches) is: lower-case the message's keys, take its `tags`
-list, and produce a map from each tag's `name` (key) to its `value`. Tag names
-are used as-is for the key (callers normalise as needed).
+§5.2 step 4a and for patches) is: take the message's `Tags` list, and produce a
+map from each tag's `name` (key) to its `value`. Tag names are used as-is for
+the key.
 
 ### 5.6 Unset sentinel
 
@@ -400,7 +404,7 @@ key-removal mechanism. Non-string and nested-map values are passed through
 
 ### 5.7 Identifier & value encodings (summary)
 
-- All ids (`Id`, `Target`, `From`-when-id, `owner`, process id, image id) are
+- All ids (`Id`, `Target`, `From`-when-id, process id, image id) are
   **base64url**, never hex. 32-byte native ids are base64url-encoded to 43-char
   form; already-human ids (42/43/44 chars) pass through.
 - `Owner` is the **address**, not the public key, on the `to` and compute paths.
@@ -426,28 +430,29 @@ key-removal mechanism. Non-string and nested-map values are passed through
 
 - The device performs **no authorisation checks** and requires no commitment to
   invoke any of its keys; it is a representation transform. It creates **no
-  commitments** and removes none — it never re-signs a message.
-- On the staging path it surfaces the scheduled message's **own** signer
-  address, signature, and signing-key id into the JSON for the legacy handler;
-  these are derived from the message's existing commitments and are not minted by
-  this device.
+  commitments** — it never re-signs a message. Adding a key to the base (`init`,
+  `compute`) drops the base's `commitments` (`message@1.0` `set`).
+- On the staging path it puts the scheduled message's **own** signer address,
+  signature, and public key into the JSON for the legacy handler; these are
+  derived from the message's existing commitments, not created by this device.
 - Private keys of the subject message are excluded from the JSON: the
   message-structure builder operates on a representation with the private area
   reset/removed and `commitments` stripped before scalar reads, so private fields
   do not leak into `Tags`/`Data`/etc.
 - **Failure-closed on result errors.** A WASM `type == error`, an unparseable
-  result, or an unrecognised result shape yields an **error** outcome (not a
-  silently-empty success), so a failed evaluation cannot masquerade as an empty
-  successful one.
+  result, or a result that is not a map yields an **error** outcome (not a
+  silently-empty success).
 
 ## 8. Errors
 
 | Condition | Outcome |
 |---|---|
 | `compute` pass 2, `results/<prefix>/type == error` | Error outcome; base message annotated with `outbox => <unset>` and `results => { "body": "WASM execution error." }`. |
-| `compute` pass 2, output parses but is not the `{ ok:true, response:… }` envelope, or is not valid JSON | Error outcome; base message annotated with `results/outbox => <unset>` and `results/body => "JSON error parsing result output."`. |
+| `compute` pass 2, output is not valid JSON | Error outcome; base message annotated with `results/outbox => <unset>` and `results/body => "JSON error parsing result output."`. |
+| `compute` pass 2, output parses to `{ ok:false, … }` | `{error, Response}`: its `response`, or `<<"AOS execution error.">>` if it has none. |
+| `compute` pass 2, output parses to an envelope other than `{ ok:true, response:… }` or `{ ok:false, … }` | Raises `error({try_clause, Envelope})`. |
 | `from` / result mapping, subject is `{ "ok": false, "error": <E> }` | `{error, <E>}` — the explicit error value, passed through unchanged. |
-| `from` / result mapping, subject is neither a normal result nor the explicit-error shape | The outcome is **`{error, ErrorMap}`** where `ErrorMap` carries the human-readable message under the **`error`** key (NOT `body`): `#{ <<"error">> => <<"Invalid JSON message input.">>, <<"received">> => <Term> }`. (Hyphenated atom form of the condition: `invalid-json-message-input`.) An "unrecognised shape" = a decoded subject that is **not** a map/object (e.g. a JSON array, number, or bare string), OR a map carrying none of `Output`/`Messages`/`patches`/`Error`/`Data`. |
+| `from` / result mapping, subject is neither a normal result nor the explicit-error shape | The outcome is **`{error, ErrorMap}`** where `ErrorMap` carries the human-readable message under the **`error`** key (NOT `body`): `#{ <<"error">> => <<"Invalid JSON message input.">>, <<"received">> => <Term> }`. An "unrecognised shape" = a decoded subject that is **not** a map/object (e.g. a JSON array or number). |
 | atom/type decode within a nested conversion | surfaced as the underlying codec's error (see `structured@1.0`). |
 
 Notes:
@@ -524,11 +529,13 @@ a key against a constructed message (or by parsing a known JSON input):
    object whose members are exactly `Id`, `Anchor`, `Owner`, `From`, `Tags`,
    `Target`, `Data`, `Signature`, `PublicKey` (plus `Module`/`Block-Height` only
    on the staged message), with the casing shown. No other top-level members are
-   emitted.
+   emitted, except `ao-types` in the staged JSON when a value is a binary that
+   is not UTF-8 text (given as its base64url, typed `binary`).
 6. **Owner/Signature/PublicKey for a signed message.** For a signed subject:
-   `Owner` is the signer's 43-char base64url **address**; `Signature` is the
-   base64url of the (512-byte RSA) signature; `PublicKey` is the signing key id
-   with any `scheme:` prefix removed. For an unsigned subject all three are `""`.
+   `Owner` is the signer's 43-char base64url **address** (for a `did-ar@1.0`
+   committer; any other committer as it is); `Signature` is the base64url of
+   the (512-byte RSA) signature; `PublicKey` is the commitment's `public-key`,
+   or else its `owner`. For an unsigned subject all three are `""`.
 7. **`Data` rule.** A printable-UTF-8 `data` is emitted as a JSON string;
    non-UTF-8 (binary) `data` is emitted as JSON `null`.
 8. **`From` rule.** `From` is the message's `from-process` if present, else
@@ -537,16 +544,17 @@ a key against a constructed message (or by parsing a known JSON input):
    (the address already is).
 9. **`Tags` rule.** With an ANS-104 `original-tags` present, `Tags` is the
    original ordered `{name,value}` list (order preserved). Otherwise `Tags` is
-   one header-cased `{name,value}` per remaining field, **excluding** `id`,
-   `anchor`, `owner`, `data`, `target`, `signature`, `commitments`; keys are
-   rendered in `Header-Case` (e.g. `block-height` → `Block-Height`).
+   one header-cased `{name,value}` per remaining field (one per element of a
+   field whose value is a list), **excluding** `id`, `anchor`, `owner`, `data`,
+   `target`, `signature`, `commitments`; keys are rendered in `Header-Case`
+   (e.g. `block-height` → `Block-Height`).
 10. **Result mapping (`from`).** A result structure with `Output`/`Messages`/
     `patches` maps to `{ outbox, patches, data }`: `outbox` is keyed by 1-based
     integer position over `Messages` (input order preserved); `data` is
     `Output.data` (lowercase) if present else top-level `Data` (capitalised) else
-    `""`; `patches` is the patch list with tags folded and unset converted.
+    `""`; `patches` is each patch's `Tags` as a map, with unset converted.
 11. **Outbox preprocessing.** Each outbox message has `from-process`,
-    `from-image`, `anchor`, `tags` removed; its `tags` folded into top-level
+    `from-image`, `anchor`, `Tags` removed; its `Tags` folded into top-level
     key/values (overriding remaining keys); `"__ao-unset__"` values converted to
     the unset sentinel.
 12. **Outbox post-processing (compute path).** After a successful pass-2 collect,
@@ -555,18 +563,21 @@ a key against a constructed message (or by parsing a known JSON input):
     `from-image => <process image>`. The `from` codec key does **not** add these.
 13. **Handler envelope.** On pass-2 collect with `type == ok`, the output is
     parsed as `{ ok:true, response:R }` and `R` is mapped per §5.2; a parse
-    failure or non-`{ok:true}` envelope yields the JSON-error result
-    (`results/body => "JSON error parsing result output."`), and `type == error`
-    yields the WASM-execution-error result
+    failure yields the JSON-error result
+    (`results/body => "JSON error parsing result output."`), `{ ok:false, … }`
+    yields `{error, Response}` (§8), any other envelope raises
+    `error({try_clause, Envelope})`, and `type == error` yields the
+    WASM-execution-error result
     (`results => { body: "WASM execution error." }`).
 14. **Explicit error result.** `from` of `{ "ok": false, "error": E }` returns
-    `{error, E}`; `from` of an unrecognised shape returns an error carrying an
-    `invalid-json-message-input`-style message and the received value.
+    `{error, E}`; `from` of an unrecognised shape returns `{error, ErrorMap}`
+    with the `error` message and the `received` value (§8).
 15. **Unset conversion.** A `"__ao-unset__"` value (including nested) in a patch
     or outbox message becomes the unset sentinel; non-string values are
     untouched.
-16. **Encodings.** Every id/address/signature emitted is base64url (never hex);
-    `Module`/process/image ids are base64url; `Block-Height` is a JSON number.
+16. **Encodings.** Every id emitted, the address of a `did-ar@1.0` committer and
+    a 512-byte signature are base64url (never hex); `Module`/process/image ids
+    are base64url; `Block-Height` is a JSON number.
 17. **Commitments stripped for scalar reads.** `Anchor`/`Data`/`Target`/`From`
     are read from the subject with `commitments` removed, so a commitment sub-map
     cannot shadow them.
@@ -583,7 +594,7 @@ a key against a constructed message (or by parsing a known JSON input):
   encoder/decoder is available) and the **`structured@1.0`** TABM byte layout.
 - The cryptography of commitments / the `httpsig@1.0` and `ans104@1.0`
   commitment devices (only their observable `original-tags`/`signature`/
-  `committer`/`keyid` surfaces are referenced).
+  `committer`/`public-key`/`owner` surfaces are referenced).
 - The surrounding **`process@1.0`** orchestration, scheduling, the `pass`
   increment mechanism (`stack@1.0`/`multipass@1.0`), and result caching/freshness
   policy.
@@ -594,22 +605,16 @@ a key against a constructed message (or by parsing a known JSON input):
 
 - **`Spawns` and `Assignments` are not consumed.** A legacy CU result nominally
   may carry `Output`, `Messages`, `Spawns`, and `Assignments`. This device reads
-  only `Output` (→ `data`), `Messages` (→ `outbox`), `patches` (→ `patches`), and
-  `Error`. Spawns are expected to arrive folded into `Messages` (a spawn is a
-  message marked as a process), and `Assignments` are not handled at all. A spec
-  consumer relying on separate `Spawns`/`Assignments` arrays would diverge —
-  confirm whether the legacy contract truly folds these into `Messages` or
-  whether this device intentionally drops them.
+  only `Output` and `Data` (→ `data`), `Messages` (→ `outbox`), `patches`
+  (→ `patches`), and `Error`. Spawns are expected to arrive folded into
+  `Messages` (a spawn is a message marked as a process), and `Assignments` are
+  not handled at all. A spec consumer relying on separate `Spawns`/`Assignments`
+  arrays would diverge — confirm whether the legacy contract truly folds these
+  into `Messages` or whether this device intentionally drops them.
 - **Non-`original-tags` `Tags` order is unspecified.** When a message has no
   ANS-104 `original-tags`, the `Tags` array order is map-iteration order. If a
   legacy handler is order-sensitive on tags, this is a latent incompatibility;
   consider mandating a sorted order on that path.
-- **`From` default uses base64url-of-owner-address.** The default `From` is the
-  base64url encoding of the already-base64url owner address (i.e. an extra
-  encoding hop), then id-normalised. Confirm the intended exact byte value of
-  `From` for an ordinary signed user message (it should be the owner address) —
-  the double-encode-then-normalise path is subtle and worth pinning against the
-  legacy expectation.
 - **`Signature` for non-512-byte committers.** A non-RSA (e.g. ECDSA/Ethereum)
   signature is passed through **as-is** rather than base64url-encoded. Confirm
   the legacy handler's expectation for such signatures, or mandate base64url for

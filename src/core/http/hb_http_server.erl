@@ -142,7 +142,6 @@ start_application() ->
                 throw({failed_to_load_config, Loc, Reason})
         end,
     MergedConfig = hb_maps:merge(EnvConfig, Loaded),
-    hb_http_client:setup_conn(MergedConfig),
     %% Apply store defaults before starting store
     StoreOpts = hb_opts:get(store, no_store, MergedConfig),
     StoreDefaults = hb_opts:get(store_defaults, #{}, MergedConfig),
@@ -1028,12 +1027,17 @@ reply(InitReq, TABMReq, Result, Opts) ->
     ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
     % A reply to a `HEAD' request, or with a 204 or 304 status, carries no
-    % body, so it carries no `content-digest' either.
+    % body, so it carries no `content-digest' either. Every other reply carries
+    % the `content-length' of its body: without it, hackney reads a reply whose
+    % connection closes early as a whole reply.
     ReplyHeaders =
         case cowboy_req:method(Req) of
             Method when Method == <<"HEAD">>; Status == 204; Status == 304 ->
                 hb_maps:without([<<"content-digest">>], HeadersWithCors, Opts);
-            _ -> HeadersWithCors
+            _ ->
+                HeadersWithCors#{
+                    <<"content-length">> => hb_util:bin(byte_size(EncodedBody))
+                }
         end,
     EncodedHeaders = hb_private:reset(ReplyHeaders),
     ?event(debug_http,
@@ -2285,7 +2289,7 @@ cors_get_test() ->
             }
         }),
     % The CORS headers are headers of the HTTP reply, not keys of its message.
-    {ok, 200, Headers, _} =
+    {ok, 200, Headers, Body} =
         hb_http_client:request(
             #{
                 peer => URL,
@@ -2304,6 +2308,11 @@ cors_get_test() ->
     ?assertEqual(
         <<"application/json">>,
         proplists:get_value(<<"content-type">>, Headers)
+    ),
+    % The reply carries the length of its body, so a cut reply is an error.
+    ?assertEqual(
+        hb_util:bin(byte_size(Body)),
+        proplists:get_value(<<"content-length">>, Headers)
     ).
 
 index_test() ->

@@ -45,6 +45,13 @@
 %% to the `/generate' path with the `salt' request key.
 -define(DEFAULT_SALT, <<"constant:ao">>).
 
+%% @doc The largest PBKDF2 iteration count and key length a request may demand,
+%% bounding the work one unauthenticated request can cause. Nodes may override
+%% them with the `http_auth_max_iterations' and `http_auth_max_key_length'
+%% options.
+-define(MAX_ITERATIONS, 5_000_000).
+-define(MAX_KEY_LENGTH, 256).
+
 %% @doc Generate or extract a secret and bind it to the base message by
 %% recording its committer.
 -spec commit(
@@ -164,6 +171,24 @@ derive_key(Decoded, Req, Opts) ->
         ),
     Iterations = hb_maps:get(<<"iterations">>, Req, 2 * 600_000, Opts),
     KeyLength = hb_maps:get(<<"key-length">>, Req, 64, Opts),
+    MaxIterations = hb_opts:get(http_auth_max_iterations, ?MAX_ITERATIONS, Opts),
+    MaxKeyLength = hb_opts:get(http_auth_max_key_length, ?MAX_KEY_LENGTH, Opts),
+    case Iterations =< MaxIterations andalso KeyLength =< MaxKeyLength of
+        false ->
+            {error,
+                #{
+                    <<"status">> => 400,
+                    <<"details">> =>
+                        <<"PBKDF2 iterations or key-length above node maxima.">>
+                }
+            };
+        true ->
+            derive_key(Alg, Decoded, Salt, Iterations, KeyLength)
+    end.
+
+%% @doc Run PBKDF2 over the authentication information with the given
+%% parameters and return the encoded key.
+derive_key(Alg, Decoded, Salt, Iterations, KeyLength) ->
     ?event(key_gen,
         {derive_key,
             {alg, Alg},
@@ -195,6 +220,25 @@ derive_key(Decoded, Req, Opts) ->
     end.
 
 %%% Tests
+
+%% @doc A request whose PBKDF2 parameters exceed the node's maxima is refused
+%% rather than run, bounding the work one request can demand.
+excessive_pbkdf2_parameters_rejected_test() ->
+    Auth = <<"Basic ", (base64:encode(<<"user:pass">>))/binary>>,
+    Req =
+        #{
+            <<"path">> => <<"generate">>,
+            <<"authorization">> => Auth,
+            <<"iterations">> => 2000
+        },
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"http-auth@1.0">> },
+            Req,
+            #{ <<"http-auth-max-iterations">> => 1000 }
+        )
+    ).
 
 benchmark_pbkdf2_test() ->
     Key = crypto:strong_rand_bytes(32),

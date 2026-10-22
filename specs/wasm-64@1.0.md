@@ -16,8 +16,9 @@ exchanged across the host boundary are 64-bit integers.
 The device is an **execution device**: it is designed to be driven inside a
 multi-pass process stack (e.g. `process@1.0`). The stack calls `init` once to
 boot the instance, `compute` on each pass to run a function, `snapshot` to
-capture a resumable memory image for checkpoint/replay, `normalize` to restore
-an instance from such an image, and `terminate` to tear the instance down.
+capture a resumable memory image for checkpoint/replay, and `normalize` to
+restore an instance from such an image. `terminate` tears the instance down;
+no stack or process calls it.
 
 Crucially, the device does **not** define what WASM imports (host functions)
 do. Every call the running module makes *out* to the host is reflected back
@@ -45,14 +46,13 @@ implementations.
 - **Input prefix:** the key path, relative to the base message, under which the
   device reads its *inputs* (notably `image`). Read from the base message key
   `input-prefix`; default the empty prefix (inputs read at the top level).
-- **Output prefix:** the key path under which the device reads/writes its *own*
-  state — the private instance handle and helpers, the public results, and the
-  stdlib mount point. Read from the base message key `output-prefix`; default
-  the empty prefix. Throughout this spec `<OUT>` denotes the output prefix and
-  `<IN>` the input prefix. When a prefix is the empty binary, the leading
-  `<prefix>/` collapses (e.g. `<OUT>/instance` with empty `<OUT>` is `instance`,
-  `<OUT>/results/...` is `results/...`; an empty-prefix path never begins with a
-  stray `/`).
+- **Output prefix:** the key path under which the device reads/sets its *own*
+  state — the private instance handle and helpers, and the stdlib mount point;
+  the public results are under `results/<OUT>/`. Read from the base message key
+  `output-prefix`; default the empty prefix. Throughout this spec `<OUT>`
+  denotes the output prefix and `<IN>` the input prefix. When a prefix is the
+  empty binary, its `/` is dropped (e.g. `<OUT>/instance` with empty `<OUT>`
+  is `instance`, and `results/<OUT>/output` is `results/output`).
 - **Import / host function:** a function the WASM module imports and calls at
   runtime. Each WASM import is identified by a `(module, field)` pair and a type
   **signature**. When invoked, the host suspends the module, resolves the call
@@ -109,11 +109,11 @@ implementations.
   - `input-prefix`, `output-prefix` from `Base` (via `message@1.0` `get`;
     defaults empty).
   - `<IN>/image` from `Base`. Resolution rules, in order:
-    1. **Reference (content identifier):** if the value is an **ID** — a base64url
-       content-id per the platform's id predicate (43 chars; ~32/43 bytes) — **and**
-       it resolves to a stored message, read that message and use its `body` binary
-       as the image bytes. (An ID-shaped value that does not resolve to a stored
-       message falls through to rule 3 — raw binary.)
+    1. **Reference (content identifier):** if the value is an **ID** — a binary
+       of 32, 42 or 43 bytes, per the platform's id predicate — read that
+       message and use its `body` binary as the image bytes.
+       (An ID-shaped value that does not resolve to a stored message fails
+       `init` with `{badmatch, _}`.)
     2. **Wrapping message:** if the value is a message (map), use its `body`
        binary as the image bytes.
     3. **Raw binary:** if the value is a binary, use it directly as the image
@@ -127,8 +127,8 @@ implementations.
     comparison is exact-match on the binaries `WASM` / `AOT`.
 - **Behaviour:**
   1. Obtain the image bytes per the rules above. If no image can be obtained
-     (no `<IN>/image` and no usable top-level `body`), the device MUST fail with
-     error `wasm-init-error` (see §8). The error message SHOULD identify the
+     (no `<IN>/image` and no top-level `body`), the device MUST fail with
+     error `wasm_init_error` (see §8). The error message SHOULD identify the
      `<IN>/image` path that was searched.
   2. Instantiate the WASM module from the bytes in the chosen mode, targeting the
      `memory64` proposal (see §`6.4 64-bit specifics`).
@@ -137,23 +137,19 @@ implementations.
      `<OUT>/import-resolver`; and the memory read/write helpers at `<OUT>/read`
      and `<OUT>/write`.
 - **Returns:** `{ok, Base'}` where `Base'` is `Base` with the private state
-  above installed. No public keys are added by `init`.
+  above installed and the public key `cache-control` set to `[<<"no-store">>]`.
 - **Side effects:** Creates a node-local, in-memory WASM execution context.
   Reading an image by reference reads from the content store. No commitments, no
-  external network calls, no public-state mutation.
+  external network calls.
 
 ### `compute` — call an exported function
 
 - **Reads:**
   - First runs `normalize(Base, Req, Opts)` (see below) to guarantee a live
     instance and to strip any literal `snapshot` key, yielding the normalised base
-    `M`. The **execution state** is `M` with the **request's non-reserved public
-    keys folded in** (dropping `path`/`device`/`priv`/`hashpath`). This fold is
-    load-bearing: request-supplied mounts — notably a stdlib at
-    `<OUT>/stdlib/<module>` — must be part of the state the import bridge resolves
-    against (§4a/§4b), since `hb_ao:resolve(Base, Req, …)` does NOT merge `Req`
-    into the base. Without it a request-supplied stdlib is invisible and every
-    import hits the stub. All reads below are against `M` / the execution state.
+    `M`. The **execution state** is `M`: the request is not merged into it, so
+    the import bridge (§4a/§4b) does not see a stdlib at `<OUT>/stdlib/<module>`
+    in the request. All reads below are against `M` / the execution state.
   - `output-prefix` from `M`.
   - `pass` from `M` (an integer pass counter, optional). The device only executes
     on the **first pass**: `pass == 1` or `pass` absent. For any other pass value
@@ -177,13 +173,13 @@ implementations.
      **not** a per-value WASM type), a **list of return values**, and the
      (possibly host-call-mutated) message state. (The 64-bit runtime returns no
      per-value type tag — `results/type` carries the call status.)
-  4. Set, on that resulting (**post-call**) message: `<OUT>/results/type` to the
-     call status (the runtime success tag, `ok`), and `<OUT>/results/output` to the
-     list of return values. (The `type` carrier follows the platform's value
+  4. Set, on that resulting (**post-call**) message: `results/<OUT>/type` to the
+     call status (the runtime success tag, `ok`), and `results/<OUT>/output` to
+     the list of return values. (The `type` carrier follows the platform's value
      handling — the atom `ok` and its wire-form `<<"ok">>` are equivalent; it is
      not separately pinned.)
 - **Returns:** `{ok, M'}` — the message after execution, carrying
-  `<OUT>/results/type` and `<OUT>/results/output`. When execution was skipped
+  `results/<OUT>/type` and `results/<OUT>/output`. When execution was skipped
   (no function), `{ok, M}` with no results written.
 - **Side effects:** Mutates the live instance's memory; may drive host-function
   resolutions (which may themselves have effects defined by the mounted stdlib
@@ -227,7 +223,7 @@ implementations.
      instance. (No deserialisation.)
   2. **If no live instance exists:** locate the snapshot body as above.
      - If no snapshot body is found, the device MUST fail with error
-       `no-wasm-instance-or-snapshot` (see §8).
+       `no_wasm_instance_or_snapshot` (see §8).
      - Otherwise: boot a fresh instance from the same image source by performing
        `init` (so `<OUT>/instance`, `<OUT>/import-resolver`, helpers are
        installed), then **deserialise** the snapshot body into that instance,
@@ -282,7 +278,7 @@ The bridge MUST:
    not the init-time one.** So a driver supplies a stdlib by setting
    `<OUT>/stdlib/<module>` on the base it resolves `compute` against (that message
    becomes the runtime's initial state, against which the bridge resolves §4b);
-   the mount need not — and does not — exist at `init` time.
+   the mount need not exist at `init` time.
 3. From the resolution result, read back two keys: `state` (the new base message
    to continue execution with) and `results` (the list of values to hand back to
    the module as the import's return values).
@@ -310,12 +306,13 @@ The bridge MUST:
   4. **On success** (`{ok, Res}`): return `{ok, Res}` unchanged. By the
      host-function calling convention (§4c), `Res` is expected to carry `state`
      and `results`.
-  5. **On `not_found`** (no device is mounted for this `(module, func)`): invoke
-     the **undefined-import stub** (§4d) and return its result.
+  5. **On `{error, not_found}`** (no device is mounted for this
+     `(module, func)`): invoke the **undefined-import stub** (§4d) and return
+     its result.
 - **Returns:** `{ok, Res}` where `Res` carries `state` (new execution message)
   and `results` (the return-value list), per §4c.
 - **Side effects:** Whatever the mounted stdlib device does. The state placement
-  itself is private/non-hashpath-advancing.
+  itself is public and does not advance the hashpath.
 
 #### 4c. Host-function calling convention (what a mounted stdlib device MUST return)
 
@@ -335,10 +332,10 @@ augmented as in §4b and the request carrying `args` and `func-sig`. It:
 When no device is mounted for an import, the device MUST NOT crash the module.
 Instead it MUST:
 1. Append the import request (the `Req` describing the call) to a running log at
-   the path `<OUT>/results/undefined-calls` **on the returned `state` message**
+   the path `results/<OUT>/undefined-calls` **on the returned `state` message**
    (prepending the newest call; the value is a list of the import requests seen).
-   The list MUST be created if absent. (Prefix **before** `results` — consistent
-   with `compute`'s `<OUT>/results/...` outputs, §5/§9; the log lives on the
+   The list MUST be created if absent. (Prefix **after** `results` — consistent
+   with `compute`'s `results/<OUT>/...` outputs, §5/§9; the log is on the
    `state` this stub returns.)
 2. Return `{ok, #{ <<"state">> => <updated base with the log>, <<"results">> =>
    [0] }}` — i.e. hand the module back a single `0` value and continue.
@@ -352,9 +349,9 @@ of every unimplemented call in the public results.
 - **Keys** are binary, lowercase, hyphenated (`output-prefix`, `func-sig`,
   `undefined-calls`, `import-resolver`). IDs (image references) are base64url.
 - **Result keys** written by `compute`:
-  - `<OUT>/results/type` — the result-type tag returned by the call (an opaque
+  - `results/<OUT>/type` — the result-type tag returned by the call (an opaque
     tag from the runtime; reproduced verbatim).
-  - `<OUT>/results/output` — the list of return values from the call.
+  - `results/<OUT>/output` — the list of return values from the call.
 - **Snapshot** is a message `#{ <<"body">> => <binary> }`; the body is an opaque,
   implementation-defined serialisation of instance state. When embedded in a
   base for restore, it lives under the `snapshot` key (optionally nested one
@@ -387,10 +384,10 @@ instance restored from that same snapshot MUST compute identically. `normalize`
 guarantees this by collapsing both to the warm form.
 
 ### 6.3 Hashpath stability
-Booting/restoring an instance and placing per-module state for host calls are
-**private, non-content** operations and MUST NOT advance the message's hashpath —
-they add **no extra step** (a cold compute's hashpath still ends in exactly
-`/compute`, not `/normalize/compute`). Note: a *cold* arrival carries a **public**
+Booting/restoring an instance and placing per-module state for host calls MUST
+NOT advance the message's hashpath — they add **no extra step** (a cold
+compute's hashpath still ends in exactly `/compute`, not `/normalize/compute`).
+Note: a *cold* arrival carries a **public**
 `snapshot` key while a *warm* arrival carries the instance **privately**, so their
 pre-compute public content — and thus their hashpath prefixes — necessarily
 differ. Equality holds (i) on the **content id** once the snapshot has been
@@ -433,8 +430,8 @@ this device.
 - **Private handle non-leakage.** The live instance handle MUST NOT be resolvable
   as a public key, MUST NOT appear in `keys`/`get`, and MUST NOT be committed or
   content-addressed (it is node-local and meaningless off-node).
-- **Failure containment.** Missing image → `wasm-init-error`; missing instance
-  and snapshot on `normalize` → `no-wasm-instance-or-snapshot`. Unimplemented
+- **Failure containment.** Missing image → `wasm_init_error`; missing instance
+  and snapshot on `normalize` → `no_wasm_instance_or_snapshot`. Unimplemented
   imports fail **open-but-logged** (stub), by design, so partial stdlibs do not
   abort otherwise-valid computations.
 
@@ -449,41 +446,42 @@ conformance observable; the exact carrier (thrown vs `{error, _}`, atom vs
 binary, detail tuple vs bare) is not pinned.
 
 - `wasm_init_error` — `init` (or the `init` performed inside `normalize`) could
-  obtain no image: `<IN>/image` was absent (or not a usable reference/message/
-  binary) **and** no usable top-level `body` binary was present. The detail MAY
-  report the `<IN>/image` path searched.
+  obtain no image: `<IN>/image` **and** the top-level `body` are both absent.
+  The detail MAY report the `<IN>/image` path searched.
 - `no_wasm_instance_or_snapshot` — `normalize` found neither a live instance at
   `<OUT>/instance` nor a snapshot body at `snapshot[/<device-key>]/body`, so it
   could neither continue nor restore.
 
 Note on `compute`: a **missing function name is not an error** — `compute`
-returns the (normalised) message unchanged. Only the two conditions above are
-device-level errors.
+returns the (normalised) message unchanged. A call that traps returns
+`{error, Error}`, with the `Error` the runtime gives.
 
 ## 9. Composition
 
 - **Process execution stack.** The canonical use is as an execution device
-  inside a process stack (`process@1.0` driving a stack device). The stack calls
-  `init` on the first pass and `compute` on subsequent passes; `compute`'s own
-  pass-gating (only pass 1, or no pass, executes) makes it safe to invoke on
-  every pass. `snapshot`/`normalize` let the stack checkpoint and resume the
-  process's WASM memory across messages; `terminate` releases the instance.
+  inside a process stack (`process@1.0` driving a stack device). The process
+  resolves `init` once, and `compute` for each slot; the stack resolves
+  `compute` on every pass. `compute`'s own pass-gating (only pass 1, or no
+  pass, executes) makes it safe to invoke on every pass. `snapshot`/`normalize`
+  let the stack checkpoint and resume the process's WASM memory across
+  messages; `terminate` releases the instance.
 - **Prefixing for stacks.** Inside a process stack a typical configuration sets
   `input-prefix` to the process namespace (so the image is read from the process
   definition, e.g. `process/image`) and `output-prefix` to this device's slot
-  name (so its instance, results, and stdlib live under, e.g., `wasm/...`). Both
-  prefixes default to empty for standalone use. Implementations MUST resolve both
-  prefixes through `message@1.0` and MUST apply them consistently to every
-  private key (`<OUT>/instance`, `<OUT>/import-resolver`), public result key
-  (`<OUT>/results/...`), stdlib mount (`<OUT>/stdlib/...`), and the
-  undefined-calls log path.
+  name (so its instance and stdlib are under, e.g., `wasm/...`, and its results
+  under `results/wasm/...`). Both prefixes default to empty for standalone use.
+  Implementations MUST resolve both prefixes through `message@1.0` and MUST
+  apply them consistently to every private key (`<OUT>/instance`,
+  `<OUT>/import-resolver`), public result key (`results/<OUT>/...`), stdlib
+  mount (`<OUT>/stdlib/...`), and the undefined-calls log path.
 - **Stdlib devices (host functions).** A host-function library is composed in by
   mounting a device message at `<OUT>/stdlib/<module>` (so its functions answer
   at `<OUT>/stdlib/<module>/<func>`). `wasi@1.0` is mounted this way at
-  `<OUT>/stdlib/wasi_snapshot_preview1` to provide the WASI-preview-1 system
-  interface; any device satisfying the host-function calling convention (§4c) can
-  be mounted under any module name a module imports. The set of mounted libraries
-  defines the module's ambient capabilities.
+  `wasm/stdlib/wasi_snapshot_preview1`, whatever `<OUT>` is, to provide the
+  WASI-preview-1 system interface; any device satisfying the host-function
+  calling convention (§4c) can be mounted under any module name a module
+  imports. The set of mounted libraries defines the module's ambient
+  capabilities.
 - **Call-target sourcing.** A driver may pass the function/parameters per-call in
   the request (`function`/`parameters`, or nested under `body/`), or fix them on
   the base message; `compute` prefers the request over the base (§4 `compute`).
@@ -501,7 +499,7 @@ An implementation MUST exhibit all of the following observable behaviours:
    via `message@1.0` and default to the empty binary. With empty prefixes, the
    instance resolves at private `instance`, results at `results/...`, stdlib at
    `stdlib/...`. With `output-prefix = X`, the same move to `X/instance`,
-   `X/results/...`, `X/stdlib/...`. (Both standalone-empty and prefixed
+   `results/X/...`, `X/stdlib/...`. (Both standalone-empty and prefixed
    configurations MUST work.)
 3. **Image — direct binary.** `init` with `<IN>/image` a raw WASM binary
    instantiates that module and installs a live instance and an
@@ -513,15 +511,15 @@ An implementation MUST exhibit all of the following observable behaviours:
 6. **Image — top-level body fallback.** `init` with no `<IN>/image` but a binary
    top-level `body` uses `body` as the image.
 7. **Missing image error.** `init` with no obtainable image fails with
-   `wasm-init-error`.
+   `wasm_init_error`.
 8. **Mode default + AOT gating.** Absent/`WASM` mode runs interpreted. `AOT` runs
    ahead-of-time **only** when the node enables it; otherwise `AOT` is silently
    downgraded to `WASM` (not an error).
-9. **Basic execution + result keys.** After `init`, a `compute` with a
-   `function` and `parameters` that name an exported function calls it and writes
-   `<OUT>/results/type` and `<OUT>/results/output`, where `output` is the list of
-   the function's return values. (E.g. a factorial-style export called with `5`
-   yields `output = [120]` in some numeric form.)
+9. **Basic execution + result keys.** After `init`, a `compute` with `function`
+   set to an exported function and with `parameters` calls it and sets
+   `results/<OUT>/type` and `results/<OUT>/output`, where `output` is the list
+   of the function's return values. (E.g. a factorial-style export called with
+   `5` yields `output = [120]` in some numeric form.)
 10. **Call-target precedence.** `compute` selects the function from request
     `body/function`, else request `function`, else base `function`; and the
     parameters from request `body/parameters`, else request `parameters`, else
@@ -542,7 +540,7 @@ An implementation MUST exhibit all of the following observable behaviours:
     function returns a value computed by a mounted device.)
 15. **Undefined-import stub.** An import with no mounted device does not abort the
     module: the call returns `[0]` to the module and the request is appended to
-    the public list at `<OUT>/results/undefined-calls` on the returned state.
+    the public list at `results/<OUT>/undefined-calls` on the returned state.
 16. **Snapshot shape.** `snapshot` returns `{ok, #{ <<"body">> => Binary }}`
     carrying an opaque serialisation of instance state.
 17. **Restore via snapshot (cold start).** A base with no live instance but a
@@ -556,7 +554,7 @@ An implementation MUST exhibit all of the following observable behaviours:
     `compute`), the returned message has **no** `snapshot` key.
 19. **Missing instance + snapshot error.** `normalize` with neither a live
     instance nor a findable snapshot body fails with
-    `no-wasm-instance-or-snapshot`.
+    `no_wasm_instance_or_snapshot`.
 20. **Hashpath stability.** Instance boot/restore and host-call state placement
     add **no** hashpath step (a cold compute still ends in `/compute`). Identical
     public inputs ⇒ identical hashpaths and results (the live instance never leaks

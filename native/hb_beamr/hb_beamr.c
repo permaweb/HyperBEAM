@@ -127,12 +127,21 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
             return;
         }
         // Extract the function name and the args from the Erlang term and generate the wasm_val_vec_t
-        char* function_name = driver_alloc(MAXATOMLEN);
+        // Size the name buffer from the term, so a name longer than a fixed
+        // buffer cannot write past its end.
+        int name_type, name_size;
+        ei_get_type(buff, &index, &name_type, &name_size);
+        char* function_name = driver_alloc(name_size + 1);
         ei_decode_string(buff, &index, function_name);
         DRV_DEBUG("Function name: %s", function_name);
         proc->current_function = function_name;
 
         DRV_DEBUG("Decoding args. Buff: %p. Index: %d", buff, index);
+        // Record how many arguments the request gave, so the call can be
+        // refused if it is not the number the function's signature takes.
+        int args_type, args_arity;
+        ei_get_type(buff, &index, &args_type, &args_arity);
+        proc->current_args_length = args_arity;
         proc->current_args = decode_list(buff, &index);
 
         driver_async(proc->port, NULL, wasm_execute_function, proc, NULL);

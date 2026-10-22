@@ -11,6 +11,8 @@
 
 %%% Timeout for legacy CU status check.
 -define(STATUS_TIMEOUT, 100).
+%%% Timeout for the legacy CU to start.
+-define(START_TIMEOUT, 30000).
 
 %% @doc Initialize the device.
 -spec init(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
@@ -198,7 +200,8 @@ delegated_opts(Opts) ->
         <<"delegated-compute-peer">> => <<"http://localhost:", Port/binary>>
     }.
 
-%% @doc Ensure the local `genesis-wasm@1.0' is live. If it not, start it.
+%% @doc Ensure the local `genesis-wasm@1.0' is live. If it is not, start it,
+%% and return `false' if it does not answer within `?START_TIMEOUT' ms.
 ensure_started(Opts) ->
     % Check if the `genesis-wasm@1.0' device is already running. The presence
     % of the registered name implies its availability.
@@ -372,16 +375,14 @@ ensure_started(Opts) ->
             hb_name:register(<<"genesis-wasm@1.0">>, PID),
             ?event({genesis_wasm_starting, {pid, PID}}),
             % Wait for the device to start.
-            hb_util:until(
+            hb_util:wait_until(
                 fun() ->
-                    receive after 2000 -> ok end,
                     Status = is_genesis_wasm_server_running(Opts),
                     ?event({genesis_wasm_boot_wait, {received_status, Status}}),
                     Status
-                end
-            ),
-            ?event({genesis_wasm_started, {pid, PID}}),
-            true
+                end,
+                ?START_TIMEOUT
+            )
     end.
 
 %% @doc Find either a specific checkpoint by its ID, or find the most recent
@@ -548,11 +549,12 @@ do_import(Proc, CheckpointMessage, Opts) ->
             }}
     end.
 
-%% @doc Check if the genesis-wasm server is running, using the cached process ID
-%% if available.
+%% @doc Check if the genesis-wasm server is running. A `true' status is kept
+%% for the calling process, so later checks in it do not ask the server again.
 is_genesis_wasm_server_running(Opts) ->
     case get(genesis_wasm_pid) of
-        undefined ->
+        true -> true;
+        _ ->
             ?event(genesis_wasm_pinging_server),
             Parent = self(),
             PID = spawn(
@@ -570,8 +572,7 @@ is_genesis_wasm_server_running(Opts) ->
                 ?event({genesis_wasm_status_check, timeout}),
                 erlang:exit(PID, kill),
                 false
-            end;
-        _ -> true
+            end
     end.
 
 %% @doc Check if the genesis-wasm server is running by requesting its status

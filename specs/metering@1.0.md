@@ -87,9 +87,10 @@ when no other device contributes a resource.
   callers MAY call consume unconditionally.
 
 - **Message shapes:**
-  - `estimate` and `price` are invoked by `p4@1.0` with a request message whose
-    contents this device **ignores** (it reads no fields from `Base` or `Req` for
-    these keys); it reads only the node option `metering-rates` (for `price`).
+  - `estimate` and `price` are invoked by `p4@1.0` with a request message from
+    which this device reads only `body` (it reads no fields from `Base`); it
+    reads the node option `metering-rates` (for both keys) and
+    `metering-default-estimate` (for `estimate`).
   - The consume operation takes a **resource name** plus an **amount**, where the
     amount is supplied either as a bare integer or inside a request message under
     the key `amount` (integer; default `0` when absent). See §4.
@@ -98,25 +99,27 @@ when no other device contributes a resource.
 
 ### `estimate`
 
-- **Reads:** nothing from `Base` or `Req`. Captures the current resolving
-  context's reduction counter.
+- **Reads:** the `body` of `Req`, whose size it consumes as `request-bytes`, and
+  the node options `metering-rates` and `metering-default-estimate`; nothing
+  from `Base`. Captures the current resolving context's reduction counter.
 - **Behaviour:** Open a fresh metering session in the current context. The new
   session MUST start with an **empty** set of resource meters and MUST record the
   context's current reduction count as the session's start point. If a session
   was already open in this context, it is **replaced** (its prior meters and
   start point are discarded). After this call, the active-session predicate MUST
   report active, and subsequent consume operations accumulate into this session.
-- **Returns:** `{ok, 0}` — always the integer `0`. (`estimate` reserves the
-  *up-front* estimated price; this device always estimates `0` and defers the
-  whole charge to `price`.)
+- **Returns:** `{ok, E}`, where `E` is the node option
+  `metering-default-estimate` (default `1`), if any rate in `metering-rates` is
+  above `0`; else `{ok, 0}`. The whole charge is computed at `price`.
 - **Side effects:** Mutates process/context-local metering state only. No cache,
   store, commitment, or network effects.
 
 ### `price`
 
-- **Reads:** the node option `metering-rates` (default: empty map). Reads no
-  fields from `Base` or `Req`. Captures the current reduction counter to finalise
-  the `beam-reductions` meter.
+- **Reads:** the node option `metering-rates` (default: empty map), and the
+  `body` of `Req`, whose size it consumes as `response-bytes`; no fields from
+  `Base`. Captures the current reduction counter to finalise the
+  `beam-reductions` meter.
 - **Behaviour:** Close the current session and compute the final integer price.
   1. Finalise the `beam-reductions` meter: add to it the value
      `max(0, current_reductions − session_start_reductions)` — the reduction work
@@ -144,8 +147,8 @@ when no other device contributes a resource.
   `consume(ResourceName, AmountOrRequestMessage, Opts)` — NOT by resolving a path.
   (`metering@1.0/consume` MUST NOT perform it — see §3 and §8.) This three-argument
   calling convention is the cross-device contract: platform resource consumers
-  (e.g. the bundler, charging `arweave-bytes`) invoke it fire-and-forget on the
-  configured pricing device, so the name, arity, and argument order are fixed.
+  (e.g. the bundler, charging `arweave-bytes`) invoke it fire-and-forget on
+  `metering@1.0`, so the name, arity, and argument order are fixed.
 - **Inputs:**
   - a **resource name** (any key; normalized per §5 before use as a meter key);
   - an **amount**, supplied either as
@@ -159,16 +162,16 @@ when no other device contributes a resource.
      therefore never need to check whether metering is active.
   2. If a session is open:
      a. Coerce the amount to an integer.
-     b. If the amount is `< 0`, the operation MUST fail with an
-        **invalid-amount** error carrying the offending amount (see §8). The
-        session MUST be left unchanged.
+     b. If the amount is `< 0`, the operation MUST fail (the reference raises
+        `error({invalid_meter_amount, Amount})`; see §8). The session MUST be
+        left unchanged.
      c. Otherwise add the amount to the meter for the normalized resource name:
         `meter(R) ← meter(R) + amount` (a previously unmetered resource starts
         from `0`). An amount of `0` is permitted and leaves the running total
         unchanged (but is still a successful, in-session operation). Return the
         success sentinel `ok`.
-- **Returns:** `ok` on success (both the no-op and the in-session add); an
-  invalid-amount error on a negative amount.
+- **Returns:** `ok` on success (both the no-op and the in-session add); raises
+  `error({invalid_meter_amount, Amount})` on a negative amount.
 - **Side effects:** Mutates process/context-local metering state only. No cache,
   store, commitment, or network effects.
 
@@ -229,7 +232,8 @@ when no other device contributes a resource.
   agreed pricing across peers MUST set the `beam-reductions` rate to `0` (pricing
   only deterministic, explicitly-consumed resources such as `arweave-bytes`).
   This is the device's only source of non-determinism; all other resources are
-  exactly the amounts callers consumed.
+  the amounts callers consumed and the sizes of the `estimate` and `price`
+  bodies (`request-bytes`, `response-bytes`).
 
 - **No result caching of its own:** the device caches nothing and stores nothing.
   Its outputs depend on mutable process-local session state plus a node option,
@@ -264,17 +268,17 @@ when no other device contributes a resource.
 
 ## 8. Errors
 
-- **invalid-amount** — the consume operation was called, within an active
-  session, with a **negative** amount. The operation MUST **reject** it: it does
-  **not** meter the amount and leaves the session unchanged, and it signals an
-  invalid-amount condition carrying the offending amount value. The signalling
-  **mechanism is implementation-defined and not load-bearing** — no caller observes
-  it (consume is invoked fire-and-forget with non-negative amounts), so an
-  implementation MAY raise an Erlang error/exception **or** return an `{error, _}`
-  value (the reference raises). What is normative is only that the negative amount
-  is rejected (not metered, session intact) rather than silently treated as a
-  successful add. (Outside a session a negative amount is never inspected — the
-  operation no-ops before coercion.)
+- **`error({invalid_meter_amount, Amount})`** — the consume operation was
+  called, within an active session, with a **negative** amount. The operation
+  MUST **reject** it: it does **not** meter the amount and leaves the session
+  unchanged, and it signals this condition with the offending amount value. The
+  signalling **mechanism is implementation-defined and not load-bearing** — no
+  caller observes it (consume is invoked fire-and-forget with non-negative
+  amounts), so an implementation MAY raise an Erlang error/exception **or**
+  return an `{error, _}` value (the reference raises). What is normative is only
+  that the negative amount is rejected (not metered, session intact) rather than
+  silently treated as a successful add. (Outside a session a negative amount is
+  never inspected — the operation no-ops before coercion.)
 
 - **(base-device) not-found / resolution error** — resolving any key other than
   `estimate` or `price` against this device (notably `consume`) does not reach a
@@ -291,10 +295,11 @@ succeed (returning `{ok, integer}`).
   `pricing-device => metering@1.0` (alongside `p4@1.0`'s ledger device). During
   the charged lifecycle, `p4@1.0` resolves `estimate` on this device at the start
   (opening the session) and `price` at the end (closing it and obtaining the
-  integer charge), then debits that amount via its ledger device. `estimate`'s
-  `0` return means no up-front hold is placed; the full charge is computed at
-  `price`. End-to-end, a request that consumes `N` units of resource `R` (and
-  whatever `beam-reductions` the work costs) is charged
+  integer charge), then debits that amount via its ledger device. `estimate`
+  returns `metering-default-estimate` (default `1`) when any rate is above `0`,
+  so `p4@1.0` checks the caller's balance against it; the full charge is
+  computed at `price`. End-to-end, a request that consumes `N` units of
+  resource `R` (and whatever `beam-reductions` the work costs) is charged
   `Σ meter(R) × metering-rates[R]` against the requester's balance.
 
 - **Resource producers call consume.** Any device that produces a chargeable
@@ -317,9 +322,11 @@ An implementation MUST exhibit all of the following:
    any other key — in particular `consume` (e.g. a request with `path = consume`,
    `resource`, `amount`) — does NOT perform a metering action and returns an
    error / not-found via the base device.
-2. `estimate` returns `{ok, 0}` and opens a metering session: immediately after,
-   the active-session predicate is `true`, the meter set is empty, and the
-   session has captured the context's start reduction count.
+2. `estimate` returns `{ok, 0}` (or `metering-default-estimate`, default `1`, if
+   any rate in `metering-rates` is above `0`) and opens a metering session:
+   immediately after, the active-session predicate is `true`, the meter set
+   contains only `request-bytes`, and the session has captured the context's
+   start reduction count.
 3. A second `estimate` while a session is open replaces it: prior meters are
    discarded and the start reduction count is re-captured.
 4. The consume operation is **not** reachable by AO-Core resolution; it is invoked
@@ -331,8 +338,9 @@ An implementation MUST exhibit all of the following:
    repeated calls; an amount supplied via a request message is read from the
    `amount` field (default `0` when absent); a bare-integer amount is accepted
    directly.
-7. Consume with a **negative** amount, within an active session, fails with the
-   **invalid-amount** error carrying the amount, and leaves the session unchanged.
+7. Consume with a **negative** amount, within an active session, fails (the
+   reference raises `error({invalid_meter_amount, Amount})`), and leaves the
+   session unchanged.
 8. `price` returns `{ok, P}` where `P = Σ over metered resources of
    meter × rate`, `rate` taken from the node option `metering-rates` (integer-
    coerced), defaulting to `0` for any resource absent from `metering-rates`;
@@ -375,15 +383,13 @@ An implementation MUST exhibit all of the following:
 
 ## Open questions
 
-- **Error-atom spelling.** The reference implementation raises its negative-amount
+- **Error-atom form.** The reference implementation raises its negative-amount
   error with a non-hyphenated atom (`invalid_meter_amount`) carrying the amount,
-  via a raised error rather than an `{error, _}` return. This spec normalises the
-  *condition* and names it **invalid-amount** to follow the hyphenated-error-atom
-  convention; an implementer reproducing the reference byte-for-byte would use the
-  underscored atom. Whether the canonical surface should be a hyphenated
-  `{error, invalid-amount}` tuple or the raised underscored atom is unresolved —
-  callers should treat "negative amount within a session" as the contract and not
-  depend on the exact atom or raise/return form.
+  via a raised error rather than an `{error, _}` return. Whether the canonical
+  surface should be a hyphenated `{error, invalid-amount}` tuple or the raised
+  underscored atom is unresolved — callers should treat "negative amount within
+  a session" as the contract and not depend on the exact atom or raise/return
+  form.
 - **Rate sign.** Rates are assumed non-negative (the device does not validate
   them); a negative configured rate would yield a negative price contribution.
   The reference neither rejects nor clamps negative rates. Whether negative rates

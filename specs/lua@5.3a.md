@@ -21,7 +21,8 @@ The device also installs a small **host library** (the `ao` table) into every
 Lua state, giving scripts the ability to perform AO-Core resolutions, read/set
 message keys, and emit host events — bridged through the same value mapping. A
 configurable **sandbox** can render dangerous standard-library functions inert,
-and a **device sandbox** can restrict which AO-Core devices a script may reach.
+and a **device sandbox** lists the AO-Core devices a script may reach; no
+resolver enforces it (§7.2).
 
 This spec pins: the execution-device key surface; how source modules are located
 and loaded; exactly which Lua function is called with which arguments; the
@@ -49,8 +50,8 @@ representation is out of scope.
   name is `K` (unless overridden by a `function` field — §4.`compute`). Calling
   the device for `K` runs that function.
 - **Result message:** the AO-Core message produced by mapping a Lua function's
-  return value(s) back into the message world (§5.2). When the script returns a
-  table, that table **is** the result message (after decoding).
+  return value(s) back into the message world (§5.2). When the script returns an
+  associative table, that table **is** the result message (after decoding).
 - **Host library (the `ao` table):** a set of host-implemented functions injected
   into the Lua global table `ao` (§4.6). Scripts call e.g. `ao.resolve{…}` to
   reach back into AO-Core.
@@ -89,7 +90,7 @@ rules are normative.
   answered by a Lua-device key of their own.) Implementation note: the catch-all's
   *static* reserved set is the fixed list above; the **"every existing field"**
   part is per-message — the device computes it from the base message's current keys
-  (its `info` callback receives the base). The reference relies on this excluded-key
+  (`device_info/1` receives the base). The reference relies on this excluded-key
   set alone; an implementation MAY additionally guard in-handler. ⚠ Known platform
   subtlety (found defect): the substrate's exclusion check normalises the *looked-up*
   key and the *excluded-key list* with different atom functions (existing-only vs
@@ -102,14 +103,14 @@ rules are normative.
   | Key | Type | Required | Meaning |
   |---|---|---|---|
   | `module` | id \| message \| list \| name-map | one of `module` / inline body | The Lua source module(s) to load (§4.`init`). |
-  | `content-type` + `body` | binary + binary | (alt. to `module`) | If `content-type` is a Lua content type, `body` is treated as an inline literal Lua module. |
+  | `content-type` + `body` (or `data`) | binary + binary | (alt. to `module`) | If `content-type` is a Lua content type, `body`, else `data`, is treated as an inline literal Lua module. |
   | `sandbox` | boolean \| list \| map | no (default `false`) | Standard-library sandbox spec (§7.1). |
   | `device-sandbox` | list of device names | no (default unrestricted) | AO-Core device allow-list for host resolutions (§7.2). |
   | `function` | binary | no | Overrides the function name to call (else the resolved key) (§4.`compute`). |
   | `parameters` | list | no | Overrides the Lua call arguments (§4.`compute`). |
 
-  Either a `module` field or an inline Lua `body` (with a Lua `content-type`)
-  MUST be present; otherwise `init`/`compute` error (§8).
+  Either a `module` field or an inline Lua `body` or `data` (with a Lua
+  `content-type`) MUST be present; otherwise `init`/`compute` error (§8).
 
 - **Request message shape (compute path).** When the catch-all handler runs, the
   request message MAY carry, taking precedence over the base-message fields:
@@ -137,9 +138,10 @@ rules are normative.
   1. **Idempotence.** If the base message's private area already holds a `state`,
      return the base message unchanged (the state is already initialised).
   2. **Locate modules.** Build an ordered list of source modules from the base
-     message (§4.1). At least one module MUST be found, else error (§8,
-     `no Lua modules found`).
-  3. **Create state.** Create a fresh Lua 5.3 interpreter state.
+     message (§4.1). With no `module` field and no inline body module, error
+     (§8, `no Lua modules found`).
+  3. **Create state.** Create a fresh Lua 5.3 interpreter state, and apply the
+     node option `lua-minimum-sandbox` to it (§7.1).
   4. **Load each module** into the state, **in order**, evaluating the chunk so
      its top-level definitions (functions, globals) take effect. Each module is
      loaded under its **module reference** as the chunk name (used in stack
@@ -161,7 +163,7 @@ The source modules are assembled as follows. Let **B** be the base message.
 
 1. **Inline body module.** If B's `content-type` is a Lua content type
    (`application/lua` or `text/x-lua`), B itself contributes one module whose
-   source is B's `body` (the literal Lua text).
+   source is B's `body`, else its `data` (the literal Lua text).
 2. **`module` field.** Read B's `module`:
    - **absent**, and no inline body module → **error** (§8): no modules found.
    - **a binary id** → treat as a single-element list `[id]` and recurse.
@@ -225,14 +227,15 @@ reserved key and not an existing field of the base message (§3).
        the base message (with its private area removed), the request message, and
        an empty message — in that order.
 
-     **Read these selection fields (`function`, `parameters`) as plain message
-     fields** — direct field access on `Req`/`Base` — **never resolved *through*
-     this device.** Resolving them via AO-Core against a base that carries
-     `device => lua@5.3a` re-enters this same catch-all handler (it tries to call a
-     Lua function named `function`/`parameters`) and does **not terminate**. The
-     identical rule applies to **every** config field this device reads off its own
-     base — `module`, `sandbox`, `device-sandbox`, and the snapshot location read
-     by `normalize` (below): they are **data reads**, never device resolutions.
+     **Read these selection fields (`function`, `parameters`) of `Base` as
+     `message@1.0`** — **never resolved *through* this device**; read those of
+     `Req` with `Req`'s own device. Resolving them via AO-Core against a base
+     that carries `device => lua@5.3a` re-enters this same catch-all handler (it
+     tries to call a Lua function named `function`/`parameters`) and does **not
+     terminate**. The identical rule applies to **every** config field this
+     device reads off its own base — `module`, `sandbox`, `device-sandbox`, and
+     the snapshot location read by `normalize` (below): they are read as data or
+     as `message@1.0`, never through this device.
   4. **Fully resolve** the arguments (force any lazy links to concrete values).
   5. **Encode** the arguments to Lua values (§5.1) and **call** the named global
      Lua function with them as its positional arguments, against the current
@@ -241,7 +244,8 @@ reserved key and not an existing field of the base message (§3).
      **post-call** Lua state back into the result message's private area (under
      `state`), so the next resolution observes this call's mutations.
 - **Returns:** the mapped result (§4.3) — `{Status, ResultMessage}` or
-  `{Status, NonMessageValue}` on success, or an error (§8) on a Lua/Erlang fault.
+  `{Status, NonMessageValue}` on success, or a failure (§8) on a Lua/Erlang
+  fault.
 - **Side effects:** whatever the script performs through the host library (§4.6) —
   AO-Core resolutions, host events — plus updating the private Lua state in the
   returned message. No commitments are created by the call itself.
@@ -253,9 +257,10 @@ follows (let the decoded values be the Lua returns mapped per §5.2):
 
 1. **One return value `R`.** Treated as **status `ok`** with result `R` — i.e.
    equivalent to a function that returned `("ok", R)`.
-2. **Two (or more) return values `(S, R)`.** The **first** value `S` is the
-   **status** and the **second** value `R` is the **result**. Any further return
-   values are ignored.
+2. **Two return values `(S, R)`.** The **first** value `S` is the
+   **status** and the **second** value `R` is the **result**. Any other number
+   `N` of return values gives `{error, <<"Lua function returned N values: it
+   must return a result, or a status and a result.">>}`.
 3. **Status coercion.** The status `S` (a Lua string, e.g. `"ok"`, `"error"`) is
    coerced to the AO-Core outcome tag: the resolution returns `{<status-atom>, …}`
    where `<status-atom>` is `S` as an atom (so `"ok"` → an `ok` outcome,
@@ -306,11 +311,9 @@ follows (let the decoded values be the Lua returns mapped per §5.2):
      **`snapshot` / [ `<device-key>` ] / `body`** — i.e. `snapshot/body`, or
      `snapshot/<device-key>/body` when a `device-key` field is set on the base
      (so a stack can disambiguate multiple devices' snapshots). **Traverse this
-     path as plain nested data fields on the base — NOT an AO-Core resolution:**
-     resolving `snapshot` through the base would invoke this device's own
-     `snapshot` key (§4.`snapshot`), which errors when there is no live state,
-     instead of reading the stored bytes. If no such serialised state is found,
-     **error/throw** (§8): no Lua state snapshot found.
+     path on the base as `message@1.0` — NOT through this device.** If no such
+     serialised state is found, **error/throw** (§8): no Lua state snapshot
+     found.
   3. Deserialise it into a live Lua state (the inverse of `snapshot`) and store it
      in the base message's private area under `state`.
 - **Returns:** `{ok, BaseMessage'}` with the restored state attached privately.
@@ -351,20 +354,21 @@ The library MUST expose **exactly** these functions on the `ao` table:
 - **Forms (MUST accept all):**
   - `ao.resolve(singleton)` — one argument that is a **message/table**: parse it
     as a single AO-Core request *singleton* (a message that encodes a full
-    request path, e.g. `{ path = "/hello", hello = "Hello, AO world!" }`) and
+    request path, e.g. `{ path = "//hello", hello = "Hello, AO world!" }`) and
     resolve it.
   - `ao.resolve(base, path)` — a base message/table and a **string path**:
     resolve `path` (which may contain `/`-separated segments) against `base`.
-  - `ao.resolve(list)` — a **sequence** of messages: resolve them as a chained
-    multi-message request (each element applied in turn).
-- **`as` shorthand.** Anywhere a message argument is expected, a 3-element
+  - `ao.resolve(m1, m2, …)` — two or more messages (or paths): resolve them as a
+    chained multi-message request (each element applied in turn).
+- **`as` shorthand.** In the forms with two or more arguments, a 3-element
   sequence `{ "as", <device-name>, <message> }` denotes "treat `<message>` as
   bound to device `<device-name>`" for that resolution step.
 - **Behaviour:** Run the resolution under the device's **device-sandbox**
   allow-list (§7.2). On success return two Lua values `(status, result)`, where
   `status` is the resolution status (e.g. `"ok"`) and `result` is the resolved
-  value (encoded to Lua per §5.1). On an internal resolution fault, return
-  `("error", <error>)` rather than raising.
+  value (encoded to Lua per §5.1). A fault that the resolution throws returns
+  `("error", <error>)`; an Erlang error that it raises is not caught, and the
+  call is a failure (§8).
 - **Side effects:** whatever the resolved path performs.
 
 #### `ao.get(key, base)` — read a single key
@@ -372,8 +376,9 @@ The library MUST expose **exactly** these functions on the `ao` table:
 - **Args:** a `key` (string) and a `base` message/table. (`key` and `base` MAY
   each use the `{ "as", device, msg }` shorthand.)
 - **Behaviour:** Resolve `key` against `base` (the single-key `get` of the
-  message model), returning the value (or the not-found/default value) as one Lua
-  value. No `{ok,_}` wrapper.
+  message model), returning the value, or Lua's `nil` when the resolution gives
+  an error (such as a key that `base` does not have), as one Lua value. No
+  `{ok,_}` wrapper.
 - **Returns:** the value, encoded to Lua (§5.1).
 
 #### `ao.set(base, key, value)` / `ao.set(base, values)` — write keys
@@ -413,36 +418,42 @@ values, host-function arguments).
 | AO-Core value | Lua value (encode) | Lua value | AO-Core value (decode) |
 |---|---|---|---|
 | binary (string) | string | string | binary |
-| integer | number | number (integral) | integer |
-| float | number | number (fractional) | float |
+| integer | number | number (integer) | integer |
+| float | number | number (float) | float |
 | boolean `true`/`false` | boolean `true`/`false` | boolean | boolean |
-| atom (other than `true`/`false`) | string (the atom's name) | — | — |
+| atom (other than `true`/`false`/`nil`) | string (the atom's name) | — | — |
 
 Rules (MUST):
 
-- **Atoms encode to strings.** An AO-Core atom that is **not** `true`/`false`
-  encodes to a Lua **string** of the atom's textual name. (Booleans `true`/`false`
-  remain Lua booleans.) Lua has no atom type; decode never produces an atom from a
-  bare string (it produces a binary).
+- **Atoms encode to strings.** An AO-Core atom that is **not**
+  `true`/`false`/`nil` encodes to a Lua **string** of the atom's textual name.
+  (Booleans `true`/`false` remain Lua booleans, and the atom `nil` is Lua's
+  `nil`.) Lua has no atom type; decode never produces an atom from a bare string
+  (it produces a binary).
 - **Numbers.** Integers and floats both map to Lua numbers; on decode, a Lua
-  number is mapped back to an AO-Core integer or float per the value (integral vs
-  fractional). Implementations MUST preserve integer values exactly within Lua's
-  number range.
+  integer is mapped back to an AO-Core integer and a Lua float to a float.
+  Implementations MUST preserve integer values exactly within Lua's number
+  range.
 - **Strings/binaries** map 1:1.
 
 ### 5.2 Composite type mapping (tables ⇄ messages/lists)
 
 - **Encode (AO → Lua):**
   - A **message** (associative map) → a Lua **table** with the same string keys,
-    values encoded recursively. **Exception:** a message that is an *ordered list*
-    (§5.3) is first converted to its list form and encoded as a sequence.
+    values encoded recursively; its `commitments` keep only the signed
+    commitments, with each Arweave committer given as its address.
+    **Exception:** a message that is an *ordered list* (§5.3) is first converted
+    to its list form and encoded as a sequence.
   - A **list** → a Lua **sequence** (table with integer keys `1..N`), values
     encoded recursively.
 - **Decode (Lua → AO):**
   - The **empty** Lua table `{}` → the **empty message** `#{}` (NOT an empty
     list).
   - A Lua table whose keys are present as **`{key, value}` pairs** (an associative
-    table) → a **message**: a map from each (string) key to the decoded value.
+    table) → a **message**: a map from each key, as a binary (`1` → `"1"`,
+    `true` → `"true"`), to the decoded value. A pair whose key is a table, or
+    whose value is a function or userdata, is dropped. A key with no normalized
+    form, such as `1.5`, raises an error (§8).
   - After building the map, if it is an **ordered list** (§5.3) it is converted to
     an AO-Core **list**; otherwise it stays a message.
   - Values are decoded recursively.
@@ -486,8 +497,8 @@ the carrier the process orchestrator snapshots via §4.`snapshot`.
   The snapshot captures the live interpreter state **including the host `ao`
   closures bound at install time**, so it is **node/build-local**: round-trip is
   guaranteed within one node/build, but a snapshot is **not** guaranteed portable
-  across nodes running different module versions. (Restore re-uses the serialised
-  closures; an implementation MAY instead re-install the host library on restore.)
+  across nodes running different module versions. (Restore sets the host
+  library functions in the `ao` table again when `ao` can be indexed.)
 
 ## 6. Ordering, freshness & caching
 
@@ -495,8 +506,8 @@ the carrier the process orchestrator snapshots via §4.`snapshot`.
   (b) the prior Lua state, and (c) the encoded arguments — provided the script
   does not consult non-deterministic host facilities. The default sandbox is
   designed to remove the obvious sources of non-determinism and side effects
-  (`os.execute`, `os.exit`, `os.getenv`, `os.tmpname`, file/`io` access,
-  `package`/`require`/`load*`/`dofile`) — see §7.1. A script that performs
+  (`os.execute`, `os.exit`, `os.getenv`, `os.remove`, `os.rename`, `os.tmpname`,
+  `loadfile`, `dofile`, `require` from disk) — see §7.1. A script that performs
   `ao.resolve` of a non-deterministic path, or that reads a non-sandboxed
   non-deterministic function, is **not** deterministic; determinism for process
   replay relies on the script restricting itself to deterministic inputs.
@@ -515,20 +526,21 @@ the carrier the process orchestrator snapshots via §4.`snapshot`.
 
 ### 7.1 Standard-library sandbox
 
-The `sandbox` field on the base message controls which Lua standard-library
-facilities are reachable. The device replaces each sandboxed path with an inert
-value (so calling/indexing it yields that value instead of the real function),
-addressing each function as a **path** through the global table (e.g.
-`os.execute` is addressed as the path `_G.os.execute`).
+The node option `lua-minimum-sandbox` and the `sandbox` field on the base
+message control which Lua standard-library facilities are reachable. The device
+replaces each sandboxed path with an inert value (so calling/indexing it yields
+that value instead of the real function), addressing each function as a
+**path**, a list of keys through the global table (e.g. `os.execute` is the
+path `["_G", "os", "execute"]`).
 
-- `sandbox = false` (**default**): **no** sandboxing — all standard library
-  available.
-- `sandbox = true`: apply the **default sandbox set**, replacing each of the
-  following with the inert string value `"sandboxed"`:
-  - the whole `io` table, the whole `file` table, the whole `package` table;
-  - `os.execute`, `os.exit`, `os.getenv`, `os.remove`, `os.rename`, `os.tmpname`;
-  - `loadfile`, `require`, `dofile`, `load`, `loadstring`.
-  (These cover file/OS/process access and arbitrary-code loading.)
+- Before the modules load, the node option `lua-minimum-sandbox` is applied, and
+  `require` is replaced with one that loads only from `package.loaded` and
+  `package.preload`, never from disk. A message cannot lift these. By default
+  each of these paths is replaced with the inert string value `"sandboxed"`:
+  - `loadfile`, `dofile`, `package.searchers`, `package.searchpath`;
+  - `os.execute`, `os.exit`, `os.getenv`, `os.remove`, `os.rename`, `os.tmpname`.
+  With `lua-minimum-sandbox => false`, neither applies.
+- `sandbox = false` (**default**) or `sandbox = true`: nothing more.
 - `sandbox = <list of paths>`: sandbox **each** listed path, each replaced with
   the inert string `"sandboxed"`.
 - `sandbox = <map of path → value>`: sandbox each path in the map, replacing it
@@ -541,7 +553,7 @@ string `"sandboxed"`), surfacing as a Lua error (§8).
 
 ### 7.2 Device sandbox (host-resolution allow-list)
 
-The `device-sandbox` field restricts which AO-Core **devices** a host-library
+The `device-sandbox` field lists the AO-Core **devices** that a host-library
 resolution (`ao.resolve`/`ao.get`/`ao.set`) may use:
 
 - **Absent (default):** unrestricted — host resolutions may use any device the
@@ -569,16 +581,16 @@ device-load allow-list hook; tracked as a found defect, not fixed here.)
 
 ### 7.3 Trust & commitments
 
-- The device creates **no commitments** and re-signs nothing. A function that
-  returns the (mutated) base message returns it **without** commitments unless the
-  caller re-commits; mutating a committed key via the result follows the message
-  model's commitment-invalidation rules (a changed committed value drops
-  commitments — see `message@1.0`).
+- The device creates **no commitments** and re-signs nothing. Lua sees only the
+  signed commitments of a message, and decoding a result drops each commitment
+  that does not verify: a function that returns the (mutated) base message
+  returns it with the signed commitments that still verify (a changed committed
+  value drops its commitment — see `message@1.0`).
 - The Lua state lives only in the **private** area and is never exposed via
   `id`/`keys`/`committers` nor committed.
 - **Authority for a process** (which messages a process trusts, e.g. an
   `authority`/`from-process` check) is **script-level policy**, not enforced by
-  this device. The device faithfully passes the request (including its
+  this device. The device passes the request (including its signed
   commitments, loaded into the arguments) to the script, which MAY accept or
   reject it (e.g. returning an error / a "not trusted" result). This device does
   not itself gate on signer identity.
@@ -589,9 +601,9 @@ device-load allow-list hook; tracked as a found defect, not fixed here.)
 
 | Condition | Outcome |
 |---|---|
-| `init`/`compute` finds **no** modules (no `module` field and no inline Lua body) | Error: a message stating no Lua modules were found when preparing the environment. (Hyphenated atom form of the cause: `no-lua-modules-found`.) |
+| `init`/`compute` finds **no** modules (no `module` field and no inline Lua body) | `init`: `{error, <<"No Lua modules found when preparing environment for call.">>}`. `compute` raises it as `error:{badmatch, {error, _}}`. |
 | Module **id not found** in the store | Error message with `status => 404` and a body naming the missing module id. |
-| Module **message not loadable** (no `body`/`data` source) | Error message with `status => 404` and a body explaining a module must carry a `body` of code; the offending module is echoed. |
+| Module **message not loadable** (no `body`/`data` source) | Error message with `status => 404` and a body explaining a module must carry a `body` of code; the offending module is echoed. `compute` raises it as `error:{badmatch, {error, _}}`. |
 | A key with **no function** in the script (its global is `nil`) | `{error, not_found}`. The script is not called. |
 | **Lua runtime error** while calling the function (a `lua_error`) that the script does not catch | `{failure, #{ status => 500, body => <the script's error value>, trace => <decoded stack trace> }}`. `body` is the object the script passed to `error(...)`, **unwrapped** from the engine's structured error: a Lua engine reports `error(X)` as a wrapper (e.g. `{error_call, [X]}`), so `body` is the decoded `X`, **not** the whole wrapper (decoding the wrapper as a value is wrong and may itself crash). For an engine-internal fault that carries no user value (e.g. an illegal-index error), `body` is a readable rendering of that error. The `trace` is a normalised list of frames, each a message with `function`, `parameters` (a numbered message of the frame's decoded arguments), and a `line` (`"<file>:<n>"` when available). |
 | **Status string with no existing atom** returned by the script (§4.3 rule 3) | The status coercion (`list_to_existing_atom`) faults → a failure (a `status => 500` Erlang/host error, as the row below), **not** a success carrying the novel tag. |
@@ -609,9 +621,9 @@ Notes:
   catch is the `status => 500` failure above, which a process does not store: a
   script that throws is a failure, as a device that throws is.
 - The status atom of a successful return is whatever string the script returns as
-  its first value (default `ok` for a single-value return). An unrecognised status
-  string still becomes that atom; only `ok` denotes success to the surrounding
-  resolution machinery.
+  its first value (default `ok` for a single-value return). A status string
+  whose atom exists becomes that atom; only `ok` denotes success to the
+  surrounding resolution machinery.
 
 ## 9. Composition
 
@@ -649,7 +661,8 @@ Notes:
   this device's computation with arbitrary other devices' behaviour mid-call.
 - **Direct hooks.** As an HTTP request hook (bound via the node's `on`/`request`
   configuration), an inbound request resolves a Lua function (default `request`)
-  whose returned `{status, message}` becomes the HTTP response — e.g. returning
+  whose returned message's `body` is the list of messages that the node
+  resolves for the HTTP response — e.g. returning
   `("ok", { body = { { body = "i like turtles" } } })`.
 
 ## 10. Conformance (normative checklist)
@@ -694,24 +707,27 @@ unreachable/offline path).
    attaches no private area (§4.3 rule 4), so the next resolution rebuilds from the
    original base and does **not** see the increment.
 8. **Value mapping — scalars.** binary⇄string, integer/float⇄number,
-   boolean⇄boolean; an AO **atom** (not `true`/`false`) encodes to its **name as a
-   Lua string**; a Lua number decodes to an integer or float per its value.
+   boolean⇄boolean; an AO **atom** (not `true`/`false`/`nil`) encodes to its
+   **name as a Lua string**; a Lua integer decodes to an integer and a Lua float
+   to a float.
 9. **Value mapping — composites.** An associative table decodes to a message; a
    sequence (`1..N`) decodes to a list; the **empty table `{}` decodes to an empty
    message `#{}`, not a list**; an AO ordered-list message encodes to a Lua
    sequence.
-10. **Default sandbox.** With `sandbox = true`, calling a sandboxed function
-    (e.g. `os.getenv`) does not return its real result; the attempt surfaces as an
-    error outcome. With `sandbox = false` (default) the standard library is
-    available. A `sandbox` **map** replaces each named path with the caller's
-    specified value; a `sandbox` **list** replaces each with `"sandboxed"`.
+10. **Default sandbox.** With `sandbox` `false` (default) or `true`, calling a
+    sandboxed function (e.g. `os.getenv`) does not return its real result; the
+    attempt gives a failure. With the node option
+    `lua-minimum-sandbox => false` and no `sandbox` list or map, the standard
+    library is available. A `sandbox` **map** replaces each named path with the
+    caller's specified value; a `sandbox` **list** replaces each with
+    `"sandboxed"`.
 11. **Host library present.** Every loaded state exposes `ao.resolve`, `ao.get`,
     `ao.set`, `ao.event` on the global `ao` table, merged over any `ao` table the
     script defined.
 12. **`ao.resolve` forms.** A single message singleton (e.g.
-    `{ path = "/hello", hello = "…" }`) resolves and returns `(status, result)`;
-    a `(base, path)` form resolves the path against the base; an internal
-    resolution fault returns `("error", …)` rather than raising.
+    `{ path = "//hello", hello = "…" }`) resolves and returns
+    `(status, result)`; a `(base, path)` form resolves the path against the
+    base; a fault that the resolution throws returns `("error", …)`.
 13. **`ao.get` / `ao.set`.** `ao.get(key, base)` returns the single resolved
     value; `ao.set(base, key, value)` / `ao.set(base, values)` returns the merged
     message (with `message@1.0` `set` semantics).
@@ -739,7 +755,7 @@ unreachable/offline path).
 19. **Idempotent init.** Re-running `init` on a message that already holds a
     private state is a no-op (the state is not rebuilt).
 20. **No commitments minted.** Resolving any Lua key creates no commitments; a
-    returned message is uncommitted unless re-committed by the caller, and the
+    returned message has only the signed commitments that still verify, and the
     private Lua state never appears in `id`/`keys`/`committers`.
 
 ## 11. Out of scope

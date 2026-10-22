@@ -69,7 +69,7 @@ get(Node, Message, Opts) ->
     request(
         <<"GET">>,
         Node,
-        hb_ao:get(<<"path">>, Message, <<"/">>, Opts),
+        hb_maps:get(<<"path">>, Message, <<"/">>, Opts),
         Message,
         Opts
     ).
@@ -80,12 +80,7 @@ post(Node, Path, Opts) when is_binary(Path) ->
     post(Node, #{ <<"path">> => Path }, Opts);
 post(Node, Message, Opts) ->
     post(Node,
-        hb_ao:get(
-            <<"path">>,
-            Message,
-            <<"/">>,
-            Opts#{ <<"topic">> => ao_internal }
-        ),
+        hb_maps:get(<<"path">>, Message, <<"/">>, Opts),
         Message,
         Opts
     ).
@@ -421,7 +416,7 @@ route_to_request(M, {ok, #{ <<"uri">> := XPath, <<"opts">> := ReqOpts}}, Opts) -
     % host and path.
     URI = uri_string:parse(XPath),
     ?event(debug_http_outbound, {parsed_uri, {uri, {explicit, URI}}}),
-    Method = hb_ao:get(<<"method">>, M, <<"GET">>, Opts),
+    Method = hb_maps:get(<<"method">>, M, <<"GET">>, Opts),
     % We must remove the path and host from the message, because they are not
     % valid for outbound requests. The path is retrieved from the route, and
     % the host should already be known to the caller. A committed path or host
@@ -453,8 +448,8 @@ route_to_request(M, {ok, #{ <<"uri">> := XPath, <<"opts">> := ReqOpts}}, Opts) -
 route_to_request(M, {ok, Routes}, Opts) ->
     ?event(debug_http_outbound, {found_routes, {req, M}, {routes, Routes}}),
     % The result is a route, so we leave it to `request' to handle it.
-    Path = hb_ao:get(<<"path">>, M, <<"/">>, Opts),
-    Method = hb_ao:get(<<"method">>, M, <<"GET">>, Opts),
+    Path = hb_maps:get(<<"path">>, M, <<"/">>, Opts),
+    Method = hb_maps:get(<<"method">>, M, <<"GET">>, Opts),
     % We must remove the path and host from the message, because they are not
     % valid for outbound requests. The path is retrieved from the route, and
     % the host should already be known to the caller. A committed path or host
@@ -573,7 +568,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                         <<"content-type">> => media_type(Format),
                         <<"accept-bundle">> =>
                             hb_util:bin(
-                                hb_ao:get(
+                                hb_maps:get(
                                     <<"accept-bundle">>,
                                     WithSelfPort,
                                     true,
@@ -886,6 +881,20 @@ signed_routing_fields_test() ->
             ?assertEqual(<<"application.example">>, maps:get(<<"host">>, Prepared))
         end,
         [Route, #{ <<"nodes">> => [Route] }]
+    ),
+    % The method and path of a message with a `device' are its values: the
+    % device does not run.
+    ?assertMatch(
+        {ok, <<"POST">>, _, <<"/value">>, _, _},
+        route_to_request(
+            #{
+                <<"device">> => <<"apply@1.0">>,
+                <<"method">> => <<"POST">>,
+                <<"path">> => <<"/value">>
+            },
+            {ok, #{ <<"nodes">> => [Route] }},
+            Opts
+        )
     ),
     ?assertEqual({ok, <<"preserved">>},
         request(<<"POST">>, Route, <<"/ignored">>, Signed, Opts)).

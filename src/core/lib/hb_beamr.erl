@@ -209,7 +209,8 @@ stub(Base, _Req, _Opts) ->
     {ok, [0], Base}.
 
 %% @doc Synchonously monitor the WASM executor for a call result and any
-%% imports that need to be handled.
+%% imports that need to be handled. An import that raises stops the executor,
+%% and its exception is raised to the caller.
 monitor_call(WASM, ImportFun, StateMsg, Opts) ->
     receive
         {execution_result, Result} ->
@@ -231,20 +232,16 @@ monitor_call(WASM, ImportFun, StateMsg, Opts) ->
                     ),
                 ?event({import_ret, Module, Func, {args, Args}, {res, Res}}),
                 dispatch_response(WASM, Res),
-                monitor_call(WASM, ImportFun, StateReq, Opts)
+                StateReq
+            of
+                NextState -> monitor_call(WASM, ImportFun, NextState, Opts)
             catch
                 Err:Reason:Stack ->
-                    % Signal the WASM executor to stop.
+                    % The executor waits for the import's response: stop it.
+                    % A stopped executor sends no further messages.
                     ?event({import_error, Err, Reason, Stack}),
                     stop(WASM),
-                    % The driver is going to send us an error message, so we 
-                    % need to clear it from the mailbox, even if we already 
-                    % know that the import failed.
-                    receive
-                        {error, _} -> ok
-                    %after 0 -> ok
-                    end,
-                    {error, Err, Reason, Stack, StateMsg}
+                    erlang:raise(Err, Reason, Stack)
             end;
         {error, Error} ->
             ?event({wasm_error, Error}),
@@ -400,3 +397,22 @@ trap_keeps_instance_usable_test() ->
     {ok, Mem} = serialize(WASM),
     ok = reset(WASM, File, wasm, Mem),
     ?assertEqual({ok, [120.0]}, call(WASM, "fac", [5.0])).
+
+%% @doc An imported function of no results is called, and the driver sizes
+%% its import message to the terms it sends.
+void_import_test() ->
+    % A module that imports `env.f' of type () -> () and exports `run',
+    % which calls it. The byte sequence is the module's sections: type,
+    % import, function, export and code.
+    Module =
+        <<
+            0, "asm", 1, 0, 0, 0,
+            1, 4, 1, 16#60, 0, 0,
+            2, 9, 1, 3, "env", 1, "f", 16#00, 0,
+            3, 2, 1, 0,
+            7, 7, 1, 3, "run", 16#00, 1,
+            16#0A, 6, 1, 4, 0, 16#10, 0, 16#0B
+        >>,
+    {ok, WASM, _Imports, _Exports} = start(Module),
+    ?assertEqual({ok, []}, call(WASM, "run", [])),
+    stop(WASM).

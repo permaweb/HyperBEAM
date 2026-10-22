@@ -60,8 +60,11 @@ and JSON name snapshots can all be stacked behind one uniform lookup surface.
   on the node options as the binary, lowercase, hyphenated key `name-resolvers`.
   (An implementation whose option layer canonicalises case/underscore MUST
   resolve this to the same option; the underlying key name is `name-resolvers`.)
-  Default when unset: the **empty list** `[]` (no resolvers → every lookup is
-  not-found).
+  Default when unset: `#{ <<"device">> => <<"arweave@2.9">> }`, then
+  `#{ <<"device">> => <<"b32-name@1.0">> }`, then the path
+  `<id>~json@1.0/deserialize&target=data`, where `<id>` is the ARNS snapshot
+  `G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8`. In test mode the default is
+  the **empty list** `[]` (no resolvers → every lookup is not-found).
 - **`node-host` / `host` (node options):** the node's own externally-reachable
   host, used by the hook facet to strip the node's domain off an incoming `Host`
   header and isolate the subdomain. `node-host` is consulted first; `host` is
@@ -73,15 +76,15 @@ and JSON name snapshots can all be stacked behind one uniform lookup surface.
 - **Dispatch shape:** **default-handler.** Every key not explicitly excluded is
   handled by the default resolver behaviour (§4.`<name>`); i.e. the device
   answers an **arbitrary** key by treating that key as a name to resolve.
-- **Excluded keys:** the device MUST NOT capture the keys `keys` and `set`.
-  These fall through to the base identity device (`message@1.0`) so that the
-  bound message can still be inspected (`keys`) and mutated (`set` / its
-  path-setting variant) — operations needed to manipulate the base message
-  itself rather than to resolve a name. No other keys are excluded; in
+- **Excluded keys:** the device MUST NOT capture the keys `committers`, `keys`
+  and `set`. These fall through to the base identity device (`message@1.0`) so
+  that the bound message can still be inspected (`keys`) and mutated (`set`) —
+  operations needed to manipulate the base message itself, not to resolve a
+  name. No other keys are excluded; in
   particular `id`, `commit`, `verify`, `path`, etc. are **not** in this device's
   exclude list (they are not part of its contract and an implementation MAY rely
   on the substrate's normal handling of them, but the only keys this device
-  guarantees to forward are `keys` and `set`).
+  guarantees to forward are `committers`, `keys` and `set`).
 - **Resolved-key message shape (Base):** the device ignores the content of the
   base message for resolution purposes — the name comes from the requested key,
   not from base data. (The base message is still the message the device is bound
@@ -107,18 +110,18 @@ and JSON name snapshots can all be stacked behind one uniform lookup surface.
     `#{ <<"device">> => <<"arweave@2.9">> }`, but `M` MAY be any message whose
     device answers the name as a key (e.g. a literal in-line map
     `#{ <<"hello">> => <<"world">> }` answers the name `hello` with `world`).
-- **An empty or unset resolver list** disables resolution: every lookup is
-  not-found, with no error.
+- **An empty resolver list** disables resolution: every lookup is not-found,
+  with no error.
 
 ## 4. Resolved keys (normative)
 
 ### `<name>` (the default handler) — resolve a name
 
 - **Reads:** the requested key (the **name**); the node option `name-resolvers`
-  (the ordered resolver list, default `[]`); the request key `load` (default
+  (the ordered resolver list, default in §2); the request key `load` (default
   `true`); and, on load, the node's content-addressed message store.
 - **Behaviour:**
-  1. Read the ordered resolver list from `name-resolvers` (default `[]`).
+  1. Read the ordered resolver list from `name-resolvers` (default in §2).
   2. **First-match scan.** Walk the list in order. For each resolver, attempt to
      resolve the name against it (per the per-shape rules in §3):
      - a **binary** resolver `P` → resolve path `P/<name>`;
@@ -177,14 +180,15 @@ current execution `body` (the list of messages to be resolved). It rewrites the
      - Let `NodeHost` be `node-host` if set, else `host` (the node option), else
        the no-host fallback.
      - If `NodeHost` is known: parse the host portion out of `NodeHost` (it MAY
-       be a full URL such as `http://localhost`; take its host component) and
+       be a full URL such as `http://localhost`; take its host component, or
+       the value as it is when it has none) and
        split `host` on the literal `.<NodeHost-host>` suffix. If `host` is
        exactly `<the node host>` (no subdomain) → **skip** (no name). Otherwise
        the **subdomain** (everything before that suffix) is the name. If `host`
        does not end in the node host suffix, fall back to the no-host rule
        below.
-     - **No-host fallback** (no node host configured, or parse failed, or the
-       request host does not contain the node host): split `host` on `.`. If
+     - **No-host fallback** (no node host configured, or the request host does
+       not end in the node host suffix): split `host` on `.`. If
        there is only a single label (no `.`) → **skip**. If the host is an **IP
        address** (parses as a literal IPv4/IPv6 address) → **skip** (an IP has
        no meaningful subdomain). Otherwise the **first label** (before the first
@@ -192,7 +196,9 @@ current execution `body` (the list of messages to be resolved). It rewrites the
   2. **Skip path.** If step 1 yields a *skip* (no subdomain / bare host / IP
      literal), the hook returns the **unmodified** hook request `{ok, HookReq}`
      — name resolution does not apply; the request proceeds normally.
-  3. **Resolve the name.** Resolve the extracted name exactly as the `<name>`
+  3. **Resolve the name.** If the name, lowercased, is in the node option
+     `name-reserved-host-labels` (default `[]`), return the 404 error (§8) for
+     any `body`. Otherwise resolve the extracted name exactly as the `<name>`
      handler does (same resolver list, same first-match, **with loading at its
      default**, i.e. the resolved message is loaded). Call the result
      `ResolvedMsg`.
@@ -210,29 +216,29 @@ current execution `body` (the list of messages to be resolved). It rewrites the
      **de-duplication** rule (so the named base is not executed twice when the
      path already names it):
      - If `body` is empty → new body is `[ResolvedMsg]`.
-     - Else let `OldBase` be the head of `body` and `Rest` the tail. Compare the
-       **identity** of `OldBase` and `ResolvedMsg` (their IDs — see "permissive
-       identity" in §5):
-       - **Same identity** and `OldBase` is a map or list → keep `body`
-         unchanged (the resolved base is already present in loaded form; do not
-         duplicate it).
-       - **Same identity** and `OldBase` is not a map/list (e.g. it is the bare
-         ID) → replace the head with the loaded `ResolvedMsg`:
-         `[ResolvedMsg | Rest]` (prefer the loaded form over the bare ID).
-       - **Different identity:** if `OldBase` is a map carrying its own `path`
-         key, keep it and prepend: `[ResolvedMsg, OldBase | Rest]` (both are
-         executed, resolved subdomain first, then the path-bearing old base).
-         Otherwise drop `OldBase` and use `[ResolvedMsg | Rest]`.
-  6. Return `{ok, #{ <<"body">> => NewBody }}` — i.e. a hook result whose `body`
-     is the rewritten execution list. The request pipeline then executes that
-     body.
+     - Else, if the head of `body` is not a map (the parser gives a key, an ID
+       or a URI as the base), replace it with the request that the parser
+       gives for the first path part when the path starts with an empty part.
+       Let `OldBase` be the head of `body` and `Rest` the tail. Compare the
+       **key** of `OldBase` with the value that the name resolves to and with
+       the signed ID of `ResolvedMsg` (see "key comparison" in §5):
+       - **Equal** → replace the head with the loaded `ResolvedMsg`:
+         `[ResolvedMsg | Rest]`.
+       - **Not equal:** if `OldBase` is a map with no `path` key, drop it and
+         use `[ResolvedMsg | Rest]`. Otherwise keep it and prepend:
+         `[ResolvedMsg, OldBase | Rest]` (both are executed, resolved
+         subdomain first, then the old base).
+  6. Return `{ok, HookReq#{ <<"body">> => NewBody }}` — i.e. the hook request
+     with its `body` replaced by the rewritten execution list. The request
+     pipeline then executes that body.
 - **Returns:**
   - `{ok, HookReq}` (unmodified) on a **skip** (no subdomain) or on a
     **non-root not-found**;
-  - `{ok, #{ <<"body">> => NewBody }}` on a **successful** name resolution
-    (path rewritten);
+  - `{ok, HookReq#{ <<"body">> => NewBody }}` on a **successful** name
+    resolution (path rewritten);
   - `{error, #{ <<"status">> => 404, <<"body">> => <<"Not Found">> }}` on a
-    **root-path not-found** (subdomain present, names nothing, empty body).
+    **root-path not-found** (subdomain present, not found, empty body), or
+    on a name in `name-reserved-host-labels` (any body).
 - **Side effects:** the resolution + load it performs are **reads** only; the
   hook itself writes nothing and emits no commitment. Its observable effect is
   the rewritten `body` it returns (the pipeline, not this device, executes it).
@@ -256,17 +262,16 @@ current execution `body` (the list of messages to be resolved). It rewrites the
   prefix `P` is the byte concatenation `P <> "/" <> K` — a single `/`
   separator, `K` appended as one trailing segment. `P` is **not** otherwise
   transformed.
-- **Permissive identity (hook de-duplication):** to compare an "old base" in the
-  request body with the freshly resolved message, the hook reduces each to an
-  ID as follows: an **identifier** binary → itself; a **link** → the ID it
-  references; a wrapped *resolution request* form (a base+device pairing) →
-  the identity of its inner message; a **map** message → its **signed** ID. Two
-  bases are "the same" iff these IDs are equal. (This lets the hook recognise
-  that `<id>.<host>/` and `<id>.<host>/<same-id>/...` name the same base and
-  avoid executing it twice.)
+- **Key comparison (hook de-duplication):** to compare an "old base" in the
+  request body with the freshly resolved message, the hook takes the key of the
+  old base: a **binary** → itself; a **map** → its `path`; any other value has
+  no key. The old base is "the same" iff its key equals the value that the
+  name resolves to or the **signed** ID of the loaded message. (This lets the
+  hook recognise that `<id>.<host>/<same-id>/...` has the same base as
+  `<id>.<host>/` and avoid executing it twice.)
 - The hook's HTTP error is the structured pair `status => 404` (integer) and
-  `body => <<"Not Found">>` (binary). The hook's success result is a message
-  with a single `body` key holding the rewritten execution list.
+  `body => <<"Not Found">>` (binary). The hook's success result is the hook
+  request with its `body` replaced by the rewritten execution list.
 
 ## 6. Ordering, freshness & caching
 
@@ -318,7 +323,7 @@ current execution `body` (the list of messages to be resolved). It rewrites the
 ## 8. Errors
 
 - **`not_found`** — the resolved-key facet's result when **no** resolver in
-  `name-resolvers` claims the name (including the empty/unset-list case). The
+  `name-resolvers` claims the name (including the empty-list case). The
   handler **returns the bare atom `not_found`** (not a structured map, not
   `{error, _}`); through `hb_ao:resolve` this is observed inside the standard
   success envelope as **`{ok, not_found}`** (the pipeline wraps a bare device
@@ -326,8 +331,9 @@ current execution `body` (the list of messages to be resolved). It rewrites the
   erroring, or crashing contributes to this outcome but is **not** itself
   surfaced.
 - **HTTP 404 (`status => 404`, `body => <<"Not Found">>`)** — the hook facet's
-  result when a host **subdomain is present**, names nothing (resolution
-  not-found), **and** the execution body is empty (root path). This is a
+  result when a host **subdomain is present**, its resolution is not-found,
+  **and** the execution body is empty (root path), or when the subdomain is
+  in `name-reserved-host-labels` (any body). This is a
   structured error map, returned as `{error, #{...}}`.
 - The hook's **skip** and **non-root not-found** outcomes are **not** errors:
   they return `{ok, <unmodified hook request>}`. A skip carries an internal
@@ -368,9 +374,9 @@ current execution `body` (the list of messages to be resolved). It rewrites the
 ## 10. Conformance (normative checklist)
 
 1. The device is a **default-handler** device: it answers an arbitrary key by
-   treating it as a name to resolve, and it **excludes** exactly `keys` and
-   `set` (those forward to the base identity device).
-2. With `name-resolvers` unset or `[]`, resolving any name yields the bare atom
+   treating it as a name to resolve, and it **excludes** exactly `committers`,
+   `keys` and `set` (those forward to the base identity device).
+2. With `name-resolvers` set to `[]`, resolving any name yields the bare atom
    `not_found`, with no error and no side effect.
 3. Resolution scans `name-resolvers` **in order** and returns the value of the
    **first** resolver that yields `{ok, _}`; a later resolver that would also
@@ -401,11 +407,12 @@ current execution `body` (the list of messages to be resolved). It rewrites the
     **unmodified**.
 11. On a skip, the hook returns `{ok, <unmodified hook request>}`; it never
     rewrites the body for a skipped request.
-12. When a subdomain **is** present and resolves, the hook returns
-    `{ok, #{ <<"body">> => NewBody }}` where the resolved message is **prepended
-    as the base** of the execution body, applying the de-duplication rule (no
-    double-execution when the path already names the same base; a path-bearing
-    differing old base is retained behind the resolved base).
+12. When a subdomain **is** present, is not in `name-reserved-host-labels`, and
+    resolves, the hook returns `{ok, HookReq#{ <<"body">> => NewBody }}` where
+    the resolved message is **prepended as the base** of the execution body,
+    applying the de-duplication rule (no double-execution when the path already
+    starts with the same base; a path-bearing differing old base is kept after
+    the resolved base).
 13. When a subdomain is present but resolution is **not-found** and the
     execution body is **empty** (root path), the hook returns
     `{error, #{ <<"status">> => 404, <<"body">> => <<"Not Found">> }}`.
@@ -448,23 +455,15 @@ current execution `body` (the list of messages to be resolved). It rewrites the
 
 ## Open questions
 
-- **Excludes are minimal (`keys`, `set` only).** Unlike the guidance that
-  default-handler devices exclude the full manipulation set
-  (`keys`/`set`/`set-path`/`remove`), this device excludes only `keys` and
-  `set`. So a name equal to `set-path`, `remove`, `id`, `commit`, or `verify`
-  would be captured by the resolver default rather than forwarded to the base
-  device — i.e. those names are not directly resolvable as base-message
-  operations through a `~name@1.0` binding. Flagged in case the intended exclude
-  set is broader; the spec pins the observed behaviour (only `keys`/`set`
-  forwarded).
-- **Permissive identity uses the *signed* ID of a map base.** The hook's
-  de-duplication compares a map old-base by its **signed** identity. For an
-  **uncommitted** map base this identity is computed over the message as-is; the
-  spec does not constrain what that yields for an unsigned message versus the
-  identifier the subdomain resolved to, so the "same base" determination for an
-  uncommitted inline base is only as well-defined as that identity. Flagged as a
-  corner of the de-dup rule a reimplementer should mirror exactly (compare IDs;
-  map → signed ID) rather than guess.
+- **Excludes are minimal (`committers`, `keys`, `set` only).** Unlike the
+  guidance that default-handler devices exclude the full manipulation set
+  (`keys`/`set`/`set-path`/`remove`), this device excludes only `committers`,
+  `keys` and `set`. So a name equal to `set-path`, `remove`, `id`, `commit`, or
+  `verify` would be captured by the resolver default rather than forwarded to
+  the base device — i.e. those names are not directly resolvable as
+  base-message operations through a `~name@1.0` binding. Flagged in case the
+  intended exclude set is broader; the spec states the observed behaviour (only
+  `committers`/`keys`/`set` forwarded).
 - **`load` coercion of unexpected values.** `load` is coerced to a boolean; the
   spec pins `true`/`false` (boolean or binary) and treats absent as `true`, but
   does not enumerate behaviour for other binaries (e.g. `1`/`0`). A reimplementer

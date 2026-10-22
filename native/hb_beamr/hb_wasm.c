@@ -21,8 +21,15 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
     DRV_DEBUG("Proc: %p. Args size: %d", proc, args->size);
     DRV_DEBUG("Import name: %s.%s [%s]", import_hook->module_name, import_hook->field_name, import_hook->signature);
 
-    // Initialize the message object
-    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * ((2+(2*3)) + ((args->size + 1) * 2) + ((results->size + 1) * 2) + 2));
+    // The message is `{import, Module, Field, Args, Signature}': the atom and
+    // two strings (2 + 3 + 3), one term per argument with the list's nil,
+    // header and count (args->size * 2 + 3), the signature string (3), and
+    // the 5-tuple header (2).
+    ErlDrvTermData* msg =
+        driver_alloc(
+            sizeof(ErlDrvTermData) *
+                ((2 + 3 + 3) + (args->size * 2 + 3) + 3 + 2)
+        );
     int msg_index = 0;
     msg[msg_index++] = ERL_DRV_ATOM;
     msg[msg_index++] = atom_import;
@@ -306,6 +313,15 @@ void wasm_execute_function(void* raw) {
     const wasm_functype_t* func_type = wasm_func_type(func);
     const wasm_valtype_vec_t* param_types = wasm_functype_params(func_type);
     const wasm_valtype_vec_t* result_types = wasm_functype_results(func_type);
+
+    // Refuse a call whose argument count is not the one the signature takes.
+    // Building the value vector reads one decoded term per parameter, so a
+    // shorter list would read past its end and end the node's VM.
+    if (proc->current_args_length != (int) param_types->size) {
+        send_error(proc, "Function %s takes %d parameters", function_name, (int) param_types->size);
+        drv_unlock(proc->is_running);
+        return;
+    }
 
     wasm_val_vec_t args, results;
     wasm_val_vec_new_uninitialized(&args, param_types->size);

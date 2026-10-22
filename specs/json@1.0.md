@@ -1,7 +1,7 @@
 # `json@1.0` — JSON codec and HyperPATH-over-JSON device
 
 - **Device name:** `json@1.0`
-- **Depends-on:** `structured@1.0` (typed-message ⇄ TABM codec; this device round-trips through it), `message@1.0` (the surrounding message model and reserved-key surface), `httpsig@1.0` (its `commit`/`verify`/`committed` keys delegate there). All three specs are provided to reimplementers.
+- **Depends-on:** `structured@1.0` (typed-message ⇄ TABM codec; this device round-trips through it), `message@1.0` (the surrounding message model and reserved-key surface), `httpsig@1.0` (its `commit`/`verify` keys delegate there). All three specs are provided to reimplementers.
 - **Status:** Draft
 
 ## 1. Overview
@@ -35,9 +35,10 @@ ubiquitous JSON wire format used by external clients and HTTP APIs.
   Defined by the `structured@1.0` spec.
 - **Atom:** an interned symbolic constant (e.g. `ok`, `true`) — a type AO-Core
   messages support but **JSON has no native representation for**. This device's
-  type-handling rules (§5) centre on the single asymmetry that JSON can carry
-  numbers, strings, booleans, arrays, objects, and `null` natively, but **not**
-  atoms.
+  type-handling rules (§5) centre on the asymmetry that JSON can carry floats,
+  integers up to 9007199254740991 in magnitude, UTF-8 strings, booleans, arrays,
+  objects, and `null` natively, but **not** atoms, other binaries or larger
+  integers.
 - **Codec keys vs resolvable keys:** the *codec keys* (`from`, `to`, and the
   commitment passthroughs) are invoked by the conversion subsystem when a caller
   converts a message to/from the `json@1.0` format; the *resolvable keys*
@@ -53,19 +54,18 @@ ubiquitous JSON wire format used by external clients and HTTP APIs.
   does not name (including the message-manipulation and commitment-inspection
   reserved keys `keys`, `set`, `set-path`, `remove`, `id`, `commitments`,
   `committers`, `verify`) falls through to the base `message@1.0` device — except
-  `commit`, `verify`, and `committed`, which this device overrides to pin the
-  commitment device (§4).
+  `commit`, `verify`, and `committed`, which this device overrides (§4).
 
 - **Keys answered:**
   - Codec direction keys: **`to`** (message/TABM → JSON), **`from`** (JSON →
     message). These are the conversion-subsystem entry points.
-  - Codec metadata: **`content-type`**.
+  - Bundle hint for `structured@1.0`: **`to-hint`**.
   - Commitment surface: **`commit`**, **`verify`**, **`committed`**.
   - HyperPATH-over-JSON: **`serialize`**, **`deserialize`**.
 
 - **Message shapes the device operates on:**
-  - `to` accepts either a **binary** (already-serialised content, or any opaque
-    binary) or a **message** (map).
+  - `to` accepts a **binary** (already-serialised content, or any opaque
+    binary), a number, `true`, `false`, `null`, or a **message** (map).
   - `from` accepts either a **binary** (a JSON document) or a **message** (map,
     already decoded).
   - `serialize`/`deserialize` operate on the current resolution **base message**
@@ -75,7 +75,8 @@ ubiquitous JSON wire format used by external clients and HTTP APIs.
 
 ### `to` — encode message → JSON
 - **Reads:** the value to encode (`Base`); the request flag `bundle` (boolean,
-  default `false`).
+  default `false`; `true` for a list), which the `bundle` of the message's
+  `httpsig@1.0` commitment replaces.
 - **Behaviour:**
   1. If the value is a **binary**, the device MUST JSON-encode that binary value
      directly and return the result. (A binary is treated as an opaque JSON
@@ -85,53 +86,50 @@ ubiquitous JSON wire format used by external clients and HTTP APIs.
         encoding — private content MUST NOT appear in the JSON output.
      b. If `bundle` is `true`, fully **load any linked/lazy sub-values** so the
         emitted JSON is self-contained (no unresolved references). If `bundle`
-        is `false` or absent, linked sub-values MAY be represented by their link
-        form rather than inlined.
-     c. Produce a JSON-oriented intermediate in which **only `atom` values are
-        type-encoded** and **all other supported rich types remain JSON-native**:
-        integers and floats become JSON numbers, lists become JSON arrays,
-        strings/binaries become JSON strings, nested messages become JSON
-        objects, and atoms are encoded per §5 (TABM-style typed string plus an
-        `ao-types` entry). See §5 for the exact rule.
+        is `false` or absent, each nested message and list is given as its link,
+        the string `ao:<ID>`, as `structured@1.0` §6 gives it.
+     c. Produce a JSON-oriented intermediate in which **only `atom` values,
+        binaries that are not UTF-8 text, and integers greater than
+        9007199254740991 in magnitude are type-encoded** and **all other
+        supported rich types remain JSON-native**: integers and floats become
+        JSON numbers, strings/binaries become JSON strings, with `bundle = true`
+        lists become JSON arrays (objects if an element is type-encoded) and
+        nested messages JSON objects, and the type-encoded values are encoded
+        per §5 (TABM-style typed string plus an `ao-types` entry).
+        See §5 for the exact rule.
      d. JSON-encode that intermediate and return the document as a binary.
   3. The hashpath/commitment machinery MUST NOT be triggered as a side effect of
      encoding (encoding is a pure representation change).
 - **Returns:** `{ok, JSONBinary}`.
-- **Side effects:** none, except cache **reads** to materialise linked values
-  when `bundle = true`.
+- **Side effects:** none, except cache **reads** to materialise linked values,
+  and without `bundle = true` the cache writes of `structured@1.0` §6.
 
 ### `from` — decode JSON → message
-- **Reads:** the value to decode (`Base`); the request flag `accept-codec`
-  (binary, optional).
+- **Reads:** the value to decode (`Base`); the request flag `bundle` (boolean,
+  default `false`).
 - **Behaviour:**
   1. If the value is already a **message** (map), the device MUST return it
      unchanged.
   2. If the value is a **binary**, the device MUST parse it as a JSON document.
      JSON objects become messages, arrays become lists, numbers become
-     integers/floats, strings become binaries, `true`/`false`/`null` are handled
-     per §5.
+     integers/floats, strings become binaries (links if they start with `ao:`),
+     `true`/`false`/`null` are handled per §5.
   3. The device MUST **normalise** the parsed result so the output is a fully
      type-consistent message: any TABM type annotations carried *inside* the JSON
      (e.g. an `ao-types` field and its typed values, as emitted by `to` for
      atoms) are decoded to their rich types, and the message is re-reduced to
-     the caller's requested form. Concretely, parsing then converting the result
+     TABM. Concretely, parsing then converting the result
      to rich (structured) form and back to TABM yields the normalised message;
      the visible effect is that atoms and any other embedded typed values are
      reconstituted rather than left as raw strings.
-  4. If `accept-codec` equals `structured@1.0`, the device MUST return the
-     **rich (structured)** intermediate form (typed values, not TABM binaries).
-     Otherwise it MUST return the **TABM** form.
+  4. The device MUST return the **TABM** form.
 - **Returns:** `{ok, Message}`.
 - **Errors:** a malformed JSON document is a decode failure (§8). An embedded
-  `ao-types` token that names an atom unknown to the decoder, or any type token
-  the decoder does not recognise, surfaces the corresponding `structured@1.0`
-  decode error (§8).
-- **Side effects:** none.
-
-### `content-type` — codec MIME type
-- **Reads:** nothing.
-- **Behaviour:** MUST return the fixed MIME type for this codec.
-- **Returns:** `{ok, <<"application/json">>}`.
+  `atom` whose name is unknown to the decoder raises
+  `error({case_clause, {error, ErrorMap}})`, with `ErrorMap` the
+  `structured@1.0` error (§8); an `ao-types` with a type name the decoder does
+  not recognise is kept as a key, and no types are applied.
+- **Side effects:** the cache writes of `structured@1.0` §6.
 
 ### `commit` — produce a commitment
 - **Reads:** the target message (`Base`); the request `Req`.
@@ -145,10 +143,9 @@ ubiquitous JSON wire format used by external clients and HTTP APIs.
 
 ### `verify` — check commitments
 - **Reads:** the target message (`Base`); the request `Req`.
-- **Behaviour:** MUST delegate to **`message@1.0`** with `commitment-device`
-  forced to `httpsig@1.0` (message@1.0 does the commitment selection + field-merge,
-  then forwards to `httpsig@1.0`) and return its result. Do NOT call `httpsig@1.0`'s
-  `verify` directly — it raises `badkey <<"type">>` without the merged commitment.
+- **Behaviour:** MUST call `httpsig@1.0`'s `verify` with `Base` and `Req` and
+  return its result. `message@1.0`'s `verify` calls it for a commitment whose
+  `commitment-device` is `json@1.0`, with the commitment as `Req`.
 - **Returns:** `{ok, Boolean}`.
 
 ### `committed` — list committed keys
@@ -170,7 +167,7 @@ ubiquitous JSON wire format used by external clients and HTTP APIs.
   - `content-type` ⇒ `application/json`
   - `body` ⇒ the JSON document (binary), identical to what `to` would return for
     `Base` under the same request.
-- **Side effects:** none beyond `to`'s (cache reads when bundling).
+- **Side effects:** none beyond `to`'s.
 
 ### `deserialize` — parse a JSON field of the base message into a message
 - **Reads:** the request field `target` (binary, **default `body`**); the value
@@ -180,10 +177,10 @@ ubiquitous JSON wire format used by external clients and HTTP APIs.
   2. If no value is found at `target`, the device MUST return the error message
      in §8 (HTTP-shaped, status `404`).
   3. Otherwise the device MUST decode that value via `from` (using `Req`) and
-     return the result. `accept-codec` in `Req` is honoured exactly as in `from`.
+     return the result.
 - **Returns:** `{ok, Message}` on success, or the §8 error map on a missing
   target.
-- **Side effects:** none.
+- **Side effects:** those of `from`.
 
 ## 5. Data formats & encodings (normative)
 
@@ -197,20 +194,21 @@ observable mapping. Internal representation of intermediate forms is out of scop
 
 | Message value | JSON output |
 |---|---|
-| binary / string | JSON string |
-| integer | JSON number (integer, no fraction/exponent) |
+| binary / string | JSON string; a binary that is not UTF-8 text is its base64url form, typed `binary` in `ao-types` |
+| integer | JSON number (integer, no fraction/exponent); one greater than 9007199254740991 in magnitude is a JSON string of its decimal text, typed `integer` in `ao-types` |
 | float | JSON number |
-| nested message (map) | JSON object |
-| list | JSON array (elements encoded by the same rules) |
+| nested message (map) | JSON object with `bundle = true`, else the string `ao:<ID>` (§4) |
+| list | JSON array (elements encoded by the same rules) with `bundle = true`, else the string `ao:<ID>` (§4); with a type-encoded element, an object with the keys `1` to `N` and an `ao-types` |
 | **atom** | JSON **string** carrying the TABM type-encoded form, **plus** an `ao-types` entry naming the key's type as `atom` (see below) |
 
-Atoms are the sole rich type with **no** JSON-native form, so they alone are
-type-annotated on the way out: the value is emitted as its Structured-Fields
-token form (per `structured@1.0`) and the enclosing object gains an `ao-types`
-field — an SF dictionary mapping the (escaped) key to the SF token `atom`. Every
-other supported type is emitted natively and carries **no** `ao-types` entry.
-The well-known atoms `true`/`false` are encoded this way as well (as typed
-`atom` values), not as JSON booleans — see decoding note below.
+Atoms, binaries that are not UTF-8 text and integers greater than
+9007199254740991 in magnitude have **no** JSON-native form, so they alone are
+type-annotated on the way out: the value is emitted in its `structured@1.0`
+form and the enclosing object gains an `ao-types` field — an SF dictionary with
+the key in the member of the value's type, e.g. `atom=("key")`. Every other
+supported type is emitted natively and carries **no** `ao-types` entry. The
+well-known atoms `true`/`false` are encoded this way as well (as typed `atom`
+values), not as JSON booleans — see decoding note below.
 
 **Decoding (`from`/`deserialize`), JSON → message, per JSON value:**
 
@@ -220,23 +218,23 @@ The well-known atoms `true`/`false` are encoded this way as well (as typed
 | array | list |
 | number without fraction or exponent | integer |
 | number with a fraction or exponent | float |
-| string | binary (unless its key is retyped by an `ao-types` sibling, e.g. an `atom`) |
+| string | binary (unless its key is retyped by an `ao-types` sibling, e.g. an `atom`), or a link if it starts with `ao:` (`structured@1.0` §5) |
 | `true` / `false` | boolean values, normalised to the `atom`s `true` / `false` |
 | `null` | the `atom` `null` |
 
 `null` and the JSON booleans therefore round-trip through the message model as
 atoms (`null`, `true`, `false`). A field that was an `atom` on encode is restored
 to that atom on decode via its `ao-types` annotation; a JSON string with no such
-annotation decodes to a plain binary.
+annotation decodes to a plain binary, or a link if it starts with `ao:`.
 
 ### `ao-types`, key escaping, and per-type encodings
-The `ao-types` field, the percent-escaping of its dictionary keys, the
-Structured-Fields encodings of `integer`/`atom`/`list`/`float`, the `empty-*`
-markers for empty collections, and the numbered-message representation of lists
-are all defined **exactly** by the `structured@1.0` spec and MUST match it
-byte-for-byte. This device adds **no** new type tokens or escaping rules; it only
-chooses (in `to`) to leave integers, floats, and lists in JSON-native form while
-type-encoding atoms.
+The `ao-types` field, the escaping of its keys, the encodings of
+`integer`/`atom`/`list`/`float`/`binary`, and the numbered-message
+representation of lists are all defined **exactly** by the `structured@1.0` spec
+and MUST match it byte-for-byte. This device adds **no** new type tokens or
+escaping rules; it only chooses (in `to`) to leave floats, lists, UTF-8 text and
+integers up to 9007199254740991 in magnitude in JSON-native form while
+type-encoding atoms, other binaries and larger integers.
 
 ### JSON number, string, and document conventions
 - Integers MUST be emitted without a decimal point or exponent; a JSON number
@@ -257,9 +255,9 @@ text, so JSON key order does not affect a message's ID.
 
 ## 6. Ordering, freshness & caching
 
-- Encoding and decoding are **pure** functions of their inputs (the only state
-  read is the cache, and only to materialise links when `bundle = true`); the
-  device performs no result caching of its own.
+- Encoding and decoding read the cache only to materialise links, and without
+  `bundle = true` make the cache writes of `structured@1.0` §6; the device
+  performs no result caching of its own.
 - JSON is **not** a canonical, content-addressed wire form for this device:
   message IDs are computed over TABM (via `structured@1.0`), never over the JSON
   text. Two JSON documents that differ only in insignificant whitespace or member
@@ -275,9 +273,10 @@ text, so JSON key order does not affect a message's ID.
 - **Private keys MUST NOT be serialised.** `to` (and therefore `serialize`)
   strips the message's private section before encoding; private content never
   reaches the JSON output.
-- `commit`/`verify`/`committed` are thin pass-throughs to the `httpsig@1.0`
-  commitment device; all signing/verification trust assumptions are those of
-  `httpsig@1.0`. This device never invents or weakens a commitment.
+- `commit`/`verify` are thin pass-throughs to the `httpsig@1.0` commitment
+  device, and `committed` to `message@1.0`; all signing/verification trust
+  assumptions are those of `httpsig@1.0`. This device never invents or weakens
+  a commitment.
 - A round-trip `message → to → from` MUST NOT fabricate or strip commitments
   beyond the documented private-key removal; commitment integrity is governed by
   the codec/commitment rules of `structured@1.0` and `httpsig@1.0`.
@@ -299,10 +298,10 @@ text, so JSON key order does not affect a message's ID.
     for: ` (NOTE: no space between `message.` and `Searched`) followed by the
     requested `target` value. (This exact byte sequence is part of the conformance
     contract.)
-- **Embedded-type decode errors** — decoding JSON that carries `ao-types`
-  annotations inherits the `structured@1.0` decode errors: `unexpected-type`
-  (an unrecognised type token) and atom-decode failure (an `atom` whose name is
-  unknown to the decoder).
+- **Embedded-type decode errors** — decoding JSON with an `atom` whose name is
+  unknown to the decoder raises `error({case_clause, {error, ErrorMap}})`, with
+  `ErrorMap` the `structured@1.0` error. An `ao-types` with an unrecognised type
+  name is no error: it is kept as a key, and no types are applied.
 
 All device-specific error atoms are hyphenated; this device introduces no new
 atoms of its own beyond the HTTP-shaped `deserialize` error above and those
@@ -324,30 +323,30 @@ inherited from its dependencies.
   `deserialize` parses a JSON field (default `body`) of the current message into
   a message, which subsequent path segments can then navigate as ordinary
   message keys. Setting `target` selects a different source field.
-- **Returning structured form:** a caller that wants the rich (typed) message
-  rather than the TABM form sets `accept-codec = structured@1.0` on a `from`/
-  `deserialize` request.
 - **Reserved keys fall through:** because the device declares no default handler,
   `keys`/`set`/`set-path`/`remove`/`id` and the other `message@1.0` reserved keys
   resolve against the base `message@1.0` device as normal; only `commit`,
-  `verify`, and `committed` are overridden (to pin `httpsig@1.0`).
+  `verify`, and `committed` are overridden (`commit` and `verify` to use
+  `httpsig@1.0`).
 
 ## 10. Conformance (normative checklist)
 
 An implementation MUST exhibit every behaviour below.
 
-1. **Content type.** Resolving `content-type` returns `application/json`.
+1. **Content type.** The device has no `content-type` key: it falls through to
+   `message@1.0`.
 2. **Binary encode passthrough.** `to` of a binary value returns that value
    JSON-encoded (a JSON string), not the raw bytes.
-3. **Object/array/number mapping.** `to` of a message emits a JSON object;
-   nested messages emit nested objects; lists emit JSON arrays; integers emit
-   JSON numbers without a fraction/exponent; floats emit JSON numbers; binaries
-   emit JSON strings.
+3. **Object/array/number mapping.** `to` of a message emits a JSON object; with
+   `bundle = true`, nested messages emit nested objects and lists JSON arrays
+   (objects if an element is type-encoded); integers up to 9007199254740991 in
+   magnitude emit JSON numbers without a fraction/exponent; floats emit JSON
+   numbers; binaries emit JSON strings.
 4. **Atom type-encoding.** `to` of a message containing an `atom` value emits
-   that value as the `structured@1.0` typed form and adds an `ao-types` entry
-   mapping the (escaped) key to the SF token `atom`; integers, floats, and lists
-   carry **no** `ao-types` entry. The `ao-types` field and key escaping match
-   `structured@1.0` byte-for-byte.
+   that value as the `structured@1.0` typed form and adds the key to the `atom`
+   member of `ao-types` (`atom=("key")`); floats, lists, and integers up to
+   9007199254740991 in magnitude carry **no** `ao-types` entry. The `ao-types`
+   field and key escaping match `structured@1.0` byte-for-byte.
 5. **Private stripping.** `to`/`serialize` of a message with private keys
    produces JSON that contains none of those keys or their values.
 6. **Bundling.** `to`/`serialize` with `bundle = true` produces JSON with all
@@ -357,15 +356,14 @@ An implementation MUST exhibit every behaviour below.
    returns it unchanged.
 8. **JSON decode mapping.** `from` of a JSON document yields a message in which
    objects→messages, arrays→lists, integer-valued numbers→integers,
-   fractional/exponent numbers→floats, strings→binaries, `true`/`false`→the
-   atoms `true`/`false`, and `null`→the atom `null`.
+   fractional/exponent numbers→floats, strings→binaries (links if they start
+   with `ao:`), `true`/`false`→the atoms `true`/`false`, and `null`→the atom
+   `null`.
 9. **Atom round-trip.** A message whose value is an atom, encoded by `to` and
    decoded by `from`, yields the original atom (the `ao-types` annotation is
    honoured on decode); the booleans and `null` round-trip as the atoms
    `true`/`false`/`null`.
-10. **Accept-codec.** `from`/`deserialize` with `accept-codec = structured@1.0`
-    returns the rich (typed) message; without it (or with any other value) the
-    result is the TABM form.
+10. **TABM form.** `from` returns the TABM form.
 11. **Commitment delegation.** `commit` and `verify` produce/verify commitments
     via `httpsig@1.0` (the commitment device is forced to `httpsig@1.0`), and
     their results equal `httpsig@1.0`'s for the same input.
@@ -402,12 +400,6 @@ An implementation MUST exhibit every behaviour below.
 
 ## Open questions
 
-- **Float encoding stability.** Floats are emitted as JSON numbers, but the
-  `structured@1.0` reference encoding of floats is itself flagged unstable (plain
-  float-to-text rather than a pinned decimal form). Where a float must survive a
-  JSON round-trip *and* a TABM round-trip identically, the exact text form is not
-  yet guaranteed across implementations; avoid floats in content-addressed
-  messages until `structured@1.0` pins this.
 - **Boolean/`null` asymmetry.** JSON `true`/`false`/`null` decode to the atoms
   `true`/`false`/`null`, and atoms re-encode (via `to`) as typed `ao-types`
   strings rather than JSON booleans/`null`. A value that entered as a JSON boolean

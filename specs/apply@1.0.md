@@ -14,7 +14,7 @@ resolution's result.
 
 It supports two modes. (1) **Eval mode:** the key the device is invoked with is
 treated as the *name of a path* to look up and then resolve — optionally on top
-of a `source` message drawn from elsewhere in the base. (2) **Pair mode:** a
+of a `source` message drawn from the request or the base. (2) **Pair mode:** a
 `base` message and a `request` message are each named indirectly, fetched, and
 then resolved against one another (`base` applied with `request`). Pair mode is
 reached either by invoking the `pair` key explicitly, or automatically whenever
@@ -56,9 +56,9 @@ key/value content and resolution results only.
   handler. The default handler MUST be **excluded** from capturing the message
   manipulation/inspection keys, so that the following keys fall through to the
   base `message@1.0` device instead of being interpreted as indirect references:
-  `keys`, `set`, `set-path`, `remove`. (`set` and `set-path` are the same
-  reserved operation; hyphen and underscore are equivalent in key names.) Any
-  key other than those four, and other than `pair`, is treated as an **invoked
+  `committers`, `keys`, `set`, `set-path`, `remove`. (`set-path` is `set_path`
+  in `excludes`; hyphen and underscore are equivalent in key names.) Any
+  key other than those five, and other than `pair`, is treated as an **invoked
   key** by the default handler.
 
 - **Message shape(s):**
@@ -67,8 +67,8 @@ key/value content and resolution results only.
       naming the message to use as the resolution subject. If absent, the
       subject is the base message itself with its `device` key removed (see §4).
     - the **invoked key** *(as a field)* — a field of that name (looked up in
-      `Req` first, else `Base`) whose value is the **path** set as the subject's
-      `path` and resolved on the subject (§4). If **no such field exists**, the
+      `Req` first, else the subject) whose value is the **path** set as the
+      subject's `path` and resolved on it (§4). If **no such field exists**, the
       eval-execute step **errors** with `path-not-found` (``Path `<invoked-key>`
       to execute not found.``) — it is NOT returned as an unresolved subject. (An
       invoked key is always present when the device is invoked, so a missing
@@ -106,7 +106,7 @@ and the default handler (every non-excluded, non-`pair` key).
      `Base` has a `request` field, fail with `path-not-found`.
   2. Resolve the `base` field to a path `BasePath`; if absent in both, fail with
      `path-not-found`.
-  3. Resolve `RequestPath` to a message `RequestSource` (§5). On failure, fail
+  3. Resolve `RequestPath` to a value `RequestSource` (§5). On failure, fail
      with `source-not-found` (or `invalid-path` for a malformed path).
   4. Resolve `BasePath` to a message `BaseSource` (§5), with the same failure
      mapping.
@@ -129,7 +129,7 @@ and the default handler (every non-excluded, non-`pair` key).
 - **Behaviour:** MUST:
   1. Look up `base` and `request` **as raw, direct keys of `Req` only** — a plain
      map-key presence test on the request (NOT a `message@1.0` read, NOT the §5
-     cross-message order): the trigger is case-sensitive and does not hide private
+     cross-message order): the trigger does not hide private
      keys. (This is *only* the trigger test; once pair mode is entered, the shared
      `pair` logic re-reads `base`/`request` via the §5 cross-message order, so a
      `base` present only on `Base` is still *used*.) If **both** `base` and
@@ -146,8 +146,9 @@ and the default handler (every non-excluded, non-`pair` key).
      b. **Look up the path to execute.** Resolve the **invoked key** via §5
         **path resolution** (the "Path values and resolution" rules, NOT the bare
         "Field-lookup order"): a plain invoked key has no prefix, so it reads its
-        field **value** request-first then base; a `base:`/`request:`/`req:`
-        prefixed invoked key dispatches per §5. The resolved value **is**
+        field **value** request-first then from the subject; a
+        `base:`/`request:`/`req:` prefixed invoked key dispatches per §5, with
+        the subject as the base. The resolved value **is**
         `ExecPath`. If the invoked-key field is **absent or cannot be resolved for
         any reason** (not-found, source-not-found, or invalid path), the
         eval-execute step fails uniformly with `path-not-found`,
@@ -156,11 +157,13 @@ and the default handler (every non-excluded, non-`pair` key).
         success case via the default handler: an invoked key is always present, so
         a missing invoked-key field is this error, not a silent `{ok, Subject}`.)
      c. **Execute.** Set the **subject's** `path` key to `ExecPath` and resolve
-        the resulting message as a plain `message@1.0` resolution **on the subject
-        alone**. `ExecPath` is **not** re-resolved via §5 and the original request
-        is **not** consulted for it (a no-prefix `ExecPath` reads from the subject,
-        not request-first). Return that inner result; an inner error propagates
-        unchanged (§8).
+        the resulting message with `hb_ao:resolve/2`. A first path part without
+        a key (`//a`, `/~meta@1.0`) is the subject, with the device and keys of
+        that part applied; a first path part that is a key, alone or with a
+        device (`/a`), is the `ao:` URI of that key, which the node loads.
+        `ExecPath` is **not** re-resolved via §5 and the original request is
+        **not** consulted for it. Return that inner result; an inner error
+        propagates unchanged (§8).
 - **Returns:** `{ok, Result}` — the inner (subject-`ExecPath`) resolution result
   — or an error message (§8).
 - **Side effects:** none of its own; inherited from the resolved devices.
@@ -173,9 +176,9 @@ and the default handler (every non-excluded, non-`pair` key).
 > - Base `{ device: apply@1.0, data-container: { relevant: "DATA" },
 >   base: "data-container", … }`, request `{ data-path: "relevant",
 >   request: "data-path", path: "pair" }`: explicit `pair` → `base` path
->   `data-container` and `request` path `data-path` are each resolved to
->   messages, then the container is resolved with `{ relevant ... }`'s target as
->   its request → `"DATA"`.
+>   `data-container` and `request` path `data-path` are resolved to the
+>   container and to the binary `relevant`, then the container is resolved with
+>   `relevant` as its request → `"DATA"`.
 > - Path-string invocation
 >   `/~meta@1.0/build/node~apply@1.0&node=TEST&base=request:&request=base:`:
 >   binds `apply@1.0` over the `…/build` message with request fields
@@ -187,13 +190,13 @@ and the default handler (every non-excluded, non-`pair` key).
 
 ### Field-lookup order (which message a field is read from)
 Unless a step explicitly restricts to `Req` only (the auto-pair trigger in the
-default handler reads `base`/`request` from `Req` only), a **field name** named
-by this device (`source`, `base`, `request`, the invoked key) is looked up by
+default handler reads `base`/`request` from `Req` only), a **field name** that
+this device reads (`source`, `base`, `request`) is looked up by
 trying, **in order**, and taking the first that resolves:
 1. the **request** message, read under `message@1.0` semantics;
 2. the **base** message, read under `message@1.0` semantics.
 If neither yields a value, the field is treated as **absent** (which, for
-`source` and the invoked-key field, is not itself an error — it changes
+`source`, is not itself an error — it changes
 behaviour as described in §4; for `base`/`request` in pair mode, absence is a
 `path-not-found` error).
 
@@ -203,8 +206,8 @@ A **path value** retrieved from a field is a path in ordinary AO-Core path form
 `"/user-request/test-key"`, or `"/~meta@1.0/build/node"`). To **resolve** a path
 value to a message/value:
 
-1. **Split** the path into segments on `/`. The empty path and `"/"` denote the
-   message itself (see source-only prefixes below).
+1. **Split** the path into segments on `/`. The empty path and `"/"` have no
+   segments: they give `invalid-path` (step 4).
 2. **Inspect the first segment** for a source prefix by splitting it once on the
    first `:`:
    - First segment exactly `base:` (i.e. `base` then empty) → the value is the
@@ -266,12 +269,10 @@ own.
 - A request MAY be committed (signed) by a caller; the signature covers the
   request's own fields (e.g. the indirect references and the invoked path). This
   device does not strip or alter those fields, so a downstream device that cares
-  about the request's committers sees them intact. Conversely, because this
-  device sets a `path` (in pair-via-default and in eval execute), a previously
-  committed `path` on the prepared/subject message MAY be changed; per
-  `message@1.0`, setting a committed key to a different value drops that
-  message's commitments. Implementers MUST rely on `message@1.0`'s set semantics
-  for this rather than inventing their own.
+  about the request's committers sees them intact. Conversely, this device sets
+  a `path` (in pair-via-default and in eval execute) on the prepared/subject
+  message without `message@1.0`'s `set`, so the message keeps its commitments,
+  including one that covers a different `path`.
 - **Failure-closed for references:** a named `base`/`request` (pair mode) or an
   invoked-key field that cannot be resolved is an **error**, not a silent empty
   result. Eval mode's **`source`** reference is the *only* deliberate exception:
@@ -336,15 +337,16 @@ unchanged.
   The whole-*request* `source: request:` is safe (the request carries no apply
   device). Avoid a whole-base `source` as an eval subject; this asymmetry is
   inherent to the device's `device`-strip being scoped to the no-`source` branch.
-- **Fall-through of mutation/inspection keys.** Because `keys`, `set`,
-  `set-path`, and `remove` are excluded from the default handler, an
+- **Fall-through of mutation/inspection keys.** Because `committers`, `keys`,
+  `set`, `set-path`, and `remove` are excluded from the default handler, an
   `apply@1.0`-bound message still supports being `set` on, listed, path-bound,
   and pruned via the base `message@1.0` device. A reimplementation MUST keep
-  these four keys excluded, or those operations on an `apply@1.0` message break.
+  these five keys excluded, or those operations on an `apply@1.0` message break.
 - **Singleton / request-merge invocation.** The device is commonly invoked from
   a path string of the form `…/<seg>~apply@1.0&k1=v1&k2=v2`, which binds
-  `apply@1.0` over the message reached at `<seg>` and merges `k1=v1,k2=v2` as
-  request fields (the AO-Core singleton encoding supplied by the platform). The
+  `apply@1.0` over the message reached before `<seg>`, with `<seg>` as the
+  invoked key, and merges `k1=v1,k2=v2` as request fields (the AO-Core
+  singleton encoding supplied by the platform). The
   `base`/`request`/`source` indirect references and source-prefixed path values
   are designed to be supplied this way (e.g. `base=request:&request=base:` to
   swap subject and request). This device does not define that encoding; it only
@@ -358,29 +360,30 @@ unchanged.
 An implementation MUST exhibit all of the following, each checkable by resolving
 crafted messages (and by code review of the excluded-key set):
 
-1. **Default routing.** Any invoked key other than `pair`, `keys`, `set`,
-   `set-path`, `remove` is handled by the indirection logic; `keys`, `set`,
-   `set-path`, `remove` fall through to `message@1.0` (e.g. `set` on an
-   `apply@1.0` message mutates it rather than being interpreted as a reference).
+1. **Default routing.** Any invoked key other than `pair`, `committers`, `keys`,
+   `set`, `set-path`, `remove` is handled by the indirection logic;
+   `committers`, `keys`, `set`, `set-path`, `remove` fall through to
+   `message@1.0` (e.g. `set` on an `apply@1.0` message mutates it, and is not
+   interpreted as a reference).
 2. **Eval, no source, invoked-key field present.** With base
    `{ device: apply@1.0, body: <path> }` and request `{ path: "body" }`, the
-   device resolves `<path>` on the base (device removed) and returns that result
-   (e.g. a base whose `body` is `/~meta@1.0/build/node` yields the node's build
-   name).
+   device resolves the base (device removed) with its `path` set to `<path>`
+   and returns that result (e.g. a base whose `body` is `/~meta@1.0/build/node`
+   yields the node's build name).
 3. **Eval execute sets `path`.** The value found at the invoked-key field is set
-   as the subject's `path` and resolved **on the subject alone** (message@1.0);
+   as the subject's `path` and the subject is resolved (`hb_ao:resolve/2`);
    the result equals resolving the subject with that path — not the literal field
-   value, and not a request-first re-resolution (a value present on both the
-   subject and the request resolves to the subject's).
+   value, and not a request-first re-resolution (with `//<key>`, a key present
+   on both the subject and the request resolves to the subject's).
 4. **Eval, no invoked-key field.** If the invoked key names no field in either
    message, the device returns the `path-not-found` error (body ``Path
    `<invoked-key>` to execute not found.``) — an error, **not** a silent
    `{ok, Subject}`.
 5. **`source` redirection.** When a `source` field resolves to a path, the
-   subject is the message that path denotes (not the base). A multi-segment
-   execution path then resolves against that subject (e.g. invoked key
-   `user-path` with value `/user-request/test-key` on a base containing
-   `user-request: { test-key: "DATA" }` yields `"DATA"`).
+   subject is the message that path denotes (not the base). An execution path
+   with an empty first path part then resolves against that subject (e.g.
+   invoked key `user-path` with value `//user-request/test-key` on a base
+   containing `user-request: { test-key: "DATA" }` yields `"DATA"`).
 6. **Auto-pair trigger.** If the **request** carries both `base` and `request`
    fields, the device enters pair mode and additionally sets the prepared
    request's `path` to the invoked key.

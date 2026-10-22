@@ -114,7 +114,7 @@ data(ID, Opts) ->
             Data =
                 case hb_maps:find(<<"data">>, Res, Opts) of
                     {ok, D} -> D;
-                    _ -> hb_ao:get(<<"body">>, Res, <<>>, Opts)
+                    _ -> hb_maps:get(<<"body">>, Res, <<>>, Opts)
                 end,
             ?event(gateway,
                 {data,

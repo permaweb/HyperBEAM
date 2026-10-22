@@ -66,11 +66,18 @@ encode_header(Bin) ->
         <<"\n">>, <<"\\n">>, [global]
     ).
 
-decode_header(<<>>) -> <<>>;
-decode_header(<<$\\, $\\, Rest/binary>>) -> <<$\\, (decode_header(Rest))/binary>>;
-decode_header(<<$\\, $r, Rest/binary>>) -> <<$\r, (decode_header(Rest))/binary>>;
-decode_header(<<$\\, $n, Rest/binary>>) -> <<$\n, (decode_header(Rest))/binary>>;
-decode_header(<<C, Rest/binary>>) -> <<C, (decode_header(Rest))/binary>>.
+%% @doc Unescape the backslashes, carriage returns and newlines that
+%% `encode_header/1' escapes, in one pass. Any other byte is kept as is.
+decode_header(Bin) -> decode_header(Bin, <<>>).
+decode_header(<<>>, Acc) -> Acc;
+decode_header(<<$\\, $\\, Rest/binary>>, Acc) ->
+    decode_header(Rest, <<Acc/binary, $\\>>);
+decode_header(<<$\\, $r, Rest/binary>>, Acc) ->
+    decode_header(Rest, <<Acc/binary, $\r>>);
+decode_header(<<$\\, $n, Rest/binary>>, Acc) ->
+    decode_header(Rest, <<Acc/binary, $\n>>);
+decode_header(<<C, Rest/binary>>, Acc) ->
+    decode_header(Rest, <<Acc/binary, C>>).
 
 %% @doc Encode a string with escaped quotes.
 encode_quotes(String) when is_binary(String) ->
@@ -152,7 +159,8 @@ header_escape_test() ->
     Bytes = list_to_binary(lists:seq(0, 255)),
     lists:foreach(
         fun(Bin) -> ?assertEqual(Bin, decode_header(encode_header(Bin))) end,
-        [<<>>, Bytes, <<Bytes/binary, Bytes/binary>>]
+        % A 1 MiB value decodes within the test timeout.
+        [<<>>, Bytes, <<Bytes/binary, Bytes/binary>>, binary:copy(Bytes, 4096)]
     ).
 
 escape_unescape_identity_test() ->

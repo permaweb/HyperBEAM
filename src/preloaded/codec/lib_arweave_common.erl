@@ -243,6 +243,7 @@ tag_keys(Item, _Opts) ->
 %% field in `Fields' takes precedence over a tag of the same name, and the tag
 %% stays only in the commitment's `original-tags'. A field with its default
 %% value is not in `Fields', so a tag of the same name gives the key's value.
+%% Section 5.5 of `specs/tx@1.0.md' gives each case in a table.
 base(CommittedKeys, Fields, Tags, Data, Opts) ->
     hb_maps:from_list(
         lists:map(

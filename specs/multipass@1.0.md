@@ -19,8 +19,8 @@ before the work is complete — for example, a compute stack where one device
 produces inputs that a second device can only consume on a subsequent pass. The
 device implements the smallest possible contract: *signal "go around again" or
 "done"*. The mechanics of actually re-executing — incrementing the pass counter,
-re-entering the first device, the gate that permits this — belong to the
-consumer (`stack@1.0`), not to this device.
+re-entering the first device — belong to the consumer (`stack@1.0`), not to
+this device.
 
 ## 2. Concepts & terminology
 
@@ -187,12 +187,10 @@ This device is designed to be a member of a `stack@1.0` device stack, and its
 contract only has effect in that context:
 
 - **Repass interpretation (consumer-side):** when any device in a `stack@1.0`
-  stack returns the **repass signal** (`{pass, Message}`), the stack — if its
-  multipass behaviour is enabled (the stack's `Allow-Multipass` gate) —
+  stack returns the **repass signal** (`{pass, Message}`), the stack
   **increments the `pass` key by one** and **re-executes the stack from its first
   device** with the returned message as the new base. This increment is performed
-  by the stack, not by `multipass@1.0`. A stack that does not permit multipass
-  treats the repass signal as terminal.
+  by the stack, not by `multipass@1.0`.
 - **Driving the loop:** placing `multipass@1.0` in a stack (typically last) with
   a base message carrying `passes => N` causes the stack to run exactly `N`
   sweeps: on each sweep `multipass@1.0` sees the stack-maintained `pass`
@@ -260,8 +258,8 @@ keys against a constructed base message (and, for items 1–2, comparing against
 
 - The **internal representation** of the device and of the message it operates on.
 - The mechanism by which the surrounding pipeline acts on the repass signal —
-  incrementing `pass`, re-entering the first device, the `Allow-Multipass` gate,
-  starting-pass selection — all of which belong to `stack@1.0` (see its spec).
+  incrementing `pass`, re-entering the first device, starting-pass selection —
+  all of which belong to `stack@1.0` (see its spec).
 - The semantics of the delegated `keys`/`set` keys beyond "identical to
   `message@1.0`" (see the `message@1.0` spec for their full behaviour).
 - The exact integer encoding of message values on the wire (substrate concern).

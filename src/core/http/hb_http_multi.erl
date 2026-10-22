@@ -110,13 +110,11 @@ multirequest_opts(Config, Message, Opts) ->
 
 %% @doc Get a value for a multirequest option from the config or message.
 multirequest_opt(Key, Config, Message, Default, Opts) ->
-    hb_ao:get_first(
-        [
-            {Message, <<"multirequest-", Key/binary>>},
-            {Config, Key}
-        ],
-        Default,
-        Opts#{ <<"hashpath">> => ignore }
+    hb_maps:get(
+        <<"multirequest-", Key/binary>>,
+        Message,
+        hb_maps:get(Key, Config, Default, Opts),
+        Opts
     ).
 
 %% @doc Return the `multirequest-*' keys of a message, which configure a

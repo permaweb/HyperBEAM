@@ -240,7 +240,12 @@ head_raw_tx(TXID, relative, Length, Opts) ->
                 TXID,
                 relative,
                 hb_util:int(
-                    hb_ao:get(<<"data-size">>, StructuredTXHeader, Length, Opts)
+                    hb_maps:get(
+                        <<"data-size">>,
+                        StructuredTXHeader,
+                        Length,
+                        Opts
+                    )
                 ),
                 StructuredTXHeader,
                 Opts
@@ -262,14 +267,11 @@ head_raw_confirmed_tx(TXID, StartOffset, Length, Opts) ->
 
 head_raw_tx_response(TXID, StartOffset, Length, StructuredTXHeader, Opts) ->
     ContentType =
-        hb_ao:get(
+        hb_maps:get(
             <<"content-type">>,
             StructuredTXHeader,
             <<"application/octet-stream">>,
-            Opts#{
-                <<"cache-control">> =>
-                    [<<"no-cache">>, <<"no-store">>]
-            }
+            Opts
         ),
     {ok,
         #{
@@ -1046,15 +1048,21 @@ store_block_index([Entry | Rest], Req, Height, To, Opts) ->
     end.
 
 %% @doc Bypass stored headers for refreshes or when required proofs are absent.
+%% Only the request's `cache-control' applies, read as `hb_cache_control' reads
+%% it: `no-cache' in the options skips the resolver's cache, not this one.
 read_cached_block(Block, Req, Opts) ->
     maybe
-        false ?= lists:member(
-            <<"no-cache">>, hb_maps:get(<<"cache-control">>, Req, [], Opts)),
+        #{ <<"lookup">> := true } ?=
+            hb_cache_control:derive_cache_settings(
+                [Req],
+                Opts#{ <<"cache-control">> => [] }
+            ),
         {ok, Cached} ?= dev_arweave_block_cache:read(Block, Opts),
         false ?= hb_maps:get(<<"include-proofs">>, Req, true, Opts)
             andalso not hb_maps:is_key(<<"poa">>, Cached, Opts),
         {ok, block_proofs(Cached, Req, Opts)}
     else
+        #{ <<"lookup">> := false } -> {error, not_found};
         true -> {error, not_found};
         Error -> Error
     end.
@@ -1108,11 +1116,17 @@ requested_block(<<"hash/", ID/binary>>, Block, Opts) ->
 requested_block(<<"current">>, _Block, _Opts) ->
     true.
 
-%% @doc Return whether the request only permits cached values.
+%% @doc Return whether the request only permits cached values. Only the
+%% request's `cache-control' applies, as in `read_cached_block/3'.
 only_if_cached(Req, Opts) ->
-    lists:member(
+    hb_maps:get(
         <<"only-if-cached">>,
-        hb_maps:get(<<"cache-control">>, Req, [], Opts)
+        hb_cache_control:derive_cache_settings(
+            [Req],
+            Opts#{ <<"cache-control">> => [] }
+        ),
+        false,
+        Opts
     ).
 
 %% @doc Retrieve the current block information from Arweave.
@@ -2043,7 +2057,9 @@ get_tx_data_tag_exclude_data_test_parallel() ->
 
 head_raw_tx_test_parallel() ->
     TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
-    Opts = setup_arweave_index_opts([TXID]),
+    % A TX with the tag `device: manifest@1.0'.
+    DeviceTXID = <<"fQXYPE9MAcfI1wV2CwJ3sJIhgT9btBOlYFOKFDGhAs0">>,
+    Opts = setup_arweave_index_opts([TXID, DeviceTXID]),
     {ok, Result} =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9">> },
@@ -2066,6 +2082,25 @@ head_raw_tx_test_parallel() ->
     ?assertEqual(
         {ok, 0},
         hb_maps:find(<<"header-length">>, Result, Opts)
+    ),
+    % The HEAD of a TX with a `device' tag gives the TX's `content-type': the
+    % device does not run.
+    ?assertMatch(
+        {ok,
+            #{
+                <<"content-type">> := <<"application/x.arweave-manifest+json">>,
+                <<"data-length">> := 1221326
+            }
+        },
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"raw">>,
+                <<"raw">> => DeviceTXID,
+                <<"method">> => <<"HEAD">>
+            },
+            Opts
+        )
     ).
 
 head_raw_ans104_test_parallel() ->

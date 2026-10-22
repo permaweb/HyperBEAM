@@ -389,8 +389,8 @@ external_item_with_target_field_test() ->
     ?event({result, {initial, TX}, {result, Encoded}}),
     ?assertEqual(TX, Encoded).
 
-% @doc Ensure that items made inside HyperBEAM use the tags to encode `target'
-% values, rather than the `target' field.
+% @doc Ensure that an item made from a message whose `target' and `anchor' are
+% not IDs carries them as tags: its `target' and `anchor' fields stay empty.
 generate_item_with_target_tag_test() ->
     Msg =
         #{
@@ -400,7 +400,7 @@ generate_item_with_target_tag_test() ->
         },
     {ok, TX} = to(Msg, #{}, #{}),
     ?event({encoded_tx, TX}),
-    % The encoded TX should have ignored the `target' field, setting a tag instead.
+    % The encoded item leaves its `target' field empty, setting a tag instead.
     ?assertEqual(?DEFAULT_TARGET, TX#tx.target),
     ?assertEqual(?DEFAULT_ANCHOR, TX#tx.anchor),
     Decoded = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),

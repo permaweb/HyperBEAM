@@ -70,18 +70,9 @@ resolution outcomes below are normative.
 - **Dispatch shape:** **default-handler.** The device does not enumerate a fixed
   set of data keys; a single catch-all handler answers **every** key by running
   it through the stack (fold or map), with the exceptions below.
-- **Excluded keys (MUST delegate to `message@1.0`):** a catch-all (default-handler)
-  device MUST exclude the **entire `message@1.0` reserved-key set** from the stack
-  logic, NOT merely `set`/`keys`. The full set that MUST fall through to the
-  identity/base-message device is at least: `keys`, `set`, `set-path`, `remove`,
-  `device`, `id`, `commitments`, `committers`, `committed`, `commit`, `verify`,
-  `path`. **This is load-bearing for termination, not just correctness:** because
-  the catch-all answers "every other key" by re-running the stack, and the
-  substrate itself resolves `device` (for dispatch) and `id`/commitment keys on
-  the stack message during normal resolution, failing to exclude them makes a
-  `device`/`id` resolution **re-enter the fold and recurse without bound**
-  (observed: thousands of self-calls / a hang). An implementation that excludes
-  only `set`/`keys` will infinite-loop. The two most-used delegations:
+- **Excluded keys (MUST delegate to `message@1.0`):** the device excludes `set`
+  and `keys` from the stack logic; they fall through to the
+  identity/base-message device. The two delegations:
   - `keys` → the base message's public key listing (`message@1.0` `keys`).
   - `set` → the base message's deep-merge mutation (`message@1.0` `set`).
   This preserves the ability to bind the device onto a path, list its keys, and
@@ -150,14 +141,9 @@ values are the exact binaries `Fold` and `Map` (capitalised first letter).
   1. Look up `<stack-name>` in `device-stack`. If it is absent, the **entire**
      `transform/<stack-name>/<key>` path MUST resolve to **`{ok, not_found}`** — a
      *successful* resolution to the `not_found` value (NOT `{error, not_found}`).
-     Note the resolver walks one segment at a time, so it is NOT enough for the
-     `transform` step alone to return the bare `not_found` atom — the trailing
-     `<key>` would then resolve *against* that atom and yield `{error, not_found}`,
-     failing this contract. Instead, the unknown-name transform MUST return a
-     **view that absorbs every trailing key**: resolving ANY `<key>` against it
-     yields `{ok, not_found}` (e.g. a small inline message whose device answers all
-     keys with `{ok, not_found}`). So `<key>` never actually runs, and the whole
-     path is a successful `{ok, not_found}`.
+     The `<stack-name>` step returns the bare atom `not_found`; the resolver
+     ends a path at a step result that is not `{ok, _}` and returns it as
+     `{ok, not_found}`. So `<key>` does not run.
   2. If present, produce a copy of the base whose active device is the looked-up
      device, and which additionally records (for the device to read): the
      active device's `device-key` = `<stack-name>` and the
@@ -211,6 +197,7 @@ For the device at position `DevNum` (starting `DevNum = 1`):
    | `{skip, M}` (`M` a message) | the **skip signal** | end this sweep early: return `{ok, M}` (then finalise) |
    | `{pass, M}` (`M` a message) | the **repass signal** | increment the `pass` counter by 1 and **restart from `DevNum = 1`** with `M` as the state |
    | `{error, Info}` | device error | apply the **error strategy** (§8) |
+   | `{failure, F}` | a failure of the node running the stack (a failed read, an exception) | return `{failure, F}` as it arrived; the error strategy is not applied |
    | any other shape | unexpected | apply the **error strategy** (§8) with reason `{unexpected_result, Outcome}` |
 
    Notes:
@@ -250,7 +237,7 @@ results.
 
 1. Read `device-stack`. The set of devices to map over is **every entry** of
    `device-stack` **except** the AO-Core reserved keys (the protocol keys such as
-   `device`, `path`, etc.; an implementation MUST exclude the same reserved-key
+   `path` and `hashpath`; an implementation MUST exclude the same reserved-key
    set the substrate defines, so only genuine device entries are mapped).
 2. For each remaining entry keyed `K`:
    - Activate device `K` (transform the base so device `device-stack/K` is
@@ -283,8 +270,9 @@ results.
 - **Prefixes:** `input-prefixes` / `output-prefixes` are maps from stack-name to
   a binary prefix string. When activating device `K`, the stack sets the singular
   `input-prefix` / `output-prefix` to `input-prefixes/K` / `output-prefixes/K`
-  respectively (absent → no prefix; the singular default is the empty binary
-  `""`). A constituent device that wishes to namespace its I/O reads its inputs
+  respectively (absent → the message keeps the `input-prefix` / `output-prefix`
+  it has; the singular default is the empty binary `""`). A constituent device
+  that wishes to namespace its I/O reads its inputs
   under `input-prefix` and writes its outputs under `output-prefix`; a device
   that ignores the prefixes operates on un-prefixed keys. The stack-level
   singular `input-prefix` / `output-prefix` on the base (if present) are
@@ -308,8 +296,8 @@ results.
   by stack-name, so order does not affect the observable result. Result map key
   ordering is unspecified; callers MUST NOT depend on it.
 - **Pass loop termination** is **not** guaranteed by this device: the stack
-  honours every repass signal (when multipass is permitted, §7) and will loop as
-  long as some device keeps emitting it. Bounding the loop is the responsibility
+  honours every repass signal and will loop as long as some device keeps
+  emitting it. Bounding the loop is the responsibility
   of the constituent devices (e.g. `multipass@1.0` stops emitting the signal once
   `pass` reaches its target). An implementation MUST NOT impose its own arbitrary
   pass cap.
@@ -326,16 +314,11 @@ results.
   than by opaque substitution, so the resolved message's HashPath remains
   correct and verifiable across the delegation to each constituent device. An
   implementation MUST perform device-switching through the standard message
-  `set` path for this reason (the mechanism is internal; the **requirement** is
-  that the through-stack resolution produces the same HashPath as the equivalent
-  explicit sequence of single-device resolutions).
-- **Multipass gate (failure-closed on looping):** the repass signal causes a
-  re-run **only if** the node/run configuration permits multipass (an
-  `allow-multipass` gate). Where multipass is **not** permitted, the stack MUST
-  treat the repass signal as terminal (return the carried message as `{ok, …}`)
-  rather than looping. This prevents a constituent device from forcing unbounded
-  re-execution where the operator has disallowed it. (Where the gate is open, the
-  bound is the constituent devices' behaviour, §6.)
+  `set` path for this reason (the mechanism is internal; the result carries the
+  HashPath of resolving the called key on the stack message, not that of the
+  equivalent explicit sequence of single-device resolutions).
+- **Repass:** the stack re-runs on every repass signal; no option or key
+  disables it. The bound is the constituent devices' behaviour (§6).
 - The excluded `keys`/`set` honour `message@1.0`'s private-key rules; the stack
   exposes no private keys itself.
 
@@ -344,22 +327,21 @@ results.
 Error handling in **fold** mode is governed by a node/run **error strategy**
 option (`error-strategy`), with two values:
 
-- **`throw` (default):** a device `{error, Info}` (or an unexpected outcome
+- **`throw`:** a device `{error, Info}` (or an unexpected outcome
   shape) MUST raise a fatal error that aborts the resolution, **via
   `erlang:error/1` (or `exit/1`)** — NOT a literal `erlang:throw/1`. (This matters
   observably: under a plain `catch`, an `error`/`exit` surfaces as `{'EXIT', _}`
   whereas a `throw` surfaces as the bare value; the strategy named "throw" must
   produce the `{'EXIT', _}` form.) The raised reason is
-  **`{stack_call_failed, Base, Req, DevNum, Info}`** (the same 5-tuple as the stop
-  strategy below; `Info` is the device's `Info`, equivalently
-  `{unexpected_result, Outcome}` for a malformed outcome). The resolution MUST
-  fail (not return a partial state).
-- **`stop`:** a device `{error, Info}` MUST instead cause the stack to return,
-  without raising, exactly
-  **`{error, {stack_call_failed, Base, Req, DevNum, Info}}`** — a tagged 5-tuple
-  inside `{error, _}` where `DevNum` is the failing device's **integer** position
-  (1-based) and `Base`/`Req` are the state and request at that step. Resolution
-  ends with that error value; subsequent devices are not run.
+  **`{device_failed, {dev_num, DevNum}, {base, Base}, {req, Req},
+  {info, Info}}`**, where `DevNum` is the failing device's **integer** position
+  (1-based), `Base`/`Req` are the state and request at that step, and `Info` is
+  the device's `Info`, equivalently `{unexpected_result, Outcome}` for a
+  malformed outcome. The resolution MUST fail (not return a partial state).
+- **`stop` (default):** a device `{error, Info}` MUST instead cause the stack
+  to return, without raising, exactly **`{error, Info}`**: the device's error
+  alone (`Info` is `{unexpected_result, Outcome}` for a malformed outcome).
+  Resolution ends with that error value; subsequent devices are not run.
 
 Other error-relevant outcomes (fold):
 
@@ -370,11 +352,10 @@ Other error-relevant outcomes (fold):
 In **map** mode there is **no** error strategy: any non-`ok` outcome (including
 `{error, …}`) simply omits that device from the result (§4.B).
 
-Hyphenated error atoms are used throughout (e.g. `not-found` semantics surfaced
-by constituent devices; the stack's own `stop`-strategy error is a
-`stack-call-failed`-style atom). The stack defines no error atoms beyond the
-strategy-controlled propagation above; the only "errors" it *originates* are the
-fatal raise (throw strategy) and the `{error, …}` return (stop strategy).
+The only errors the stack *originates* are the fatal raise (throw strategy),
+`{error, {unexpected_result, Outcome}}` (stop strategy) and
+`throw({error, no_valid_device_stack})` when a fold or a transform finds no
+`device-stack` on the base.
 
 ## 9. Composition
 
@@ -456,11 +437,10 @@ chosen to exercise the path):
    D2, each computed from the **same** input base (state not threaded). Non-`ok`
    device outcomes (including `not_found`) omit that device's entry; map mode
    never raises, skips-the-rest, or repasses.
-10. **Error strategy.** Under the default (`throw`) strategy, a device
-    `{error, Info}` (or an unexpected outcome) aborts the resolution fatally; under
-    the `stop` strategy the same yields an `{error, …}` (`stack-call-failed`-style)
-    return naming the failing device position, without raising. (`{error,
-    not_found}` is exempt — it is skip-and-continue, item 4.)
+10. **Error strategy.** Under the `throw` strategy, a device `{error, Info}` (or
+    an unexpected outcome) aborts the resolution fatally; under the default
+    (`stop`) strategy the same yields `{error, Info}`, without raising.
+    (`{error, not_found}` is exempt — it is skip-and-continue, item 4.)
 11. **Delegated `keys`/`set`.** Resolving `keys` returns the `message@1.0` public
     key listing for the base (not a per-device fold); resolving `set` returns the
     `message@1.0` deep-merge of the request onto the base. Neither is routed
@@ -480,17 +460,18 @@ chosen to exercise the path):
     counter is cleaned up); invoking the returned message again with the same key
     re-runs the stack from scratch and accumulates again (idempotent counters,
     accumulating data).
-15. **HashPath transparency.** Resolving the key through the stack yields the same
-    HashPath as the equivalent explicit sequence of single-device resolutions
-    (device-switching is performed via message `set`, not opaque substitution).
+15. **HashPath transparency.** Resolving the key through the stack yields the
+    HashPath of resolving that key on the stack message, not that of the
+    equivalent explicit sequence of single-device resolutions (device-switching
+    is performed via message `set`, not opaque substitution).
 
 ## 11. Out of scope
 
 - The **internal representation** of the stack, the state message, the
   bookkeeping keys (`device-key`), and links.
 - The **exact reason structure** of the throw-strategy raise and the
-  stop-strategy `{error, …}` return (only "must fail fatally" vs "must return an
-  error naming the failing position" is normative).
+  stop-strategy `{error, …}` return (only "must fail fatally" vs "must return
+  the device's error" is normative).
 - The mechanism by which device-switching is implemented (it MUST go through
   message `set` to preserve HashPath, but the specifics are internal).
 - The semantics of the delegated `keys`/`set` beyond "identical to `message@1.0`"
@@ -500,8 +481,8 @@ chosen to exercise the path):
 - The precise AO-Core reserved-key set excluded from map iteration (a substrate
   definition the implementation MUST reuse, not redefine).
 - Result-caching/freshness of resolutions routed through the stack, and any
-  `allow-multipass` / `error-strategy` configuration mechanics beyond their
-  observable effect (node/substrate configuration concern).
+  `error-strategy` configuration mechanics beyond its observable effect
+  (node/substrate configuration concern).
 - Performance and storage strategy.
 
 ## Open questions
@@ -516,13 +497,10 @@ itself leaves under-pinned:
    The reference effectively falls through to fold-vs-map on an exact match and
    does not define a third outcome; a reimplementer SHOULD accept exactly `Fold`
    and `Map` and treat the base-level default as fold.
-2. **Source of the multipass gate and error strategy.** Whether
-   `allow-multipass` and `error-strategy` are read from node options, from the
-   message, or both, is left to the substrate (this spec pins only their
-   observable effect: gate-off ⇒ repass is terminal; `throw` ⇒ fatal, `stop` ⇒
-   `{error,…}` return). Default error strategy is `throw`. The default for the
-   multipass gate is not pinned here; a conservative reimplementer treats the
-   gate as a configuration input with the operator's chosen default.
+2. **Source of the error strategy.** Whether `error-strategy` is read from
+   node options, from the message, or both, is left to the substrate (this
+   spec states only its observable effect: `throw` ⇒ fatal, `stop` ⇒
+   `{error,…}` return). Default error strategy is `stop`.
 3. **Map-mode reserved-key exclusion set.** Map iterates `device-stack` entries
    minus the AO-Core reserved/protocol keys. The exact membership of that
    reserved set is a substrate definition; this spec requires reusing it rather

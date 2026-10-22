@@ -51,8 +51,9 @@ directory of the package: each of its keys is a file or a directory in it.
 
 ### `index`
 
-Returns `index.html` from the package, with `content-type: text/html` and
-`cache-control: no-store`. The bytes are the same for every device.
+Returns `index.html` from the package, with
+`content-type: text/html; charset=utf-8` and `cache-control: no-store`. The
+bytes are the same for every device.
 
 ### `implementations`
 
@@ -60,8 +61,8 @@ Returns `{specification, implementations}` for the device in the `for` of the
 request, or else of the base: the ID of the signature of its specification,
 and every implementation ID of that specification that the node's loader can
 find: in the preloaded store, in the node's stores, and from the trusted
-signers on Arweave. The node signs the `hashpath` of the reply, so the
-signature attests the lookup. `cache-control: no-store`.
+signers on Arweave. A node with `force-signed` set signs the `hashpath` of the
+reply, so the signature attests the lookup. `cache-control: no-store`.
 
 ### `devices`
 
@@ -104,8 +105,8 @@ page can load from `/~docs@1.0/asset/markdown.js`.
 
 ## 6. Security
 
-- The runner of the page sends a recipe's requests to the page's origin with
-  `credentials: 'omit'`, so that they do not carry the visitor's cookies.
+- The runner of the page sends a recipe's requests with `credentials: 'omit'`,
+  so that they do not carry the visitor's cookies.
 - A community recipe is rendered without raw HTML, and the first click on one
   of its requests shows a caution that someone else made it. Only a second
   click sends the request.

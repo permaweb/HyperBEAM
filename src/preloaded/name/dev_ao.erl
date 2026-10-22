@@ -12,12 +12,14 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Loads the message that an `ao:' URI identifies. The body is the rest
-%% of the URI after `ao:'.
+%% of the URI after `ao:', or a link if the rest is itself an `ao:' URI.
 -spec from(
-    #{ body := binary(), _ => _ },
+    #{ body := any(), _ => _ },
     #{ type := binary(), _ => _ },
     #{ _ => _ }
 ) -> {ok, _} | {error, _}.
+from(#{ <<"body">> := {link, URI, _} }, #{ <<"type">> := <<"uri">> }, Opts) ->
+    hb_uri:from(URI, Opts);
 from(#{ <<"body">> := Body }, #{ <<"type">> := <<"uri">> }, Opts) ->
     hb_hashpath:load(<<"ao:", Body/binary>>, Opts).
 

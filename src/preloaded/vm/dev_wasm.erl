@@ -584,6 +584,27 @@ basic_execution_64_test() ->
     ?assertEqual(
         {ok, [120.0]},
         test_run_wasm("test/test-64.wasm", <<"fac">>, [5.0], #{})
+    ),
+    {ok, Base} =
+        hb_ao:resolve(cache_wasm_image("test/test-64.wasm"), <<"init">>, #{}),
+    % A call that gives fewer parameters than the function takes is an error,
+    % not a crash of the node's VM.
+    ?assertMatch(
+        {error, _},
+        hb_ao:resolve(Base#{ <<"function">> => <<"fac">> }, <<"compute">>, #{})
+    ),
+    % A function name longer than a fixed buffer is an error, not a crash of
+    % the node's VM.
+    ?assertMatch(
+        {error, _},
+        hb_ao:resolve(
+            Base#{
+                <<"function">> => binary:copy(<<"a">>, 512),
+                <<"parameters">> => [5.0]
+            },
+            <<"compute">>,
+            #{}
+        )
     ).
 
 imported_function_test() ->

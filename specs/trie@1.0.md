@@ -91,8 +91,7 @@ purposes of `get`/`set`/`keys`/commitment.
 
 ### `set` — insert/update one or more stored keys
 - **Reads:** `Base` (the current trie); from `Req`, every key except `path`
-  (each is a `(stored-key → value)` pair to apply); the node's configured signing
-  wallet (for the resulting commitment).
+  (each is a `(stored-key → value)` pair to apply).
 - **Behaviour:**
   1. Take the request keys excluding `path`. The relative order in which the
      pairs are applied MUST NOT affect the resulting trie topology or stored
@@ -103,28 +102,27 @@ purposes of `get`/`set`/`keys`/commitment.
      a. Strip all existing commitments from the trie and from every nested
         submessage (the structure changed, so prior signatures no longer apply),
         yielding the fully-uncommitted structure.
-     b. Commit **every node bottom-up**: each branch submessage (leaves first,
-        then their parents, up to the root) gets its **own** unsigned content
-        commitment of type `hmac-sha256` (an `hmac-sha256` keyed-hash over that
-        node, not a wallet signature), added via the `message@1.0`/commitment
-        surface — concretely `hb_message:commit(Node, Opts, #{<<"type">> =>
-        <<"unsigned">>})`, whose result carries a `type = hmac-sha256`,
-        no-`committer` commitment. A single top-level commit is NOT sufficient: it
-        converts children to links but leaves grandchildren unpersisted, so a trie
-        of depth ≥ 3 fails to read back (`necessary_message_not_found`) and §7's
-        "every nested submessage independently verifies" is unmet.
-     c. **Cache-write every committed node** (not just the root): each node's
-        committed content must be persisted so its link target resolves. (A
-        bottom-up commit+`hb_cache:write` per node satisfies both b and c at once.)
+     b. Commit the root: it gets an unsigned content commitment of type
+        `hmac-sha256` (an `hmac-sha256` keyed-hash, not a wallet signature),
+        added via the `message@1.0`/commitment surface — concretely
+        `hb_message:commit(Trie, Opts, #{<<"type">> => <<"unsigned">>})`, whose
+        result carries a `type = hmac-sha256`, no-`committer` commitment. The
+        nested submessages carry no commitment.
+     c. **Cache-write** the committed trie (`hb_cache:write`), which writes each
+        nested submessage too.
   4. Return the committed trie.
 - **Insertion algorithm** (defines the observable topology). Let the trie node
   under consideration be `N`, and let `S` be the still-unmatched **suffix** of
   the stored key `K` at this depth (initially `K`; as descent proceeds, the bytes
   already consumed by ancestor edge labels are removed from the front). Compute
   the **longest common byte-prefix** between `S` and each edge label of `N`
-  (edges per §3; comparison is byte-by-byte, i.e. 8-bit chunks), and take the
-  edge `L` with the longest match of length `m` bytes (`m = 0` if no edge shares
-  even one leading byte). Then:
+  (edges per §3; comparison is byte-by-byte, i.e. 8-bit chunks), cut to its
+  longest prefix that is neither private (starts with `priv`, in any case) nor
+  a structural key (§3), and take the edge `L` with the longest match of length
+  `m` bytes (`m = 0` if no edge shares even one leading byte). Where a step
+  below adds an edge `N[E] := X` and `E` is private or a structural key, it
+  adds `N[Ep] := { Es : X }` instead: `Ep` is the longest prefix of `E` that
+  is neither, and `Es` the rest of `E`. Then:
   - **No match (`m = 0`):**
     - If `S` is empty (`K` ended exactly at `N`): set `N.node-value := V`.
     - Else: add an **implicit leaf** edge — `N[S] := V` (the suffix maps directly
@@ -159,9 +157,9 @@ purposes of `get`/`set`/`keys`/commitment.
 ### `get` — look up one stored key
 - **Reads:** the key to look up (the resolved key name, or a `key` field of
   `Req`); `Base` (the trie).
-- **Behaviour:** Descend the trie matching `K` byte-for-byte. Maintain the count
-  of key bytes consumed by ancestor edge labels; let `S` be the unconsumed suffix
-  of `K`.
+- **Behaviour:** Lower-case the ASCII capitals of `K`, then descend the trie
+  matching `K` byte-for-byte. Maintain the count of key bytes consumed by
+  ancestor edge labels; let `S` be the unconsumed suffix of `K`.
   1. **Whole key consumed** (no suffix remains): return the current node's
      `node-value` if present, else `not_found`.
   2. Otherwise compute the longest common byte-prefix between `S` and the node's
@@ -208,11 +206,10 @@ purposes of `get`/`set`/`keys`/commitment.
 
 ## 5. Data formats & encodings
 
-- **Keys on the wire** are binary, byte-for-byte. Prefix matching and key
-  equality are **byte-exact**: no case folding, no hyphen/underscore folding, no
-  Unicode normalisation. (This differs from `message@1.0`'s case-insensitive
-  `get`; a trie lookup is exact. An implementation MUST NOT case-fold stored
-  keys.) Comparison proceeds in 8-bit (one-byte) chunks.
+- **Keys on the wire** are binary, byte-for-byte. `get` lower-cases the ASCII
+  capitals of the requested key, as `message@1.0`'s `get` does; prefix matching
+  and key equality are then **byte-exact**: no hyphen/underscore folding, no
+  Unicode normalisation. Comparison proceeds in 8-bit (one-byte) chunks.
 - **Edge labels** are the byte suffixes described in §2/§4; their concatenation
   along a root-to-terminal path reconstructs the stored key exactly.
 - **`node-value`** holds the terminal value verbatim (any AO-Core value).
@@ -222,8 +219,8 @@ purposes of `get`/`set`/`keys`/commitment.
   `hmac-sha256`-type content commitment. The trie message (committed) is a normal
   AO-Core message and is content-addressable and verifiable like any other.
 - The structural keys `node-value`, `device`, `commitments`, `priv`, `hashpath`
-  are reserved and MUST NOT be used as stored keys (they would be skipped as
-  edges and so could not be stored or retrieved as data). `path` is likewise
+  are reserved and MUST NOT be used as stored keys (no edge label is one of
+  these keys: `set` splits such a label, §4). `path` is likewise
   reserved by the request shape and cannot be a stored key set via `set`.
 
 ## 6. Ordering, freshness & caching
@@ -250,11 +247,11 @@ purposes of `get`/`set`/`keys`/commitment.
 
 ## 7. Security & authority
 
-- A tried map is a normal AO-Core message. After `set`, the trie (and its nested
-  submessages) carry an `hmac-sha256` content commitment, so the structure is
-  integrity-checked and verifiable via the `message@1.0` `verify` surface: a
-  `set` result MUST be a well-committed, valid message, and every nested
-  submessage in the result MUST likewise verify.
+- A tried map is a normal AO-Core message. After `set`, the trie carries an
+  `hmac-sha256` content commitment and its nested submessages carry none, so
+  the structure is integrity-checked and verifiable via the `message@1.0`
+  `verify` surface: a `set` result MUST be a well-committed, valid message, and
+  every nested submessage in the result MUST likewise verify.
 - Because `set` rebuilds the structure, it **drops any pre-existing commitments**
   before re-committing — a trie's commitment never appears to cover a structure
   it does not. There is no authority check on `get`/`set` beyond the ordinary
@@ -281,8 +278,8 @@ purposes of `get`/`set`/`keys`/commitment.
   nor a `key` request field). (This message is a human-readable binary, not a
   hyphenated atom; reproduce it verbatim for byte-compatibility.)
 - All commitment/verification/ID errors are those of the `message@1.0` surface
-  the device delegates to (e.g. `requested-committers-not-found`); the trie
-  device introduces none of its own beyond the two above.
+  the device delegates to (e.g. `throw({verify, {requested_committers_not_found,
+  ...}})`); the trie device introduces none of its own beyond the two above.
 
 ## 9. Composition
 
@@ -297,8 +294,8 @@ purposes of `get`/`set`/`keys`/commitment.
   message with the same logical key/value content: a `get` of any key returns the
   same result under both devices; a `set` of a key makes that key retrievable
   under both; the set of `keys` is the same multiset (modulo order). The trie
-  device differs only in internal nesting (and the byte-exact, non-case-folding
-  lookup of §5), never in which `(key → value)` pairs are observable.
+  device differs only in internal nesting, never in which `(key → value)` pairs
+  are observable.
 - **Nested values are inert data.** The submessages a trie creates are plain
   nested maps; resolving deeper structure does not re-enter the trie device
   except via the trie's own `get`/`keys` descent. A consumer that wants the raw
@@ -362,14 +359,14 @@ An implementation MUST exhibit all of the following, each checkable via public
 10. **Key-count bounds.** A `set` of a key not present increases the `keys` count
     by exactly one; a `set` of a present key leaves the count unchanged; a `set`
     never decreases the count.
-11. **Commitment after `set`.** The message returned by `set` (and every nested
-    submessage within it) is a valid, well-committed message under the
-    `message@1.0`/commitment surface — `verify` of the result is `true`, and the
-    result carries an `hmac-sha256`-type content commitment. Prior commitments are
-    dropped and the structure re-committed.
-12. **Exact, non-folding keys.** Lookup is byte-exact: keys are not case-folded
-    and `-`/`_` are not equivalent (unlike `message@1.0`'s case-insensitive
-    `get`). A key with no key supplied at all errors with the
+11. **Commitment after `set`.** The message returned by `set` is a valid,
+    well-committed message under the `message@1.0`/commitment surface —
+    `verify` of the result is `true`, and the result carries an
+    `hmac-sha256`-type content commitment. Prior commitments are dropped and
+    the structure re-committed.
+12. **Lower-cased, non-folding keys.** Lookup lower-cases the requested key, as
+    `message@1.0`'s `get` does, and is then byte-exact: `-`/`_` are not
+    equivalent. A key with no key supplied at all errors with the
     `'key' parameter is required for trie lookup.` binary.
 13. **Inherited surface.** `id`, `commit`, `verify`, `commitments`, `committers`,
     `committed`, `set-path`, `remove`, and `path`-binding behave per
@@ -396,7 +393,7 @@ An implementation MUST exhibit all of the following, each checkable via public
 
 ## Open questions
 
-- **`keys` order.** The reference returns keys in a specific traversal order
+- **`keys` order.** The reference returns keys in reverse traversal order
   (siblings in node-map order, value-bearing branch before its children), but
   node-map ordering is not a stable wire property, so the spec leaves `keys`
   order unspecified. If a deterministic order is ever required, it must be pinned

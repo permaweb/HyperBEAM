@@ -71,15 +71,16 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
             ],
             Opts
         ),
-    % A `peer' named in the request is checked against the host policy. A
-    % `relay-route' is resolved through the node's own routes, so it names a
+    % A `peer' that the request gives is checked against the host policy.
+    % A relative `relay-route' is routed by the node's own routes, so it gives a
     % destination the node's configuration chose and is reached without a
-    % check.
+    % check. The message relayed does not choose its own `peer': for the
+    % `request' hook it is the inbound request, and the node's routes choose
+    % its destination.
     RequestPeer =
         hb_ao:get_first(
             [
                 {M1, <<"peer">>},
-                {{as, <<"message@1.0">>, BaseTarget}, <<"peer">>},
                 {RawM2, <<"peer">>}
             ],
             Opts
@@ -133,10 +134,25 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
         end,
     % A relayed request's `multirequest-*' keys configure this node's own
     % multirequest, so remove them: the route alone chooses the peers reached.
+    % The keys that configure this call are removed too, unless a commitment
+    % covers them.
     TargetMod4 =
-        hb_maps:without(
-            hb_http_multi:multirequest_keys(TargetMod3, Opts),
-            strip_cookies(TargetMod3, Opts),
+        hb_message:without_unless_signed(
+            [
+                <<"peer">>,
+                <<"relay-path">>,
+                <<"relay-method">>,
+                <<"relay-body">>,
+                <<"relay-device">>,
+                <<"relay-route">>,
+                <<"relay-commit-request">>,
+                <<"commit-request">>
+            ],
+            hb_maps:without(
+                hb_http_multi:multirequest_keys(TargetMod3, Opts),
+                strip_cookies(TargetMod3, Opts),
+                Opts
+            ),
             Opts
         ),
     Commit =
@@ -184,17 +200,28 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
             <<"http-redirects">> => 0
         },
     % Decide where the request goes and whether the host was chosen by the
-    % node. A `relay-route' the node resolves through its own routes is trusted.
-    % A request `peer' or absolute `relay-path' is checked; a relative
-    % `relay-path' names no host and is routed by `hb_http:request/2', which
-    % fails closed when no route matches.
+    % node. A relative `relay-route' the node resolves through its own routes
+    % is trusted. A request `peer' is checked, and so is an absolute
+    % `relay-route', which the router sends to its own URL. With no peer,
+    % `hb_http:request/2' routes the message by its `route-path', else its
+    % `path' (the `relay-path'): an absolute one is checked, and a relative one
+    % gives no host and fails closed when no route matches.
+    RoutePath = hb_maps:get(<<"route-path">>, TargetMod5, RelayPath, Opts),
     {RelayPeer, Destination, RouteOpts} =
         case RelayRoute of
             not_found ->
-                {RequestPeer, relay_destination(RequestPeer, RelayPath), HTTPOpts};
+                {RequestPeer, relay_destination(RequestPeer, RoutePath), HTTPOpts};
             _ ->
-                {Node, NodeOpts} = route_node(RelayRoute, RelayMethod, HTTPOpts),
-                {Node, undefined, NodeOpts}
+                case route_node(RelayRoute, RelayMethod, HTTPOpts) of
+                    {not_found, NodeOpts} ->
+                        {
+                            not_found,
+                            relay_destination(not_found, RoutePath),
+                            NodeOpts
+                        };
+                    {Node, NodeOpts} ->
+                        {Node, relay_destination(not_found, RelayRoute), NodeOpts}
+                end
         end,
     RequestOpts = RouteOpts#{ <<"http-redirects">> => 0 },
     case is_blocked_host(Destination, Opts) of
@@ -228,18 +255,19 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
             end
     end.
 
-%% @doc The host the relay will contact: the `peer' when one is named,
-%% otherwise an absolute `relay-path'. A relative path names no host, so the
-%% node routes it through its own routes and there is nothing for
-%% `is_blocked_host/2' to vet: return `undefined'.
+%% @doc The host the relay will contact: the `peer' when the request gives one,
+%% otherwise an absolute `route-path', `relay-path' or `relay-route'. A relative
+%% path gives no host, so the node routes it through its own routes and there
+%% is nothing for `is_blocked_host/2' to vet: return `undefined'.
 relay_destination(not_found, <<"http://", _/binary>> = Path) -> Path;
 relay_destination(not_found, <<"https://", _/binary>> = Path) -> Path;
 relay_destination(not_found, _RelativePath) -> undefined;
 relay_destination(Peer, _RelayPath) -> Peer.
 
-%% @doc The node that the node's own routes resolve `Route' to: the destination
-%% the node's configuration chose for that path, with its request options.
-%% Returns `{not_found, Opts}' when no route matches, leaving no peer to contact.
+%% @doc The node that the router resolves `Route' to, with its request options:
+%% for a relative path, the destination the node's configuration chose; for an
+%% absolute URL, the host of that URL. Returns `{not_found, Opts}' when no
+%% route matches, leaving no peer to contact.
 route_node(Route, Method, Opts) ->
     case hb_http:message_to_request(
             #{ <<"path">> => Route, <<"method">> => Method },
@@ -553,7 +581,49 @@ relay_peer_allowed_test() ->
         ),
     ?assertEqual(Address, hb_ao:get(<<"body">>, Res, #{})),
     % The result is the peer's message, without the `status' the client adds.
-    ?assertNot(maps:is_key(<<"status">>, Res)).
+    ?assertNot(maps:is_key(<<"status">>, Res)),
+    % `~test-device@1.0/delay' answers in 750 ms, after the send timeout of
+    % 100 ms: the call returns `{error, timeout}'.
+    ?assertEqual(
+        {error, timeout},
+        relay_call(
+            #{
+                <<"peer">> => Target,
+                <<"relay-path">> => <<"/~test-device@1.0/delay">>
+            },
+            #{
+                <<"relay-block-internal">> => false,
+                <<"http-client-send-timeout">> => 100
+            }
+        )
+    ),
+    % The peer answers `503' with `retry-after: 3600': the call returns the
+    % `503' and does not wait to send the request again.
+    ?assertMatch(
+        {failure, #{ <<"status">> := 503 }},
+        relay_call(
+            #{
+                <<"peer">> => Target,
+                <<"relay-path">> =>
+                    <<"/~message@1.0/set?status+integer=503&retry-after=3600">>
+            },
+            #{
+                <<"relay-block-internal">> => false,
+                <<"http-client-send-timeout">> => 1000
+            }
+        )
+    ),
+    % The call's own keys are not sent: the peer has no `peer' to read.
+    ?assertMatch(
+        {error, #{ <<"status">> := 404 }},
+        relay_call(
+            #{
+                <<"peer">> => Target,
+                <<"relay-path">> => <<"/~message@1.0/peer">>
+            },
+            #{ <<"relay-block-internal">> => false }
+        )
+    ).
 
 %% @doc A `call' whose `relay-path' is an absolute URL on an internal host is
 %% refused by default.
@@ -563,6 +633,49 @@ relay_absolute_internal_blocked_test() ->
         {error, blocked_host},
         relay_call(
             #{ <<"relay-path">> => <<Target/binary, "~meta@1.0/info/address">> },
+            #{}
+        )
+    ),
+    % The same URL as a `relay-route' is refused too.
+    ?assertEqual(
+        {error, blocked_host},
+        relay_call(
+            #{
+                <<"relay-route">> => <<Target/binary, "~meta@1.0/info/address">>,
+                <<"relay-path">> => <<"/~meta@1.0/info/address">>
+            },
+            #{}
+        )
+    ),
+    % The same URL as the `path' of a request to a node with `router@1.0'
+    % `preprocess' as its `request' hook is refused too.
+    Node =
+        hb_http_server:start_node(#{
+            <<"on">> => #{
+                <<"request">> => #{
+                    <<"device">> => <<"router@1.0">>,
+                    <<"path">> => <<"preprocess">>
+                }
+            }
+        }),
+    ?assertEqual(
+        {error, blocked_host},
+        hb_http:request(
+            <<"GET">>,
+            Node,
+            <<"/~meta@1.0/info/address">>,
+            #{ <<"path">> => <<Target/binary, "~meta@1.0/info/address">> },
+            #{}
+        )
+    ),
+    % The same URL as a `route-path' is refused too.
+    ?assertEqual(
+        {error, blocked_host},
+        relay_call(
+            #{
+                <<"route-path">> => <<Target/binary, "~meta@1.0/info/address">>,
+                <<"relay-path">> => <<"/~meta@1.0/info/address">>
+            },
             #{}
         )
     ).

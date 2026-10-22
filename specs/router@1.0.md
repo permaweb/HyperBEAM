@@ -77,10 +77,10 @@ is defined over logical key/value content and resolution results.
 ## 3. Device interface
 
 - **Dispatch shape:** **explicit-keys.** The device answers exactly the keys
-  `info`, `routes`, `route`, `match`, `register`, `preprocess` (and the bound
-  base device, `message@1.0`, supplies `keys`/`set`/`id`/… for the message it is
-  attached to). It is NOT a default-handler device: a key it does not name is
-  not interpreted by the router.
+  `routes`, `route`, `match`, `register`, `preprocess` (and the bound base
+  device, `message@1.0`, supplies `info`/`keys`/`set`/`id`/… for the message
+  it is attached to). It is NOT a default-handler device: a key it does not
+  name is not interpreted by the router.
 - **Two call conventions for `route`:** `route` is defined as a device key
   `(Base, Req, Opts)` that **ignores `Base`** (routing is driven entirely by the
   node's table and the request), and MAY also be invoked as a standalone
@@ -95,13 +95,9 @@ is defined over logical key/value content and resolution results.
 ## 4. Resolved keys (normative)
 
 ### `info`
-- **Reads:** nothing (static).
-- **Behaviour:** Return a human-facing description of the device and its API
-  (a `description`, a `version` of `1.0`, and an `api` map enumerating the keys
-  above). The exact prose is non-normative; only that the key returns
-  `{ok, Map}`.
-- **Returns:** `{ok, Map}`.
-- **Side effects:** none.
+Not a key of this device: `message@1.0` answers `info`. It returns
+`{ok, Info}` with `device` (the node's `docs-device`), `for => router@1.0`,
+`schema`, `specification` and `cache-control => no-store`.
 
 ### `routes`
 Read or mutate the routing table.
@@ -115,7 +111,8 @@ Read or mutate the routing table.
   - If `method` is `POST`: **add a route**. Two sub-modes:
     - **No registrar configured:** authorise then insert. The request MUST be
       signed by an authorised operator/route-owner (§7). If authorised, insert
-      the request message (its route fields) into the table and **re-sort the
+      the keys of the request that the owners' commitments cover into the table
+      and **re-sort the
       whole table ascending by each route's `priority`** (a route with no
       `priority` sorts as if its key were absent — see §6 ordering), then
       install the new table as the node's routes. Return
@@ -175,7 +172,8 @@ Find the destination for a request. **Ignores `Base`.**
   from the target path and the descriptor's rule keys, evaluated in this
   priority:
   1. `uri` present → use it verbatim.
-  2. `prefix` present → `uri = prefix ++ target-path`.
+  2. `prefix` present → `uri = prefix ++ target-path`, without the `/`s at the
+     end of `prefix` when target-path starts with `/`.
   3. `suffix` present → `uri = target-path ++ suffix`.
   4. `match` + `with` present → `uri = ` target-path with **every** match of
      regex `match` replaced by `with` (global replace).
@@ -236,9 +234,9 @@ that relays it to the matched upstream, or run it locally if no route matches.
   (default) or `error`.
 - **Behaviour:** Attempt to route the wrapped `request` (as in `route`).
   - **No route matches:** fall back per `router-preprocess-default`:
-    - `local` → return `{ok, #{ <<"body">> => <inbound body> }}` (the request
-      proceeds locally, unmodified).
-    - `error` → return `{ok, #{ <<"body">> => [ #{ <<"status">> => 404,
+    - `local` → return `{ok, Req#{ <<"body">> => <inbound body> }}` (the
+      request proceeds locally, unmodified).
+    - `error` → return `{ok, Req#{ <<"body">> => [ #{ <<"status">> => 404,
       <<"message">> => <<"No matching template found in the given routes.">> }
       ] }}`.
   - **A route matches (resolving to a concrete upstream `Node`):** emit a
@@ -247,13 +245,14 @@ that relays it to the matched upstream, or run it locally if no route matches.
     normative):
     1. **Stage 1** binds the relay: `#{ <<"device">> => <<"relay@1.0">>,
        <<"relay-device">> => <<"apply@1.0">>, <<"method">> => <<"POST">>,
-       <<"peer">> => <upstream Node> }`, **plus** `<<"commit-request">> => true`
+       <<"relay-route">> => <the user's path> }`, **plus**
+       `<<"commit-request">> => true`
        **iff** the base's `commit-request` was true (omit the key entirely when
        false).
     2. **Stage 2** invokes `call`: `#{ <<"path">> => <<"call">>,
        <<"target">> => <<"proxy-message">>, <<"proxy-message">> => ProxyMsg }`
        where `ProxyMsg = #{ <<"device">> => <<"apply@1.0">>,
-       <<"path">> => <<"user-path">>, <<"source">> => <<"user-message">>,
+       <<"path">> => <<"//user-path">>, <<"source">> => <<"user-message">>,
        <<"user-path">> => <the user's path>,
        <<"user-message">> => <the user request (committed per below)> }`.
     The user's inbound request is **committed first if it is unsigned** (an
@@ -261,10 +260,12 @@ that relays it to the matched upstream, or run it locally if no route matches.
     httpsig@1.0`, `type => unsigned`) so headers the relaying node adds are not
     folded into the user's request; an already-signed request (non-empty signers)
     is left as-is. That (possibly-committed) request is the `user-message`. The
-    user's `path` MUST be a non-empty binary, else **raise** `invalid_user_path`.
-- **Returns:** `{ok, #{ <<"body">> => … }}` (a single-message local body, an
-  error-status body, or a two-element relay pipeline). On a bad user path,
-  raises `invalid_user_path`.
+    user's `path` MUST be a non-empty binary: without a `path` it **throws**
+    `{error, missing_user_path}`, and with an empty or non-binary `path` it
+    **throws** `{error, invalid_user_path}`.
+- **Returns:** `{ok, Req#{ <<"body">> => … }}` (the inbound body, an
+  error-status body, or a two-element relay pipeline). On a bad user path, it
+  throws as above.
 - **Side effects:** none directly; the emitted pipeline, when later resolved by
   the caller, performs the relayed outbound request.
 
@@ -278,10 +279,10 @@ that relays it to the matched upstream, or run it locally if no route matches.
   - A **binary template** is a regular expression matched against the target
     path. Matching is via substring regex search (`re:run` semantics), **not**
     anchored, UNLESS the regex begins with `^` (in which case it anchors at the
-    start). Before matching, both the path and a non-`^` regex are normalised to
-    have a single leading `/`. Thus `/.*/schedule` matches `/abc/schedule` and
-    `/a/b/c/schedule`; `^/arweave` matches only paths beginning `/arweave`; a
-    bare substring like `worker` matches any path containing `worker`.
+    start). Before matching, both the path and a non-`^` regex are given a
+    leading `/` when they lack one. Thus `/.*/schedule` matches `/abc/schedule`
+    and `/a/b/c/schedule`; `^/arweave` matches only paths beginning `/arweave`;
+    a bare substring like `worker` matches any path containing `/worker`.
   - A **map template** matches iff: (a) if the template itself carries a path
     regex (under its own `path` or `route-path`), that regex matches the target
     path; AND (b) every **other** key/value pair in the template is present with
@@ -295,8 +296,8 @@ that relays it to the matched upstream, or run it locally if no route matches.
 - **Hash-to-integer:** strategies that map a value to a 256-bit integer use:
   a native/human 32-byte ID decoded big-endian; a 32-byte binary decoded
   big-endian; any other binary first SHA-256'd then decoded; an integer used
-  as-is. `route-by` is interpreted as an integer when it parses as a decimal
-  integer, otherwise hashed.
+  as-is. `Nearest-Integer` reads a `route-by` that parses as a decimal integer
+  as that integer, otherwise hashes it; `By-Base` hashes a binary `route-by`.
 - **`reference`** on a matched route is a path string: `routes/<index>` for a
   table hit, or `explicit` for the `http(s)://` short-circuit. It is added by
   the device, not supplied by the user.
@@ -319,13 +320,14 @@ that relays it to the matched upstream, or run it locally if no route matches.
   reading the resulting `routes` (or the result itself if it is already a route
   list). **Resolve the provider AS-IS** — a non-list provider with
   `hb_ao:resolve(Provider, Opts)` (the 2-arg form: the provider message/path
-  carries its **own** `path`, e.g. `/key/routes`, which drives the navigation —
+  carries its **own** `path`, e.g. `//key/routes`, which is the path resolved —
   do **NOT** inject a `path` such as `routes`); a **list** provider with
   `hb_ao:resolve_many(List, Opts)` (resolved in sequence, the final result
   supplying the table). The resolved result is then the route **list** directly,
   or a message from which the `routes` key is read. **Otherwise** (no provider)
-  the table is the static top-level **`routes`** node option
-  (default `[]`). So the read order is: `router-opts.provider` (dynamic) → else
+  the table is the static top-level **`routes`** node option (default: the
+  `routes` of `hb_opts:default_message/0`). So the read order is:
+  `router-opts.provider` (dynamic) → else
   top-level `routes` (static). A provider that fails MUST surface as an error
   (`routes_provider_failed`). Provider results are treated as fully-loaded route
   data. The provider mechanism is how prices/weights/membership can change at
@@ -369,8 +371,8 @@ that relays it to the matched upstream, or run it locally if no route matches.
   ring so the two nearest directions are both considered.
 - **Lowest-distance tie-break:** when selecting by distance, a candidate
   replaces the current best only if its distance is **strictly less**; an
-  `infinity`/sentinel distance is treated as immediately selectable when no
-  finite best has been seen. Equal finite distances keep the earlier candidate.
+  `infinity` distance always replaces the current best. Equal finite distances
+  keep the earlier candidate.
 - **Caching / freshness.** The device performs no result caching of its own.
   Because routing can be **mutable at a constant path** (the `routes` POST
   changes the table, and a provider changes it at runtime), a node that caches
@@ -382,9 +384,9 @@ that relays it to the matched upstream, or run it locally if no route matches.
 
 - **Adding a route (no registrar)** is **operator-gated**: the POST request MUST
   carry a commitment from an address in the node's authorised set — the node
-  `operator`, plus any configured additional route-owners. The check is: the
-  URI that `hb_committer:uri/2` gives for at least one authorised owner appears
-  among the request's committers/signers.
+  option `route-owners`, default `[operator]`. The check is: the URI that
+  `hb_committer:uri/2` gives for at least one authorised owner appears among the
+  request's committers/signers, and the commitments of those owners verify.
   If not, the device returns `not_authorized` and the table is unchanged
   (**failure-closed**).
 - **Registrar mode** delegates the authority decision to the configured
@@ -499,18 +501,18 @@ HTTP:
 22. `register` reads the node's offered route(s) and POSTs a **signed**
     registration to each route's `registration-peer`, returning
     `Routes registered.`.
-23. `preprocess` with no matching route returns `{ok, #{ body => <inbound
+23. `preprocess` with no matching route returns `{ok, Req#{ body => <inbound
     body> }}` when `router-preprocess-default` is `local`, or a body of a single
     `status: 404` message when it is `error`.
 24. `preprocess` with a matching route returns a two-element `body` list: stage 1
-    binds `relay@1.0` (`relay-device => apply@1.0`, `method => POST`, `peer =>
-    <upstream>`, and `commit-request => true` iff the base requested it); stage 2
-    is `#{ path => call, target => proxy-message, proxy-message => #{ device =>
-    apply@1.0, path => user-path, source => user-message, user-path => <path>,
-    user-message => <user request> } }` (§4 `preprocess`). An unsigned user
-    request is committed (unsigned httpsig) before relay and becomes the
-    `user-message`, a signed one is left untouched; an empty user path **raises**
-    `invalid_user_path`.
+    binds `relay@1.0` (`relay-device => apply@1.0`, `method => POST`,
+    `relay-route => <path>`, and `commit-request => true` iff the base requested
+    it); stage 2 is `#{ path => call, target => proxy-message, proxy-message =>
+    #{ device => apply@1.0, path => //user-path, source => user-message,
+    user-path => <path>, user-message => <user request> } }` (§4 `preprocess`).
+    An unsigned user request is committed (unsigned httpsig) before relay and
+    becomes the `user-message`, a signed one is left untouched; an empty user
+    path **throws** `{error, invalid_user_path}`.
 25. If a `provider` is configured, the table is computed by resolving it rather
     than read statically; a provider failure surfaces as an error.
 

@@ -41,14 +41,13 @@ delimiter rules below are content-addressing-relevant and are pinned exactly.
 
 - **Dispatch shape:** **codec.** The device answers the codec keys `from`
   (flat → TABM, i.e. *unflatten*) and `to` (TABM → flat, i.e. *flatten*), the
-  commitment passthrough keys `commit` / `verify`, and `deserialize` (parse the
-  text form, §5). It maintains no state and reads no node options that affect its
-  output.
+  commitment passthrough keys `commit` / `verify`, and `serialize` /
+  `deserialize` (the text form, §5). It maintains no state and reads no node
+  options that affect its output.
 - **Resolved-key surface (normative).** The device's resolved keys are exactly
-  `from`, `to`, `commit`, `verify`, `deserialize`. **`serialize` is a library
-  helper, NOT a resolved device key** (a caller produces the text form via the
-  helper, not via path resolution). An implementation MUST NOT expose
-  `serialize` as a resolvable key, and MUST expose `deserialize` as one.
+  `from`, `to`, `commit`, `verify`, `serialize`, `deserialize` (`serialize`
+  gives the text form of §5, and `deserialize` parses it). An implementation
+  MUST expose `serialize` and `deserialize` as resolvable keys.
 - **Codec entry signature.** The codec keys are invoked by the platform's
   conversion layer **directly** as `from(Base, Req, Opts)` / `to(Base, Req, Opts)`
   (the 3-argument key-function shape), not only via generic path resolution. Each
@@ -94,9 +93,9 @@ delimiter rules below are content-addressing-relevant and are pinned exactly.
        NOT emit one; a consumer's behaviour on one is **out of scope** (§11).
   - An **empty map** operand returns an **empty map**.
 - **Empty-list value note.** If any value in the operand map is the empty list
-  `[]`, the implementation MAY emit a diagnostic but MUST NOT fail; processing
-  continues and that entry is deep-set with an empty-list value. (Well-formed
-  TABM inputs do not contain bare empty lists — `structured@1.0` represents the
+  `[]`, the implementation emits a diagnostic and then raises
+  `error(function_clause)`: `from` accepts no list operand. (Well-formed TABM
+  inputs do not contain bare empty lists — `structured@1.0` represents the
   empty list as an `ao-types` marker — so this is an edge-case guard, not a
   supported encoding.)
 - **Returns:** `{ok, TABM}` (a nested map), or the unchanged binary for a binary
@@ -108,8 +107,8 @@ delimiter rules below are content-addressing-relevant and are pinned exactly.
 - **Behaviour:**
   - A **binary** operand MUST be returned **unchanged** (identity passthrough).
   - A **list** operand MUST first be converted to a **numbered message** (keys
-    `1`, `2`, …, one per element in order; see `structured@1.0`) and then
-    flattened as a map.
+    `1`, `2`, …, one per element in order, and `ao-types` ⇒ `list=(".")`; see
+    `structured@1.0`) and then flattened as a map.
   - A **map** operand is flattened by processing **each** `Key → Value` entry and
     merging the results into a single single-level map:
     1. **Recurse into the value first:** apply `to` to `Value`.
@@ -128,15 +127,14 @@ delimiter rules below are content-addressing-relevant and are pinned exactly.
 - **Side effects:** none.
 
 ### `commit` / `verify`
-- Delegate to `httpsig@1.0`: force `commitment-device = httpsig@1.0` (set it into
-  the request) and delegate to the base message device's commit/verify, returning
-  its result unchanged. `commit` returns `{ok, CommittedMessage}`; `verify`
-  returns `{ok, Boolean}` (the codec key MUST return the `{ok, _}`-wrapped result,
-  not a bare message). The default committer selection follows `message@1.0`
-  (`verify` defaults to **all** commitments). `commit` produces a commitment over
-  the message; `verify` checks it. See the `httpsig@1.0` spec. The codec adds no
-  commitment logic of
-  its own.
+- Delegate to `httpsig@1.0`: `commit` forces `commitment-device = httpsig@1.0`
+  (set it into the request) and delegates to the base message device's commit;
+  `verify` calls `httpsig@1.0`'s `verify` with the base and the request. Each
+  returns its result unchanged. `commit` returns `{ok, CommittedMessage}`;
+  `verify` returns `{ok, Boolean}` (the codec key MUST return the
+  `{ok, _}`-wrapped result, not a bare message). `commit` produces a commitment
+  over the message; `verify` checks it. See the `httpsig@1.0` spec. The codec
+  adds no commitment logic of its own.
 
 ## 5. Data formats & encodings (normative — byte-exact)
 
@@ -166,7 +164,7 @@ Given a flat key, produce its ordered segment list as follows. The key is one of
   element that itself contains `/` (e.g. `[<<"a/b">>, <<"c">>]`) expands to
   `[<<"a">>, <<"b">>, <<"c">>]`. The empty list reduces to no segments and is
   ill-formed (§8), as above.
-- **An atom** → the single segment `[atom-name-as-binary]`.
+- **An atom** → the single segment `[Atom]`, the atom itself (not a binary).
 - **An integer** → the single segment of its **decimal** text (e.g. `1` →
   `<<"1">>`).
 
@@ -205,21 +203,21 @@ A flat message has a canonical human-readable **text** rendering used for
 display and line transports (it is **not** the content-addressed TABM form and
 is not consumed by `from`/`to`):
 
-- **Serialise:** flatten the message (`to`), then for each key in **ascending
-  byte-wise sorted** key order emit the line
+- **Serialise:** convert the message from `structured@1.0` to `flat@1.0`
+  (`structured@1.0`'s `from`, which gives each nested message and list as its
+  link `ao:<ID>` and writes it to the cache, then `to`), then for each key in
+  **ascending byte-wise sorted** key order emit the line
   `<key>` `: ` (colon-space) `<value>` followed by a single `\n`. Concatenate the
   lines. (Sorting makes the text deterministic; the flat map itself is unordered.)
-- **Deserialise:** split the input on `\n`; for each line, split on the **first**
-  `: ` (colon-space) into `key` and `value` (a line without a `: ` separator is
-  ignored); collect into a flat map; then decode that flat map **through
-  `structured@1.0`** (i.e. treat the result as a flat TABM and convert to the
-  rich form). Because values are split on the *first* `: ` only, a value
-  containing `: ` is preserved.
+- **Deserialise:** split the input on `\n`; skip an empty line; split each other
+  line on `: ` (colon-space) into `key` and `value`, and raise
+  `error({invalid_line, N})`, `N` counted from 1, for a line that does not give
+  exactly one `key` and one `value`; collect into a flat map; then convert that
+  flat map from `flat@1.0` to `structured@1.0` (this codec's `from`, then
+  `structured@1.0`'s `to`, which gives the rich form).
 
-This text form is lossy for values that contain `\n` or that begin in a way that
-collides with the `: ` split, and for keys/values requiring rich typing beyond
-plain binaries; it is intended for diagnostics and simple transports, not for
-content addressing.
+This text form cannot carry values that contain `\n` or `: `; it is intended
+for diagnostics and simple transports, not for content addressing.
 
 ## 6. Ordering, freshness & caching
 
@@ -257,7 +255,8 @@ content addressing.
 ## 8. Errors
 
 `flat@1.0` defines **no** error atoms of its own for the `from`/`to` conversions:
-every supported operand (binary, map, and — for `to` — list) yields `{ok, _}`.
+every supported operand (binary, map, and — for `to` — list) yields `{ok, _}`,
+but `from` raises on a map with a list value (§4).
 
 - An operand of an **unsupported type** (neither binary, map, nor — for `to` —
   list) is outside the contract; behaviour is unspecified (an implementation will
@@ -315,7 +314,8 @@ constructing the input and comparing the converted output):
    `[<<"y">>, <<"z">>]` flattens such that the resulting flat keys contain that
    path joined with `/` (the list segments are concatenated, not stringified).
 9. **Lists become numbered messages.** `to` of a list operand produces the same
-   flat map as `to` of the numbered message `#{ <<"1">> => E1, <<"2">> => E2, … }`
+   flat map as `to` of the numbered message
+   `#{ <<"1">> => E1, <<"2">> => E2, …, <<"ao-types">> => <<"list=(\".\")">> }`
    built from the list in order.
 10. **Recursion through values.** `from`/`to` recurse into nested-map values
     (not only top-level keys): nesting expressed in a value map is expanded /
@@ -325,11 +325,14 @@ constructing the input and comparing the converted output):
     `<<"a/b">>`; `to` never emits such forms.
 12. **No segment escaping / round-trip caveat.** There is no escape for a literal
     `/` inside a segment; `from`/`to` round-trip exactly for messages whose
-    segment names contain no `/`, and an implementation MUST NOT add escaping.
+    segment names contain no `/` and that have no empty nested map, and an
+    implementation MUST NOT add escaping.
 13. **No newline in keys.** No flat key produced by `to` contains `\n`.
 14. **Text form ordering.** The text serialisation emits `key: value\n` lines in
-    ascending byte-wise sorted key order; the text deserialiser splits each line
-    on the first `: ` and decodes the resulting flat map through `structured@1.0`.
+    ascending byte-wise sorted key order; the text deserialiser skips empty
+    lines, splits each other line on `: `, raises `error({invalid_line, N})` for
+    a line that does not give one key and one value, and decodes the resulting
+    flat map through `structured@1.0`.
 15. **`commit`/`verify`** behave exactly as `httpsig@1.0`'s `commit`/`verify`.
 
 ## 11. Out of scope
@@ -351,11 +354,11 @@ constructing the input and comparing the converted output):
 ## Open questions
 
 - **Empty-list value handling.** A bare empty-list value reaching `from` is
-  treated as an edge case: the reference path emits a diagnostic and then deep-
-  sets it unchanged (it does not drop the entry or fail). Whether such a value
-  should instead be dropped, or rejected, is unsettled — but well-formed TABM
-  never carries a bare empty list (it is an `ao-types` marker in
-  `structured@1.0`), so this should not arise in content-addressed use.
+  treated as an edge case: the reference path emits a diagnostic and then
+  raises. Whether such a value should instead be dropped, or deep-set, is
+  unsettled — but well-formed TABM never carries a bare empty list (it is an
+  `ao-types` marker in `structured@1.0`), so this should not arise in
+  content-addressed use.
 - **Collision determinism.** When two flat keys map to the same non-map leaf
   path, the surviving value is governed by unordered-map iteration and is left
   unspecified here. If a deterministic tie-break is ever required (e.g. for a

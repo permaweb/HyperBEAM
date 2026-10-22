@@ -213,9 +213,6 @@ equivalence_context(
 ) ->
     maps:remove(<<"varied-result-uri">>,
         Ctx#{ <<"normalizer">> => replace, <<"varied-result">> => Result });
-equivalence_context(Ctx = #{ <<"normalizer">> := request }, Opts) ->
-    {ok, Result} = result_from_context(Ctx, Opts),
-    equivalence_context(Ctx#{ <<"result">> => Result }, Opts);
 equivalence_context(Ctx, _) -> Ctx.
 
 %% @doc Decode a hashpath into a list of context segments, with the grammar
@@ -303,9 +300,7 @@ verify_part(_Parts, _PartNum, _Opts) -> false.
 %% Assuming successful computation, we then verify the `VariedBase` and
 %% `VariedRequest` fields against the parsed context, the `DependenciesID` if
 %% given, the `Normalizer` type, and finally the `Result` message itself. If all
-%% of these verify, the context is considered valid. Execution errors are
-%% preserved for loading; public verification treats them as failed
-%% verification.
+%% of these verify, the context is considered valid.
 verify_context(#{ <<"base">> := Base } = Ctx, Opts)
         when not is_map_key(<<"request">>, Ctx),
              not is_map_key(<<"request-uri">>, Ctx) ->
@@ -319,23 +314,15 @@ verify_context(Ctx, Opts) ->
         true ?= verify_varied(Ctx, ExecutedCtx, Opts),
         true ?= verify_dependencies(Ctx, ExecutedCtx, Opts),
         true ?= verify_equivalence(Ctx, ExecutedCtx, Opts),
-        {true,
-            case is_context(Ctx) of
-                true -> maps:get(<<"base">>, ExecutedCtx);
-                false -> maps:get(<<"result">>, ExecutedCtx)
-            end
-        }
+        {true, maps:get(<<"result">>, ExecutedCtx)}
     else
-        Error ->
+        _Error ->
             ?event_debug(
                 hashpath_debug,
-                {hashpath_verify_context_failed, {error, Error}, {ctx, Ctx}},
+                {hashpath_verify_context_failed, {error, _Error}, {ctx, Ctx}},
                 Opts
             ),
-            case Error of
-                {error, _} -> Error;
-                _ -> false
-            end
+            false
     end.
 
 %% @doc If varied `Req` and `Base` statements were present in the hashpath,
@@ -548,25 +535,18 @@ resolve_context(Base, Req, ExecOpts) ->
 %% @doc Load the result of a hashpath, or of a given part number within it, by
 %% resolving the request of each part on its base. The claims of the hashpath
 %% are ignored: the result has the hashpath of this node's resolution. A link
-%% to a hashpath loads the hashpath, and any other link is loaded as a link.
-load(Link = {link, _, LinkOpts}, Opts) ->
+%% to a hashpath loads the hashpath.
+load({link, Hashpath, LinkOpts}, Opts) ->
     MergedOpts = hb_store:scope(
         hb_util:deep_merge(Opts, LinkOpts, Opts),
         hb_opts:get(scope, local, LinkOpts)
     ),
-    case hb_link:normalize(#{ <<"hashpath">> => Link }, discard, MergedOpts) of
-        #{ <<"hashpath">> := HP } when ?IS_HASHPATH(HP) -> load(HP, MergedOpts);
-        _ ->
-            case hb_cache:ensure_loaded(Link, MergedOpts) of
-                Map when is_map(Map) -> {ok, Map};
-                Serialized -> load(Serialized, MergedOpts)
-            end
-    end;
+    load(Hashpath, MergedOpts);
 load(Hashpath, Opts) when is_binary(Hashpath) ->
     load(parse(Hashpath, Opts), Opts);
 load([Ctx = #{ <<"base-uri">> := URI }], Opts) when map_size(Ctx) == 1 ->
-    % A hashpath of one part has no claims: it is the message that the store
-    % holds at its URI.
+    % A hashpath of one part has no claims: it is the message stored at its
+    % URI.
     read(URI, Opts);
 load(Parts, Opts) when is_list(Parts) ->
     load(Parts, length(Parts), Opts);
@@ -579,16 +559,6 @@ load(Parts, PartNum, Opts)
     load_result(Parts, PartNum, lists:nth(PartNum, Parts), Opts);
 load(_Parts, _PartNum, _Opts) ->
     {error, <<"Hashpath part number out of bounds.">>}.
-
-%% @doc An explicit pre-result context presents the prior state as ancestry.
-%% A compact request without witnesses still denotes the request's result.
-is_context(Ctx) ->
-    not maps:is_key(<<"varied-result">>, Ctx) andalso
-        not maps:is_key(<<"varied-result-uri">>, Ctx) andalso
-        (maps:is_key(<<"varied-base-uri">>, Ctx) orelse
-            maps:is_key(<<"varied-base">>, Ctx) orelse
-            maps:is_key(<<"dependencies-uri">>, Ctx) orelse
-            maps:is_key(<<"dependencies">>, Ctx)).
 
 %% @doc Resolve the request of a part on its base with `hb_ao:resolve/3'. The
 %% resolver returns the cached result if the node has one, and executes the
@@ -681,39 +651,15 @@ verify_commitments(Value, Opts) when is_map(Value) ->
     hb_message:verify(Value, #{ <<"ids">> => <<"all">> }, Opts);
 verify_commitments(_Value, _Opts) -> true.
 
-%% @doc Extract, if we can, a workable post-exec `message` from a context either
-%% via the fully qualified result if possible or layering of the `varied-result`
-%% atop the `base` if provided explicitly.
-result_from_context(Ctx, Opts) ->
-    maybe
-        {ok, Result} ?= load_field(<<"varied-result">>, Ctx, Opts),
-        case maps:get(<<"normalizer">>, Ctx, replace) of
-            replace -> {ok, Result};
-            Normalizer when Normalizer == base; Normalizer == request ->
-                maybe
-                    {ok, Original} ?=
-                        case Normalizer of
-                            base -> load_field(<<"base">>, Ctx, Opts);
-                            request -> load_field(<<"request">>, Ctx, Opts)
-                        end,
-                    {ok,
-                        hb_message:normalize_commitments(
-                            hb_ao:set(Original, Result, internal_opts(Opts)),
-                            Opts,
-                            #{ <<"verify">> => fast, <<"depth">> => shallow }
-                        )
-                    }
-                end;
-            _ -> {error, <<"Unsupported hashpath normalizer.">>}
-        end
-    end.
-
-%% @doc Generate a receipt from the original and varied execution messages.
-%% Return its hashpath and complete context for challenge, preserving witnesses
-%% under the execution's cache policy. The resolver supplies the overlaid
-%% result.
+%% @doc Generate the hashpath of a resolution, and return it with its context,
+%% which `verify_context/2' compares with the claims of a hashpath. The inputs
+%% are the original and the varied base and request, the varied result, and
+%% the result with its overlay applied. `store/2' may write the base, the
+%% request and the dependencies message to the cache.
 generate(RawBase, RawReq, Res, VariedBase, VariedReq, VariedRes, Overlay, Opts) ->
-    % Original witnesses must also name all unsigned fields selected by Vary.
+    % `original_witness/3' gives the base and the request of the hashpath. An
+    % unsigned one gets a commitment over all of its fields, so that its ID
+    % covers the fields that Vary selects.
     Base = original_witness(RawBase, VariedBase, Opts),
     Req = original_witness(RawReq, VariedReq, Opts),
     Normalizer =
@@ -729,9 +675,10 @@ generate(RawBase, RawReq, Res, VariedBase, VariedReq, VariedRes, Overlay, Opts) 
         <<"varied-result">> => VariedRes,
         <<"normalizer">> => Normalizer
     },
-    % A replacement reached by the identity vary has a compact receipt: its
-    % witnesses and dependencies are derivable from the addressed pair. Other
-    % receipts name their witnesses; a patch's ancestry is denoted by them.
+    % A `.R' result, where Vary changed neither the base nor the request, gets
+    % no `;VB+VR' or `@D' claim: the varied base and request are the base and
+    % the request, and the dependencies follow from them. Any other result,
+    % such as a patch, gets the varied base and request and their dependencies.
     Completed =
         case Normalizer == replace andalso
                 hb_message:id(VariedBase, all, Opts) =:=
@@ -750,7 +697,7 @@ generate(RawBase, RawReq, Res, VariedBase, VariedReq, VariedRes, Overlay, Opts) 
                 }
         end,
     HP = format(Completed, Opts),
-    store(HP, Completed, Opts),
+    store(Completed, Opts),
     {HP, Completed}.
 
 %% @doc Reuse the varied identity when Vary only added unsigned commitments.
@@ -762,9 +709,12 @@ original_witness(Original, Varied, Opts) ->
         false -> hb_ao:normalize_input(Original, Opts)
     end.
 
-%% @doc Preserve the witnesses required to port a receipt under the same cache
-%% policy as its reusable execution result.
-store(HP, Ctx, Opts) ->
+%% @doc Write the base, the request and the dependencies message of a
+%% resolution to the cache, if `hb_cache_control:derive_cache_settings/2' gives
+%% `store' for the varied result and the request. The resolver makes the same
+%% check before it stores the result. A user with the hashpath can get the
+%% dependencies message from the node by the ID in its `@D' claim.
+store(Ctx, Opts) ->
     case
         hb_cache_control:derive_cache_settings(
             [
@@ -775,8 +725,8 @@ store(HP, Ctx, Opts) ->
         )
     of
         #{ <<"store">> := true } ->
-            % The dependencies link to the base and the request by ID, so
-            % those witnesses are written first.
+            % The dependencies message links to the base and the request, so
+            % it is written after them.
             lists:foreach(
                 fun(Name) -> hb_cache:write(maps:get(Name, Ctx), Opts) end,
                 [<<"base">>, <<"request">>] ++
@@ -785,17 +735,7 @@ store(HP, Ctx, Opts) ->
                     ||
                         is_map_key(<<"dependencies">>, Ctx)
                     ]
-            ),
-            case maps:get(<<"varied-result">>, Ctx) of
-                Patch when is_map(Patch); is_binary(Patch); is_list(Patch) ->
-                    hb_cache:write(Patch, Opts);
-                _ -> ok
-            end,
-            case maps:get(<<"normalizer">>, Ctx) of
-                request -> hb_cache:write(maps:get(<<"result">>, Ctx), Opts);
-                _ -> ok
-            end,
-            hb_cache:write(HP, Opts);
+            );
         _ -> not_caching
     end.
 
@@ -1031,19 +971,6 @@ supplied_context_test() ->
             Opts
         )
     ),
-    {ok, Overlaid} =
-        result_from_context(
-            #{
-                <<"request">> => #{ <<"path">> => <<"a">> },
-                <<"normalizer">> => request,
-                <<"varied-result">> => #{ <<"value">> => 7 }
-            },
-            Opts
-        ),
-    ?assertEqual(
-        #{ <<"path">> => <<"a">>, <<"value">> => 7 },
-        hb_message:uncommitted(hb_private:reset(Overlaid), Opts)
-    ),
     {ok, ID} = hb_cache:write(Base, Opts),
     URI = <<"ao:", ID/binary>>,
     WrongBase = [#{ <<"base-uri">> => URI, <<"base">> => #{ <<"a">> => 3 } }],
@@ -1115,9 +1042,6 @@ overlay_receipt_test() ->
     ),
     Linked = hb_cache:ensure_loaded({link, HP3, #{}}, Opts),
     ?assertEqual(3, hb_maps:get(<<"counter">>, Linked, undefined, Opts)),
-    {ok, Serialized} = hb_cache:write(HP3, Opts),
-    {ok, Decoded} = load({link, Serialized, #{}}, Opts),
-    ?assertEqual(HP3, hb_path:hashpath(Decoded, Opts)),
     ?assertNot(
         verify_all(format(Ctx2#{ <<"normalizer">> => replace }, Opts), Opts)
     ),
@@ -1220,6 +1144,7 @@ coerced_dependencies_test() ->
     {ok, Result} = hb_ao:resolve(Base, Req, Opts),
     HP = hb_path:hashpath(Result, Opts),
     Ctx = context(HP, Opts),
+    % The node stores the dependencies message of the `@D' claim.
     {ok, Deps} = load_field(<<"dependencies">>, Ctx, Opts),
     BaseID = hb_message:id(Base, all, Opts),
     ReqID = hb_message:id(Req, all, Opts),
@@ -1399,9 +1324,8 @@ pre_result_context_test() ->
     ?assertEqual(3, hb_maps:get(<<"counter">>, Next, undefined, Opts)),
     ?assert(verify_all(hb_path:hashpath(Next, Opts), Opts)).
 
-%% @doc A binary result loads by resolving its request on its base, directly or
-%% through a stored hashpath. A key with a literal value, such as `7', loads by
-%% its `ao:' path.
+%% @doc A binary result loads by resolving its request on its base. A key with
+%% a literal value, such as `7', loads by its `ao:' path.
 literal_result_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     Value = <<"literal replacement">>,
@@ -1416,18 +1340,8 @@ literal_result_test() ->
             Opts
         ),
     ?assertEqual({ok, Value}, load(HP, Opts)),
-    {ok, Serialized} = hb_cache:write(HP, Opts),
-    ?assertEqual(
-        {ok, Value},
-        load(
-            {
-                link,
-                Serialized,
-                #{ <<"lazy">> => true }
-            },
-            Opts
-        )
-    ),
+    % `ao:' followed by the hashpath loads the same value as the hashpath.
+    ?assertEqual({ok, Value}, hb_cache:read(<<"ao:", HP/binary>>, Opts)),
     {ok, BaseID} = hb_cache:write(#{ <<"value">> => 7 }, Opts),
     ?assertEqual({ok, 7}, load(<<"ao:", BaseID/binary, "/value">>, Opts)),
     ?assertEqual(
