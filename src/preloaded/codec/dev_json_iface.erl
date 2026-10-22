@@ -112,7 +112,7 @@ denormalize_message(Message, Opts) ->
                 Message#{
                     <<"owner">> => hb_util:committer_address(PrimarySigner),
                     <<"signature">> =>
-                        hb_ao:get(<<"signature">>, Commitment, <<>>, Opts)
+                        hb_maps:get(<<"signature">>, Commitment, <<>>, Opts)
                 }
         end,
     NormOwnerMsg#{
@@ -138,9 +138,9 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                 {ok, _, Commitment} =
                     hb_message:commitment(Signer, RawMsg, Opts),
                 CommitmentSignature =
-                    hb_ao:get(<<"signature">>, Commitment, <<>>, Opts),
+                    hb_maps:get(<<"signature">>, Commitment, <<>>, Opts),
                 CommitmentKey =
-                    hb_ao:get_first(
+                    hb_maps:get_first(
                         [
                             {Commitment, <<"public-key">>},
                             {Commitment, <<"owner">>}
@@ -157,7 +157,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                         };
                     false ->
                         CommitmentOwner =
-                            hb_ao:get_first(
+                            hb_maps:get_first(
                                 [
                                     {Commitment, <<"key">>},
                                     {Commitment, <<"public-key">>},
@@ -649,7 +649,24 @@ basic_aos_call_test_() ->
 				),
 				#{}
 			),
-		?assertEqual(<<"true">>, hb_ao:get(<<"results/data">>, Trusted, #{}))
+		?assertEqual(<<"true">>, hb_ao:get(<<"results/data">>, Trusted, #{})),
+		% `json-iface@1.0' does not run the `device' of a message's commitment.
+		AOSMsg = generate_aos_msg(ProcID, <<"return 1+1">>),
+		Body = maps:get(<<"body">>, AOSMsg),
+		Commitments =
+			maps:map(
+				fun(_, C) -> C#{ <<"device">> => <<"manifest@1.0">> } end,
+				maps:get(<<"commitments">>, Body)
+			),
+		{ok, WithDevice} =
+			hb_ao:resolve(
+				Msg,
+				AOSMsg#{
+					<<"body">> => Body#{ <<"commitments">> => Commitments }
+				},
+				#{}
+			),
+		?assertEqual(<<"2">>, hb_ao:get(<<"results/data">>, WithDevice, #{}))
 	end}.
 
 aos_stack_benchmark_test_() ->

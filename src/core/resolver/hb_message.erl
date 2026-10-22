@@ -964,7 +964,7 @@ commitments(_Spec, _Msg, _Opts) ->
 commitment_devices(#{ <<"commitments">> := Commitments }, Opts) ->
     lists:map(
         fun(CommMsg) ->
-            hb_ao:get(<<"commitment-device">>, CommMsg, Opts)
+            hb_maps:get(<<"commitment-device">>, CommMsg, not_found, Opts)
         end,
         maps:values(Commitments)
     );

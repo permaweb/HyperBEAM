@@ -673,6 +673,22 @@ commitment_identity_test() ->
     Victim = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
     Signed = hb_message:commit(Msg, Opts),
     Unsigned = hb_message:commit(Msg, Opts, #{ <<"type">> => <<"unsigned">> }),
+    % `commitment_devices/2' does not run the `device' of a commitment.
+    Device =
+        #{ <<"commitment-device">> => fun(_, _, _) -> {ok, <<"ran">>} end },
+    ?assertEqual(
+        [<<"httpsig@1.0">>],
+        hb_message:commitment_devices(
+            Signed#{
+                <<"commitments">> =>
+                    maps:map(
+                        fun(_, C) -> C#{ <<"device">> => Device } end,
+                        maps:get(<<"commitments">>, Signed)
+                    )
+            },
+            Opts
+        )
+    ),
     % An unsigned commitment is named by the committer of unsigned commitments.
     ?assertMatch(
         [#{ <<"keyid">> := ?UNSIGNED_COMMITTER }],
