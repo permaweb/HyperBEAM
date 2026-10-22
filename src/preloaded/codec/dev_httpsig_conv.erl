@@ -249,6 +249,18 @@ is_codec_media_type(<<"content-type">>, Value) when is_binary(Value) ->
     string:prefix(string:lowercase(Value), <<"application/x.ao.">>) =/= nomatch;
 is_codec_media_type(_Key, _Value) -> false.
 
+%% @doc Check whether a key is `content-type' and the message contains other
+%% messages, as values or as links. Such a message is multipart when it is
+%% bundled, so its own `content-type' is carried in a body part in every form.
+is_bundle_content_type(<<"content-type">>, Msg) ->
+    lists:any(
+        fun({Key, Value}) ->
+            is_map(Value) orelse ?IS_LINK(hb_link:decode(Key, Value))
+        end,
+        maps:to_list(maps:without([<<"commitments">>, <<"priv">>], Msg))
+    );
+is_bundle_content_type(_Key, _Msg) -> false.
+
 %% @doc Parse a single part of a multipart body into a TABM.
 from_body_part(InlinedKey, Part, Opts) ->
     % Extract the Headers block and Body. Only split on the FIRST double CRLF
@@ -481,6 +493,7 @@ uncovered_body_keys(TABM, Commitments, Opts) ->
             lists:member(Key, ?RESERVED_HEADERS) orelse
             is_multipart(Key, Value) orelse
             is_codec_media_type(Key, Value) orelse
+            is_bundle_content_type(Key, TABM) orelse
             default_where(Value) == body
     ].
 
@@ -507,11 +520,13 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
                     % part, because the decoder parses such a header for the
                     % `boundary' of the body. So is a `content-type' of the
                     % form `application/x.ao.<name>', because a receiver reads
-                    % such a header as the codec of the whole body.
+                    % such a header as the codec of the whole body. So is the
+                    % `content-type' of a message that contains other messages.
                     Where =
                         case lists:member(Key, ?RESERVED_HEADERS) orelse
                                 is_multipart(Key, Value) orelse
-                                is_codec_media_type(Key, Value) of
+                                is_codec_media_type(Key, Value) orelse
+                                is_bundle_content_type(Key, TABM) of
                             true -> #{ where => body };
                             false -> #{}
                         end,
@@ -1055,6 +1070,23 @@ multipart_content_type_test() ->
     ?assertEqual(
         Msg,
         hb_message:uncommitted(hb_cache:ensure_all_loaded(Decoded, Opts), Opts)
+    ),
+    % An unbundled commitment verifies when the message is sent bundled.
+    ?assert(
+        hb_message:verify(
+            hb_message:convert(
+                hb_message:convert(
+                    hb_message:commit(maps:without([<<"body">>], Msg), Opts),
+                    #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
+                    Opts
+                ),
+                <<"structured@1.0">>,
+                <<"httpsig@1.0">>,
+                Opts
+            ),
+            all,
+            Opts
+        )
     ),
     % A browser sends the `boundary' unquoted, starting with `-'.
     ?assertEqual(

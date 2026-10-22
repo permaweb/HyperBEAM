@@ -512,9 +512,12 @@ placed in the body):
   `signature`, `signature-input`, `content-digest`, `ao-body-key`,
   `content-length`, `connection`, `keep-alive`, `proxy-connection`, `te`,
   `trailer`, `transfer-encoding` or `upgrade`, or the value is a `multipart/*` or
-  `application/x.ao.*` `content-type`. Every name is **percent-encoded** on the
-  wire: a byte other than `a-z`, `0-9` and the RFC 9110 `tchar` punctuation
-  other than `%` is encoded as `%xx` in lowercase hex. `from` decodes it.
+  `application/x.ao.*` `content-type`, or it is the `content-type` of a message
+  that contains other messages, as values or as links: bundled, such a message
+  is multipart, so its own `content-type` is in a body part in every form.
+  Every name is **percent-encoded** on the wire: a byte other than `a-z`, `0-9`
+  and the RFC 9110 `tchar` punctuation other than `%` is encoded as `%xx` in
+  lowercase hex. `from` decodes it.
 - Any other **binary** value is lifted into the multipart body as its own part.
 - A **map** (nested message) value is encoded as a part of the multipart body,
   recursively, preserving hierarchy. The fields of a part are keys of its
