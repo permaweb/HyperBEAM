@@ -251,7 +251,7 @@ is_multipart(_Key, _Value) -> false.
 %% document, such as `application/json', so it is not carried in a body part: a
 %% stored document is served as itself.
 is_codec_media_type(<<"content-type">>, Value) when is_binary(Value) ->
-    string:prefix(string:lowercase(Value), <<"application/x.ao.">>) =/= nomatch;
+    string:prefix(hb_util:lowercase_key(Value), <<"application/x.ao.">>) =/= nomatch;
 is_codec_media_type(_Key, _Value) -> false.
 
 %% @doc Check whether a key is `content-type' and the message contains other
@@ -1190,7 +1190,9 @@ multipart_content_type_test() ->
         <<"multipart/form-data", _/binary>>,
         ContentType(<<"application/x.ao.json">>)
     ),
-    ?assertEqual(<<"application/json">>, ContentType(<<"application/json">>)).
+    ?assertEqual(<<"application/json">>, ContentType(<<"application/json">>)),
+    % A `content-type' that is not UTF-8 is a header as well.
+    ?assertEqual(<<16#E6>>, ContentType(<<16#E6>>)).
 
 group_maps_test() ->
    Map = #{
