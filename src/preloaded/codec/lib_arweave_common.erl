@@ -399,6 +399,7 @@ with_unsigned_commitment(
         BaseFields, Item, Device, CommittedFields, Tags,
         UncommittedMessage, CommittedKeys, Opts) ->
     ID = hb_util:human_id(Item#tx.unsigned_id),
+    Bundle = bundle_commitment_key(Tags, UncommittedMessage, Opts),
     UncommittedMessage#{
         <<"commitments">> => #{
             ID =>
@@ -409,7 +410,7 @@ with_unsigned_commitment(
                             <<"commitment-device">> => Device,
                             <<"committed">> => CommittedKeys,
                             <<"type">> => <<"unsigned-sha256">>,
-                            <<"bundle">> => bundle_commitment_key(Tags, Opts),
+                            <<"bundle">> => Bundle,
                             <<"original-tags">> => original_tags(
                                 BaseFields, Item, Opts),
                             <<"avro-form">> => avro_form(Item)
@@ -427,6 +428,7 @@ with_signed_commitment(
         BaseFields, Item, Device, FieldCommitments, Tags,
         UncommittedMessage, CommittedKeys, Opts) ->
     ID = hb_util:human_id(Item#tx.id),
+    Bundle = bundle_commitment_key(Tags, UncommittedMessage, Opts),
     ExtraCommitments = hb_maps:merge(
         FieldCommitments,
         hb_maps:with(?BUNDLE_KEYS, Tags),
@@ -443,7 +445,7 @@ with_signed_commitment(
                     <<"signature">> => hb_util:encode(Item#tx.signature),
                     <<"owner">> => hb_util:encode(Item#tx.owner),
                     <<"type">> => ar_tx:serialize_sig_type(Item#tx.signature_type),
-                    <<"bundle">> => bundle_commitment_key(Tags, Opts),
+                    <<"bundle">> => Bundle,
                     <<"original-tags">> => original_tags(
                         BaseFields, Item, Opts),
                     <<"avro-form">> => avro_form(Item)
@@ -460,14 +462,16 @@ with_signed_commitment(
 
 %% @doc Return the bundle key for an item: whether its nested messages are
 %% bundled in its data. An item whose nested messages are not bundled links
-%% each with a tag whose value is an `ao:' URI, and bundles only the values
-%% that are too large for tags.
-bundle_commitment_key(Tags, Opts) ->
+%% each with an `ao:' URI, and bundles only the values that are too large for
+%% tags. The link of the message of the data key, or of a key too long for a
+%% tag name, is an item in the data, not a tag, so links are read from the
+%% values of `Message', the message decoded from the item.
+bundle_commitment_key(Tags, Message, Opts) ->
     hb_util:bin(
         hb_maps:is_key(<<"bundle-format">>, Tags, Opts) andalso
             not lists:any(
                 fun({Key, Value}) -> ?IS_LINK(hb_link:decode(Key, Value)) end,
-                hb_maps:to_list(Tags, Opts)
+                hb_maps:to_list(Message, Opts)
             )
     ).
 

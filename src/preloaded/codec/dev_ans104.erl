@@ -999,7 +999,18 @@ unbundled_with_large_value_test() ->
             Opts,
             #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }
         ),
-    ?assert(hb_message:verify(Outer, all, Opts)).
+    ?assert(hb_message:verify(Outer, all, Opts)),
+    % The message of the `data' key is linked from the data, not a tag.
+    WithData =
+        hb_message:commit(
+            #{
+                <<"large">> => binary:copy(<<"a">>, ?MAX_TAG_VALUE_SIZE + 1),
+                <<"data">> => #{ <<"key">> => <<"value">> }
+            },
+            Opts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false }
+        ),
+    ?assert(hb_message:verify(WithData, all, Opts)).
 
 %% @doc An item whose two tags are one Avro block with a negative count
 %% verifies, as its signature is over its own bytes. Its message, read back
