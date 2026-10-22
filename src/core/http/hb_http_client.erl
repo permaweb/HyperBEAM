@@ -166,8 +166,25 @@ httpc_req(Args, Opts) ->
                         {URL, HeaderKV, binary_to_list(ContentType), Body}
                 end,
             ?event({http_client_outbound, Method, URL, {priv_req, Request}}),
+            % Give httpc the send and connect timeouts that gun takes. httpc
+            % runs each request in a process of its own, which keeps running
+            % if the caller exits: without a timeout, a request to a peer that
+            % never answers keeps that process and its connection forever.
+            ConnectTimeout =
+                hb_opts:get(
+                    http_client_connect_timeout,
+                    ?DEFAULT_CONNECT_TIMEOUT,
+                    Opts
+                ),
+            SendTimeout = hb_opts:get(http_client_send_timeout, infinity, Opts),
+            HTTPOptions =
+                [
+                    {autoredirect, false},
+                    {timeout, SendTimeout},
+                    {connect_timeout, ConnectTimeout}
+                ],
             HTTPCOpts = [{full_result, true}, {body_format, binary}],
-            case httpc:request(Method, Request, [{autoredirect, false}], HTTPCOpts) of
+            case httpc:request(Method, Request, HTTPOptions, HTTPCOpts) of
                 {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
                     download_metric(RespBody, Opts),
                     RespHeaders =

@@ -556,7 +556,22 @@ relay_peer_allowed_test() ->
         ),
     ?assertEqual(Address, hb_ao:get(<<"body">>, Res, #{})),
     % The result is the peer's message, without the `status' the client adds.
-    ?assertNot(maps:is_key(<<"status">>, Res)).
+    ?assertNot(maps:is_key(<<"status">>, Res)),
+    % `~test-device@1.0/delay' answers in 750 ms, after the send timeout of
+    % 100 ms: the call returns `{error, timeout}'.
+    ?assertEqual(
+        {error, timeout},
+        relay_call(
+            #{
+                <<"peer">> => Target,
+                <<"relay-path">> => <<"/~test-device@1.0/delay">>
+            },
+            #{
+                <<"relay-block-internal">> => false,
+                <<"http-client-send-timeout">> => 100
+            }
+        )
+    ).
 
 %% @doc A `call' whose `relay-path' is an absolute URL on an internal host is
 %% refused by default.
