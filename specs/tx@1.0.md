@@ -59,8 +59,8 @@ transaction behaviour.
 
 ## 3. Device interface
 
-- **Dispatch shape:** **codec + commitment device.** The device answers the four
-  keys `from`, `to`, `commit`, `verify`. It is *not* a default-handler device and
+- **Dispatch shape:** **codec + commitment device.** The device answers the keys
+  `from`, `to`, `commit`, `verify`. It is *not* a default-handler device and
   does not expose arbitrary message keys; message inspection/mutation
   (`keys`/`set`/…) is inherited from `message@1.0`.
 - **`from` (Base = a transaction, Req, Opts):** decode a transaction (or a raw
@@ -83,50 +83,50 @@ IDs, and commitments are normative.
   `rsa-pss-sha256`.
 - **`bundle`** (to/commit/verify): boolean (`true`/`false`, default `false`).
   When true the message's nested sub-messages are materialised into the
-  transaction's `data` field as an ANS-104 bundle; when false they are dropped
-  from the encoding (only the top-level scalar keys survive). The flag may be
-  supplied on the request, on the matched commitment (`bundle` key), or as a node
-  option, in that precedence order; absent everywhere it is `false`.
-- **`field-<name>`** (to/commit): for a message without a `tx@1.0` commitment,
-  gives the base field `<name>` over the message's key `<name>` (§5.5).
-- **`exclude-data`** (to): boolean. When true, a `data`/`data_root`/`data_size`
-  reconstruction MUST treat the header as carrying *no inline data* even if
-  `data_root`/`data_size` are present (used to encode a value-transfer header
-  that references data uploaded separately). See §5.5.
+  transaction's `data` field as an ANS-104 bundle; when false `structured@1.0`
+  replaces each with a link, which the transaction carries as a tag whose value
+  is an `ao:` URI. The flag may be supplied on the matched commitment (`bundle`
+  key) or on the request, in that precedence order; absent from both it is
+  `false`.
+- **`field-<name>`** (to, signed commit): for a message without a `tx@1.0`
+  commitment, gives the base field `<name>` over the message's key `<name>`
+  (§5.5).
 
 ## 4. Resolved keys (normative)
 
 ### 4.1 `from` — transaction → message (TABM)
 
-- **Reads:** the transaction (Base); `bundle` (Req); node options.
+- **Reads:** the transaction (Base); node options.
 - **Behaviour:**
   1. A **binary** Base returns unchanged (`{ok, Binary}`) — a raw binary has no
      transaction structure.
-  2. If the transaction's tags contain `{<<"ao-type">>, <<"binary">>}`, the
+  2. If the transaction's only tag is `{<<"ao-type">>, <<"binary">>}`, the
      transaction is the wrapper for a raw binary; return `{ok, Data}` where
      `Data` is the transaction's `data` field. (This is the inverse of the
      binary wrapping in `to`, §4.2.1.)
   3. Otherwise **validate** the transaction (§5.2); on failure throw the
      corresponding error atom (§8). Then normalise it (recompute IDs, and
-     data_size from `data` if present; a data root only for a transaction
-     without one; §5.3) and decode any bundled `data` into nested sub-messages.
+     data_size from `data` if present; a data root for format 1, and for
+     format 2 only without one; §5.3) and decode any bundled `data` into
+     nested sub-messages.
   4. Compute the three component maps — **fields**, **tags**, **data** (§5.4) —
      then the **committed key set** (§5.6) and assemble the **base message** by
      selecting, for each committed key, its value with precedence **data > field
      > tag** (§5.5). A committed key absent from all three is an error
-     (`missing-key`).
+     (`{missing_key, Key}`).
   5. Attach **commitments** (§5.9): if the transaction is signed, a signed
      commitment keyed by its signed ID; else if its tags are not all-normal (case
-     differs, duplicate names, or a reserved field name appears as a tag), an
-     unsigned commitment keyed by its unsigned ID; else no commitment.
+     differs, duplicate names, a private name, a reserved field name appears as
+     a tag, or a list bundle; §5.6), an unsigned commitment keyed by its
+     unsigned ID; else no commitment.
 - **Returns:** `{ok, Message}` (a TABM map) or `{ok, Binary}`.
 - **Side effects:** none beyond reading linked/cached values it is handed. (A
   bundled `data` field is decoded in place; no writes.)
 
 ### 4.2 `to` — message → transaction
 
-- **Reads:** the message / binary (Base); `bundle`, `exclude-data` (Req); the
-  message's `tx@1.0` commitment if present; node options.
+- **Reads:** the message / binary (Base); `field-<name>` (Req); the message's
+  `tx@1.0` commitment if present; node options.
 - **Behaviour:**
   1. A **binary** Base is wrapped: produce a normalised format-2 transaction with
      a single tag `{<<"ao-type">>, <<"binary">>}`, `data = Binary`, and the rest
@@ -135,9 +135,8 @@ IDs, and commitments are normative.
   2. A Base that is already a transaction returns unchanged.
   3. A **map** Base is converted: locate the message's `tx@1.0` commitment
      (`commitment-device = tx@1.0`); more than one such commitment is an error
-     (`multiple-commitments-unsupported`). If `bundle` is true, fully
-     load/materialise the message and re-flatten it (so nested sub-messages
-     become a bundle); else use it as-is.
+     (`{multiple_ans104_commitments_unsupported, TABM}`). The message is used
+     as it is; `structured@1.0` loads it when `bundle` is true.
   4. Build the transaction from three sources, in this order:
      - **signature info** (§5.9.3): owner, signature, signature_type, and the
        original tag list, taken from the commitment if present, else defaults
@@ -156,13 +155,13 @@ IDs, and commitments are normative.
   5. Normalise the assembled transaction (§5.3) and re-validate it (§5.2); on
      failure throw (§8).
 - **Returns:** `{ok, Transaction}`.
-- **Side effects:** when `bundle` is true the message is read fully (its links
-  resolved); no writes.
+- **Side effects:** no writes.
 
 ### 4.3 `commit` — produce a `tx@1.0` commitment
 
-- **Reads:** the message (Base); `type` and `field-<name>` (Req, §5.5); the
-  signing wallet from node options (key `priv-wallet`).
+- **Reads:** the message (Base); `type` and, for a signed type, `committer` and
+  `field-<name>` (Req, §5.5): `message@1.0` gives the node's `priv-wallet` as
+  `committer` when the request has none.
 - **Behaviour:** by `type`:
   - **`unsigned` / `unsigned-sha256`:** remove any existing `commitments`, then
     round-trip the message through `to` then `from` (transaction encode →
@@ -183,18 +182,23 @@ IDs, and commitments are normative.
     of a commitment that the message has: its data may have changed since.
 - **Returns:** `{ok, CommittedMessage}`.
 - **Side effects:** none (no cache writes); consumes the configured wallet.
-- **Errors:** absence of a usable wallet for a signed commit is a node
-  misconfiguration (`no-viable-wallet`).
+- **Errors:** a signed commit without a `committer` in the request fails with
+  `error:function_clause` in `lib_arweave_common:sign/4`.
 
 ### 4.4 `verify` — verify a `tx@1.0` commitment
 
-- **Reads:** the message (Base) and the `committers` / `commitment-ids` selector
-  in Req (per `message@1.0`).
-- **Behaviour:** restrict the message to the selected commitment(s), reset
-  private keys, convert it to a transaction via `to`, and run the Arweave
-  transaction verification (§5.10) over the result.
-- **Returns:** `{ok, Boolean}` — `true` iff the reconstructed transaction
-  verifies. **Failure-closed:** any inconsistency (bad signature, ID ≠ hash of
+- **Reads:** the message (Base) and the commitment (Req), which `message@1.0`
+  selects by the `committers` / `ids` of its request.
+- **Behaviour:** reset private keys of the message, which `message@1.0`
+  restricts to the commitment and its committed keys, and convert it to a
+  transaction via `to`. A signed commitment verifies when the transaction
+  passes the Arweave transaction verification (§5.10), the commitment's ID is
+  the signed ID and its `committer` is the URI of the owner's committer
+  (§5.9.2); an unsigned one when its ID is the unsigned ID and it has no
+  `committer`. Its `committed` keys must also be the keys that `from` gives
+  the transaction and the keys of the message.
+- **Returns:** `{ok, Boolean}` — `true` iff the commitment verifies as above.
+  **Failure-closed:** any inconsistency (bad signature, ID ≠ hash of
   signature, data/size/root mismatch, unsupported field) yields `false`.
 - **Side effects:** none.
 
@@ -213,7 +217,7 @@ fields are decimal text.
 | id (signed ID) | — (commitment ID) | 32 bytes → base64url | n/a (derived) |
 | unsigned_id | — (commitment ID) | 32 bytes → base64url | n/a (derived) |
 | anchor (`last_tx`) | `anchor` | 0, 32, or 48 bytes → base64url | `<<>>` (empty) |
-| owner (public key) | — (`keyid` in commitment) | bytes → base64url, prefixed `publickey:` | all-zero (unsigned) |
+| owner (public key) | — (`owner` in commitment) | bytes → base64url | all-zero (unsigned) |
 | target | `target` | 0 or 32 bytes → base64url | `<<>>` (empty) |
 | quantity | `quantity` | non-negative integer (decimal text) | `0` |
 | data | `data` (or `ao-data-key`) | raw binary, or nested bundle | `<<>>` (empty) |
@@ -233,27 +237,28 @@ so does the data root of a transaction with `data`.)
 
 ### 5.2 Transaction validity (enforced by `from` and `to`)
 
-A transaction MUST satisfy all of the following or the conversion throws the
-named error (§8). The check exists so the rest of the codec can assume a
-well-formed header.
+A transaction MUST satisfy all of the following or the conversion throws
+`{invalid_field, Field, Value}`, `Field` as in parentheses below (§8). The
+check exists so the rest of the codec can assume a well-formed header.
 
-1. `format` ∈ {1, 2} — else `invalid-field` (format).
-2. `id` and `unsigned_id` are each exactly 32 bytes — else `invalid-field`.
-3. `anchor` size ∈ {0, 32, 48} — else `invalid-field` (anchor).
-4. `owner` is a binary — else `invalid-field` (owner).
-5. `target` size ∈ {0, 32} — else `invalid-field` (target).
-6. `quantity`, `data_size`, `reward` are integers — else `invalid-field`.
-7. `data_root` size ∈ {0, 32} — else `invalid-field` (data_root).
-8. `signature` is a binary — else `invalid-field` (signature).
+1. `format` ∈ {1, 2} — else `invalid_field` (format).
+2. `id` and `unsigned_id` are each exactly 32 bytes — else `invalid_field`.
+3. `anchor` size ∈ {0, 32, 48} — else `invalid_field` (anchor).
+4. `owner` is a binary — else `invalid_field` (owner).
+5. `target` size ∈ {0, 32} — else `invalid_field` (target).
+6. `quantity`, `data_size`, `reward` are integers — else `invalid_field`.
+7. `data_root` size ∈ {0, 32} — else `invalid_field` (data_root).
+8. `signature` is a binary — else `invalid_field` (signature).
 9. `denomination` = 0 (denomination changes are unsupported) — else
-   `invalid-field` (denomination).
+   `invalid_field` (denomination).
 10. `signature_type` ∈ {RSA `{rsa,65537}`, ECDSA `{ecdsa,secp256k1}`} — else
-    `invalid-field` (signature_type).
+    `invalid_field` (signature_type).
 11. `tags` is a list of `{binary name, binary value}` pairs; each name ≤ 1024
-    bytes, each value ≤ 3072 bytes — else `invalid-field` (tag / tag_name /
-    tag_value). A non-tuple tag entry is `invalid-field` (tag).
+    bytes, each value ≤ 3072 bytes — else `invalid_field` (tags / tag_name /
+    tag_value). A non-tuple tag entry is `invalid_field` (tag).
 
-A non-transaction, non-binary Base passed to `from`/`to` is `invalid-tx`.
+A Base passed to `to` that is not a transaction, a binary or a map is
+`{invalid_tx, Base}`.
 
 ### 5.3 Normalisation
 
@@ -286,22 +291,20 @@ From a (normalised, validated) transaction the codec derives three maps:
   from it and the data root is not a body key: only the commitment's
   `field-data-root` carries it (§5.9.2).
 - **Tags map:** the transaction's tag list, **normalised**: each tag name is
-  lower-cased and `-`/`_`-canonicalised; **duplicate** names are aggregated into
-  a single key whose value is an RFC 9651 Structured-Fields **list** of the
-  individual values, in original order (e.g. two `Test-Tag` values become
-  `test-tag` → `"v1", "v2"`). Metadata tags (`ao-types` re-normalisation) are
-  handled per §5.6.
+  lower-cased; **duplicate** names are aggregated into a single key whose value
+  is an RFC 9651 Structured-Fields **list** of the individual values, in
+  original order (e.g. two `Test-Tag` values become `test-tag` → `"v1", "v2"`).
+  An `ao-types` tag is kept as it is (§5.6).
 - **Data map:** empty if `data` is empty. If `data` decodes to a map (a bundle),
-  each child is recursively decoded (`from`) and keys normalised. Otherwise a
-  single entry `DataKey → data`, where `DataKey` is the value of the
-  `ao-data-key` tag if present, else `data`.
+  each child is decoded as an `ans104@1.0` item (`lib_arweave_common:from/3`)
+  and keys normalised. Otherwise a single entry `DataKey → data`, where
+  `DataKey` is the value of the `ao-data-key` tag if present, else `data`.
 
 ### 5.5 Base-message assembly & field/tag precedence (`from`)
 
 The base message contains exactly the **committed keys** (§5.6). For each key the
 value is chosen by precedence **data > fields > tags** (first hit wins); a key
-found in none throws `missing-key`. Lookups also accept the `+link` form of a
-key (a key `k` matches a stored `k+link`).
+found in none throws `{missing_key, Key}`.
 
 This precedence is what lets a tag named like a base field (`anchor`, `quantity`,
 …) but carrying a **non-conforming value** (not a valid ID / not an integer)
@@ -335,10 +338,10 @@ whose field is then at its default value becomes a tag (§5.6). A `quantity: 1`
 key committed with `field-quantity: 0` gives a transaction with quantity 0 and
 the tag `quantity: 1`. `to` refuses a request `field-<name>` that is not at its
 default value and differs from the message's key, or that the message does not
-have (`request-field-differs`).
+have (`{request_field_differs, Name}`).
 
-`exclude-data` request handling (`to`): when set, the encoder reconstructs the
-header's `data_root`/`data_size` from the `field-data-root`/`field-data-size`
+Encoding a message without `data` (`to`): the encoder reconstructs the header's
+`data_root`/`data_size` from the `field-data-root`/`field-data-size`
 commitment keys (or message keys) and leaves `data` empty, producing a
 value-transfer header that commits to a data root without inlining the bytes.
 
@@ -349,11 +352,11 @@ value-transfer header that commits to a data root without inlining the bytes.
   2. **tag keys** — every tag's normalised name, **excluding** the metadata tags
      `bundle-format`, `bundle-version`, `bundle-map`, `ao-data-key`, and `data`
      (a `data` *tag* is never promoted to a body key — it would collide with the
-     message's actual data; it is preserved only inside `original-tags`);
+     message's actual data; it is preserved only inside `original-tags`), and
+     any private name (`hb_private:is_private/1`);
   3. **field keys** — each base field present whose name also appears among the
      base-fields / tags / data (i.e. fields that have a corresponding value to
      commit).
-  Any `+link` suffix is stripped from the final committed-key list.
 - **Tag emission (`to`)** reverses this. The committed key order is taken from
   the commitment's `committed` list (or, with no commitment, the message's sorted
   keys minus `commitments`). For each committed key, emit a tag `{key, value}`
@@ -371,10 +374,11 @@ value-transfer header that commits to a data root without inlining the bytes.
   Prepend bundle tags (from the commitment's `bundle-format`/`bundle-version`/
   `bundle-map`) and, when the data lives under a key other than `data`, an
   `{<<"ao-data-key">>, DataKey}` tag. A committed key with no value in the
-  message is `missing-committed-key`.
+  message is `{missing_committed_key, Key}`.
 - **`original-tags`:** when the transaction's tags are **not all-normal** — any
-  tag name is not already lower-cased+canonical, or duplicates exist, or a tag
-  name equals a reserved field name (`data` or a base field) — the *exact*
+  tag name is not already lower-cased or is private, or duplicates exist, or a
+  tag name equals a reserved field name (`data`, `ao-data-key`, `ao-types` or a
+  base field), or the data is a list bundle — the *exact*
   original tag list is preserved in the commitment as `original-tags`: a numbered
   message `{"1" → #{name, value}, "2" → …}` (1-based, in original order,
   preserving name case and duplicates). On `to`, while the message still has
@@ -383,9 +387,8 @@ value-transfer header that commits to a data root without inlining the bytes.
   re-deriving tags from body keys); a message whose values changed is given
   tags derived from its keys, which the commitment's signature does not verify.
   When the tags *are* all-normal, `original-tags` is omitted.
-- **`ao-types` tags** are re-normalised on decode: the structured-fields
-  dictionary is parsed, its keys lower-cased/normalised, and re-encoded, so the
-  `ao-types` key set matches the normalised body keys.
+- **`ao-types` tags** are kept as they are on decode; `structured@1.0`
+  lowercases the keys that the tag lists when it decodes the message.
 
 ### 5.7 Data field & bundling
 
@@ -393,10 +396,12 @@ value-transfer header that commits to a data root without inlining the bytes.
   data binary is exposed in the message under key `K` (and `to` re-adds the
   `ao-data-key` tag whenever the data key is not `data`). The encoder chooses the
   data key as: an explicit `ao-data-key` if the message carries one; else `body`
-  if the message has a `body` key (non-link) and no `data` key; else `data`.
-- **`bundle = false`:** nested sub-messages are **not** serialised into `data`;
-  only top-level scalar keys are encoded. A non-bundled transaction therefore has
-  an empty `data` unless the message carries an explicit `data`/`body` binary.
+  if the message has a `body` key (non-link) and no or an empty `data`; else
+  `data`.
+- **`bundle = false`:** `structured@1.0` replaces each nested sub-message with a
+  link, which the transaction carries as a tag whose value is an `ao:` URI. A
+  key whose value or name exceeds the tag-size limits in §5.12 is still put
+  into `data` as an ANS-104 bundle.
 - **`bundle = true`:** the message's nested sub-messages (map-valued keys, and
   any key whose value or name exceeds the tag-size limits in §5.12) are
   materialised into `data` as an **ANS-104 bundle** (the sibling `ans104@1.0`
@@ -464,12 +469,13 @@ is treated as RSA-typed for preimage purposes).
   ECDSA key.
 - `committed` = the ordered committed-key list (§5.6).
 - `signature` = the signature bytes, base64url.
-- `keyid` = `publickey:` ‖ base64url(owner public key).
+- `owner` = base64url(owner public key).
 - `type` = the §5.9.1 token.
 - `bundle` = `true`/`false` (string) — whether the transaction's tags carry
-  `bundle-format` (i.e. the data is a bundle).
-- `field-<name>` for each entry of the fields map (§5.4), with or without a tag
-  of the same name (§5.5) — value encoded as in §5.1.
+  `bundle-format` (i.e. the data is a bundle) and no tag value is an `ao:` URI.
+- `field-<name>` for each base field whose header value is not its default
+  (§5.1), with or without a tag of the same name (§5.5), and `field-data-size`
+  only without `data` — value encoded as in §5.1.
 - `field-data-root` for every transaction with a non-empty `data_root`, with
   data or without: the signed root, base64url. For a transaction with `data`
   it is the only place the root is carried, and `to` gives the transaction
@@ -481,7 +487,8 @@ is treated as RSA-typed for preimage purposes).
 
 #### 5.9.3 Unsigned commitment fields
 
-Same as signed, **minus** `committer`, `signature`, `keyid` (there is no signer).
+Same as signed, **minus** `committer`, `signature`, `owner` (there is no signer)
+and `bundle-format` / `bundle-version` / `bundle-map`.
 `type = unsigned-sha256`. Keyed by the unsigned ID. An unsigned commitment is
 produced by `from` only when the tags are not all-normal (otherwise the message
 needs no commitment to round-trip).
@@ -489,13 +496,12 @@ needs no commitment to round-trip).
 #### 5.9.4 Reconstructing sig info (`to`)
 
 From the matched commitment: `signature` = base64url-decode of `signature` (or
-the all-zero default if absent); `owner` = base64url-decode of `keyid` with the
-`publickey:` scheme prefix stripped (or all-zero default); `signature_type` =
-decode of `type`; tags = decode of `original-tags` (or `[]`). The `field-`
-prefixed keys then reconstruct the header fields (§5.7). The tags and fields
-come from the commitment only while the message still has their values; for a
-message whose values changed, tags = `[]` and its own keys give the fields
-(§5.6).
+the all-zero default if absent); `owner` = base64url-decode of `owner` (or
+all-zero default); `signature_type` = decode of `type`; tags = decode of
+`original-tags` (or `[]`). The `field-` prefixed keys then reconstruct the
+header fields (§5.7). The tags and fields come from the commitment only while
+the message still has their values; for a message whose values changed, tags =
+`[]` and its own keys give the fields (§5.6).
 
 ### 5.10 Verification (`verify` / round-trip)
 
@@ -523,9 +529,10 @@ with **URL-safe base64 without padding** on the wire. Hex MUST NOT be used.
 ### 5.12 Size limits
 
 - A tag name MUST be ≤ 1024 bytes; a tag value ≤ 3072 bytes. A message key or
-  value exceeding these is offloaded into the bundle `data` (when `bundle =
-  true`) rather than emitted as a tag.
-- The number of emitted tags MUST be ≤ 128; exceeding it is `too-many-keys`.
+  value exceeding these is offloaded into the bundle `data`, not emitted as a
+  tag.
+- The number of emitted tags MUST be ≤ 128; exceeding it is
+  `{too_many_keys, TABM}`.
 
 ## 6. Ordering, freshness & caching
 
@@ -543,13 +550,14 @@ with **URL-safe base64 without padding** on the wire. Hex MUST NOT be used.
   gives its tags in sorted key order, so one whose tags are not sorted
   re-encodes with another unsigned ID.
 - The device performs **no result caching** of its own; it transforms the
-  supplied message/transaction. (A bundled `to` reads linked values fully.)
+  supplied message/transaction. (`structured@1.0` reads linked values fully
+  for a bundled conversion.)
 
 ## 7. Security & authority
 
-- **Signing** requires the node-configured wallet (`priv-wallet`); a signed
-  `commit` with no wallet is a node misconfiguration (`no-viable-wallet`), not a
-  silent unsigned result.
+- **Signing** requires a `committer` in the request (`message@1.0` gives the
+  node's `priv-wallet`); a signed `commit` without one fails
+  (`error:function_clause`), not a silent unsigned result.
 - **Verification is failure-closed:** any reconstruction inconsistency (§5.10)
   yields `false`, never an exception-as-success. A signed commitment whose
   committed key values were altered will fail because the recomputed signature
@@ -560,31 +568,32 @@ with **URL-safe base64 without padding** on the wire. Hex MUST NOT be used.
 - Private (`priv*`) keys are reset before encoding/verification and never enter
   the transaction or a commitment.
 - Denomination changes and signature types other than RSA-PSS / ECDSA are
-  rejected (`invalid-field`), failing closed against unsupported variants.
+  rejected (`invalid_field`), failing closed against unsupported variants.
 
 ## 8. Errors
 
-All error atoms are hyphenated.
+All error atoms use underscores.
 
-- `invalid-tx` — Base passed to `from`/`to` is neither a transaction, a binary,
-  nor (for `to`) a map.
-- `invalid-field` — a transaction field failed a §5.2 check. The offending field
-  is identified (one of: `format`, `id`, `unsigned-id`, `anchor`, `owner`,
-  `target`, `quantity`, `data-size`, `data-root`, `signature`, `reward`,
-  `denomination`, `signature-type`, `tags`, `tag`, `tag-name`, `tag-value`).
-- `missing-key` — `from` could not find a committed key in data, fields, or tags.
-- `missing-committed-key` — `to` could not find a committed key's value in the
-  message while emitting tags.
-- `multiple-commitments-unsupported` — the message carries more than one
-  `tx@1.0` commitment, which `to`/`from` cannot disambiguate.
-- `too-many-keys` — more than 128 tags would be emitted.
-- `request-field-differs` — a request `field-<name>` is not at its default
-  value and differs from the message's key, or the message does not have the
-  key (§5.5).
-- `no-viable-wallet` — a signed `commit` was requested with no signing wallet
-  configured.
-- `invalid-signature-type` — a `type` token (commit/decode) names a signature
-  type the codec does not support.
+- `{invalid_tx, Base}` — Base passed to `to` is neither a transaction, a
+  binary, nor a map.
+- `{invalid_field, Field, Value}` — a transaction field failed a §5.2 check.
+  `Field` is one of: `format`, `id`, `unsigned_id`, `anchor`, `owner`,
+  `target`, `quantity`, `data_size`, `data_root`, `signature`, `reward`,
+  `denomination`, `signature_type`, `tags`, `tag`, `tag_name`, `tag_value`.
+- `{missing_key, Key}` — `from` could not find a committed key in data,
+  fields, or tags.
+- `{missing_committed_key, Key}` — `to` could not find a committed key's
+  value in the message while emitting tags.
+- `{multiple_ans104_commitments_unsupported, TABM}` — the message carries
+  more than one `tx@1.0` commitment, which `to` cannot disambiguate.
+- `{too_many_keys, TABM}` — more than 128 tags would be emitted.
+- `{request_field_differs, Name}` — a request `field-<name>` is not at its
+  default value and differs from the message's key, or the message does not
+  have the key (§5.5).
+- `error:function_clause` in `lib_arweave_common:sign/4` — a signed `commit`
+  request has no `committer`.
+- `{invalid_signature_type, Type}` — the `type` of a commitment that `to`
+  encodes is not a token of `ar_tx:deserialize_sig_type/1`.
 
 ## 9. Composition
 
@@ -608,12 +617,12 @@ All error atoms are hyphenated.
 An implementation MUST exhibit all of the following, each checkable via the
 public codec / commit / verify surface:
 
-1. `from` of a transaction with `{ao-type, binary}` returns the raw `data`
-   binary; `to` of a binary returns a format-2 transaction with that single tag
-   and `data` = the binary; the pair round-trips a binary exactly.
-2. `from`/`to` reject a transaction failing any §5.2 check with `invalid-field`
-   (correct field) and reject a non-transaction/non-binary/non-map Base with
-   `invalid-tx`.
+1. `from` of a transaction whose only tag is `{ao-type, binary}` returns the
+   raw `data` binary; `to` of a binary returns a format-2 transaction with that
+   single tag and `data` = the binary; the pair round-trips a binary exactly.
+2. `from`/`to` reject a transaction failing any §5.2 check with `invalid_field`
+   (correct field), and `to` rejects a non-transaction/non-binary/non-map Base
+   with `invalid_tx`.
 3. Base fields map to keys exactly per §5.1; IDs/addresses/keys/anchor/target/
    data_root are base64url (43 chars for 32 bytes), never hex; integer fields are
    decimal text; `format` is omitted when 2 and emitted as `1` when 1.
@@ -627,26 +636,26 @@ public codec / commit / verify surface:
 6. The signature preimage element order is exactly §5.8 (format 2 RSA includes
    owner; format 2 ECDSA omits owner; integers and format are ASCII decimal; tags
    as `[[name,value],…]`).
-7. Decoded tags are lower-cased/`-`-`_`-canonicalised; duplicate tag names
-   aggregate into one key whose value is an SF list of the values in order;
-   `data`, `ao-data-key`, and the three `bundle-*` tags are excluded from body
-   keys.
+7. Decoded tags are lower-cased; duplicate tag names aggregate into one key
+   whose value is an SF list of the values in order; `data`, `ao-data-key`,
+   the three `bundle-*` tags and private names are excluded from body keys.
 8. Committed-key order is data-keys (sorted) ++ non-metadata tag-keys (tag order)
-   ++ present field-keys, de-duplicated, `+link` stripped; `committed` in the
-   commitment matches this.
+   ++ present field-keys, de-duplicated; `committed` in the commitment matches
+   this.
 9. When (and only when) the transaction's tags are not all-normal (case differs,
-   duplicates, or a reserved-field name as a tag), `from` attaches a commitment
-   carrying `original-tags` as a 1-based numbered `{name,value}` message in
-   original order; `to` reproduces the exact original tag list from it.
+   duplicates, a private name, a reserved-field name as a tag, or a list
+   bundle), `from` attaches a commitment carrying `original-tags` as a 1-based
+   numbered `{name,value}` message in original order; `to` reproduces the exact
+   original tag list from it.
 10. Base-message value precedence is data > field > tag; a same-named tag whose
     value is non-conforming for the typed field is preserved (header field keeps
     the valid value, tag value survives via `original-tags`); a committed key
-    missing from all three sources errors `missing-key`.
+    missing from all three sources errors `{missing_key, Key}`.
 11. A signed commitment has `commitment-device = tx@1.0`, `committer` = the
-    URI of the owner's committer (§5.9.2), `signature` (base64url), `keyid =
-    publickey:<base64url-owner>`, `type` per §5.9.1, `bundle`, the relevant
+    URI of the owner's committer (§5.9.2), `signature` (base64url), `owner`
+    (base64url), `type` per §5.9.1, `bundle`, the relevant
     `field-<name>` keys, and `original-tags` when applicable; an unsigned
-    commitment omits `committer`/`signature`/`keyid` and uses
+    commitment omits `committer`/`signature`/`owner` and uses
     `type = unsigned-sha256`, keyed by the unsigned ID.
 12. `commit type=signed` produces a message that `verify` accepts and whose
     reconstructed transaction satisfies §5.10; `commit type=unsigned` produces an
@@ -659,12 +668,13 @@ public codec / commit / verify surface:
 14. `bundle=true` materialises nested sub-messages into `data` as an ANS-104
     bundle, adding `bundle-format=binary`, `bundle-version=2.0.0`, and
     `bundle-map=<base64url manifest id>`, and round-trips the nested structure
-    losslessly; `bundle=false` drops nested sub-messages from the encoding.
+    losslessly; `bundle=false` gives each nested sub-message as a tag whose
+    value is an `ao:` URI (a link).
 15. A real signed Arweave transaction fetched from a gateway, decoded by `from`,
     re-encoded by `to`, reproduces a transaction with the identical signed ID and
     a valid signature (interoperability with the external Arweave standard).
-16. Emitting more than 128 tags errors `too-many-keys`; tag name > 1024 / value >
-    3072 bytes are offloaded to the bundle data rather than emitted as tags.
+16. Emitting more than 128 tags errors `{too_many_keys, TABM}`; tag name > 1024
+    / value > 3072 bytes are offloaded to the bundle data, not emitted as tags.
 
 ## 11. Out of scope
 
@@ -693,11 +703,10 @@ public codec / commit / verify surface:
   specified signs only RSA-PSS (`rsa-pss-sha256`); whether `commit` must also be
   able to *produce* ECDSA commitments is unconfirmed (the reference treats ECDSA
   signing tests as disabled).
-- **`anchor` of 48 bytes.** Validity permits a 48-byte anchor (§5.2), but the
-  base-field reconstruction only accepts 32-byte (ID-shaped) anchors when
-  decoding from `field-anchor`/tag values; the intended handling of a 48-byte
-  anchor on the *encode* path should be confirmed during validation.
-- **Float / rich values in tags.** `ao-types` on a transaction's tags is
-  re-normalised but the reference carries a disabled test indicating typed
+- **`anchor` of 48 bytes.** Validity permits a 48-byte anchor (§5.2), and the
+  base-field reconstruction gives the header any anchor that a `field-anchor`
+  or `anchor` value decodes to (base64url).
+- **Float / rich values in tags.** `ao-types` on a transaction's tags is kept
+  as it is but the reference carries a disabled test indicating typed
   (non-binary) tag values are not fully supported; committed messages SHOULD
-  avoid non-binary tag values until pinned.
+  avoid non-binary tag values.
