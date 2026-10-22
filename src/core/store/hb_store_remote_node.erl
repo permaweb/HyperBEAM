@@ -68,8 +68,19 @@ remote_read(Opts = #{ <<"node">> := Node }, Key) ->
             {error, not_found}
     end;
 remote_read(_, _) -> {error, not_found}.
-read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->
-    read_request(Opts, Key).
+
+%% @doc Read a key with the node's options, overridden by the options in the
+%% store's message. `force-message' is removed, as with it `hb_ao' returns
+%% messages in place of values, and `store-module', as `hb_cache:list/2' takes
+%% options that contain it for a store.
+read(StoreOpts, #{ <<"read">> := Key }, NodeOpts) ->
+    read_request(
+        maps:without(
+            [<<"store-module">>, <<"force-message">>],
+            hb_util:deep_merge(NodeOpts, StoreOpts, NodeOpts)
+        ),
+        Key
+    ).
 
 %% @doc Return whether a message read by an ID has that ID: its uncommitted ID,
 %% the ID of one of its commitments, or the combined ID of its commitments, as
@@ -194,6 +205,31 @@ read_test() ->
     {ok, RetrievedMsg} = hb_cache:read(ID, #{ <<"store">> => RemoteStore }),
     % An unsigned message reads back as it was written, without commitments.
     ?assertEqual(#{ <<"test-key">> => Rand }, hb_cache:ensure_all_loaded(RetrievedMsg)),
+    % A read with the `force-message' of an HTTP request runs the node's
+    % `http-client-receipt' hook.
+    Self = self(),
+    Receipt =
+        fun(_, Req, _) ->
+            Self ! receipt,
+            {ok, Req}
+        end,
+    {ok, _} =
+        hb_cache:read(
+            ID,
+            #{
+                <<"store">> => RemoteStore,
+                <<"force-message">> => true,
+                <<"priv-wallet">> => ar_wallet:new(),
+                <<"on">> => #{
+                    <<"http-client-receipt">> =>
+                        #{ <<"device">> => #{ http_client_receipt => Receipt } }
+                }
+            }
+        ),
+    ?assertEqual(
+        receipt,
+        receive receipt -> receipt after 5000 -> 'missing-receipt' end
+    ),
     % The store reads the list regardless of the HTTP result option.
     ?assertEqual(
         {ok, []},

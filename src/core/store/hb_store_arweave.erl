@@ -150,9 +150,17 @@ read_remote_offset(
 read_remote_offset(_, _, _) -> not_found.
 
 %% @doc Read the data at the given key, reading the `local-store' first if
-%% available.
-read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
-    case hb_store_remote_node:read_local_cache(StoreOpts, ID, StoreOpts) of
+%% available. The reads use the node's options, overridden by the options in
+%% the store's message. `force-message' is removed, as with it the
+%% `~arweave@2.9' reads return messages, not data, and `store-module', as in
+%% `hb_store_remote_node:read/3'.
+read(StoreOpts, #{ <<"read">> := ID }, NodeOpts) when ?IS_ID(ID) ->
+    Opts =
+        maps:without(
+            [<<"store-module">>, <<"force-message">>],
+            hb_util:deep_merge(NodeOpts, StoreOpts, NodeOpts)
+        ),
+    case hb_store_remote_node:read_local_cache(StoreOpts, ID, Opts) of
         {ok, Message} ->
             ?event(
                 arweave_offsets,
@@ -160,7 +168,7 @@ read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
             ),
             {ok, Message};
         _ ->
-            case do_read(StoreOpts, ID, StoreOpts) of
+            case do_read(StoreOpts, ID, Opts) of
                 not_found -> {error, not_found};
                 Result -> Result
             end
@@ -455,6 +463,32 @@ write_read_tx_test() ->
     ok = write_offset(Opts, ID, <<"tx@1.0">>, StartOffset, Size),
     {ok, Bundle} = read(Opts, #{ <<"read">> => ID }, Opts),
     ?assert(hb_message:verify(Bundle, all, #{})),
+    % A read with the `force-message' of an HTTP request runs the node's
+    % `http-client-receipt' hook.
+    Self = self(),
+    Receipt =
+        fun(_, Req, _) ->
+            Self ! receipt,
+            {ok, Req}
+        end,
+    {ok, _} =
+        read(
+            Opts,
+            #{ <<"read">> => ID },
+            #{
+                <<"store">> => [hb_test_utils:test_store()],
+                <<"force-message">> => true,
+                <<"priv-wallet">> => ar_wallet:new(),
+                <<"on">> => #{
+                    <<"http-client-receipt">> =>
+                        #{ <<"device">> => #{ http_client_receipt => Receipt } }
+                }
+            }
+        ),
+    ?assertEqual(
+        receipt,
+        receive receipt -> receipt after 5000 -> 'missing-receipt' end
+    ),
     {ok, Child} =
         hb_ao:resolve(
             Bundle,
