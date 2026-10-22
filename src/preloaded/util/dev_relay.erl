@@ -636,6 +636,27 @@ relay_absolute_internal_blocked_test() ->
             },
             #{}
         )
+    ),
+    % The same URL as the `path' of a request to a node with `router@1.0'
+    % `preprocess' as its `request' hook is refused too.
+    Node =
+        hb_http_server:start_node(#{
+            <<"on">> => #{
+                <<"request">> => #{
+                    <<"device">> => <<"router@1.0">>,
+                    <<"path">> => <<"preprocess">>
+                }
+            }
+        }),
+    ?assertEqual(
+        {error, blocked_host},
+        hb_http:request(
+            <<"GET">>,
+            Node,
+            <<"/~meta@1.0/info/address">>,
+            #{ <<"path">> => <<Target/binary, "~meta@1.0/info/address">> },
+            #{}
+        )
     ).
 
 %% @doc The same absolute URL is reached once internal hosts are permitted.
