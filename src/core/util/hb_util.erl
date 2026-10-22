@@ -498,10 +498,10 @@ deep_get([Key|Rest], Msg, Default, Opts) ->
 
 %% @doc Find the target path to route for a request message.
 find_target_path(Msg, Opts) ->
-    case hb_ao:get(<<"route-path">>, Msg, not_found, Opts) of
+    case hb_maps:get(<<"route-path">>, Msg, not_found, Opts) of
         not_found ->
             ?event({find_target_path, {msg, Msg}, not_found}),
-            case hb_ao:get(<<"path">>, Msg, no_path, Opts) of
+            case hb_maps:get(<<"path">>, Msg, no_path, Opts) of
                 no_path -> no_path;
                 Path -> {<<"path">>, Path}
             end;

@@ -240,7 +240,12 @@ head_raw_tx(TXID, relative, Length, Opts) ->
                 TXID,
                 relative,
                 hb_util:int(
-                    hb_ao:get(<<"data-size">>, StructuredTXHeader, Length, Opts)
+                    hb_maps:get(
+                        <<"data-size">>,
+                        StructuredTXHeader,
+                        Length,
+                        Opts
+                    )
                 ),
                 StructuredTXHeader,
                 Opts
@@ -262,14 +267,11 @@ head_raw_confirmed_tx(TXID, StartOffset, Length, Opts) ->
 
 head_raw_tx_response(TXID, StartOffset, Length, StructuredTXHeader, Opts) ->
     ContentType =
-        hb_ao:get(
+        hb_maps:get(
             <<"content-type">>,
             StructuredTXHeader,
             <<"application/octet-stream">>,
-            Opts#{
-                <<"cache-control">> =>
-                    [<<"no-cache">>, <<"no-store">>]
-            }
+            Opts
         ),
     {ok,
         #{
@@ -2043,7 +2045,9 @@ get_tx_data_tag_exclude_data_test_parallel() ->
 
 head_raw_tx_test_parallel() ->
     TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
-    Opts = setup_arweave_index_opts([TXID]),
+    % A TX with the tag `device: manifest@1.0'.
+    DeviceTXID = <<"fQXYPE9MAcfI1wV2CwJ3sJIhgT9btBOlYFOKFDGhAs0">>,
+    Opts = setup_arweave_index_opts([TXID, DeviceTXID]),
     {ok, Result} =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9">> },
@@ -2066,6 +2070,25 @@ head_raw_tx_test_parallel() ->
     ?assertEqual(
         {ok, 0},
         hb_maps:find(<<"header-length">>, Result, Opts)
+    ),
+    % The HEAD of a TX with a `device' tag gives the TX's `content-type': the
+    % device does not run.
+    ?assertMatch(
+        {ok,
+            #{
+                <<"content-type">> := <<"application/x.arweave-manifest+json">>,
+                <<"data-length">> := 1221326
+            }
+        },
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"raw">>,
+                <<"raw">> => DeviceTXID,
+                <<"method">> => <<"HEAD">>
+            },
+            Opts
+        )
     ).
 
 head_raw_ans104_test_parallel() ->
