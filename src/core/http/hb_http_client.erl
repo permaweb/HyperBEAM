@@ -222,7 +222,9 @@ hackney_req(Args, Opts) ->
                 {connect_options, [{nodelay, true}]},
                 {checkout_timeout, CheckoutTimeout},
                 {recv_timeout, RecvTimeout}],
-            Response = case hackney_request(Method, URL, HeaderList, Body, HackneyOpts) of
+            % gun bounds each whole request by the same option.
+            SendTimeout = hb_opts:get(http_client_send_timeout, infinity, Opts),
+            Response = case hackney_request(Method, URL, HeaderList, Body, HackneyOpts, SendTimeout) of
                 {ok, Status, RespHeaders, RespBody} ->
                     download_metric(RespBody, Opts),
                     ?event(debug_http_client, {hackney_resp, Status, RespHeaders, RespBody}),
@@ -239,24 +241,34 @@ hackney_req(Args, Opts) ->
     end.
 
 %% @doc Make a hackney request in a process of its own, which exits once it has
-%% sent the result. When a request raises, as it does for a reply with a
-%% malformed chunk size, hackney keeps the request's connection checked out of
-%% the pool until the process that made the request exits, and gives no
-%% reference to release it: this process exits at once, so the connection
-%% goes back to the pool. The raise is returned as `{error, Reason}'.
-hackney_request(Method, URL, Headers, Body, HackneyOpts) ->
+%% sent the result, and stop it at `Timeout': hackney's own timeouts bound each
+%% read of a reply, not the reply. When a request raises, as it does for a
+%% reply with a malformed chunk size, hackney keeps the request's connection
+%% checked out of the pool until the process that made the request exits, and
+%% gives no reference to release it: this process exits at once, so the
+%% connection goes back to the pool. The raise is returned as `{error, Reason}'.
+hackney_request(Method, URL, Headers, Body, HackneyOpts, Timeout) ->
     Caller = self(),
     Ref = make_ref(),
-    spawn_link(
-        fun() ->
-            Result =
-                try hackney:request(Method, URL, Headers, Body, HackneyOpts)
-                catch _:Reason -> {error, Reason}
-                end,
-            Caller ! {Ref, Result}
-        end
-    ),
-    receive {Ref, Response} -> Response end.
+    Worker =
+        spawn_link(
+            fun() ->
+                Result =
+                    try hackney:request(Method, URL, Headers, Body, HackneyOpts)
+                    catch _:Reason -> {error, Reason}
+                    end,
+                Caller ! {Ref, Result}
+            end
+        ),
+    receive
+        {Ref, Response} -> Response
+    after Timeout ->
+        % hackney closes the connection of a request whose process exits.
+        unlink(Worker),
+        exit(Worker, kill),
+        receive {Ref, _} -> ok after 0 -> ok end,
+        {error, timeout}
+    end.
 
 gun_req(Args, Opts) ->
 	ConnectTimeout = hb_opts:get(http_client_connect_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),

@@ -191,6 +191,49 @@ hackney_bad_chunk_test() ->
     ),
     receive {peer, Read} -> ?assertEqual({error, closed}, Read) end.
 
+%% @doc A reply whose chunks arrive within the recv timeout of each other ends
+%% at `http-client-send-timeout', as a gun request does.
+hackney_send_timeout_test() ->
+    application:ensure_all_started(hb),
+    {ok, Listener} =
+        gen_tcp:listen(0, [binary, {active, false}, {ip, {127, 0, 0, 1}}]),
+    {ok, Port} = inet:port(Listener),
+    spawn_link(
+        fun() ->
+            {ok, Socket} = gen_tcp:accept(Listener),
+            {ok, _} = gen_tcp:recv(Socket, 0),
+            gen_tcp:send(
+                Socket,
+                <<"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n">>
+            ),
+            lists:foreach(
+                fun(_) ->
+                    timer:sleep(500),
+                    gen_tcp:send(Socket, <<"1\r\nd\r\n">>)
+                end,
+                lists:seq(1, 8)
+            )
+        end
+    ),
+    ?assertEqual(
+        {error, timeout},
+        hb_http_client:request(
+            #{
+                peer => <<"http://127.0.0.1:", (hb_util:bin(Port))/binary>>,
+                path => <<"/">>,
+                method => <<"GET">>,
+                headers => #{},
+                body => <<>>
+            },
+            #{
+                <<"http-client">> => hackney,
+                <<"http-retry">> => 0,
+                <<"http-client-hackney-recv-timeout">> => 1000,
+                <<"http-client-send-timeout">> => 2000
+            }
+        )
+    ).
+
 hackney_post_test_() ->
     {timeout, 30, fun() ->
         application:ensure_all_started(hb),
