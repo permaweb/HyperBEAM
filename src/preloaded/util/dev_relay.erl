@@ -74,12 +74,13 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
     % A `peer' named in the request is checked against the host policy. A
     % `relay-route' is resolved through the node's own routes, so it names a
     % destination the node's configuration chose and is reached without a
-    % check.
+    % check. The message relayed does not choose its own `peer': for the
+    % `request' hook it is the inbound request, and the node's routes choose
+    % its destination.
     RequestPeer =
         hb_ao:get_first(
             [
                 {M1, <<"peer">>},
-                {{as, <<"message@1.0">>, BaseTarget}, <<"peer">>},
                 {RawM2, <<"peer">>}
             ],
             Opts

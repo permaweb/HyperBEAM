@@ -1934,6 +1934,22 @@ request_hook_reroute_to_nearest() ->
     ?assertEqual(
         {ok, <<"ok">>},
         hb_http:post(Node, Signed, Opts#{ <<"http-only-result">> => true })
+    ),
+    % A request with the node itself as `peer' is relayed to the routes.
+    ?assert(
+        lists:member(
+            hb_util:ok(
+                hb_http:get(
+                    Node,
+                    #{
+                        <<"path">> => <<"/~meta@1.0/info/address">>,
+                        <<"peer">> => Node
+                    },
+                    Opts#{ <<"http-only-result">> => true }
+                )
+            ),
+            Peers
+        )
     ).
 
 route_nearest_integer_preserves_opts_test_parallel() ->
