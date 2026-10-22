@@ -130,41 +130,29 @@ data(ID, Opts) ->
     end.
 
 %% @doc Find the location of the scheduler based on its ID, through GraphQL.
-%% The committer of an Arweave address is found by the address.
-%% Current AO location records use lowercase tags. Nodes may disable the
-%% fallback to legacy capitalized tags with `scheduler-legacy-locations'.
+%% The committer of an Arweave address is found by the address. The query asks
+%% for the newest record with a `type' of `location', `Location' or
+%% `Scheduler-Location', and with the given `variant', if any. An `ao.TN.1'
+%% lookup asks only for `Location' and `Scheduler-Location', as HyperBEAM's
+%% `location' records are `ao.N.1'. The gateway matches tag names in any case,
+%% so `type' and `variant' also find `Type' and `Variant' tags. With
+%% `scheduler-legacy-locations' set to `false', the query asks only for a
+%% `type' of `location'.
 location(Address, Opts) ->
     location(Address, undefined, Opts).
 location(Committer, Variant, Opts) ->
     Address = hb_util:committer_address(Committer),
-    maybe
-        % Fallback to legacy capitalized tags if a lower-case result is not
-        % available and `scheduler-legacy-locations' is enabled.
-        Error = {error, _} ?=
-            do_location(Address, Variant, <<"type">>, [<<"location">>], Opts),
-        % Return the error of a lower-case record that does not verify.
-        true ?= Error =/= {error, unverifiable_item} orelse Error,
-        true ?= hb_opts:get(scheduler_legacy_locations, true, Opts)
-            orelse Error,
-        do_location(
-            Address,
-            Variant,
-            <<"Type">>,
-            [<<"Location">>, <<"Scheduler-Location">>],
-            Opts
-        )
-    end.
-do_location(Address, Variant, TagName, TagValues, Opts) ->
+    Types =
+        case {hb_opts:get(scheduler_legacy_locations, true, Opts), Variant} of
+            {false, _} -> [<<"location">>];
+            {true, <<"ao.TN.1">>} -> [<<"Location">>, <<"Scheduler-Location">>];
+            {true, _} ->
+                [<<"location">>, <<"Location">>, <<"Scheduler-Location">>]
+        end,
     VariantTags =
         case Variant of
             undefined -> [];
-            _ ->
-                VariantTag =
-                    case TagName of
-                        <<"type">> -> <<"variant">>;
-                        <<"Type">> -> <<"Variant">>
-                    end,
-                [#{ <<"name">> => VariantTag, <<"values">> => [Variant] }]
+            _ -> [#{ <<"name">> => <<"variant">>, <<"values">> => [Variant] }]
         end,
     Query =
         <<"query($Addresses: [String!]!, $Tags: [TagFilter!]!) { ",
@@ -181,7 +169,7 @@ do_location(Address, Variant, TagName, TagValues, Opts) ->
     Variables = #{
         <<"Addresses">> => [Address],
         <<"Tags">> =>
-            [#{ <<"name">> => TagName, <<"values">> => TagValues } | VariantTags]
+            [#{ <<"name">> => <<"type">>, <<"values">> => Types } | VariantTags]
     },
     case query(Query, Variables, Opts) of
         {error, Reason} ->
@@ -625,9 +613,11 @@ ans104_no_data_item_test() ->
 scheduler_location_test() ->
     % Start a random node so that all of the services come up.
     _Node = hb_http_server:start_node(#{}),
+    % Look up the legacy scheduler with its variant, as a scheduler lookup does.
     {ok, Res} =
         location(
             <<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>,
+            <<"ao.TN.1">>,
             #{}
         ),
     ?event(gateway, {get_scheduler_location_test, Res}),
