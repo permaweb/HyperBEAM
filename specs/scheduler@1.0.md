@@ -67,20 +67,20 @@ out of scope (§11).
 
 ## 3. Device interface
 
-- **Dispatch shape:** **default-handler.** The device names a small set of
-  specific keys (`status`, `next`, `schedule`, `slot`, `init`, `checkpoint`) and
-  routes **every other key — and every bare invocation — to the `schedule`
-  behaviour** (§4 `schedule`), which itself dispatches on the request `method`
-  (POST → write, GET → read). The default handler is how a `POST` to the device
-  with no explicit `path` reaches scheduling.
+- **Dispatch shape:** **default-handler.** The device exports six keys
+  (`status`, `next`, `schedule`, `slot`, `init`, `checkpoint`). `init` has no
+  function, so it reaches the default handler, the **`schedule` behaviour**
+  (§4 `schedule`), which itself dispatches on the request `method`
+  (POST → write, GET → read). Every other key resolves through `message@1.0`;
+  a request with no `path` returns `{error, not_found}`.
 - **Excluded keys:** the device MUST NOT capture the message-manipulation /
   inspection keys; at minimum `set` and `keys` MUST fall through to
   `message@1.0`. (Per `message@1.0` §9, a default-handler device that swallows
   these breaks `set` / path-binding on the device.)
 - **`init` / `checkpoint`:** these keys exist for the `~process@1.0` compute
-  lifecycle. `init` has **no scheduler-specific behaviour** — it resolves through
-  to `message@1.0` (an identity no-op returning the base). `checkpoint` returns
-  the supplied state unchanged (`{ok, State}`); it is a hook for the compute
+  lifecycle. `init` has **no function of its own** — it reaches the default
+  handler and resolves as `schedule` (§4). `checkpoint` returns the supplied
+  state unchanged (`{ok, State}`); it is a hook for the compute
   framework and carries no scheduler semantics. An implementation MAY omit
   bespoke logic for both.
 
@@ -111,7 +111,8 @@ precedence order (first match wins). `ToSched` is the message-to-schedule
 4. Else if `Req` has `type: Process` → `Req`'s committed ID.
 5. Else if `Base` has a `process` key → the ID of `Base`'s embedded process.
 6. Else if `Base` has `type: Process` → `Base`'s committed ID.
-7. Else → `Req`'s committed ID.
+7. Else → the ID of `Req`'s `process` key if it has one, else `Req`'s
+   committed ID.
 
 A process ID extracted from a `target`/path MAY carry a query-string **hint**
 (`?hint=<url>`) and/or other query parameters; the bare 43-char base64url prefix
@@ -125,7 +126,7 @@ On `POST`, the message to schedule is located within `Req` in this order:
 1. `Req`'s `subject` key equals `base` → schedule `Base`.
 2. `Req`'s `subject` key equals `self` → schedule `Req` itself.
 3. `Req`'s `subject` key has another value `K` → schedule the value of `Req`'s
-   key `K`. If `Req` has no key `K`, fall back to `Req` itself.
+   key `K`.
 4. No `subject` key → schedule `Req`'s `body` if present, else `Req` itself.
 
 The selected message MUST be fully loadable; if any linked component cannot be
@@ -139,7 +140,7 @@ message to schedule."}`.
 - **Signature:** `(Base, Req, Opts) → {ok, Result} | {error, Map}`.
 - **Reads:** `Req`'s `method` (default `GET`, case-insensitive). Dispatches:
   - `method = POST` → **append** (below).
-  - `method = GET` (or anything non-POST) → **read** (below).
+  - `method = GET` → **read** (below).
 
 #### `POST` — append a message to the process's log
 
@@ -147,12 +148,15 @@ message to schedule."}`.
   (target resolution, §3); the scheduler binding of the process; node options
   controlling verification and redirect-following.
 - **Behaviour:**
-  1. Locate and fully load the subject message; reduce it to **only its committed
-     keys** (drop anything not covered by a commitment, retaining commitments).
+  1. Locate and fully load the subject message; resolve the process ID (§3);
+     reduce the message to **only its committed keys** (drop anything not
+     covered by a commitment, retaining commitments).
      If committed components cannot be validated, error with `{status: 400, body:
      "Message invalid: Committed components cannot be validated.", reason: …}`.
-  2. Resolve the process ID and **locate the scheduler** for it (§7 discovery):
-     - **Local** (this node is the scheduler): proceed to (3).
+  2. **Locate the scheduler** for the process ID (§7 discovery):
+     - **Local** (this node is the scheduler): start the process's scheduling
+       server if it is not running (this registers the node as the process's
+       scheduler and persists the process definition); proceed to (3).
      - **Remote**: if redirect-following is **enabled** (node option, default
        **on**), transparently proxy the append to the remote scheduler (§9) and
        return the resulting assignment. If **disabled**, return the redirect
@@ -169,15 +173,14 @@ message to schedule."}`.
      assignment of §5 (this is the only point at which `current` advances; see
      §6 for the serialization guarantee). If the subject is itself a
      process-definition (`type: Process`), the scheduler additionally persists
-     the process definition and registers itself as that process's scheduler
-     before assigning slot 0.
+     the process definition before assigning slot 0.
 - **Returns:** `{ok, Assignment}` — the freshly committed assignment message
   (§5). On the non-following remote branch, `{ok, Redirect}` (the 307 map).
 - **Side effects:** writes the assignment (and, for a new process, the process
   definition) into the node's store under the assignment keyspace (§5); links the
   per-slot path to the assignment ID; advances the hash-chain; and MAY upload the
-  message and assignment to permanent storage (Arweave) depending on the node's
-  scheduling mode (§6). None of the upload steps may change the returned result.
+  message and assignment to permanent storage (Arweave) in every scheduling
+  mode (§6). None of the upload steps may change the returned result.
 
 #### `GET` — read a range of the log
 
@@ -201,8 +204,9 @@ message to schedule."}`.
 - **Returns:** `{ok, Bundle}` (bundle form) or `{ok, #{content-type:
   application/json, body: <json>}}` (AOS2 form). The bundle's `assignments` map
   is keyed by slot number; absent slots in the requested range are simply not
-  present (a sparse/short result is not an error).
-- **Side effects:** none for a purely local read. A remote read MAY cache fetched
+  present (a short result is not an error).
+- **Side effects:** a local read starts the process's scheduling server if it
+  is not running (§4 `POST` step 2). A remote read MAY cache fetched
   assignments into the local store (best-effort; failure does not affect the
   result).
 
@@ -212,18 +216,20 @@ message to schedule."}`.
 - **Reads:** the process ID (target resolution, §3); the scheduler binding.
 - **Behaviour:** Locate the scheduler. **Local**: read the current slot from the
   process's scheduler state and the current Arweave time reference, and return a
-  summary. **Remote**: redirect (307) or, if following, query the remote
-  scheduler's slot endpoint and normalise its answer.
+  summary. **Remote**: redirect (307) or, if following, return the remote
+  scheduler's `slot` result (`ao.N.1`), or its latest assignment normalised to
+  this summary (`ao.TN.1`).
 - **Returns (local):** a map with **exactly** these keys:
   - `process` — the process ID (base64url).
   - `current` — the current (highest assigned) slot integer (`-1` if empty).
-  - `timestamp` — current Arweave-time millisecond timestamp.
+  - `timestamp` — the current Arweave block timestamp.
   - `block-height` — current Arweave block height (integer).
   - `block-hash` — current Arweave block hash (base64url / human-readable).
   - `addresses` — the list of scheduler signer addresses (base64url) that commit
     this process's assignments.
   - `cache-control` — the binary `no-store` (this result is volatile; §6).
-- **Side effects:** none.
+- **Side effects:** a local process's scheduling server starts if it is not
+  running (§4 `POST` step 2).
 
 ### `next` — yield the next unprocessed assignment (compute-loop key)
 
@@ -241,11 +247,11 @@ message to schedule."}`.
 - **Returns:** `{ok, #{ body => Assignment, state => NewBase }}` where `NewBase`
   is `Base` with the (possibly fetched) lookahead assignments attached for the
   next call. Errors:
-  - the requested slot is not yet available → `{status: 404, body: "Requested
-    slot not yet available in schedule."}`.
-  - the located assignment's slot is unparseable → `{status: 500, body:
+  - the requested slot is not yet available → `{status: 404, reason:
+    "Requested slot not yet available in schedule."}`.
+  - the located assignment's slot is unparseable → `{status: 500, reason:
     "Unprocessable slot value received in assignment."}`.
-  - the located assignment's slot ≠ `at-slot + 1` → `{status: 404, body:
+  - the located assignment's slot ≠ `at-slot + 1` → `{status: 404, reason:
     "Received assignment slot does not match expected slot.", unexpected-slot,
     expected-slot}`.
 - **Side effects:** MAY populate the returned `state` with prefetched
@@ -267,8 +273,7 @@ message to schedule."}`.
 
 ### `init` / `checkpoint`
 
-- `init` → resolves to `message@1.0` (identity; returns `Base`). No
-  scheduler-specific behaviour.
+- `init` → reaches the default handler and resolves as `schedule` (above).
 - `checkpoint` → returns the supplied state unchanged (`{ok, State}`).
 
 ## 5. Data formats & encodings
@@ -315,8 +320,8 @@ with these keys:
 |---|---|---|
 | `type` | binary | constant `<<"schedule">>` |
 | `process` | binary | the process ID (base64url) |
-| `continues` | boolean | `true` iff the response was truncated (more slots exist beyond `to`); else `false` |
-| `timestamp` | integer | current Arweave-time millisecond timestamp |
+| `continues` | boolean | `true` iff the response is truncated (more slots exist beyond `to`); else `false` (`undefined` when a read of a remote process is served from the local store alone) |
+| `timestamp` | integer | current Arweave block timestamp |
 | `block-height` | integer | current Arweave block height |
 | `block-hash` | binary | current Arweave block hash (base64url) |
 | `assignments` | map | a map from **slot number** → the assignment message of §5.1 for that slot |
@@ -327,9 +332,8 @@ with these keys:
   TABM conversion the bundle undergoes (the codec cannot encode integer map keys,
   so the map collapses to empty), whereas decimal-string-binary keys round-trip
   intact. It is **not** an ordered list on the wire; ordering is recovered from the
-  slot keys. The map contains only slots actually present in the store for the
-  requested range; gaps below `current` are simply absent (the read does not
-  fabricate them).
+  slot keys. Its slot keys are the slots from `from` to `to` below the first
+  slot missing from the store; the read does not fabricate missing slots.
 - When transported as an HTTP-signature bundle, the encoded message additionally
   acquires the structural keys an `httpsig@1.0` bundle carries (a hashpath entry
   and a `commitments` entry); these are an artefact of the transport encoding,
@@ -346,10 +350,12 @@ the log cryptographically:
 - For each subsequent slot, the base value is the **substrate hashpath** of (the
   previous assignment's `base-hashpath`, the previous assignment's committed ID).
   This is the AO-Core substrate's path-hashing function (`hb_path:hashpath`, the
-  same operation the resolver uses to fold a path), with the process's configured
-  algorithm (default **`sha-256-chain`**) — **NOT** a literal single hash
-  `sha-256(a‖b)`. Its result is the substrate's **path-form** binary
-  `<prev-base-hashpath>/<prev-id>` (a folded hashpath), not a bare 32-byte digest.
+  same operation the resolver uses to fold a path), with **`sha-256-chain`**
+  (`hb_path:hashpath_alg` gives it for every `hashpath-alg`) — **NOT** a literal
+  single hash `sha-256(a‖b)`. Its result is the substrate's **path-form** binary
+  `<base>/<prev-id>`: `<base>` is the previous `base-hashpath` when it has one
+  part (slot 1), else the base64url SHA-256 of its two parts, decoded and
+  concatenated. It is not a bare 32-byte digest.
   So `base-hashpath(n) = hashpath(base-hashpath(n-1), id(assignment(n-1)))` where
   `hashpath` is the substrate fold; an implementer reading the shorthand
   `H(a, b)` as a single concatenated digest WILL produce a different value and
@@ -360,9 +366,9 @@ the log cryptographically:
   log obtain the *same* id, **provided the stored assignment retains its signed
   commitment** (§5.5). The chain is therefore deterministic and re-derivable by
   any node reading the schedule (§6). The one way it goes wrong is a persistence
-  path that **drops the signature** on read-back (the §5.5 link trap): then the
-  read-back id silently becomes the assignment's *content* (HMAC) id instead of
-  its signed id, and the re-derived chain no longer matches. So the rule is not
+  path that **drops the signature** on read-back: then the read-back id is the
+  assignment's *content* (HMAC) id, not its signed id, and the re-derived chain
+  does not match. So the rule is not
   "re-read to get a different id" — a correct implementation gets the *same*
   signed id back; it is "ensure the stored assignment keeps its signature so its
   committed id round-trips" (§5.5).
@@ -389,12 +395,10 @@ it claims legacy interop it MUST observe:
   slot number. `message` and `assignment` are the JSON-encoded scheduled message
   and assignment (via the `json-iface@1.0` codec). On the wire the JSON body is
   returned under `body` with `content-type: application/json`.
-- **AOS2 → canonical normalisation:** reading a legacy assignment maps `nonce` →
-  `slot`, coerces `timestamp` / `epoch` / `slot` string fields to integers,
-  defaults a missing `block-hash` to the base64url of 32 zero bytes, and attaches
-  the inner message under `body`. **This normalisation is destructive to the
-  assignment's verifiability** — a normalised legacy assignment can no longer be
-  re-verified as originally signed; it is a compatibility view only.
+- **AOS2 → canonical normalisation:** reading a legacy assignment adds `slot`
+  (the integer of `nonce`) when it has none, defaults a missing `block-hash` to
+  the base64url of 32 zero bytes, and attaches the inner message under `body`.
+  It keeps the signed field values.
 - **Legacy POST:** a message scheduled to a legacy (`ao.TN.1`) process MUST be
   signed with an **ANS-104** commitment (`ans104@1.0`); the device serializes it
   as an ANS-104 data-item to the legacy scheduler. A message with no ANS-104
@@ -416,27 +420,16 @@ literal prefix `~scheduler@1.0`:
 - **The stored, slot-indexed assignment MUST retain its signed commitment** — a
   read of the per-slot path MUST return the assignment with the scheduler's
   signature intact (so it re-verifies per §7 and its committed ID is the stable
-  id the hash-chain folds, §5.3). CAUTION: a plain content-addressed *link* to a
-  signed message can, on this substrate, resolve to the **content-only (HMAC)
-  view** and **drop the signed (e.g. RSA-PSS) commitment** — yielding an
-  assignment that no longer verifies and whose read-back id is the *content* id,
-  silently breaking both §7 verification and the §5.3 chain. **The working
-  pattern (pin this — every independent implementation that got it right used
-  it):** `hb_cache:write` the signed assignment (making it readable by its signed
-  committed id), store that committed **id as a raw value** at the slot path
-  (`hb_store:write(#{<slot-path> => <committed-id>})`), and read the assignment
-  back by resolving that id directly (`hb_cache:read(<committed-id>)`). Do **NOT**
-  index the slot with a content-addressed *link* (`hb_cache:link`/`hb_store:link`)
-  — **even a link to the *signed* id resolves to the content node and drops the
-  signature**; this is the trap. The exact mechanism is out of scope, but
-  "raw-id-index + read-by-id, never a link" is the only pattern observed to
-  preserve the signature, and the signature-preserving outcome is **normative**.
-- **`status`'s `processes` list is the set of process IDs that appear as
-  children under `~scheduler@1.0/assignments`** — i.e. the processes for which the
-  node holds at least one assignment. (Registration assigns slot 0, so a process
-  this node schedules always has an assignments subtree and therefore appears.)
-  Derive it by listing the `~scheduler@1.0/assignments` group, NOT from a separate
-  registry keyspace.
+  id the hash-chain folds, §5.3). The device `hb_cache:write`s the signed
+  assignment, links its signed ID to the slot path
+  (`hb_cache:link(hb_message:id(Assignment, signed, Opts), <slot-path>, Opts)`,
+  which writes `ao:<signed-id>` at the path), reads the slot path with
+  `hb_cache:read(<slot-path>)`, and adds the unsigned commitment with
+  `hb_message:normalize_commitments`. The signature-preserving outcome is
+  **normative**.
+- **`status`'s `processes` list is the set of process IDs with a running
+  scheduling server** (`dev_scheduler_registry:get_processes/0`, which lists the
+  `hb_name` registry), not a listing of the `~scheduler@1.0/assignments` group.
 - **The process *definition* (if persisted) MUST NOT pollute the per-process slot
   listing.** Listing `~scheduler@1.0/assignments/<process-id>` MUST yield exactly
   the assigned slot integers and nothing else. Therefore persist the definition at
@@ -508,10 +501,10 @@ literal prefix `~scheduler@1.0`:
   attributable to the scheduler that produced it; a verifier checks the
   assignment's commitment against the process's declared scheduler address.
 - **Commitment device for assignments.** The selected commitment device is the
-  process's `scheduler-commitment-spec` if set, else the **node's configured
-  commitment device** — which under the default node configuration is
-  **`httpsig@1.0`** (the broader AO-Core default; this is what a default node
-  actually mints `ao.N.1` assignments with, and what the Depends-on line names).
+  process's `scheduler-commitment-spec` if set, else the node option
+  **`scheduler-default-commitment-spec`** — which under the default node
+  configuration is **`httpsig@1.0`** (this is what a default node
+  actually mints `ao.N.1` assignments with, and what the Depends-on line lists).
   A bare `ans104@1.0` exists only as a deep code-level fallback when *no* node
   default is configured; on a default node it is NOT reached. **This choice
   changes the assignment's commitment bytes and therefore its committed ID** (and
@@ -525,17 +518,20 @@ literal prefix `~scheduler@1.0`:
   or a reference resolved through `location@1.0` to a URL. A `?hint=<url>` query
   parameter on the process ID / binding short-circuits discovery and names the
   scheduler URL directly (when hint-following is enabled, default on).
-- **Where the binding is discovered (and the registered-process fallback).** The
-  device looks for the scheduler-location binding, in order, on: (1) the scheduled
-  message / `Req`, (2) the base process message (`Base`, incl. a process nested
-  under `Base`'s `process` key), and (3) — **crucially for any append or read that
-  targets an already-registered process by ID alone** — the **persisted process
-  definition** recovered from the store (§4 POST step 4 persisted it at
-  registration). Without this third source the Local arm of §4 is **unreachable**
-  for a bare `POST target=<id>` / `GET <id>` after registration: such a request
-  carries no binding of its own, so the device MUST reload the registered
-  definition to recover it. Only if none of the three yields a binding does the
-  request error `"No scheduler information provided."` (§8).
+- **Where the binding is discovered (and the registered-process fallback).** A
+  process with a running scheduling server on the node is local without a
+  binding lookup. Otherwise the device reads the binding from the process
+  message: `Base`'s `process` key, else the scheduled message or `Base` if its
+  ID is the process ID, else — **crucially for any append or read that targets
+  an already-registered process by ID alone** — the **persisted process
+  definition** recovered from the store (§4 POST persisted it at registration;
+  `throw({process_not_available, ProcID})` if it is absent). It checks that
+  message's `scheduler`, then its `scheduler-location`, then the scheduled
+  message's `scheduler-location`. A bare `POST target=<id>` / `GET <id>` to a
+  node without a running server for the process carries no binding of its own,
+  so the device MUST reload the registered definition to recover it. If none
+  yields a binding, the request errors `"No scheduler information provided."`
+  (§8).
 - **Locality decision (failure-closed on authority).** The node is the scheduler
   for a process **iff** the process has a discoverable scheduler binding (§3)
   **and** one of that binding's addresses equals an address the node can sign for
@@ -584,17 +580,18 @@ binary-body maps). The triggering conditions:
 | `POST`: subject fails the verification policy | `{status: 400, body: "Message is not valid.", reason: "Given message is invalid."}` |
 | `POST`/read: no scheduler binding found for the process | `"No scheduler information provided."` |
 | `POST` to a legacy process without an ANS-104 signature | `{status: 422, body: "Process resides on legacy scheduler. Message must be signed with ANS-104."}` |
-| legacy POST: message cannot be encoded for the legacy scheduler | `{status: 422, body: "Incorrect encoding. Scheduler has variant: ao.TN.1", class, reason}` |
+| legacy POST: message cannot be encoded for the legacy scheduler | `{status: 422, body: "Incorrect encoding. Scheduler has variant: ao.TN.1"}` |
 | remote (redirect-following disabled) | `{status: 307, location, variant, body: "Redirecting to scheduler: <url>"}` (returned as the result, not an error) |
-| `next`: requested slot not yet available | `{status: 404, body: "Requested slot not yet available in schedule."}` |
-| `next`: assignment slot unparseable | `{status: 500, body: "Unprocessable slot value received in assignment."}` |
-| `next`: assignment slot ≠ expected (`at-slot + 1`) | `{status: 404, body: "Received assignment slot does not match expected slot.", unexpected-slot, expected-slot}` |
-| target resolution: process message not retrievable | failure to resolve (e.g. `process_not_available` / `process_not_verified` raised by the process-ID derivation) |
+| `next`: requested slot not yet available | `{status: 404, reason: "Requested slot not yet available in schedule."}` |
+| `next`: assignment slot unparseable | `{status: 500, reason: "Unprocessable slot value received in assignment."}` |
+| `next`: assignment slot ≠ expected (`at-slot + 1`) | `{status: 404, reason: "Received assignment slot does not match expected slot.", unexpected-slot, expected-slot}` |
+| target resolution: process message not retrievable | `throw({process_not_available, ProcID})` from the scheduler lookup; the process-ID derivation throws `{process_not_verified, Process}` / `{process_has_no_signers, Process}` |
 
 > **Note on error style.** Like other process-layer devices (`location@1.0`),
-> the scheduler's **observable** error contract is a `status` + `body` map (or a
-> plain binary body for a few legacy-path messages), not the project's usual
-> hyphenated error atoms. The status codes and body strings above are part of the
+> the scheduler's **observable** error contract is a `status` + `body` map
+> (`status` + `reason` for `next`; a plain binary when no scheduler binding is
+> found), not the project's usual hyphenated error atoms. The status codes and
+> body strings above are part of the
 > contract and SHOULD match. Internal coercion / option handling MUST still use
 > hyphenated atoms where it surfaces them, but the wire result shapes above are
 > normative.
@@ -610,15 +607,15 @@ binary-body maps). The triggering conditions:
 - **Fed by `~push@1.0`.** Messages typically reach a process's log via the push
   device performing a `POST /schedule`, or via a direct HTTP `POST` to
   `/<process-id>~process@1.0/schedule`.
-- **Discovery via `location@1.0`.** When a scheduler binding is a reference (not a
-  bare address or hinted URL), the device resolves it through `location@1.0` to a
-  reachable URL before redirecting/proxying.
+- **Discovery via `location@1.0`.** When a scheduler binding entry has no
+  `?hint=` (a bare address included), the device resolves it through
+  `location@1.0` to a reachable URL before redirecting/proxying.
 - **Serialization via `structured@1.0` / `httpsig@1.0`.** Assignment IDs,
   commitments, and the default HTTP bundle are produced through the standard TABM
   / HTTP-signature path; the schedule bundle is a `message@1.0` message and
   composes with any consumer that understands AO-Core messages.
 - **Legacy bridge.** For `ao.TN.1` processes the device transcodes through
-  `ans104@1.0` (POST) and `json-iface@1.0` (GET/normalise) so a current node can
+  `ans104@1.0` (POST and GET/normalise) so a current node can
   read from and write to legacy net-SU infrastructure transparently.
 - **Default-handler hygiene.** Because the device is a default handler, it MUST
   let `set`/`keys` (and the other message-manipulation keys) fall through to
@@ -629,9 +626,9 @@ binary-body maps). The triggering conditions:
 An implementation MUST exhibit all of the following:
 
 1. **Dispatch.** Keys `status`, `next`, `schedule`, `slot` invoke their specific
-   behaviours; `init` and `checkpoint` are no-ops (identity / pass-through state);
-   every other key and every bare invocation routes to `schedule`, which
-   dispatches on `method` (POST → append, GET/other → read). `set` and `keys` are
+   behaviours; `checkpoint` returns the state unchanged; `init` routes to
+   `schedule`, which dispatches on `method` (POST → append, GET → read); every
+   other key resolves through `message@1.0`. `set` and `keys` are
    NOT captured by the device.
 2. **Process-ID resolution.** The process ID is selected from `(Base, Req,
    ToSched)` by the precedence of §3, normalised to human-readable base64url, and
@@ -647,8 +644,8 @@ An implementation MUST exhibit all of the following:
    of §5.1 with the stated constants (`type=Assignment`, `data-protocol=ao`,
    `variant=ao.N.1`, `epoch=0`), an integer `slot`, the Arweave block reference,
    a scheduler-local millisecond `timestamp`, the `base-hashpath` link, the
-   request `path` (or `compute`), and the committed-only scheduled message under
-   `body`.
+   subject's `path` (or `compute`), and the committed-only scheduled message
+   under `body`.
 6. **Assignment commitment.** Each assignment is committed by the scheduler's
    wallet(s) (the binding's address(es) the node holds) using the selected
    commitment device (process `scheduler-commitment-spec`, else node default,
@@ -697,8 +694,8 @@ An implementation MUST exhibit all of the following:
     the volatile views over HTTP disables result caching so reads are not stale.
 17. **(If legacy interop is claimed.)** A `ao.TN.1` process is read by mapping
     `nonce → slot` with the `from-1` offset, normalising AOS2 JSON to the
-    canonical assignment shape (non-verifiable compatibility view), and a legacy
-    POST requires an ANS-104 signature (else `422`).
+    canonical assignment shape, and a legacy POST requires an ANS-104 signature
+    (else `422`).
 
 ## 11. Out of scope
 
@@ -733,7 +730,7 @@ An implementation MUST exhibit all of the following:
    time.
 3. **Commitment device selection (see §7 for the normative rule).** Precedence:
    the process's per-process override key `scheduler-commitment-spec` → the node
-   option (`commitment-device` / `scheduler-default-commitment-spec`) → a deep
+   option `scheduler-default-commitment-spec` → a deep
    code-level `ans104@1.0` fallback reached **only** when no node default is
    configured. On the documented default `ao.N.1` network the node default is
    **`httpsig@1.0`**, so that is what a default node actually mints with; the bare
@@ -743,11 +740,11 @@ An implementation MUST exhibit all of the following:
    assignment's commitment bytes and thus its ID, so an implementer MUST pin the
    device their target network expects.
 4. **Hash-chain field naming.** Assignments expose the chain as `base-hashpath`;
-   some legacy/aos2 paths and the cache's "latest" lookup also consult a
-   `hash-chain` key as a fallback. Whether `hash-chain` is a distinct legacy field
-   or an alias of `base-hashpath` is not fully pinned here; an `ao.N.1`-only
-   implementation should standardise on `base-hashpath` and treat `hash-chain` as
-   a legacy read-only alias.
+   the scheduling server, when it starts from the latest stored assignment, also
+   consults a `hash-chain` key as a fallback. Whether `hash-chain` is a distinct
+   legacy field or an alias of `base-hashpath` is not fully pinned here; an
+   `ao.N.1`-only implementation should standardise on `base-hashpath` and treat
+   `hash-chain` as a legacy read-only alias.
 5. **Bundle `assignments` key type — RESOLVED (§5.2).** The key MUST be the slot's
    decimal-string binary (`<<"0">>`), never the bare integer: integer map keys do
    not survive the bundle's `structured@1.0` TABM conversion (the map collapses to
