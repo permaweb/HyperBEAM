@@ -21,8 +21,15 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
     DRV_DEBUG("Proc: %p. Args size: %d", proc, args->size);
     DRV_DEBUG("Import name: %s.%s [%s]", import_hook->module_name, import_hook->field_name, import_hook->signature);
 
-    // Initialize the message object
-    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * ((2+(2*3)) + ((args->size + 1) * 2) + ((results->size + 1) * 2) + 2));
+    // The message is `{import, Module, Field, Args, Signature}': the atom and
+    // two strings (2 + 3 + 3), one term per argument with the list's nil,
+    // header and count (args->size * 2 + 3), the signature string (3), and
+    // the 5-tuple header (2).
+    ErlDrvTermData* msg =
+        driver_alloc(
+            sizeof(ErlDrvTermData) *
+                ((2 + 3 + 3) + (args->size * 2 + 3) + 3 + 2)
+        );
     int msg_index = 0;
     msg[msg_index++] = ERL_DRV_ATOM;
     msg[msg_index++] = atom_import;

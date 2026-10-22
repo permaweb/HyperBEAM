@@ -397,3 +397,22 @@ trap_keeps_instance_usable_test() ->
     {ok, Mem} = serialize(WASM),
     ok = reset(WASM, File, wasm, Mem),
     ?assertEqual({ok, [120.0]}, call(WASM, "fac", [5.0])).
+
+%% @doc An imported function of no results is called, and the driver sizes
+%% its import message to the terms it sends.
+void_import_test() ->
+    % A module that imports `env.f' of type () -> () and exports `run',
+    % which calls it. The byte sequence is the module's sections: type,
+    % import, function, export and code.
+    Module =
+        <<
+            0, "asm", 1, 0, 0, 0,
+            1, 4, 1, 16#60, 0, 0,
+            2, 9, 1, 3, "env", 1, "f", 16#00, 0,
+            3, 2, 1, 0,
+            7, 7, 1, 3, "run", 16#00, 1,
+            16#0A, 6, 1, 4, 0, 16#10, 0, 16#0B
+        >>,
+    {ok, WASM, _Imports, _Exports} = start(Module),
+    ?assertEqual({ok, []}, call(WASM, "run", [])),
+    stop(WASM).
