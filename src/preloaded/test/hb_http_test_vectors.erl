@@ -1,16 +1,24 @@
 %%% @doc A battery of test vectors for serving messages between nodes over
 %%% HTTP. Each message is written to the cache of an isolated primary node, then
-%%% read back over six paths: directly with `hb_http', through a
+%%% read back over eight paths: directly with `hb_http', through a
 %%% `hb_store_remote_node' store, through a `~relay@1.0' node, from a node that
-%%% received it by POST, and from a second or third node that downloaded and
-%%% cached it. Each path is read with every codec, both `accept-bundle' settings
+%%% received it by POST, from a second or third node that downloaded and cached
+%%% it, through a `~tunnel@1.0' broker to which the primary connects, and
+%%% through a broker to which a node that reads the primary through its store
+%%% connects. Each path is read with every codec, both `accept-bundle' settings
 %%% and both `http-only-result' settings, from volatile, LMDB and filesystem
 %%% primaries. Each read is checked against the message that was written: its
 %%% values and types, its signatures and its IDs.
 %%%
-%%% By default, each message is read once with each transport, over a path and
-%%% from a primary store that rotate between cases. Set
-%%% `HB_HTTP_TEST_VECTORS=full' to read every combination. Run a single case
+%%% The primary also resolves executions: requests for keys of messages, Lua
+%%% functions and a Lua process, and requests that fail. Each is sent directly,
+%%% where its reply must have the execution's status, and through both tunnel
+%%% paths, where its reply must be the reply of the same request sent directly
+%%% to the tunnel's origin: the same status, message and commitments.
+%%%
+%%% By default, each message and execution is sent once with each transport,
+%%% over a path and from a primary store that rotate between cases. Set
+%%% `HB_HTTP_TEST_VECTORS=full' to send every combination. Run a single case
 %%% with `eunit:test(hb_http_test_vectors:run(Name, Path, Transport, Store))'.
 -module(hb_http_test_vectors).
 -export([run/3, run/4]).
@@ -294,8 +302,145 @@ messages() ->
             ]
     ].
 
+%% @doc The requests that the primary node resolves, rather than reads, each
+%% with the HTTP status of its reply. A request given as a function is built
+%% with the primary's host and options, after it writes what the request reads
+%% to the primary's store.
+executions() ->
+    [
+        {"message key", 200,
+            fun(_, Opts) -> resolve(nested(), <<"child">>, Opts) end
+        },
+        {"literal key", 200,
+            fun(_, Opts) -> resolve(nested(), <<"body">>, Opts) end
+        },
+        {"list key", 200,
+            fun(_, Opts) ->
+                resolve(
+                    #{ <<"items">> => [1, <<"two">>, typed()] },
+                    <<"items">>,
+                    Opts
+                )
+            end
+        },
+        {"lua message", 200,
+            fun(_, Opts) -> lua(<<"assoctable">>, #{}, Opts) end
+        },
+        {"lua list", 200, fun(_, Opts) -> lua(<<"ListTable">>, #{}, Opts) end},
+        {"lua request", 200,
+            fun(_, Opts) ->
+                lua(<<"hello">>, #{ <<"name">> => <<"tunnel">> }, Opts)
+            end
+        },
+        {"signed lua request", 200,
+            fun(_, Opts) ->
+                hb_message:commit(
+                    lua(
+                        <<"hello/hello">>,
+                        #{
+                            <<"method">> => <<"POST">>,
+                            <<"name">> => <<"signed">>
+                        },
+                        Opts
+                    ),
+                    Opts
+                )
+            end
+        },
+        {"lua error", 400,
+            fun(_, Opts) -> lua(<<"error_response">>, #{}, Opts) end
+        },
+        {"lua failure", 500,
+            fun(_, Opts) -> lua(<<"sandboxed_fail">>, #{}, Opts) end
+        },
+        {"lua process", 200, fun process/2},
+        {"missing message", 404,
+            #{ <<"path">> => <<"/", (hb_util:human_id(<<0:256>>))/binary>> }
+        },
+        {"invalid path", 400, #{ <<"path">> => <<"/a/b~">> }}
+    ].
+
+%% @doc Write a message to the primary's store and return a request for a key of
+%% it.
+resolve(Msg, Key, Opts) ->
+    {ok, _} = hb_cache:write(Msg, Opts),
+    #{
+        <<"path">> =>
+            <<"/", (hb_message:id(Msg, all, Opts))/binary, "/", Key/binary>>
+    }.
+
+%% @doc Write the test Lua module to the primary's store and return a request
+%% for a function of it. The primary runs `assoctable' of the module first: the
+%% first use of `lua@5.3a' in a BEAM loads the code of the Lua VM, which can
+%% take longer than a client waits for a reply.
+lua(Function, Request, Opts) ->
+    {ok, Script} = file:read_file("test/test.lua"),
+    Module =
+        #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Script
+        },
+    {ok, _} = hb_cache:write(Module, Opts),
+    Prefix =
+        <<
+            "/~lua@5.3a&module=",
+            (hb_message:id(Module, all, Opts))/binary,
+            "/"
+        >>,
+    {ok, _} =
+        hb_ao:resolve(
+            <<Prefix/binary, "assoctable">>,
+            Opts#{ <<"cache-control">> => [<<"no-store">>, <<"no-cache">>] }
+        ),
+    Request#{ <<"path">> => <<Prefix/binary, Function/binary>> }.
+
+%% @doc Write a Lua process to the primary's store, with one message in its
+%% schedule, and return a request for the output of its computation.
+process(_Host, Opts) ->
+    {ok, Script} = file:read_file("test/test.lua"),
+    Process =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"process@1.0">>,
+                <<"type">> => <<"Process">>,
+                <<"scheduler-device">> => <<"scheduler@1.0">>,
+                <<"execution-device">> => <<"lua@5.3a">>,
+                <<"module">> =>
+                    #{
+                        <<"content-type">> => <<"application/lua">>,
+                        <<"body">> => Script
+                    },
+                <<"scheduler-location">> => hb_opts:address(Opts)
+            },
+            Opts
+        ),
+    {ok, _} = hb_cache:write(Process, Opts),
+    ProcID = hb_message:id(Process, all, Opts),
+    {ok, _} =
+        hb_ao:resolve(
+            Process,
+            #{
+                <<"path">> => <<"schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> =>
+                    hb_message:commit(
+                        #{
+                            <<"target">> => ProcID,
+                            <<"type">> => <<"Message">>
+                        },
+                        Opts
+                    )
+            },
+            Opts#{ <<"hashpath">> => ignore }
+        ),
+    #{ <<"path">> => <<"/", ProcID/binary, "/now/results/output/body">> }.
+
 %% @doc The ways that a client reads a message from the primary node.
-paths() -> [direct, remote, secondary, tertiary, relay, post].
+paths() ->
+    [direct, remote, secondary, tertiary, relay, post, tunnel, tunnel_remote].
+
+%% @doc The ways that a client sends an execution's request.
+execution_paths() -> [direct, tunnel, tunnel_remote].
 
 %% @doc The stores that the primary node, and a node that receives a POST, write
 %% messages to.
@@ -375,6 +520,20 @@ exceptions() ->
         }
     ].
 
+%% @doc The messages that a path cannot read by design, each with its reason.
+%% They are not generated as tests.
+path_exceptions() ->
+    [
+        {["unsigned status"], [tunnel, tunnel_remote],
+            "A broker replies to a tunneled request from its request hook, and "
+            "a request hook can end a request only with an error. The reply to "
+            "an error has the HTTP status of the message's `status' key if "
+            "that is an HTTP status, and 400 otherwise."},
+        {["lua process"], [tunnel_remote],
+            "The scheduler of the process is the primary, so its schedule is "
+            "not in the primary's cache, which is all the origin reads."}
+    ].
+
 %% @doc Return the vectors whose message is posted with a link. The node that
 %% receives one holds the link, and not the message that it links to.
 posted_links() -> ["explicit link"].
@@ -412,95 +571,176 @@ suite_test_() ->
     Full = os:getenv("HB_HTTP_TEST_VECTORS") == "full",
     [suite(messages(), paths(), transports(), Store, Full) || Store <- stores()].
 
-%% @doc Generate one named case of the suite, to reproduce it alone. The primary
-%% store is `hb_store_volatile' unless given.
+%% @doc Generate one named case of the suite or of the executions, to reproduce
+%% it alone. The primary store is `hb_store_volatile' unless given.
 run(Name, Path, Transport) ->
     run(Name, Path, Transport, hb_store_volatile).
 run(Name, Path, Transport, Store) ->
-    {Name, _} = Message = lists:keyfind(Name, 1, messages()),
     {Transport, Spec} = Selection = lists:keyfind(Transport, 1, transports()),
-    true = lists:member(Path, paths()),
     true = lists:member(Store, stores()),
-    false = excluded(Name, Spec),
-    suite([Message], [Path], [Selection], Store, true).
+    false = excluded(Name, Path, Spec),
+    case lists:keyfind(Name, 1, messages()) of
+        {Name, _} = Message ->
+            true = lists:member(Path, paths()),
+            suite([Message], [Path], [Selection], Store, true);
+        false ->
+            {Name, _, _} = Execution = lists:keyfind(Name, 1, executions()),
+            true = lists:member(Path, execution_paths()),
+            execution_suite([Execution], [Path], [Selection], Store, true)
+    end.
 
 %% @doc Generate the tests: one primary node holds every message, and each test
 %% reads one message over one path and transport with fresh client stores.
 suite(Messages, Paths, Transports, Store, Full) ->
     {setup,
-        fun() -> primary(Messages, Store) end,
+        fun() -> primary(fun prepare/3, Messages, Store) end,
         fun stop_primary/1,
         fun({Host, PrimaryOpts, Prepared}) ->
-            [{foreach, Setup, Reset, Tests}] =
-                hb_test_utils:suite_with_opts(
-                    [
-                        {
-                            Name,
-                            Name ++ " / " ++ hb_util:list(Store) ++ " / " ++
-                                hb_util:list(Path) ++ " / " ++ Desc,
-                            fun(ClientOpts) ->
-                                {ok, Source, Expected, ID} = Preparation,
-                                ?assertEqual(
-                                    {error, not_found},
-                                    hb_cache:read(ID, ClientOpts)
-                                ),
-                                exercise(
-                                    read_path(Name, Path),
-                                    {Host, PrimaryOpts},
-                                    {ID, Source},
-                                    Expected,
-                                    Transport,
-                                    ClientOpts#{
-                                        <<"http-only-result">> =>
-                                            maps:get(only_result, Transport)
-                                    }
-                                )
-                            end
-                        }
-                    ||
-                        {MessageIndex, {Name, Preparation}} <-
-                            lists:enumerate(Prepared),
-                        {PathIndex, Path} <- lists:enumerate(Paths),
-                        {TransportIndex, {Desc, Transport}} <-
-                            lists:enumerate(Transports),
-                        not excluded(Name, Transport),
-                        selected(
-                            Full, MessageIndex, PathIndex, TransportIndex, Store
-                        )
-                    ],
-                    [
-                        #{
-                            name => isolated,
-                            desc => "HTTP vectors",
-                            parallel => false,
-                            timeout => 30,
-                            opts => options()
-                        }
-                    ]
-                ),
-            % The suite helper resets each test's stores; they are also stopped,
-            % so that their volatile tables are released.
-            {foreach,
-                Setup,
-                fun(Opts) ->
-                    try Reset(Opts)
-                    after hb_store:stop(maps:get(<<"store">>, Opts))
-                    end
-                end,
-                Tests
-            }
+            isolated(
+                "HTTP vectors",
+                [
+                    {
+                        Name,
+                        Name ++ " / " ++ hb_util:list(Store) ++ " / " ++
+                            hb_util:list(Path) ++ " / " ++ Desc,
+                        fun(ClientOpts) ->
+                            {ok, Source, Expected, ID} = Preparation,
+                            ?assertEqual(
+                                {error, not_found},
+                                hb_cache:read(ID, ClientOpts)
+                            ),
+                            exercise(
+                                read_path(Name, Path),
+                                {Host, PrimaryOpts},
+                                {ID, Source},
+                                Expected,
+                                Transport,
+                                ClientOpts#{
+                                    <<"http-only-result">> =>
+                                        maps:get(only_result, Transport)
+                                }
+                            )
+                        end
+                    }
+                ||
+                    {MessageIndex, {Name, Preparation}} <-
+                        lists:enumerate(Prepared),
+                    {PathIndex, Path} <- lists:enumerate(Paths),
+                    {TransportIndex, {Desc, Transport}} <-
+                        lists:enumerate(Transports),
+                    not excluded(Name, Path, Transport),
+                    selected(
+                        Full,
+                        MessageIndex,
+                        {PathIndex, length(Paths)},
+                        TransportIndex,
+                        Store
+                    )
+                ]
+            )
         end
     }.
 
-%% @doc Whether a case is generated. By default, each message is read once with
+%% @doc The executions for each primary store: the default cases, or every
+%% combination with `HB_HTTP_TEST_VECTORS=full'.
+execution_test_() ->
+    Full = os:getenv("HB_HTTP_TEST_VECTORS") == "full",
+    [
+        execution_suite(
+            executions(),
+            execution_paths(),
+            transports(),
+            Store,
+            Full
+        )
+    ||
+        Store <- stores()
+    ].
+
+%% @doc Generate the execution tests: one primary node resolves every request,
+%% and each test sends one request over one path and transport with fresh
+%% client stores.
+execution_suite(Executions, Paths, Transports, Store, Full) ->
+    {setup,
+        fun() -> primary(fun prepare_execution/3, Executions, Store) end,
+        fun stop_primary/1,
+        fun({Host, PrimaryOpts, Prepared}) ->
+            isolated(
+                "HTTP executions",
+                [
+                    {
+                        Name,
+                        Name ++ " / " ++ hb_util:list(Store) ++ " / " ++
+                            hb_util:list(Path) ++ " / " ++ Desc,
+                        fun(ClientOpts) ->
+                            {ok, Request, Status} = Preparation,
+                            execute(
+                                Path,
+                                {Host, PrimaryOpts},
+                                Request,
+                                Status,
+                                Transport,
+                                ClientOpts#{
+                                    <<"http-only-result">> =>
+                                        maps:get(only_result, Transport)
+                                }
+                            )
+                        end
+                    }
+                ||
+                    {ExecutionIndex, {Name, Preparation}} <-
+                        lists:enumerate(Prepared),
+                    {PathIndex, Path} <- lists:enumerate(Paths),
+                    {TransportIndex, {Desc, Transport}} <-
+                        lists:enumerate(Transports),
+                    not excluded(Name, Path, Transport),
+                    selected(
+                        Full,
+                        ExecutionIndex,
+                        {PathIndex, length(Paths)},
+                        TransportIndex,
+                        Store
+                    )
+                ]
+            )
+        end
+    }.
+
+%% @doc Run the tests one at a time, each with fresh client stores. The suite
+%% helper resets each test's stores; they are also stopped, so that their
+%% volatile tables are released.
+isolated(Desc, Tests) ->
+    [{foreach, Setup, Reset, Cases}] =
+        hb_test_utils:suite_with_opts(
+            Tests,
+            [
+                #{
+                    name => isolated,
+                    desc => Desc,
+                    parallel => false,
+                    timeout => 30,
+                    opts => options()
+                }
+            ]
+        ),
+    {foreach,
+        Setup,
+        fun(Opts) ->
+            try Reset(Opts)
+            after hb_store:stop(maps:get(<<"store">>, Opts))
+            end
+        end,
+        Cases
+    }.
+
+%% @doc Whether a case is generated. By default, each case is run once with
 %% each transport, and the path and store rotate between cases.
 selected(true, _, _, _, _) -> true;
-selected(false, MessageIndex, PathIndex, TransportIndex, Store) ->
-    PathCount = length(paths()),
-    PathIndex == 1 + (MessageIndex + TransportIndex - 2) rem PathCount
+selected(false, CaseIndex, {PathIndex, PathCount}, TransportIndex, Store) ->
+    PathIndex == 1 + (CaseIndex + TransportIndex - 2) rem PathCount
         andalso Store ==
             lists:nth(
-                1 + (MessageIndex - 1 + (TransportIndex - 1) div PathCount)
+                1 + (CaseIndex - 1 + (TransportIndex - 1) div PathCount)
                     rem length(stores()),
                 stores()
             ).
@@ -514,7 +754,7 @@ read_path(Name, post) ->
     end;
 read_path(_Name, Path) -> Path.
 
-excluded(Name, #{ codec := Codec, bundle := Bundle }) ->
+excluded(Name, Path, #{ codec := Codec, bundle := Bundle }) ->
     lists:any(
         fun({Names, ExcludedCodec, Bundles, _Reason}) ->
             ExcludedCodec == Codec
@@ -522,7 +762,13 @@ excluded(Name, #{ codec := Codec, bundle := Bundle }) ->
                 andalso lists:member(Bundle, Bundles)
         end,
         exceptions()
-    ).
+    ) orelse
+        lists:any(
+            fun({Names, Paths, _Reason}) ->
+                lists:member(Name, Names) andalso lists:member(Path, Paths)
+            end,
+            path_exceptions()
+        ).
 
 %% @doc Options for an isolated node or client: a fresh store, volatile unless
 %% given, no hooks or uploads, and an ephemeral port.
@@ -547,9 +793,10 @@ options(Store) ->
         <<"system-monitor">> => false
     }.
 
-%% @doc Start the primary node and write each message to its cache. A message
-%% that fails to build or write becomes a failing test, not a failed setup.
-primary(Messages, Store) ->
+%% @doc Start the primary node and prepare each case with its host and options:
+%% write each message to its cache, or what each execution reads. A case that
+%% fails to prepare becomes a failing test, not a failed setup.
+primary(Prepare, Cases, Store) ->
     Opts =
         (options(Store))#{
             <<"priv-wallet">> => ar_wallet:new(),
@@ -560,13 +807,13 @@ primary(Messages, Store) ->
     Host = hb_http_server:start_node(Opts),
     Prepared =
         [
-            {Name, prepare(Message, Opts)}
+            {element(1, Case), Prepare(Case, Host, Opts)}
         ||
-            {Name, Message} <- Messages
+            Case <- Cases
         ],
     {Host, Opts, Prepared}.
 
-prepare(Message, Opts) ->
+prepare({_Name, Message}, _Host, Opts) ->
     try
         Built =
             case is_function(Message, 1) of
@@ -581,6 +828,20 @@ prepare(Message, Opts) ->
         ?assertEqual(true, hb_message:deep_verify(Msg, Opts)),
         {ok, _} = hb_cache:write(Msg, Opts),
         {ok, Msg, Expected, hb_message:id(Msg, all, Opts)}
+    catch Class:Reason:Stacktrace -> {error, {Class, Reason, Stacktrace}}
+    end.
+
+%% @doc Build an execution's request with the primary's host and options.
+prepare_execution({_Name, Status, Request}, Host, Opts) ->
+    try
+        {
+            ok,
+            case is_function(Request, 2) of
+                true -> Request(Host, Opts);
+                false -> Request
+            end,
+            Status
+        }
     catch Class:Reason:Stacktrace -> {error, {Class, Reason, Stacktrace}}
     end.
 
@@ -740,6 +1001,42 @@ exercise(relay, {Host, PrimaryOpts}, {ID, _}, Expected, Transport, ClientOpts) -
             )
         end
     );
+exercise(tunnel, {_, OriginOpts}, Message, Expected, Transport, ClientOpts) ->
+    % The client reads the message from a broker, as a direct read, and the
+    % broker carries the request to the origin.
+    with_tunnel(
+        OriginOpts,
+        fun(Broker, Address) ->
+            exercise(
+                direct,
+                Broker,
+                Message,
+                Expected,
+                Transport#{ headers => route(#{}, Address, ClientOpts) },
+                ClientOpts
+            )
+        end
+    );
+exercise(tunnel_remote, {Host, PrimaryOpts}, {ID, _} = Message, Expected,
+        Transport, ClientOpts) ->
+    with_remote_origin(
+        Host,
+        PrimaryOpts,
+        fun(OriginHost, OriginOpts) ->
+            ?assertEqual(
+                {error, not_found},
+                hb_cache:read(ID, hb_store:scope(OriginOpts, local))
+            ),
+            exercise(
+                tunnel,
+                {OriginHost, OriginOpts},
+                Message,
+                Expected,
+                Transport,
+                ClientOpts
+            )
+        end
+    );
 exercise(Path, {Host, PrimaryOpts}, {ID, _} = Message, Expected, Transport,
         ClientOpts) when Path == secondary; Path == tertiary ->
     with_node(
@@ -769,6 +1066,74 @@ exercise(Path, {Host, PrimaryOpts}, {ID, _} = Message, Expected, Transport,
         end
     ).
 
+%% @doc Send an execution's request over a path. A direct request must have the
+%% execution's status. A request through a tunnel must have the same reply as a
+%% direct request to the tunnel's origin: the same status, message and
+%% commitments.
+execute(direct, {Host, _}, Request, Status, Transport, ClientOpts) ->
+    send(Host, Request, Status, Transport, ClientOpts);
+execute(tunnel, {Host, OriginOpts}, Request, Status, Transport, ClientOpts) ->
+    with_tunnel(
+        OriginOpts,
+        fun({BrokerHost, _}, Address) ->
+            validate(
+                send(Host, Request, Status, Transport, ClientOpts),
+                send(
+                    BrokerHost,
+                    Request,
+                    Status,
+                    Transport#{
+                        headers => route(Request, Address, ClientOpts)
+                    },
+                    ClientOpts
+                ),
+                ClientOpts
+            )
+        end
+    );
+execute(tunnel_remote, {Host, PrimaryOpts}, Request, Status, Transport,
+        ClientOpts) ->
+    with_remote_origin(
+        Host,
+        PrimaryOpts,
+        fun(OriginHost, OriginOpts) ->
+            execute(
+                tunnel,
+                {OriginHost, OriginOpts},
+                Request,
+                Status,
+                Transport,
+                ClientOpts
+            )
+        end
+    ).
+
+%% @doc Send a request to a node with the transport's headers, check the status
+%% of its reply, and return the reply without the keys and commitments that the
+%% reply adds.
+send(Host, Request, Status, Transport, Opts) ->
+    Message = maps:merge(Request, headers(Transport)),
+    {ErlStatus, Received} =
+        hb_http:request(
+            maps:get(<<"method">>, Message, <<"GET">>),
+            Host,
+            maps:get(<<"path">>, Message),
+            Message,
+            Opts
+        ),
+    ?assertEqual(hb_http_client:response_status_to_atom(Status), ErlStatus),
+    Loaded = hb_cache:ensure_all_loaded(Received, Opts),
+    ?assertEqual(true, hb_message:deep_verify(Loaded, Opts)),
+    case is_map(Loaded) of
+        true ->
+            ?assertEqual(
+                Status,
+                hb_maps:get(<<"status">>, Loaded, not_found, Opts)
+            );
+        false -> ok
+    end,
+    payload(#{}, Loaded, Opts).
+
 %% @doc A request hook for the node that receives a POST: cache the posted
 %% message as it was sent, without loading its links, then reply with its ID.
 receive_post(_, #{ <<"request">> := #{ <<"method">> := <<"POST">> } = Request },
@@ -795,15 +1160,140 @@ with_node(PrimaryOpts, Options, Fun) ->
     after stop_node(Opts)
     end.
 
+%% @doc Run `Fun' with a broker that has the `tunnel@1.0' request hook, to which
+%% the origin connects. `Fun' is given the broker's host and options, and the
+%% origin's address. A broker routes a request by its `host' only while the
+%% origin is connected, so we wait for the origin to register. The origin
+%% disconnects before the broker stops.
+with_tunnel(OriginOpts, Fun) ->
+    with_node(
+        OriginOpts,
+        (options())#{
+            <<"on">> =>
+                #{
+                    <<"request">> =>
+                        #{
+                            <<"device">> => <<"tunnel@1.0">>,
+                            <<"path">> => <<"request">>
+                        }
+                }
+        },
+        fun(BrokerHost, BrokerOpts) ->
+            Connect =
+                fun(Workers) ->
+                    {ok, _} =
+                        hb_ao:resolve(
+                            #{ <<"device">> => <<"tunnel@1.0">> },
+                            #{
+                                <<"path">> => <<"connect">>,
+                                <<"peer">> => BrokerHost,
+                                <<"workers">> => Workers
+                            },
+                            OriginOpts
+                        )
+                end,
+            Address = hb_opts:address(OriginOpts),
+            Connect(1),
+            try
+                hb_util:until(
+                    fun() ->
+                        {ok, Status} =
+                            hb_http:get(
+                                BrokerHost,
+                                <<"/~tunnel@1.0/status">>,
+                                BrokerOpts
+                            ),
+                        hb_ao:get(
+                            <<"registered/", Address/binary>>,
+                            Status,
+                            0,
+                            BrokerOpts
+                        ) > 0
+                    end,
+                    fun() -> receive after 10 -> 1 end end,
+                    0
+                ),
+                Fun({BrokerHost, BrokerOpts}, Address)
+            after
+                Connect(0),
+                % A worker that waits on the broker with a registration stops
+                % only once the registration ends, and a broker that stops
+                % waits 4 seconds for an open HTTP/2 stream. Until the worker
+                % stops, we send it a request that expires at once, which ends
+                % its registration.
+                hb_util:until(
+                    fun() ->
+                        hb_http:get(
+                            BrokerHost,
+                            #{
+                                <<"path">> => <<"/~meta@1.0/info/address">>,
+                                <<"tunnel-target">> => Address,
+                                <<"tunnel-timeout">> => 0
+                            },
+                            BrokerOpts
+                        ),
+                        {ok, Status} =
+                            hb_ao:resolve(
+                                #{ <<"device">> => <<"tunnel@1.0">> },
+                                #{ <<"path">> => <<"status">> },
+                                OriginOpts
+                            ),
+                        hb_maps:get(
+                            <<"retiring-client-workers">>,
+                            Status,
+                            0,
+                            OriginOpts
+                        ) == 0
+                    end,
+                    fun() -> receive after 10 -> 1 end end,
+                    0
+                )
+            end
+        end
+    ).
+
+%% @doc Return the headers that ask a broker for an origin. An unsigned request
+%% gives the origin's address as its `tunnel-target'. A node keeps only the keys
+%% of a signed request that its commitments cover, and its `host', so a signed
+%% request gives a `host' whose first label is the base32 form of the address.
+route(Request, Address, Opts) ->
+    case hb_message:signers(Request, Opts) of
+        [] -> #{ <<"tunnel-target">> => Address };
+        _ ->
+            Label = base32:encode(hb_util:native_id(Address), [lower, nopad]),
+            #{ <<"host">> => <<Label/binary, ".localhost">> }
+    end.
+
+%% @doc Run `Fun' with an origin that has no messages of its own: it reads them
+%% from the primary through its store.
+with_remote_origin(Host, PrimaryOpts, Fun) ->
+    Origin = #{ <<"store">> := Store } = options(),
+    with_node(
+        PrimaryOpts,
+        Origin#{
+            <<"store">> =>
+                [
+                    Store,
+                    #{
+                        <<"store-module">> => hb_store_remote_node,
+                        <<"node">> => Host,
+                        <<"access">> => [<<"read">>]
+                    }
+                ]
+        },
+        Fun
+    ).
+
 %% @doc The transport as a query string. A remote store builds its own request
 %% headers, so its transport is given in the URI.
 query(Transport) ->
     uri_string:compose_query(maps:to_list(headers(Transport))).
 
-%% @doc The request headers that ask for the transport's codec. Lazy links in
-%% the reply are loaded with `hb_http''s usual peer stores.
-headers(#{ accept := Accept, bundle := Bundle }) ->
-    #{
+%% @doc The request headers that ask for the transport's codec, with the
+%% transport's other headers. Lazy links in the reply are loaded with
+%% `hb_http''s usual peer stores.
+headers(Transport = #{ accept := Accept, bundle := Bundle }) ->
+    (maps:get(headers, Transport, #{}))#{
         <<"accept">> => Accept,
         <<"accept-bundle">> => hb_util:bin(Bundle)
     }.
@@ -845,7 +1335,15 @@ payload(Expected, Received, Opts) when is_map(Expected), is_map(Received) ->
             Received,
             Opts
         ),
-    {ok, Committed} = hb_message:with_only_committed(WithoutReceipt, Opts),
+    % A computed result that a codec other than `httpsig@1.0' sends may have
+    % the node's signature on its hashpath as its only commitment. Without it,
+    % its keys are all its own.
+    {ok, Committed} =
+        case hb_maps:get(<<"commitments">>, WithoutReceipt, #{}, Opts) of
+            None when map_size(None) == 0 ->
+                {ok, maps:remove(<<"commitments">>, WithoutReceipt)};
+            _ -> hb_message:with_only_committed(WithoutReceipt, Opts)
+        end,
     % A codec may add an unsigned commitment over the reply. It verified above;
     % keep only the signed commitments and those of the message itself.
     ExpectedCommitments = maps:get(<<"commitments">>, Expected, #{}),
