@@ -117,7 +117,8 @@ ets_lookup(Name) ->
             case is_process_alive(Pid) of
                 true -> Pid;
                 false -> 
-                    ets:delete(?NAME_TABLE, Name),
+                    % Another process may have registered the name since.
+                    ets:delete_object(?NAME_TABLE, {Name, Pid}),
                     undefined
             end;
         [] -> undefined
