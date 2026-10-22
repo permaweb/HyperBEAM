@@ -230,7 +230,7 @@ request_response(Method, Peer, Path, Request, Response, Duration, Opts) ->
         }),
     % The `signature-input' and the `content-type' of the reply give its codec,
     % if the request asked for that codec.
-    {ResponseStatus, Msg} =
+    {ResponseStatus, RawMsg} =
         outbound_result_to_message(
             reply_codec(NormHeaderMap, Path, Request, Opts),
             Status,
@@ -238,6 +238,9 @@ request_response(Method, Peer, Path, Request, Response, Duration, Opts) ->
             Body,
             Opts
         ),
+    % Reset the reply's private keys, which a codec can restore from the peer's
+    % headers and body, so the node does not read them as its own.
+    Msg = hb_private:reset(RawMsg),
     % A reply in any codec keeps the `status' that it carries, and gets the
     % HTTP status as its `status' if it carries none, and the cookies that it
     % sets.
@@ -1135,7 +1138,28 @@ remote_response_links_test() ->
         [<<"a">>, <<"commitments">>, <<"status">>],
         lists:sort(maps:keys(Res))
     ),
-    ?assertEqual(123, hb_ao:get(<<"a/b">>, Res, ClientOpts)).
+    ?assertEqual(123, hb_ao:get(<<"a/b">>, Res, ClientOpts)),
+    % A reply's own private keys do not reach the caller: the client resets a
+    % `priv' that the peer's body gives.
+    {_, Decoded} =
+        request_response(
+            <<"GET">>,
+            <<"peer">>,
+            <<"/x">>,
+            #{ <<"accept">> => <<"application/json">> },
+            {ok, 200,
+                [{<<"content-type">>, <<"application/json">>}],
+                hb_json:encode(
+                    #{ <<"a">> => <<"1">>,
+                       <<"priv">> => #{ <<"hook-caller">> => <<"kernel">> } }
+                )},
+            0,
+            ClientOpts
+        ),
+    ?assertEqual(
+        not_found,
+        hb_private:get(<<"hook-caller">>, Decoded, not_found, ClientOpts)
+    ).
 
 send_large_signed_request_test() ->
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
