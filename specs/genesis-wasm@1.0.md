@@ -209,7 +209,8 @@ any embedded snapshot is loaded into the CU.
      checkpoint snapshot the base is returned with any `snapshot` key removed.
 - **Returns:** `{ok, State'}` — the normalized state with any embedded snapshot
   removed (and loaded into the CU when it was a checkpoint), or `{error, #{ status
-  := 500, message := <binary> }}` if the CU is not running.
+  := 500, message := <binary> }}` if the CU is not running, or `{error, _}` if
+  the `/state` load fails.
 - **Side effects:** ensure-started (§4.6); may POST a snapshot body to the CU.
 
 ### `snapshot` (Base, Req → result)
@@ -247,14 +248,15 @@ checkpoint id is supplied, or the latest trusted one is discovered.
        store. If it is not present, return `not_found` (§8).
      - Else, **discover** the latest trusted checkpoint for the process id via
        `latest-checkpoint` (§4.5). If discovery yields no checkpoint, return its
-       error (`no-import-authorities` / `not_found`).
+       error (`{error, no_import_authorities}` / `{error, not_found}`).
   3. **Validate and adopt** the checkpoint (§4.5 *Validation & adoption*).
-- **Returns:** `{ok, State'}` — the target process message augmented with
-  `at-slot = <checkpoint nonce>` and `snapshot = <checkpoint message>`; or one of
-  the import errors of §8.
+- **Returns:** `{ok, State'}` — the target process message as
+  `lib_process:ensure_process_key/2` returns it, with
+  `at-slot = <checkpoint nonce>` and `snapshot = <checkpoint message>`; or one
+  of the import errors of §8.
 - **Side effects:** **writes** the imported state into the content-addressed
-  store under the process's compute/latest/restore result paths (§4.5); reads the
-  gateway/store. No CU subprocess is started by `import` itself.
+  store under the process's `computed/<process-id>/slot/<slot>` path (§4.5);
+  reads the gateway/store. No CU subprocess is started by `import` itself.
 
 ### `latest-checkpoint` (Base, Req → result)
 Discover the most recent **trusted** legacy checkpoint for a process id. As a
@@ -268,15 +270,15 @@ public signature; the resolved key is `(Base, Req, Opts)`).
 - **Reads:** the import authorities from `Opts` (§7); the gateway.
 - **Behaviour (MUST):**
   1. If the configured import-authority list is **empty**, return
-     `no-import-authorities` (§8). (Discovery is failure-closed: with no trusted
-     signer, there is no "latest".)
+     `{error, no_import_authorities}` (§8). (Discovery is failure-closed: with
+     no trusted signer, there is no "latest".)
   2. Otherwise query the Arweave gateway for the single most recent transaction
      (`first: 1`, height-descending) tagged `Type: Checkpoint` and
      `Process: <ProcID>`, restricted to **owners** ∈ the authority list, and
      convert the returned transaction node into a message. If the query errors,
      propagate the error; if there is no matching transaction, return
      `not_found`.
-- **Returns:** `{ok, CheckpointMessage}` | `{error, no-import-authorities}` |
+- **Returns:** `{ok, CheckpointMessage}` | `{error, no_import_authorities}` |
   `{error, not_found}` | `{error, <gateway error>}`.
 - **Side effects:** a gateway (network) query; no store write, no CU start.
 
@@ -292,7 +294,7 @@ corresponding error (§8) and performs **no** store write:
 
 1. **Valid target.** The target process message MUST be a legacy process —
    either its `variant` equals `ao.TN.1`, **or** its `execution-device` equals
-   `genesis-wasm@1.0`. Otherwise → `invalid-import-target` (`status 400`).
+   `genesis-wasm@1.0`. Otherwise → `invalid_import_target` (`status 400`).
 2. **Trusted signer.** At least one committer (signer) of the checkpoint message
    MUST be a member of the configured import-authority list. Otherwise →
    `untrusted` (`status 400`). (For an explicit `import = <id>` this is the only
@@ -301,36 +303,26 @@ corresponding error (§8) and performs **no** store write:
 3. **Verifiable.** The checkpoint message MUST `verify` (all commitments) under
    `message@1.0`. Otherwise → `unverified` (`status 400`).
 4. **Process match.** The checkpoint's `process` field MUST equal the target
-   process id. Otherwise → `process-mismatch` (`status 400`).
+   process id. Otherwise → `process_mismatch` (`status 400`).
 
 On success the device:
 - reads the checkpoint's `nonce` as the slot (`at-slot`), coercing the binary to an
-  integer (default if absent). **Read the checkpoint's fields (`nonce`, `process`,
-  `variant`) via the inert `message@1.0` view** (`{as, message@1.0, Checkpoint}` / a
-  raw map read), never by resolving through the checkpoint (which may carry its own
-  `device`). ⚠ A checkpoint sourced from an Arweave gateway tx carries
-  **capitalised** tag names (`Nonce`, `Process`); `message@1.0` does **not** case-fold
-  stored keys, so read case-tolerantly.
-- produces the adopted state = target process message + `at-slot = <slot>` +
+  integer (an absent `nonce` raises `error({else_clause, error})`). **Read
+  the checkpoint's fields (`nonce`, `process`) and the target's `variant` via a
+  raw map read**, never by resolving through the checkpoint (which may carry its
+  own `device`). A checkpoint sourced from an Arweave gateway tx has lowercase
+  keys (`nonce`, `process`): `structured@1.0` decode lowercases every key.
+- produces the adopted state = the target process message as
+  `lib_process:ensure_process_key/2` returns it + `at-slot = <slot>` +
   `snapshot = <checkpoint message>`;
 - **writes** that state into the content-addressed store so subsequent resolution
-  finds it. The process id keying the result paths is the **`all`-committed id**
-  (`hb_message:id(Process, all)` — the full id, matching `process@1.0` §5, **not** the
-  `signed` subset). The write goes through the **cache's high-level result-write**,
-  which stores the state's **raw content-id value** (preserving its commitments) — it
-  MUST NOT use a bare `hb_store:link` for the per-slot/restore indices, which would
-  drop the commitments and change the id (the hazard `process@1.0` §5 warns about). It
-  writes:
-  - a **public** copy (the adopted state with the `snapshot` key removed) under
-    the process's `compute@slot=<slot>` result path **and** its `latest` result
-    path;
-  - the **full** copy (with `snapshot`) under the process's `restore@slot=<slot>`
-    and `restore` result paths;
-  and returns the full adopted state.
-
-(The split exists so that the heavyweight snapshot blob is reachable only via the
-explicit restore paths, while ordinary `latest`/per-slot reads return the lean
-public state.)
+  finds it, with `lib_process_cache:write/4`. The process id keying the paths is
+  the **`signed`** id (`lib_process:process_id(Process, #{}, Opts)`). It writes
+  the state with `hb_cache:write`, links the returned ID (`hb_cache:link`) at
+  `computed/<process-id>/slot/<slot>` and at
+  `computed/<process-id>/<uncommitted id>`, and writes `<slot>:<time>` at
+  `computed/<process-id>/latest` unless a higher slot is cached. It writes the
+  **full** state (with `snapshot`) and returns it.
 
 #### 4.6 Ensure-started (legacy CU lifecycle) — normative
 
@@ -359,8 +351,8 @@ MUST run **ensure-started**, which is **idempotent**:
    small monitor wrapper that runs the Node server and terminates it when the
    parent node exits, with the process environment of §6.
 
-The probe result MAY be cached per worker for the lifetime of a resolution so the
-status endpoint is not hammered; a cached "live" short-circuits the probe.
+The probe result is cached in the process dictionary of the calling process
+(`genesis_wasm_pid`); a cached "live" result skips the probe.
 
 - **Status-probe timeout.** The liveness `GET /status` uses a **short** timeout
   (on the order of 100 ms); a probe that does not answer in time is treated as
@@ -375,17 +367,18 @@ drives; it is pinned here because an independent legacy CU on the other side
 depends on byte-level agreement. The base URL is the **local** CU:
 `http://localhost:<genesis-wasm-port>` (default port **6363**, §6). Requests are
 issued as a relayed HTTP call; the **request body is JSON** with
-`Content-Type: application/json` and **caching disabled** (`no-store`,
-`no-cache`) — CU calls MUST NOT be served from a result cache. Responses are
-AOS2 JSON and are decoded via the `json-iface@1.0` `from` mapping.
+`Content-Type: application/json` (the `/state` body is the snapshot `data`, with
+the snapshot's `content-type` if it has one) and **caching disabled**
+(`no-store`, `no-cache`) — CU calls MUST NOT be served from a result cache.
+Responses are AOS2 JSON and are decoded via the `json-iface@1.0` `from` mapping.
 
 | Purpose | Method & path | Request body | Response → mapping |
 |---|---|---|---|
-| **Liveness** | `GET /status` | — | any 2xx ⇒ "running"; error/timeout ⇒ "not running" (§4.6) |
+| **Liveness** | `GET /status` | — | an `{ok, _}` answer (a status below 400, not 201) ⇒ "running"; any other answer or a timeout ⇒ "not running" (§4.6) |
 | **Assignment compute** | `POST /result/<slot>?process-id=<process-id>` | the assignment rendered as an AOS2 message body (the scheduled message for `<slot>`) | the response `body` is the AOS2 result JSON; decoded into a results message and stored under `results` (and `results/raw`) on state |
 | **Dryrun** | `POST /dry-run?process-id=<process-id>` | the request message (with `commitments` removed) rendered as the AOS2 "Message" JSON structure | as above; decoded into a results message but state is **not** persisted (read-only) |
 | **Snapshot** | `POST /snapshot/<process-id>` | `{}` | the CU's checkpoint response (its `data` is the process-memory blob); becomes the `snapshot` message |
-| **Load snapshot** | `POST /state` | the snapshot's `data` blob as the body, with the snapshot's other fields as headers | acknowledgement; used by `normalize` when adopting a checkpoint |
+| **Load snapshot** | `POST /state` | the snapshot's `data` blob as the body, with the snapshot's other fields, without `commitments`, as headers | acknowledgement; used by `normalize` when adopting a checkpoint |
 
 Contract requirements (MUST):
 
@@ -437,17 +430,12 @@ launch. The numeric env values are passed as the literal strings shown
 device). The CU's own stdout/stderr are captured and logged line-by-line; this is
 informational and not part of the contract.
 
-Additional node options consulted. ⚠ These are **node options** (global-config
-precedence): a resolution reached **through the node** (the request-handling layer
-above a bare local resolve) reads these with `prefer => global`, so the node's
-global config **wins over** any per-message `Opts` override — a caller cannot inject
-a different authority list (or port) per request. (A direct in-process resolve does
-not inject the flag, but a request that arrives via the node does.) Read them with
-`hb_opts:get`, which applies that precedence.
+Additional node options consulted, read with `hb_opts:get`: the value in `Opts`,
+else the `hb_opts` default message.
 
 | Option | Default | Used by |
 |---|---|---|
-| `genesis-wasm-import-authorities` | `[]` **in this spec** — ⚠ but a stock node's `hb_opts` default message **seeds a non-empty list** (one operator address), so on a default node import/discovery is **enabled**, not disabled, and the `no-import-authorities` branch is unreachable without an explicit empty override (which `prefer => global` may shadow). | import/discovery trust allow-list (§7) |
+| `genesis-wasm-import-authorities` | `[<<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>]` (the `hb_opts` default message), so on a default node import/discovery is **enabled**, and `{error, no_import_authorities}` needs an explicit `[]`. | import/discovery trust allow-list (§7) |
 | `genesis_wasm_port` | `6363` | the CU `GET /status` liveness-probe port (§4.6) |
 
 ## 7. Security & authority
@@ -471,8 +459,9 @@ not inject the flag, but a request that arrives via the node does.) Read them wi
   **import-authority allow-list**: discovery filters by trusted owners, and
   explicit-id import still requires a trusted signer, a verifiable commitment, a
   matching process, and a legacy target (§4.5). An empty allow-list disables
-  import entirely (`no-import-authorities`). A checkpoint that fails any check is
-  rejected with no store write.
+  import: discovery returns `{error, no_import_authorities}`, and an explicit-id
+  import fails as `untrusted`. A checkpoint that fails any check is rejected
+  with no store write.
 - **Process id requires a signed, verified process.** Deriving the process id
   (needed for every CU call) MUST reject an unsigned or unverifiable process
   definition (it throws rather than computing an id), so the bridge cannot be
@@ -488,21 +477,21 @@ not inject the flag, but a request that arrives via the node does.) Read them wi
 |---|---|
 | `{failure, #{ status := 500, message := <"…compiled with genesis-wasm@1.0…"> }}` | `compute` (and the shared delegate path) on a node **not** compiled with the genesis-wasm feature and with no live CU (ensure-started returned not-running). |
 | `{error, #{ status := 500, message := <"Genesis-wasm server not running."> }}` | `normalize` when ensure-started reports the CU is not running. |
-| `invalid-import-target` (`status 400`) | `import`: the target process is neither `variant = ao.TN.1` nor `execution-device = genesis-wasm@1.0`. |
+| `invalid_import_target` (`status 400`) | `import`: the target process is neither `variant = ao.TN.1` nor `execution-device = genesis-wasm@1.0`. |
 | `untrusted` (`status 400`) | `import`: no committer of the checkpoint is in the import-authority allow-list. |
 | `unverified` (`status 400`) | `import`: the checkpoint message does not `verify`. |
-| `process-mismatch` (`status 400`) | `import`: the checkpoint's `process` ≠ the target process id. |
+| `process_mismatch` (`status 400`) | `import`: the checkpoint's `process` ≠ the target process id. |
 | `not_found` | `import` with an explicit `import = <id>` that is absent from the store; or `latest-checkpoint` discovery finding no matching transaction. |
-| `no-import-authorities` | `latest-checkpoint`/`import` discovery when the import-authority allow-list is empty. |
+| `no_import_authorities` | `latest-checkpoint`/`import` discovery when the import-authority allow-list is empty. |
 | double-skip error (carries current state) | `compute`: a duplicate re-run that *itself* reports a skip whose request already had `skip = true` (§4.4) — aborts rather than looping. |
 | propagated `{failure, _}` | any CU HTTP/transport failure, or a CU answer that is not a result (decoded by the delegated layer). Passed up unchanged; `process@1.0` stores nothing for the slot, so a later `compute` of the slot calls the CU again. |
 | propagated `{error, _}` | any error surfaced by `dedup@1.0`/`patch@1.0`/the gateway/`message@1.0`. Passed up unchanged. |
 
 The `400`/`500` import/lifecycle errors are returned as **messages** carrying a
 `status` and a `message`/`body` field (HTTP-shaped), not bare atoms; the
-hyphenated atoms above name the internal failure causes that select those
-messages. The single bare atom this device originates from `message@1.0` style
-is `not_found`; `no-import-authorities` is a hyphenated cause atom.
+atoms above are the internal failure causes that select those messages.
+`not_found` and `no_import_authorities` are returned as `{error, not_found}`
+and `{error, no_import_authorities}`.
 
 ## 9. Composition
 
@@ -586,7 +575,8 @@ ensure-started / failure-closed paths.
    dryrun is `POST /dry-run?process-id=<id>`; snapshot is
    `POST /snapshot/<id>`; snapshot-load is `POST /state`; liveness is
    `GET /status` — all against `http://localhost:<genesis-wasm-port>` (default
-   6363), with `application/json` bodies and result caching disabled.
+   6363), with `application/json` bodies (the `/state` body is the snapshot
+   `data`) and result caching disabled.
 10. **Result is failure-propagating.** A CU transport/HTTP failure, or a CU
     answer that is not a result, makes the compute step return `{failure, _}`
     (never a silently-empty success), and `process@1.0` stores nothing for the
@@ -604,19 +594,20 @@ ensure-started / failure-closed paths.
     `execution-device = genesis-wasm@1.0`), a committer is in the
     import-authority allow-list, the checkpoint verifies, and its `process`
     matches the target id; each failure returns the corresponding error
-    (`invalid-import-target` / `untrusted` / `unverified` / `process-mismatch`,
+    (`invalid_import_target` / `untrusted` / `unverified` / `process_mismatch`,
     `status 400`) and writes nothing.
 14. **Import adoption & store writes.** On success `import` returns the target
-    process + `at-slot = <checkpoint nonce>` + `snapshot = <checkpoint>`, and
-    writes the **public** (snapshot-stripped) state under the process's
-    `compute@slot` and `latest` result paths and the **full** state under its
-    `restore@slot`/`restore` paths.
-15. **Discovery trust.** `latest-checkpoint` returns `no-import-authorities` when
-    the allow-list is empty; otherwise it returns only the single most-recent
-    checkpoint owned by a trusted authority for the process (or `not_found`).
+    process (as `lib_process:ensure_process_key/2` returns it) +
+    `at-slot = <checkpoint nonce>` + `snapshot = <checkpoint>`, and writes that
+    full state under the process's `computed/<process-id>/slot/<slot>` path.
+15. **Discovery trust.** `latest-checkpoint` returns
+    `{error, no_import_authorities}` when the allow-list is empty; otherwise it
+    returns only the single most-recent checkpoint owned by a trusted authority
+    for the process (or `not_found`).
 16. **Encodings.** Process ids and checkpoint ids are **base64url** (43-char),
     never hex; committers are URIs (`hb_committer:uri/2`); CU request bodies are
-    JSON; the slot is a decimal integer in the assignment-compute path.
+    JSON, except the `/state` body (the snapshot `data`); the slot is a decimal
+    integer in the assignment-compute path.
 
 ## 11. Out of scope
 
