@@ -78,14 +78,15 @@ key (the path segment) as a singleton **name** and returns the corresponding
 process (§4, `lookup-by-name`). Resolving `~node-process@1.0/<name>` therefore
 yields the process registered under `<name>` (spawning it first if required).
 
-The default handler MUST be installed such that the keys **`set`** and **`keys`**
-are **excluded** from it and fall through to the base identity device
-(`message@1.0`). These are message-mutation/inspection keys; capturing them as
-"names" would break `set`-ing on, or enumerating, a message that has this device
-bound. The exclude set is **exactly** `set` and `keys` — matching the sibling
-resolver devices `name@1.0` / `local-name@1.0`. Do **not** over-exclude: other
-reserved keys (`id`/`commit`/`verify`/`commitments`, …) need no entry here; they
-are handled by the normal resolution of the underlying `message@1.0` message.
+The default handler MUST be installed such that the keys **`committers`**,
+**`set`** and **`keys`** are **excluded** from it and fall through to the base
+identity device (`message@1.0`). These are message-mutation/inspection keys;
+capturing them as "names" would break `set`-ing on, or enumerating, a message
+that has this device bound. The exclude set is **exactly** `committers`, `set`
+and `keys` — matching the sibling resolver device `name@1.0`.
+Do **not** over-exclude: other reserved keys (`id`/`commit`/`verify`/
+`commitments`, …) have no entry here, and the default handler takes them as
+names to look up.
 
 Because the value the default handler returns is itself a `process@1.0` message
 (it carries `device = process@1.0`), **any further path segment after the name is
@@ -114,9 +115,10 @@ All keys are lowercase, hyphenated, binary on the wire.
   - `node-process-spawn-codec` (binary, optional, **default `httpsig@1.0`**) — the
     commitment device used to **sign** a spawned process definition (§5.3). (Some
     nodes set this to `ans104@1.0`.)
-  - the node's signing key (node wallet) — used to sign the spawned process and to
-    derive the operator address added to the process's `scheduler`/`authority`
-    and used as the registry `operator` (§5.2, §7).
+  - the node's signing key (node wallet) — used to sign the spawned process, to
+    derive the operator address added to the process's `scheduler`/`authority`,
+    and, as its committer URI (`hb_opts:committer/1`), as the registry
+    `operator` (§5.2, §7).
 
 ## 4. Resolved keys (normative)
 
@@ -194,8 +196,10 @@ for the requested `Name`:
    `register` is **operator-gated**, and the gate checks the **signers of the
    register request** against the node operator — so the register request MUST be
    **committed (signed) by the node key** (it does *not* read an `operator` field
-   off the request body). The node key's address is, by configuration, the node
-   operator. After this, `lookup` of `Name` finds the singleton (§7).
+   off the request body). The device sets the `operator` option of the
+   `register` call to the node's committer URI (`hb_opts:committer/1`), if the
+   node has one, so the node key is the operator for that call. After this,
+   `lookup` of `Name` finds the singleton (§7).
    - **Outcome:** a `register` return of `{ok, _}` is success (proceed to
      **Returns**). An `{error, Err}` return is a **registration failure** → return
      an error message with `status = 500`, `body = <<"Failed to register
@@ -318,8 +322,9 @@ lists are normalised to lists of base64url address strings.
   no scheduler state; nothing is created until a permitted lookup occurs.
 - **Determinism of the returned process.** The augmentation rule (§5.2) is
   deterministic, so the same base definition + same node key yield the same
-  augmented definition; the signature (and thus the ID) is deterministic for a
-  given codec and key over that definition.
+  augmented definition; the signature (and thus the ID) is not deterministic
+  for an RSA key: `rsa_pss:sign/3` uses a random salt, so each spawn gives a
+  new ID.
 - **Mutable at a constant path.** `~node-process@1.0/<name>` is **mutable at a
   constant path**: before first access it is `not_found` (or spawns); after, its
   *state-bearing* delegated reads (e.g. `<name>/now/...`) change as the process
@@ -345,7 +350,8 @@ lists are normalised to lists of base64url address strings.
   operator check) compares the **signers of the register request** against the node
   operator — it reads **no** `operator` field off the request body. So this device
   authorises the write by **committing (signing) the register request with the node
-  key**; the node key's address is, by configuration, the node operator. If the
+  key**, and sets the `operator` option of the `register` call to the node's
+  committer URI, so the node key is the operator for that call. If the
   node has **no** signing key the request is unsigned, and registration proceeds
   only insofar as the registry permits an unclaimed node (see `local-name@1.0`).
   Reimplementers MUST NOT bypass the registry's authority model.
@@ -373,10 +379,12 @@ lists are normalised to lists of base64url address strings.
   and a `details` field carrying the underlying registry error. (The process may
   have been scheduled/created even though the binding was not recorded; the exact
   `500` status and the exact `body` binary are normative.)
-- Errors arising inside the delegated steps — the scheduler `POST` (step 4), the
-  signing (step 3), or the registry lookup/registration beyond the mapped 500 —
-  propagate as encountered; this device does not re-wrap them except as specified
-  above.
+- Errors arising inside the delegated steps propagate as exceptions: a
+  scheduler `POST` (step 4) result other than `{ok, _}` raises
+  `error({badmatch, Result})`; a registry lookup result other than `{ok, _}`
+  or `{error, not_found}`, or a registration result other than `{ok, _}` or
+  `{error, _}`, raises `error({case_clause, Result})`; an exception in the
+  signing (step 3) propagates as raised.
 
 ## 9. Composition
 
@@ -397,9 +405,9 @@ lists are normalised to lists of base64url address strings.
   and registers the singleton, then the continuation runs against it. The first
   scheduled user message therefore lands on a freshly-bootstrapped process whose
   slot sequence has already been initialised (step 4).
-- **Excluded keys delegate to the base device.** `set` and `keys` (and the other
-  reserved keys) on a `~node-process@1.0`-bound message reach `message@1.0`, not
-  the name resolver, so binding the device onto a path and mutating/inspecting that
+- **Excluded keys delegate to the base device.** `committers`, `set` and `keys`
+  on a `~node-process@1.0`-bound message reach `message@1.0`, not the name
+  resolver, so binding the device onto a path and mutating/inspecting that
   message works.
 - **Operator wiring.** Operators configure singletons declaratively under
   `node-processes`; nothing else needs to instantiate them. Patterns in the wild
@@ -412,9 +420,8 @@ An implementation MUST exhibit the following externally observable behaviours:
 
 1. The device is a **default-handler** device with **no** named data keys of its
    own; resolving `~node-process@1.0/<name>` treats `<name>` as a singleton name
-   and returns the process for it. It **excludes** `set` and `keys` (and does not
-   capture the other reserved keys) so they fall through to the base identity
-   device.
+   and returns the process for it. It **excludes** `committers`, `set` and
+   `keys` so they fall through to the base identity device.
 2. **Lookup of an existing singleton** returns the registered process: a
    `process@1.0` message (`{ok, #{ <<"device">> := <<"process@1.0">>, ... }}`),
    loaded by the **signed** process ID recorded in the local name registry.
