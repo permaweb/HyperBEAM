@@ -71,8 +71,8 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
             ],
             Opts
         ),
-    % A `peer' named in the request is checked against the host policy. A
-    % `relay-route' is resolved through the node's own routes, so it names a
+    % A `peer' that the request gives is checked against the host policy.
+    % A relative `relay-route' is routed by the node's own routes, so it gives a
     % destination the node's configuration chose and is reached without a
     % check. The message relayed does not choose its own `peer': for the
     % `request' hook it is the inbound request, and the node's routes choose
@@ -185,17 +185,18 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
             <<"http-redirects">> => 0
         },
     % Decide where the request goes and whether the host was chosen by the
-    % node. A `relay-route' the node resolves through its own routes is trusted.
-    % A request `peer' or absolute `relay-path' is checked; a relative
-    % `relay-path' names no host and is routed by `hb_http:request/2', which
-    % fails closed when no route matches.
+    % node. A relative `relay-route' the node resolves through its own routes
+    % is trusted. A request `peer' or absolute `relay-path' is checked, and so
+    % is an absolute `relay-route', which the router sends to its own URL; a
+    % relative `relay-path' gives no host and is routed by `hb_http:request/2',
+    % which fails closed when no route matches.
     {RelayPeer, Destination, RouteOpts} =
         case RelayRoute of
             not_found ->
                 {RequestPeer, relay_destination(RequestPeer, RelayPath), HTTPOpts};
             _ ->
                 {Node, NodeOpts} = route_node(RelayRoute, RelayMethod, HTTPOpts),
-                {Node, undefined, NodeOpts}
+                {Node, relay_destination(not_found, RelayRoute), NodeOpts}
         end,
     RequestOpts = RouteOpts#{ <<"http-redirects">> => 0 },
     case is_blocked_host(Destination, Opts) of
@@ -229,18 +230,19 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
             end
     end.
 
-%% @doc The host the relay will contact: the `peer' when one is named,
-%% otherwise an absolute `relay-path'. A relative path names no host, so the
-%% node routes it through its own routes and there is nothing for
-%% `is_blocked_host/2' to vet: return `undefined'.
+%% @doc The host the relay will contact: the `peer' when the request gives one,
+%% otherwise an absolute `relay-path' or `relay-route'. A relative path gives
+%% no host, so the node routes it through its own routes and there is nothing
+%% for `is_blocked_host/2' to vet: return `undefined'.
 relay_destination(not_found, <<"http://", _/binary>> = Path) -> Path;
 relay_destination(not_found, <<"https://", _/binary>> = Path) -> Path;
 relay_destination(not_found, _RelativePath) -> undefined;
 relay_destination(Peer, _RelayPath) -> Peer.
 
-%% @doc The node that the node's own routes resolve `Route' to: the destination
-%% the node's configuration chose for that path, with its request options.
-%% Returns `{not_found, Opts}' when no route matches, leaving no peer to contact.
+%% @doc The node that the router resolves `Route' to, with its request options:
+%% for a relative path, the destination the node's configuration chose; for an
+%% absolute URL, the host of that URL. Returns `{not_found, Opts}' when no
+%% route matches, leaving no peer to contact.
 route_node(Route, Method, Opts) ->
     case hb_http:message_to_request(
             #{ <<"path">> => Route, <<"method">> => Method },
@@ -564,6 +566,17 @@ relay_absolute_internal_blocked_test() ->
         {error, blocked_host},
         relay_call(
             #{ <<"relay-path">> => <<Target/binary, "~meta@1.0/info/address">> },
+            #{}
+        )
+    ),
+    % The same URL as a `relay-route' is refused too.
+    ?assertEqual(
+        {error, blocked_host},
+        relay_call(
+            #{
+                <<"relay-route">> => <<Target/binary, "~meta@1.0/info/address">>,
+                <<"relay-path">> => <<"/~meta@1.0/info/address">>
+            },
             #{}
         )
     ).
