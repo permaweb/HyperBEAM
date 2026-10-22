@@ -575,14 +575,10 @@ await_response(Args, Opts) ->
                 when Limit =/= infinity, Counter + byte_size(Data) > Limit ->
             {error, too_much_data};
 		{data, fin, Data} ->
-			FinData = iolist_to_binary([Acc | Data]),
-			download_metric(FinData, Opts),
-			upload_metric(Args, Opts),
-			{ok,
-                hb_maps:get(status, Args, undefined, Opts),
-                hb_maps:get(headers, Args, undefined, Opts),
-                FinData
-            };
+			reply([Acc | Data], Args, Opts);
+		% After the trailers gun gives nothing more: return the reply.
+		{trailers, _Trailers} ->
+			reply(Acc, Args, Opts);
 		{error, timeout} = Response ->
 			record_response_status(Method, Response, Path, Opts),
             ?event(http_outbound, {gun_cancel, {path, Path}}),
@@ -607,14 +603,24 @@ await_response(Args, Opts) ->
 	end.
 
 %% @doc Return the next result of `gun:await/3' for the request. A `1xx' reply
-%% comes before the reply, so we wait for the next result. Trailers come after
-%% the reply's data and end it, so we return `{data, fin, <<>>}'.
+%% comes before the final one, so we wait for the next result.
 gun_await(PID, Ref, Timer) ->
     case gun:await(PID, Ref, inet:timeout(Timer)) of
         {inform, _Status, _Headers} -> gun_await(PID, Ref, Timer);
-        {trailers, _Trailers} -> {data, fin, <<>>};
         Message -> Message
     end.
+
+%% @doc Return the reply, with `Data' as its body, and record the bytes that
+%% the request sent and received.
+reply(Data, Args, Opts) ->
+    FinData = iolist_to_binary(Data),
+    download_metric(FinData, Opts),
+    upload_metric(Args, Opts),
+    {ok,
+        hb_maps:get(status, Args, undefined, Opts),
+        hb_maps:get(headers, Args, undefined, Opts),
+        FinData
+    }.
 
 %% @doc Debug `http` state logging.
 log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) ->
