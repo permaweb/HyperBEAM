@@ -83,7 +83,7 @@ only the per-slot result it returns and the snapshots the CU produces on request
 
   | Key | Type | Required | Meaning |
   |---|---|---|---|
-  | `process` | message | for compute/snapshot/normalize | the **signed** process definition; its id identifies the CU process (§5.1) |
+  | `process` | message | for compute/snapshot | the **signed** process definition; its id identifies the CU process (§5.1) |
   | `output-prefix` | binary | no (default `<<>>`) | sub-namespace under which the decoded result is written (read with `message@1.0` semantics) |
   | `snapshot` | message | only on `normalize` of a restored state | a CU snapshot to load back into the remote CU (§4.`normalize`) |
 
@@ -115,8 +115,9 @@ merging the decoded result into the process state.
 - **Reads:**
   - `output-prefix` from the base, read with `message@1.0` (identity-device)
     semantics; default **empty binary** `<<>>`.
-  - the **process id** (§5.1), derived from the **base message itself** (its own
-    committed id — preferred) or the request's `process-id` (the narrow fallback).
+  - the **process id** (§5.1), derived from the **base message** (the signed id
+    of its `process` key, or of its committed keys without one — preferred) or
+    the request's `process-id` (the narrow fallback).
   - `type` from the request (default treated as "not an assignment" ⇒ dry-run).
   - on an assignment: `slot` from the request, and the full request message (the
     assignment) which is encoded into the request body (§5.2).
@@ -190,12 +191,14 @@ without its transient `snapshot` key.
      key-normaliser does **not** case-fold *values*, so a lowercased/normalised
      compare silently skips the load) ⇒
      **load the state into the remote CU** (§5.5): POST the snapshot's `data` as
-     the body, and the snapshot's remaining keys (all keys except `data`) as
-     headers, to the CU's `/state` endpoint. The load result is observed but the
-     return value of `normalize` is the **normalised base** regardless.
+     the body, and the snapshot's remaining keys (all keys except `data` and
+     `commitments`) as headers, to the CU's `/state` endpoint. On `{ok, _}`
+     `normalize` returns the **normalised base**; on `{error, E}` or
+     `{failure, E}` it returns `{error, E}`.
   4. If `type` is anything other than `"Checkpoint"` ⇒ do **not** call the CU;
      just return the normalised base.
-- **Returns:** the **normalised base message** (the base with `snapshot` removed).
+- **Returns:** the **normalised base message** (the base with `snapshot`
+  removed), or `{error, _}` if the `/state` load fails.
   Per the interface convention, an implementation MAY return it bare (`Base'`) or
   wrapped (`{ok, Base'}`); the no-snapshot case returns `{ok, Base}`.
 - **Side effects:** when a `Checkpoint` snapshot is present, **one outbound HTTP
@@ -320,9 +323,9 @@ the `process-id` query parameter.
 
 - **Endpoint:** `POST /state`.
 - **Body:** the snapshot's **`data`** value (the opaque checkpoint blob).
-- **Headers:** the snapshot's remaining keys (every key **except** `data`),
-  forwarded as request headers; the content-type defaults to `application/json`
-  unless a `content-type` header is present among them.
+- **Headers:** the snapshot's remaining keys (every key **except** `data` and
+  `commitments`), forwarded as request headers; the content-type defaults to
+  `application/json` unless a `content-type` header is present among them.
 - **Relay options:** hashpath ignored; `cache-control: [no-store, no-cache]`.
 - The device treats the blob as **opaque**; its internal structure is the CU's
   concern.
@@ -344,14 +347,14 @@ the `process-id` query parameter.
 | `snapshot` | POST | `/snapshot/<id>` | `{}` (§5.6) |
 
 All four are dispatched through `relay@1.0`’s `call`; the **destination host** for
-these paths is chosen by the node's routing table (or an explicit relay peer), not
-by this device.
+these paths is the `delegated-compute-peer` node option (the relay `peer`), or,
+without it, chosen by the node's routing table.
 
 ## 6. Ordering, freshness & caching
 
-- **Not a pure function.** Every key except `init` performs a network request, so
-  results depend on the remote CU's state at call time. Re-resolving re-issues the
-  request.
+- **Not a pure function.** Every key except `init` (and `normalize` without a
+  `Checkpoint` snapshot) performs a network request, so results depend on the
+  remote CU's state at call time. Re-resolving re-issues the request.
 - **Result-cache bypass.** Every relay this device issues sets
   `cache-control: [no-store, no-cache]` and ignores the hashpath, so a node's
   HTTP result cache MUST NOT serve or store these calls. A correct implementation
@@ -388,10 +391,11 @@ by this device.
 - **No re-signing here.** This device does not commit (sign) anything itself. Any
   re-signing of the relayed request is governed by `relay@1.0`’s policy gate
   (`relay-allow-commit-request`) and is out of scope for this device.
-- **Network capability.** Each non-`init` key causes the node to make an outbound
-  HTTP request to the CU. Operators MUST scope the reachable CU endpoints via the
-  routing table; exposing this device lets callers cause the node to relay to the
-  configured CU.
+- **Network capability.** Each non-`init` key (except `normalize` without a
+  `Checkpoint` snapshot) causes the node to make an outbound HTTP request to the
+  CU. Operators MUST scope the reachable CU endpoints via the routing table;
+  exposing this device lets callers cause the node to relay to the configured
+  CU.
 - **Failure posture.** `compute` and `normalize` are **failure-propagating**
   (errors abort, no fabricated result — §8). `snapshot` is **failure-soft**: a
   relay failure is reported inside an `ok` message (`"No checkpoint produced."`)
@@ -405,9 +409,9 @@ by this device.
 
 | Condition | Outcome |
 |---|---|
-| `compute`/`snapshot` (NOT `normalize` — its `/state` load derives no id) : process definition present but **does not verify** | hard failure (raised/thrown). The shared derivation throws the **underscored** atom **`process_not_verified`** (often `{process_not_verified, <Process>}`), per the platform thrown-atom convention — *not* a hyphenated wire form. No relay is issued. |
-| `compute`/`snapshot`: process definition verifies but has **no signers** | hard failure (raised/thrown), the **underscored** atom **`process_has_no_signers`**. No relay is issued. |
-| `compute`: the derivation returns the `not_found` sentinel (no process identity on the base) **and** the request has no `process-id` | failure deriving the process id (a missing-key failure on `process-id`); no relay is issued. (Note §5.1: a normal signed base derives or throws — it does not reach this row.) |
+| `compute`/`snapshot` (NOT `normalize` — its `/state` load derives no id) : process definition present but **does not verify** | hard failure: the shared derivation raises `throw({process_not_verified, Process})`. No relay is issued. |
+| `compute`/`snapshot`: process definition verifies but has **no signers** | hard failure: `throw({process_has_no_signers, Process})`. No relay is issued. |
+| `compute`: the derivation returns the `not_found` sentinel (no process identity on the base) **and** the request has no `process-id` | hard failure (raised): `process-id` reads as `not_found`, and forming the relay request raises; no relay is issued. (Note §5.1: a normal signed base derives or throws — it does not reach this row.) |
 | `compute`: the relay returns a transport/routing error, or a result whose status-tag is `error`/`failure` | `{failure, <Reason>}` — the relay's own reason is returned **unchanged** under the `failure` tag (no result merged). The relay tags its result by HTTP status (via `relay@1.0`'s status→atom mapping: 2xx → `ok`/`created`, 4xx → `error`, ≥5xx → `failure`); this device returns an `error` or a `failure` tag as `{failure, _}`, and takes an `ok` answer as success only if its body is a result (§5.4). `process@1.0` stores nothing for a slot whose `compute` returns `{failure, _}`, so a later `compute` of the slot calls the CU again. |
 | `compute`: the relay answers `ok` with a body that is not a result (§5.4), such as `{}`, `{"error": "process not found"}` or `{"ok": false, "error": E}` | `{failure, #{ "status" => 502, "reason" => "Delegated compute answer is not a result.", "body" => <body> }}` — no result merged, and nothing is stored for the slot, as above. |
 | `compute`: the CU's body is **not JSON** | hard failure (raised): the JSON decode of the body raises, and no result is merged. |
@@ -415,7 +419,7 @@ by this device.
 
 The device's only failure of its own is the `502` for a body that is not a
 result; for a relay failure it returns the reason that `relay@1.0` produced. The
-`process-not-verified` / `process-has-no-signers` failures originate in the
+`process_not_verified` / `process_has_no_signers` failures originate in the
 process-id derivation shared with other process-execution devices.
 
 ## 9. Composition
@@ -424,12 +428,12 @@ process-id derivation shared with other process-execution devices.
   this device is driven by `process@1.0`: `init` once, then `compute` once per
   scheduled slot (with `normalize`/`snapshot` around state load/checkpoint). The
   process orchestrator swaps this device in for the execution step (input prefix
-  `process`, the output-prefix selecting the `results` sub-namespace) and restores
-  the process device afterwards.
+  `process`; it sets no `output-prefix`, so the result is set at `results`) and
+  restores the process device afterwards.
 - **Under `genesis-wasm@1.0`.** `genesis-wasm@1.0` is a thin wrapper that forwards
   its own `compute`/`normalize`/`snapshot` to this device (`{as,
   "delegated-compute@1.0", …}`), adding around it: a CU-availability check
-  (failing with a 500 "server not running" message if the CU is not up), `dedup@1.0`
+  (failing with a 500 if the CU is not up), `dedup@1.0`
   to suppress duplicate slot computations, and `patch@1.0` over `/results/outbox`
   to apply any state patches the result carries. A reimplementer of *this* device
   produces only the per-slot decoded `results`/`results/raw`; the dedup/patch/
@@ -458,11 +462,11 @@ An implementation MUST exhibit all of the following:
    **default `signed` selector** — derived via the shared helper with an *empty*
    selector source; the device does **not** use the request's `commitments` as a
    selector. A present process definition MUST verify and MUST have ≥1 signer, else
-   the operation throws the underscored `process_not_verified` /
-   `process_has_no_signers` and **no relay is issued**. The derivation never returns
-   a no-process sentinel for a normal base, so the request-`process-id` fallback is a
-   narrow/dead path; and only `compute` and `snapshot` derive the id — `normalize`
-   (the id-less `/state` load) does not.
+   the operation raises `throw({process_not_verified, Process})` /
+   `throw({process_has_no_signers, Process})` and **no relay is issued**. The
+   derivation never returns a no-process sentinel for a normal base, so the
+   request-`process-id` fallback is a narrow/dead path; and only `compute` and
+   `snapshot` derive the id — `normalize` (the id-less `/state` load) does not.
 4. **Assignment compute.** With request `type == "Assignment"`, `compute` relays
    `POST /result/<slot>?process-id=<id>` with the assignment rendered as AOS2
    assignments JSON (content-type `application/json`).
@@ -484,7 +488,8 @@ An implementation MUST exhibit all of the following:
    returns the base unchanged and issues no relay.
 10. **`normalize` Checkpoint.** With a `snapshot` whose `type == "Checkpoint"`,
     `normalize` relays `POST /state` with the snapshot's `data` as body and its
-    remaining keys as headers, then returns the base **with `snapshot` removed**.
+    remaining keys except `commitments` as headers, then returns the base
+    **with `snapshot` removed**.
     A non-`Checkpoint` snapshot is removed but **not** loaded (no relay).
 11. **`snapshot`.** `snapshot` relays `POST /snapshot/<id>` with body `{}`
     (content-type `application/json`); on success it returns the CU response
@@ -523,10 +528,11 @@ An implementation MUST exhibit all of the following:
 ## Open questions
 
 - **CU endpoint configuration is implicit in routing.** This device emits relative
-  paths (`/result/...`, `/dry-run`, `/state`, `/snapshot/...`) and relies entirely
-  on the node's routing table to resolve them to a concrete CU host. The spec
-  cannot pin *how* an operator binds a given process to a given CU (no `cu-url` /
-  `node` field is read by this device); that binding lives in router/node config.
+  paths (`/result/...`, `/dry-run`, `/state`, `/snapshot/...`) and sends them to
+  the peer in the `delegated-compute-peer` node option or, without it, through
+  the node's routing table. The spec cannot pin *how* an operator binds a given
+  process to a given CU (no `cu-url` / `node` field is read by this device);
+  that binding lives in router/node config.
   A reimplementer should match "emit these relative paths through the relay" and
   treat host selection as external — but confirm whether a deployment expects a
   per-process CU-URL field on the message that this device should read directly.
