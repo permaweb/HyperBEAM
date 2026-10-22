@@ -152,6 +152,19 @@ ei_term* decode_list(char* buff, int* index) {
     return res;
 }
 
+size_t function_sig_size(const wasm_externtype_t* type) {
+    // The signature of a function is '(', one char per parameter, ')', one
+    // char per result, and the closing '\0'. A non-function type gets the
+    // fixed buffer the signature path leaves untouched.
+    if (wasm_externtype_kind(type) != WASM_EXTERN_FUNC) {
+        return 256;
+    }
+    const wasm_functype_t* functype = wasm_externtype_as_functype_const(type);
+    const wasm_valtype_vec_t* params = wasm_functype_params(functype);
+    const wasm_valtype_vec_t* results = wasm_functype_results(functype);
+    return params->size + results->size + 3;
+}
+
 int get_function_sig(const wasm_externtype_t* type, char* type_str) {
     type_str[0] = '\0';
     if (wasm_externtype_kind(type) == WASM_EXTERN_FUNC) {
