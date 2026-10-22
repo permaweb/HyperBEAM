@@ -415,7 +415,18 @@ generate_item_with_target_tag_test() ->
     ?assertEqual(Anchor, hb_maps:get(<<"anchor">>, OnlyCommitted, undefined, #{})),
     Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?event({result, {initial, TX}, {result, Encoded}}),
-    ?assertEqual(TX, Encoded).
+    ?assertEqual(TX, Encoded),
+    % A `target' that is a message is bundled into the item's data.
+    Bundled =
+        hb_message:commit(
+            Msg#{ <<"target">> => #{ <<"k">> => <<"v">> } },
+            #{ <<"priv-wallet">> => hb:wallet() },
+            #{
+                <<"commitment-device">> => <<"ans104@1.0">>,
+                <<"bundle">> => true
+            }
+        ),
+    ?assert(hb_message:verify(Bundled)).
 
 generate_item_with_target_field_test() ->
     Msg =

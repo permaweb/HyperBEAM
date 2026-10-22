@@ -426,6 +426,14 @@ data_header_but_no_data_test() ->
         <<"field-data-root">> => hb_util:encode(DataRoot),
         <<"field-data-size">> => integer_to_binary(DataSize)
     },
+    % A `data-size' without a `data-root' stays a tag, so the TX verifies.
+    SizeOnly =
+        hb_message:commit(
+            maps:remove(<<"data-root">>, UnsignedTABM),
+            #{ <<"priv-wallet">> => hb:wallet() },
+            <<"tx@1.0">>
+        ),
+    ?assert(hb_message:verify(SizeOnly)),
     do_tx_roundtrips(
         UnsignedTX,
         UnsignedTABM,

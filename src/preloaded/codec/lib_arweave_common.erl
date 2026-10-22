@@ -850,11 +850,14 @@ data(TABM, Req, Opts) ->
 
 %% @doc Calculate data messages for large tag values or nested messages. A
 %% message's own `ao-type: binary' is carried in the data too, so that only the
-%% item of a bare binary has that tag.
+%% item of a bare binary has that tag. A `target' that is an ID is the item's
+%% target field: it is neither carried in the data nor counted as a tag.
 data_messages(TABM, Opts) when is_map(TABM) ->
+    #tx{ target = Target } = fields_to_tx(#tx{}, <<>>, TABM, Opts),
     UncommittedTABM =
         hb_maps:without(
-            [<<"commitments">>, <<"data">>, <<"target">>],
+            [<<"commitments">>, <<"data">>] ++
+                [ <<"target">> || Target =/= ?DEFAULT_TARGET ],
             hb_private:reset(TABM),
             Opts
         ),
