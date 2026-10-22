@@ -9,5 +9,12 @@
             "name": "cache-TEST/json-test-store",
             "ao-types": "atom=(\"store-module\")"
         }
+    ],
+    "priv-store": [
+        {
+            "store-module": "hb_store_fs",
+            "name": "cache-TEST/json-test-priv-store",
+            "ao-types": "atom=(\"store-module\")"
+        }
     ]
 }
