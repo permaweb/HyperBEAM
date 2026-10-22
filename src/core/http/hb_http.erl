@@ -1169,6 +1169,26 @@ send_large_signed_request_test() ->
             Req,
             #{ <<"http-client">> => gun }
         )
+    ),
+    % The keys that pass the budget of a message's headers go in the body.
+    ?assertMatch(
+        {ok, <<"value">>},
+        post(
+            hb_http_server:start_node(),
+            <<"//key">>,
+            hb_message:commit(
+                maps:from_list(
+                    [{<<"key">>, <<"value">>}] ++
+                        [
+                            {hb_util:human_id(crypto:strong_rand_bytes(32)), N}
+                        ||
+                            N <- lists:seq(1, 360)
+                        ]
+                ),
+                Opts
+            ),
+            #{ <<"http-client">> => gun }
+        )
     ).
 
 %% Test parallel requests

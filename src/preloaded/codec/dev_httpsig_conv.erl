@@ -33,6 +33,11 @@
 
 % The max header length is 4KB
 -define(MAX_HEADER_LENGTH, 4096).
+% The most bytes that the headers of a message take, with the
+% `signature-input' of a commitment over them. cowlib sends an HTTP/2 header
+% block in one frame of at most 16384 bytes: this leaves 4096 for the request
+% line, the headers of the transport and the parameters of the commitment.
+-define(MAX_HEADERS_SIZE, 12288).
 % https://datatracker.ietf.org/doc/html/rfc7231#section-3.1.1.4
 -define(CRLF, <<"\r\n">>).
 -define(DOUBLE_CRLF, <<?CRLF/binary, ?CRLF/binary>>).
@@ -429,12 +434,13 @@ to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
     end;
 to(TABM, _Req, FormatOpts, Opts) when is_map(TABM) ->
     CommitmentsMap = maps:get(<<"commitments">>, TABM, #{}),
+    Covered = covered_keys(CommitmentsMap, Opts),
     Stripped =
         encode_keys(
             without_unsigned_commitments(
                 hb_maps:without(
                     [<<"commitments">>, <<"priv">>] ++
-                        uncovered_body_keys(TABM, CommitmentsMap, Opts),
+                        uncovered_body_keys(TABM, Covered),
                     TABM,
                     Opts
                 ),
@@ -445,7 +451,8 @@ to(TABM, _Req, FormatOpts, Opts) when is_map(TABM) ->
     Intermediate =
         do_to(
             Stripped,
-            FormatOpts ++ [{inline, InlineFieldHdrs, InlineKey}],
+            FormatOpts ++
+                [{inline, InlineFieldHdrs, InlineKey}, {covered, Covered}],
             Opts
         ),
     % Finally, add the signatures to the encoded HTTP message with the
@@ -463,32 +470,39 @@ to(TABM, _Req, FormatOpts, Opts) when is_map(TABM) ->
         )
     }.
 
+%% @doc Return the keys, percent-encoded, that the commitments of a message
+%% cover, as the keys of a map, or `all' if it has no commitments.
+covered_keys(Commitments, _Opts) when map_size(Commitments) == 0 ->
+    all;
+covered_keys(Commitments, Opts) ->
+    maps:from_keys(
+        [
+            encode_key(Key)
+        ||
+            Commitment <- maps:values(Commitments),
+            Key <-
+                hb_util:message_to_ordered_list(
+                    maps:get(<<"committed">>, Commitment, []),
+                    Opts
+                )
+        ],
+        true
+    ).
+
 %% @doc Return the keys of a message with commitments that no commitment
 %% covers and that would be sent in the body. We do not send them: a commitment
 %% that covers the body covers all of it with its `content-digest', and a
 %% reader of a message with commitments keeps only the keys that they cover. A
 %% key that no commitment covers is still sent if it fits in a header.
-uncovered_body_keys(_TABM, Commitments, _Opts)
-        when map_size(Commitments) == 0 ->
+uncovered_body_keys(_TABM, all) ->
     [];
-uncovered_body_keys(TABM, Commitments, Opts) ->
-    Covered =
-        lists:append(
-            [
-                hb_util:message_to_ordered_list(
-                    maps:get(<<"committed">>, Commitment, []),
-                    Opts
-                )
-            ||
-                Commitment <- maps:values(Commitments)
-            ]
-        ),
+uncovered_body_keys(TABM, Covered) ->
     {_, InlineKey} = inline_key(TABM),
     [
         Key
     ||
         {Key, Value} <- maps:to_list(TABM),
-        not lists:member(Key, Covered),
+        not is_map_key(encode_key(Key), Covered),
         Key == <<"body">> orelse Key == InlineKey orelse
             lists:member(Key, ?RESERVED_HEADERS) orelse
             is_multipart(Key, Value) orelse
@@ -504,16 +518,19 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
             {inline, _InlineFieldHdrs, Key} -> Key;
             _ -> not_set
         end,
-    % Calculate the initial encoding from the TABM
-    Enc0 =
-        maps:fold(
-            fun(<<"body">>, Value, AccMap) ->
+    {covered, Covered} = lists:keyfind(covered, 1, FormatOpts),
+    % Calculate the initial encoding from the TABM, with its keys in order and
+    % the size of its headers so far.
+    {Enc0, _} =
+        lists:foldl(
+            fun({<<"body">>, Value}, {AccMap, Size}) ->
                     OldBody = maps:get(<<"body">>, AccMap, #{}),
-                    AccMap#{ <<"body">> => OldBody#{ <<"body">> => Value } };
-               (Key, Value, AccMap) when Key =:= InlineKey andalso InlineKey =/= not_set ->
+                    {AccMap#{ <<"body">> => OldBody#{ <<"body">> => Value } }, Size};
+               ({Key, Value}, {AccMap, Size})
+                        when Key =:= InlineKey andalso InlineKey =/= not_set ->
                     OldBody = maps:get(<<"body">>, AccMap, #{}),
-                    AccMap#{ <<"body">> => OldBody#{ InlineKey => Value } };
-               (Key, Value, AccMap) ->
+                    {AccMap#{ <<"body">> => OldBody#{ InlineKey => Value } }, Size};
+               ({Key, Value}, {AccMap, Size}) ->
                     % A key of the message that shares the name of a reserved
                     % header is carried in a body part. A `multipart/'
                     % `content-type' of the message is also carried in a body
@@ -527,17 +544,48 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
                                 is_multipart(Key, Value) orelse
                                 is_codec_media_type(Key, Value) orelse
                                 is_bundle_content_type(Key, TABM) of
-                            true -> #{ where => body };
-                            false -> #{}
+                            true -> body;
+                            false -> default_where(Value)
                         end,
-                    field_to_http(AccMap, {Key, Value}, Where)
+                    % A header takes the bytes of its name and value, 32 more
+                    % (RFC 9113, section 6.5.2), and its name and 3 more in the
+                    % `signature-input'. If the name of a header that the
+                    % commitments cover passes ?MAX_HEADER_LENGTH bytes, or the
+                    % headers would then pass ?MAX_HEADERS_SIZE bytes, carry it
+                    % in a body part. A key that no commitment covers neither
+                    % counts nor moves: a receiver reads each key in the body
+                    % as one that a `content-digest' covers.
+                    {NewWhere, NewSize} =
+                        case Where == headers andalso
+                                (Covered == all orelse is_map_key(Key, Covered)) of
+                            false -> {Where, Size};
+                            true ->
+                                HeaderSize =
+                                    2 * byte_size(Key) + byte_size(Value) + 35,
+                                case byte_size(Key) > ?MAX_HEADER_LENGTH orelse
+                                        Size + HeaderSize > ?MAX_HEADERS_SIZE of
+                                    true -> {body, Size};
+                                    false -> {headers, Size + HeaderSize}
+                                end
+                        end,
+                    {
+                        field_to_http(
+                            AccMap,
+                            {Key, Value},
+                            #{ where => NewWhere }
+                        ),
+                        NewSize
+                    }
             end,
             % Add any inline field denotations to the HTTP message
-            case lists:keyfind(inline, 1, FormatOpts) of
-                {inline, InlineFieldHdrs, _InlineKey} -> InlineFieldHdrs;
-                _ -> #{}
-            end,
-            maps:without([<<"priv">>], TABM)
+            {
+                case lists:keyfind(inline, 1, FormatOpts) of
+                    {inline, InlineFieldHdrs, _InlineKey} -> InlineFieldHdrs;
+                    _ -> #{}
+                end,
+                0
+            },
+            hb_util:to_sorted_list(maps:without([<<"priv">>], TABM))
         ),
     ?event_debug({prepared_body_map, {msg, Enc0}}),
     BodyMap = maps:get(<<"body">>, Enc0, #{}),

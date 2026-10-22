@@ -518,6 +518,13 @@ placed in the body):
   Every name is **percent-encoded** on the wire: a byte other than `a-z`, `0-9`
   and the RFC 9110 `tchar` punctuation other than `%` is encoded as `%xx` in
   lowercase hex. `from` decodes it.
+- The keys are placed in the byte order of their names, and each header field
+  counts the bytes of its name and value, 32 more, and its name and 3 more for
+  its entry in a `signature-input`. A value that the rule above emits as a
+  header field is lifted into the body instead if its name is over 4096 bytes,
+  or if its field would bring the count over **12,288 bytes**. In a message with
+  commitments, a key that none of them covers is placed by the rule above and
+  not counted.
 - Any other **binary** value is lifted into the multipart body as its own part.
 - A **map** (nested message) value is encoded as a part of the multipart body,
   recursively, preserving hierarchy. The fields of a part are keys of its
