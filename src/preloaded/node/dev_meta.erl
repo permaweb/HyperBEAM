@@ -166,7 +166,8 @@ adopt_node_message(Request, NodeMsg) ->
         true ->
             {error, <<"Node message is already permanent.">>};
         false ->
-            hb_http_server:set_opts(Request, NodeMsg)
+            % Merge the request into the server's node message.
+            hb_http_server:set_opts(Request, hb_http_server:get_opts(NodeMsg))
     end.
 
 is_permanent(NodeMsg) ->
@@ -325,6 +326,7 @@ authorized_set_node_msg_succeeds_test() ->
 			<<"store">> => StoreOpts
         }
     ),
+    NodeMsg = hb_http_server:get_opts(),
     {ok, SetRes} =
         hb_http:post(
             Node,
@@ -339,6 +341,14 @@ authorized_set_node_msg_succeeds_test() ->
             Opts
         ),
     ?event({res, SetRes}),
+    % Only the keys of the request and `node-history' change in the node
+    % message.
+    Changed =
+        [<<"path">>, <<"type">>, <<"test-config-item">>, <<"node-history">>],
+    ?assertEqual(
+        maps:without(Changed, NodeMsg),
+        maps:without(Changed, hb_http_server:get_opts())
+    ),
     {ok, Res} = hb_http:get(Node, <<"/~meta@1.0/info">>, Opts),
     ?event({res, Res}),
     ?assertEqual(<<"test2">>, hb_ao:get(<<"test-config-item">>, Res, Opts)),
