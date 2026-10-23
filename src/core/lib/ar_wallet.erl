@@ -322,10 +322,11 @@ load_key(Addr, Opts) ->
 load_keyfile(File) ->
     load_keyfile(File, #{}).
 
-%% @doc Extract the public and private key from a keyfile.
+%% @doc Extract the public and private key from a keyfile. An RSA key without
+%% its CRT values gets them, recovered from `n', `e' and `d'.
 load_keyfile(File, Opts) ->
     {ok, Body} = file:read_file(File),
-    from_json(Body, Opts).
+    with_crt(from_json(Body, Opts)).
 
 %% @doc Convert a wallet to JSON (JWK) format
 to_json(Wallet = #{ <<"type">> := Type = ?RSA_SIGN_TYPE }) ->
@@ -470,3 +471,69 @@ decompress_ecdsa_pubkey(<<Prefix:8, X:256>>)
             false -> P - Root
         end,
     <<4:8, X:256, Y:256>>.
+
+%% @doc Add the CRT values of an RSA key to its wallet, if it has none: recover
+%% them from `n', `e' and `d'. Return any other wallet as it is.
+with_crt(Wallet = #{ <<"type">> := ?RSA_SIGN_TYPE, <<"priv">> := Priv })
+        when not is_map_key(<<"p">>, Priv) ->
+    #'RSAPrivateKey'{ modulus = N, publicExponent = E, privateExponent = D } =
+        rsa_private_key(Wallet),
+    Wallet#{ <<"priv">> => maps:merge(Priv, recover_crt(N, E, D)) };
+with_crt(Wallet) ->
+    Wallet.
+
+%% @doc Recover the CRT values of an RSA key from `n', `e' and `d', with `p' the
+%% greater prime. If no prime of `n' is found, or the primes do not multiply to
+%% `n', return no CRT values.
+recover_crt(N, E, D) ->
+    case find_prime(N, odd_part(E * D - 1, 0), 100) of
+        {ok, Prime} ->
+            Other = N div Prime,
+            crt_values(max(Prime, Other), min(Prime, Other), N, D);
+        not_found ->
+            #{}
+    end.
+
+%% @doc Return the CRT values of the primes `P' and `Q' of `N', as a JWK gives
+%% them, if `P' and `Q' multiply to `N'. Otherwise return none.
+crt_values(P, Q, N, D) when P * Q =:= N, Q > 1 ->
+    #{
+        <<"p">> => binary:encode_unsigned(P),
+        <<"q">> => binary:encode_unsigned(Q),
+        <<"dp">> => binary:encode_unsigned(D rem (P - 1)),
+        <<"dq">> => binary:encode_unsigned(D rem (Q - 1)),
+        <<"qi">> => crypto:mod_pow(Q, P - 2, P)
+    };
+crt_values(_P, _Q, _N, _D) ->
+    #{}.
+
+%% @doc Find a prime of `N' (NIST SP 800-56B, appendix C), with
+%% `e * d - 1 = R * 2^T' and `R' odd: square `G^R' modulo `N', for a random
+%% `G', until it gives 1. If the value before 1 is not `N - 1', the gcd of `N'
+%% and that value minus 1 is a prime. Try up to `Tries' values of `G'.
+find_prime(_N, _RT, 0) ->
+    not_found;
+find_prime(N, {R, T}, Tries) ->
+    G = rand:uniform(N - 3) + 1,
+    case root_of_one(binary:decode_unsigned(crypto:mod_pow(G, R, N)), N, T) of
+        {ok, Root} when Root =/= N - 1 -> {ok, gcd(Root - 1, N)};
+        _ -> find_prime(N, {R, T}, Tries - 1)
+    end.
+
+%% @doc Square `X' modulo `N', up to `T' times, until it gives 1, and return the
+%% value before 1. If `X' is 1, there is none.
+root_of_one(1, _N, _T) -> not_found;
+root_of_one(_X, _N, 0) -> not_found;
+root_of_one(X, N, T) ->
+    case X * X rem N of
+        1 -> {ok, X};
+        Square -> root_of_one(Square, N, T - 1)
+    end.
+
+%% @doc Split `K' into `{R, T}', with `K = R * 2^T' and `R' odd.
+odd_part(K, T) when K band 1 =:= 0 -> odd_part(K bsr 1, T + 1);
+odd_part(R, T) -> {R, T}.
+
+%% @doc Return the greatest common divisor of two integers.
+gcd(A, 0) -> A;
+gcd(A, B) -> gcd(B, A rem B).

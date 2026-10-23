@@ -180,6 +180,8 @@ csr_key_test() ->
         ar_wallet:load_keyfile("test/key-1.json"),
     % Loading the key file keeps the primes of the key.
     ?assertMatch(#{ <<"priv">> := #{ <<"p">> := _, <<"q">> := _ } }, Wallet),
+    % Loading the key with only `n' and `d' recovers the same primes.
+    ?assertEqual(Wallet, ar_wallet:load_keyfile("test/key-1-no-primes.json")),
     {rsa, E} = ar_tx:deserialize_sig_type(Type),
     Encoded = csr(Wallet, [<<"localhost">>, <<"node.example">>]),
     CSR = public_key:der_decode('CertificationRequest', Encoded),
