@@ -714,13 +714,16 @@ parse_controllers(Address, _Opts) when is_binary(Address) -> [Address].
 
 %% @doc Store a wallet in the appropriate location.
 store_wallet(in_memory, KeyID, Details, Opts) ->
-    % Get existing wallets
-    CurrentWallets = hb_opts:get(priv_wallet_hosted, #{}, Opts),
+    % Get existing wallets from the node message, not the request's `Opts'.
+    NodeMsg = hb_http_server:get_opts(Opts),
+    CurrentWallets = hb_opts:get(priv_wallet_hosted, #{}, NodeMsg),
     % Add new wallet
     UpdatedWallets = CurrentWallets#{ KeyID => Details },
     ?event({wallet_store, {priv_updated_wallets, UpdatedWallets}}),
     % Update the node's options with the new wallets.
-    hb_http_server:set_opts(Opts#{ <<"priv-wallet-hosted">> => UpdatedWallets }),
+    hb_http_server:set_opts(
+        NodeMsg#{ <<"priv-wallet-hosted">> => UpdatedWallets }
+    ),
     ok;
 store_wallet(non_volatile, KeyID, Details, Opts) ->
     % Find the private store of the node.
@@ -802,8 +805,14 @@ test_wallet_generate_and_verify(GeneratePath, ExpectedName, CommitParams) ->
     Node = hb_http_server:start_node(#{
         <<"priv-wallet">> => ar_wallet:new()
     }),
+    NodeMsg = hb_http_server:get_opts(),
     % Generate wallet with specified parameters
     {ok, GenResponse} = hb_http:get(Node, GeneratePath, #{}),
+    % Only `priv-wallet-hosted' changes in the node message.
+    ?assertEqual(
+        NodeMsg,
+        maps:without([<<"priv-wallet-hosted">>], hb_http_server:get_opts())
+    ),
     % Should get wallet name in body, wallet-address, and auth cookie
     ?assertMatch(#{<<"body">> := _}, GenResponse),
     WalletAddr = maps:get(<<"wallet-address">>, GenResponse),
