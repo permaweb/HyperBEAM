@@ -59,7 +59,8 @@
 %%% cursor-only ID pages with known positions omit message reads. IDs without
 %%% positions must be readable before they can supply an edge.
 %%% Without an Arweave offset store, that path cannot order or filter by weave
-%%% position.
+%%% position. If reading an entry gives an error other than `not_found', the
+%%% page fails with that error.
 %%%
 %%% With selecting filters, `block' bounds are inclusive heights translated
 %%% to weave byte ranges.
@@ -529,7 +530,7 @@ read_id(#{ <<"offset">> := _, <<"cursor">> := Cursor },
 read_id(#{ <<"node">> := _ } = Edge, _Opts) ->
     [Edge];
 read_id(AnnotatedID, Opts) ->
-    case match_message(AnnotatedID, Opts) of
+    case read_match(AnnotatedID, Opts) of
         {ok, Msg} ->
             [AnnotatedID#{ <<"node">> =>
                 hb_private:set(Msg, <<"query-match">>, AnnotatedID, Opts)
@@ -1379,7 +1380,7 @@ match_edges(Matches, Opts) ->
     Read =
         hb_pmap:parallel_map(
             [maps:remove(<<"block-result">>, Match) || Match <- Matches],
-            fun(Match) -> match_message(Match, Opts) end,
+            fun(Match) -> read_match(Match, Opts) end,
             hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts)
         ),
     block_edges(lists:filtermap(
@@ -1402,6 +1403,15 @@ match_edges(Matches, Opts) ->
 %% @doc Preserve block-page cursors, or encode a match index member.
 match_cursor(#{ <<"cursor">> := Cursor }) -> Cursor;
 match_cursor(#{ <<"member">> := Member }) -> <<?MEMBER_CURSOR, Member/binary>>.
+
+%% @doc Read the message of a match. If the read gives an error other than
+%% `not_found', throw the error, so that the page fails.
+read_match(Match, Opts) ->
+    case match_message(Match, Opts) of
+        {error, not_found} -> {error, not_found};
+        {error, _} = Error -> throw(Error);
+        Read -> Read
+    end.
 
 %% @doc L1 metadata needs only its native header, not an expanded bundle.
 %% Other messages read by ID, or decode their header at a weave offset.

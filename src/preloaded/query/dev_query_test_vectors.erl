@@ -1105,6 +1105,16 @@ transactions_header_only_test_parallel() ->
     ID = <<"VJhGCNOw2zB0c9apKBs_LKXpPx6rctrw2kSlSSyI_SQ">>,
     ok = hb_store_arweave:write_offset(Store, ID, <<"tx@1.0">>,
         386086672048374, 2283569),
+    % A header read that the peers refuse (`429') fails the query.
+    {ok, Peer, Handle} = hb_mock_server:start([{"/tx/:id", tx, {429, <<>>}}]),
+    ?assertMatch(#{ <<"errors">> := [_ | _] }, dev_query_graphql:test_query(
+        hb_http_server:start_node(Opts#{ <<"priv-wallet">> => ar_wallet:new(),
+            <<"routes">> => [#{ <<"template">> => <<"^/arweave">>,
+                <<"node">> => #{ <<"match">> => <<"^/arweave">>, <<"with">> => Peer,
+                    <<"opts">> => #{ <<"http-client">> => httpc } } }] }),
+        <<"query($id: ID!) { transaction(id: $id) { id } }">>,
+        #{ <<"id">> => ID }, Opts)),
+    hb_mock_server:stop(Handle),
     {ok, Header} = hb_ao:resolve(#{ <<"path">> => <<"~arweave@2.9/tx">>,
         <<"tx">> => ID, <<"exclude-data">> => true }, Opts),
     TX = hb_message:convert(Header, <<"tx@1.0">>, Opts),
