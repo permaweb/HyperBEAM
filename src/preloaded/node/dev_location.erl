@@ -95,6 +95,19 @@ latest_known_nonce(Address, Opts) ->
         _ -> -1
     end.
 
+%% @doc Read the node's location record from the cache. If the `location_url'
+%% option is set, return `{error, not_found}' for a record with another `url'.
+read_current(Self, Opts) ->
+    maybe
+        {ok, Cached} ?= dev_location_cache:read(Self, Opts),
+        URL = hb_opts:get(location_url, not_found, Opts),
+        true ?=
+            URL =:= not_found orelse
+                URL =:= hb_maps:get(<<"url">>, Cached, not_found, Opts) orelse
+                {error, not_found},
+        {ok, Cached}
+    end.
+
 %% @doc Find the target to be used for during a request.
 find_target(Base, RawReq, Opts) ->
     % Ensure that the request is signed by the operator.
@@ -148,7 +161,7 @@ node(Base, RawReq, RawOpts) ->
             % A non-operator has requested that we generate a new location record.
             % First we check if we have a valid location record already and if
             % so return that instead.
-            case dev_location_cache:read(Self, Opts) of
+            case read_current(Self, Opts) of
                 {ok, Location} ->
                     {ok, Location};
                 {error, not_found} ->
@@ -498,6 +511,17 @@ unsigned_get_node_is_idempotent_test() ->
     ?assertEqual(
         hb_maps:get(<<"url">>, FirstLocation, not_found, #{}),
         hb_maps:get(<<"url">>, SecondLocation, not_found, #{})
+    ),
+    % If the node's `location-url' changes, an unsigned GET gives a new record.
+    hb_http_server:set_opts(
+        (hb_http_server:get_opts())#{
+            <<"location-url">> => <<"https://new.example">>
+        }
+    ),
+    {ok, ThirdRes} = hb_http:get(Node, <<"/~location@1.0/node">>, #{}),
+    ?assertMatch(
+        #{ <<"url">> := <<"https://new.example">> },
+        hb_ao:get(<<"body">>, ThirdRes, ThirdRes, #{})
     ).
 
 %% @doc Test that a scheduler location is registered on boot.
