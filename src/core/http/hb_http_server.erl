@@ -924,11 +924,11 @@ get_opts(NodeMsg) ->
 
 %% @doc Return `Opts' with the node message's key material if they hold no
 %% wallet, as request execution `Opts' do not. The node's `priv-wallet' is its
-%% committer.
+%% committer. If `Opts' give `identities', keep them.
 with_node_committer(Opts) ->
     case hb_opts:get(priv_wallet, undefined, Opts#{ <<"only">> => local }) of
         undefined ->
-            maps:merge(Opts, maps:with(?NODE_KEY_OPTS, get_opts(Opts)));
+            maps:merge(maps:with(?NODE_KEY_OPTS, get_opts(Opts)), Opts);
         _ -> Opts
     end.
 
@@ -1706,6 +1706,7 @@ set_opts_test() ->
     DefaultOpts = hb_opts:default_message_with_env(),
     start_node(DefaultOpts#{ 
         <<"priv-wallet">> => Wallet = ar_wallet:new(), 
+        <<"identities">> => #{},
         <<"port">> => rand:uniform(10000) + 10000 
     }),
     Opts = get_opts(#{ 
@@ -1740,7 +1741,11 @@ set_opts_test() ->
     Key3 = hb_opts:get(<<"hello3">>, not_found, UpdatedOpts3),
     ?event(debug_node_history, {node_history_length, length(NodeHistory3)}),
     ?assert(length(NodeHistory3) == 3),
-    ?assert(Key3 == <<"world3">>).
+    ?assert(Key3 == <<"world3">>),
+    % If request `Opts' give `identities', the node message keeps them.
+    Ids = #{ <<"zone">> => #{ <<"priv-wallet">> => ar_wallet:new() } },
+    set_opts(maps:remove(<<"priv-wallet">>, Opts#{ <<"identities">> => Ids })),
+    ?assertEqual(Ids, hb_opts:get(identities, not_found, get_opts(Opts))).
 
 set_tls_opts_rejected_test() ->
     ?assertEqual(
