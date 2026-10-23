@@ -34,9 +34,13 @@ ensure_host(Opts) ->
             case bootstrap_node_echo(Opts) of
                 {ok, Host} ->
                     % Set the host information in the persisted node message.
-                    NodeMsg = hb_http_server:get_opts(Opts),
-                    hb_http_server:set_opts(
-                        NodeMsg#{ <<"node-host">> => Host }
+                    hb_http_server:update_opts(
+                        fun(NodeMsg) ->
+                            hb_http_server:set_opts(
+                                NodeMsg#{ <<"node-host">> => Host }
+                            )
+                        end,
+                        Opts
                     ),
                     {ok, Opts#{ <<"node-host">> => Host }};
                 Error ->

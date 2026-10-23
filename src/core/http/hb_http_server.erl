@@ -105,7 +105,7 @@
 -module(hb_http_server).
 -export([start/0, start/1, start_application/0, allowed_methods/2, init/2]).
 -export([set_opts/1, set_opts/2, get_opts/0, get_opts/1, with_node_committer/1]).
--export([set_default_opts/1, set_proc_server_id/1]).
+-export([update_opts/2, set_default_opts/1, set_proc_server_id/1]).
 -export([static/3, static/4]).
 -export([start_node/0, start_node/1]).
 -export([resolve_request/3, error_reply/4, commit_reply/3]).
@@ -925,6 +925,16 @@ get_opts(NodeMsg) ->
         no_server_ref -> NodeMsg;
         ServerRef -> cowboy:get_env(ServerRef, node_msg, no_node_msg)
     end.
+
+%% @doc Call `Fun' with the node message of the server that `Opts' give, and
+%% return its result. Calls for one server run one at a time, so a `Fun' that
+%% sets the node message does not drop the change of another call. A `Fun'
+%% that calls `update_opts/2' for its own server waits for itself.
+update_opts(Fun, Opts) ->
+    hb_name:atomic(
+        {?MODULE, node_msg, hb_opts:get(http_server, no_server_ref, Opts)},
+        fun() -> Fun(get_opts(Opts)) end
+    ).
 
 %% @doc Return `Opts' with the node message's key material if they hold no
 %% wallet, as request execution `Opts' do not. The node's `priv-wallet' is its
@@ -1770,7 +1780,23 @@ set_opts_test() ->
     % If request `Opts' give `identities', the node message keeps them.
     Ids = #{ <<"zone">> => #{ <<"priv-wallet">> => ar_wallet:new() } },
     set_opts(maps:remove(<<"priv-wallet">>, Opts#{ <<"identities">> => Ids })),
-    ?assertEqual(Ids, hb_opts:get(identities, not_found, get_opts(Opts))).
+    ?assertEqual(Ids, hb_opts:get(identities, not_found, get_opts(Opts))),
+    % Updates at once keep the key that each of them sets.
+    Keys = [ <<"update-", (hb_util:bin(N))/binary>> || N <- lists:seq(1, 10) ],
+    hb_pmap:parallel_map(
+        Keys,
+        fun(Key) ->
+            update_opts(
+                fun(NodeMsg) ->
+                    timer:sleep(1),
+                    set_opts(NodeMsg#{ Key => true })
+                end,
+                Opts
+            )
+        end,
+        10
+    ),
+    ?assertEqual([], Keys -- maps:keys(get_opts(Opts))).
 
 set_tls_opts_rejected_test() ->
     ?assertEqual(

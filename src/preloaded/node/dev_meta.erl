@@ -167,7 +167,12 @@ adopt_node_message(Request, NodeMsg) ->
             {error, <<"Node message is already permanent.">>};
         false ->
             % Merge the request into the server's node message.
-            hb_http_server:set_opts(Request, hb_http_server:get_opts(NodeMsg))
+            hb_http_server:update_opts(
+                fun(ServerOpts) ->
+                    hb_http_server:set_opts(Request, ServerOpts)
+                end,
+                NodeMsg
+            )
     end.
 
 is_permanent(NodeMsg) ->

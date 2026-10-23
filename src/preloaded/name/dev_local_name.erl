@@ -140,9 +140,23 @@ update_names(LocalNames, Opts) ->
         no_server_ref ->
             ok;
         _ ->
-            ServerOpts = hb_http_server:get_opts(Opts),
-            hb_http_server:set_opts(
-                ServerOpts#{ <<"local-names">> => LocalNames }
+            hb_http_server:update_opts(
+                fun(ServerOpts) ->
+                    % Add `LocalNames' to the names in the node message.
+                    ServerNames =
+                        hb_opts:get(
+                            local_names,
+                            #{},
+                            ServerOpts#{ <<"only">> => local }
+                        ),
+                    hb_http_server:set_opts(
+                        ServerOpts#{
+                            <<"local-names">> =>
+                                maps:merge(ServerNames, LocalNames)
+                        }
+                    )
+                end,
+                Opts
             )
     end,
     NewOpts.

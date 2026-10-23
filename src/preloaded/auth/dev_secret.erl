@@ -714,15 +714,19 @@ parse_controllers(Address, _Opts) when is_binary(Address) -> [Address].
 
 %% @doc Store a wallet in the appropriate location.
 store_wallet(in_memory, KeyID, Details, Opts) ->
-    % Get existing wallets from the node message, not the request's `Opts'.
-    NodeMsg = hb_http_server:get_opts(Opts),
-    CurrentWallets = hb_opts:get(priv_wallet_hosted, #{}, NodeMsg),
-    % Add new wallet
-    UpdatedWallets = CurrentWallets#{ KeyID => Details },
-    ?event({wallet_store, {priv_updated_wallets, UpdatedWallets}}),
-    % Update the node's options with the new wallets.
-    hb_http_server:set_opts(
-        NodeMsg#{ <<"priv-wallet-hosted">> => UpdatedWallets }
+    hb_http_server:update_opts(
+        fun(NodeMsg) ->
+            % Get existing wallets from the node message.
+            CurrentWallets = hb_opts:get(priv_wallet_hosted, #{}, NodeMsg),
+            % Add new wallet
+            UpdatedWallets = CurrentWallets#{ KeyID => Details },
+            ?event({wallet_store, {priv_updated_wallets, UpdatedWallets}}),
+            % Update the node's options with the new wallets.
+            hb_http_server:set_opts(
+                NodeMsg#{ <<"priv-wallet-hosted">> => UpdatedWallets }
+            )
+        end,
+        Opts
     ),
     ok;
 store_wallet(non_volatile, KeyID, Details, Opts) ->

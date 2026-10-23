@@ -118,23 +118,7 @@ routes(M1, M2, Opts) ->
                     RouteOwners = hb_opts:get(route_owners, [Owner], Opts),
                     case lib_meta:authorized(RouteOwners, M2, Opts) of
                         {ok, Route} ->
-                            % Minimize the work performed by AO-Core to make the sort
-                            % more efficient.
-                            SortOpts = Opts#{ <<"hashpath">> => ignore },
-                            NewRoutes =
-                                lists:sort(
-                                    fun(X, Y) ->
-                                        hb_ao:get(<<"priority">>, X, SortOpts)
-                                            < hb_ao:get(<<"priority">>, Y, SortOpts)
-                                    end,
-                                    [Route|Routes]
-                                ),
-                            % Set the routes in the node message, not in `Opts'.
-                            NodeMsg = hb_http_server:get_opts(Opts),
-                            ok =
-                                hb_http_server:set_opts(
-                                    NodeMsg#{ <<"routes">> => NewRoutes }
-                                ),
+                            ok = insert_route(Route, Opts),
                             {ok, <<"Route added.">>};
                         {error, _} -> {error, not_authorized}
                     end;
@@ -169,6 +153,26 @@ routes(M1, M2, Opts) ->
         _ ->
             {ok, Routes}
     end.
+
+%% @doc Add a route to the routes of the node message, and sort them by
+%% `priority'.
+insert_route(Route, Opts) ->
+    % Minimize the work performed by AO-Core to make the sort more efficient.
+    SortOpts = Opts#{ <<"hashpath">> => ignore },
+    hb_http_server:update_opts(
+        fun(NodeMsg) ->
+            NewRoutes =
+                lists:sort(
+                    fun(X, Y) ->
+                        hb_ao:get(<<"priority">>, X, SortOpts)
+                            < hb_ao:get(<<"priority">>, Y, SortOpts)
+                    end,
+                    [Route | hb_opts:get(routes, [], NodeMsg)]
+                ),
+            hb_http_server:set_opts(NodeMsg#{ <<"routes">> => NewRoutes })
+        end,
+        Opts
+    ).
 
 %% @doc Find the appropriate route for the given message. If we are able to 
 %% resolve to a single host+path, we return that directly. Otherwise, we return
