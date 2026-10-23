@@ -868,7 +868,16 @@ get_schedule(Base, Req, Opts) ->
             ?event({redirect_received, {redirect, Redirect}}),
             case hb_opts:get(scheduler_follow_redirects, true, Opts) of
                 true ->
-                    case get_remote_schedule(ProcID, From, To, Redirect, Opts) of
+                    case
+                        get_remote_schedule(
+                            ProcID,
+                            find_process_message(ProcID, Base, undefined, Opts),
+                            From,
+                            To,
+                            Redirect,
+                            Opts
+                        )
+                    of
                         {ok, Res} ->
                             case uri_string:percent_decode(Format) of
                                 <<"application/aos-2">> ->
@@ -893,7 +902,7 @@ get_schedule(Base, Req, Opts) ->
 
 %% @doc Get a schedule from a remote scheduler, but first read all of the 
 %% assignments from the local cache that we already know about.
-get_remote_schedule(RawProcID, From, To, Redirect, Opts) ->
+get_remote_schedule(RawProcID, Proc, From, To, Redirect, Opts) ->
     % If we are responding to a legacy scheduler request we must add one to the
     % `from' slot to account for the fact that the legacy scheduler gives us
     % the slots _after_ the stated nonce.
@@ -908,6 +917,7 @@ get_remote_schedule(RawProcID, From, To, Redirect, Opts) ->
     ),
     do_get_remote_schedule(
         ProcID,
+        Proc,
         FromLocalCache,
         From + length(FromLocalCache),
         To,
@@ -917,7 +927,7 @@ get_remote_schedule(RawProcID, From, To, Redirect, Opts) ->
 
 %% @doc Get a schedule from a remote scheduler, unless we already have already
 %% read all of the assignments from the local cache.
-do_get_remote_schedule(ProcID, LocalAssignments, From, To, _, Opts)
+do_get_remote_schedule(ProcID, _, LocalAssignments, From, To, _, Opts)
         when (To =/= undefined) andalso (From >= To) ->
     % We already have all of the assignments from the local cache. Return them
     % as a bundle. We set the 'more' to `undefined' to indicate that there may
@@ -936,7 +946,15 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, _, Opts)
             {original_to, To}
         }),
     Res;
-do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
+do_get_remote_schedule(
+        ProcID,
+        Proc,
+        LocalAssignments,
+        From,
+        To,
+        Redirect,
+        Opts
+    ) ->
     % We don't have all of the assignments from the local cache, so we need to
     % fetch the rest from the remote scheduler.
     Node = node_from_redirect(Redirect, Opts),
@@ -1008,8 +1026,10 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                     {ok, NormSched} = 
                         case Variant of
                             <<"ao.N.1">> ->
-                                cache_remote_schedule(Variant, ProcID, Res, Opts),
-                                {ok, Res};
+                                {ok, Checked} =
+                                    check_remote_schedule(ProcID, Proc, Res, Opts),
+                                cache_remote_schedule(Variant, ProcID, Checked, Opts),
+                                {ok, Checked};
                             <<"ao.TN.1">> ->
                                 JSONRes =
                                     hb_json:decode(
@@ -1122,6 +1142,63 @@ cache_remote_schedule(_, ProcID, Schedule, Opts) ->
     case hb_opts:get(scheduler_async_remote_cache, true, Opts) of
         true -> spawn(Cacher);
         false -> Cacher()
+    end.
+
+%% @doc Return a schedule from a remote scheduler with the assignments before
+%% the first that none of the process's schedulers signed. If we refuse an
+%% assignment, we log it, and set `continues' to `true' so that a client does
+%% not take the assignments returned as the whole schedule.
+check_remote_schedule(ProcID, Proc, Schedule, Opts) ->
+    Schedulers =
+        parse_schedulers(
+            hb_ao:get_first(
+                [
+                    {Proc, <<"scheduler">>},
+                    {Proc, <<"scheduler-location">>}
+                ],
+                [],
+                Opts
+            )
+        ),
+    Assignments =
+        hb_util:message_to_ordered_list(
+            hb_ao:normalize_keys(
+                hb_ao:get(
+                    <<"assignments">>,
+                    Schedule,
+                    Opts#{ <<"hashpath">> => ignore }
+                ),
+                Opts
+            )
+        ),
+    case
+        lists:splitwith(
+            fun(Assignment) ->
+                lists:any(
+                    fun(Scheduler) ->
+                        hb_message:verify(Assignment, [Scheduler], Opts)
+                    end,
+                    Schedulers
+                )
+            end,
+            Assignments
+        )
+    of
+        {_, []} -> {ok, Schedule};
+        {Signed, [Refused | _]} ->
+            ?event(warning,
+                {refusing_remote_assignment,
+                    {proc_id, ProcID},
+                    {slot, hb_maps:get(<<"slot">>, Refused, undefined, Opts)},
+                    {signers, hb_message:signers(Refused, Opts)}
+                }
+            ),
+            lib_scheduler_formats:assignments_to_bundle(
+                ProcID,
+                Signed,
+                true,
+                Opts
+            )
     end.
 
 %% @doc Get the node URL from a redirect.
@@ -1898,6 +1975,86 @@ http_get_json_schedule_test_parallel_() ->
 					length(hb_maps:get(<<"edges">>, Assignments))
 				)
 			end}.
+
+%% @doc A node that reads a schedule from the process's scheduler on another
+%% node caches the assignment that the scheduler signed, and not one that
+%% another wallet signed, whether the read has the process in its base or
+%% has the process's ID and the node has the process in its cache. Its reply
+%% over HTTP stops before the assignment that another wallet signed.
+http_cache_remote_schedule_test_parallel_() ->
+    {timeout, 30, fun http_cache_remote_schedule/0}.
+http_cache_remote_schedule() ->
+    {SchedNode, SchedOpts} = http_init(),
+    {Node, Opts} = http_init(#{ <<"scheduler-async-remote-cache">> => false }),
+    {Node2, Opts2} =
+        http_init(#{ <<"scheduler-async-remote-cache">> => false }),
+    PMsg = hb_message:commit(test_process(SchedOpts), SchedOpts),
+    ProcID = hb_util:human_id(hb_message:id(PMsg, all, SchedOpts)),
+    % The scheduler assigns slot 0, and its store has a slot 1 that another
+    % wallet signed.
+    {ok, _} =
+        hb_ao:resolve(
+            PMsg,
+            #{
+                <<"path">> => <<"schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> => PMsg
+            },
+            SchedOpts
+        ),
+    Forged =
+        hb_message:commit(
+            #{
+                <<"variant">> => <<"ao.N.1">>,
+                <<"process">> => ProcID,
+                <<"slot">> => 1
+            },
+            #{ <<"priv-wallet">> => ar_wallet:new() }
+        ),
+    ok = dev_scheduler_cache:write(ProcID, Forged, SchedOpts),
+    Location =
+        hb_message:commit(
+            #{
+                <<"type">> => <<"location">>,
+                <<"url">> => SchedNode,
+                <<"nonce">> => 1,
+                <<"time-to-live">> => 60 * 60 * 1000
+            },
+            SchedOpts
+        ),
+    {ok, _} = hb_http:post(Node, <<"/~location@1.0/known">>, Location, #{}),
+    {ok, _} = hb_http:post(Node2, <<"/~location@1.0/known">>, Location, #{}),
+    % The read has the process in its base, and the node does not have it.
+    {ok, _} =
+        hb_ao:resolve(
+            PMsg,
+            #{
+                <<"path">> => <<"schedule">>,
+                <<"method">> => <<"GET">>,
+                <<"from">> => 0,
+                <<"to">> => 1
+            },
+            Opts
+        ),
+    ?assertMatch({ok, _}, dev_scheduler_cache:read(ProcID, 0, Opts)),
+    ?assertEqual(not_found, dev_scheduler_cache:read(ProcID, 1, Opts)),
+    % The read has the process's ID, and the node has the process.
+    {ok, _} = hb_cache:write(PMsg, Opts2),
+    {ok, Schedule} = http_get_schedule(Node2, PMsg, 0, 1),
+    % The reply stops before slot 1, and says that the schedule continues.
+    ?assertEqual(
+        {[<<"0">>], true},
+        {
+            hb_maps:keys(
+                hb_private:reset(
+                    hb_ao:get(<<"assignments">>, Schedule, Opts2)
+                )
+            ),
+            hb_ao:get(<<"continues">>, Schedule, Opts2)
+        }
+    ),
+    ?assertMatch({ok, _}, dev_scheduler_cache:read(ProcID, 0, Opts2)),
+    ?assertEqual(not_found, dev_scheduler_cache:read(ProcID, 1, Opts2)).
 
 %%% Benchmarks
 

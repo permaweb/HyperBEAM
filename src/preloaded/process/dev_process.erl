@@ -530,7 +530,8 @@ prepare_next_slot(ProcID, State, RawReq, Opts) ->
 %% the compute path that produced this slot.
 %%
 %% `push' values:
-%%   `true' / `<<"true">>'  - push, no `max-depth' set (unbounded recursion).
+%%   `true' / `<<"true">>'  - push with no `max-depth' set, so the node's
+%%                            `push_max_depth' option bounds the recursion.
 %%   non-negative integer N - push with `max-depth = N', so the fan-out
 %%                            unwinds at most N levels deep. See `dev_push'
 %%                            for `max-depth = 0' semantics: each outbox

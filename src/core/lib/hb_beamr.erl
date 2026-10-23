@@ -322,7 +322,11 @@ simple_wasm_test() ->
     {ok, File} = file:read_file("test/test.wasm"),
     {ok, WASM, _Imports, _Exports} = start(File),
     {ok, [Result]} = call(WASM, "fac", [5.0]),
-    ?assertEqual(120.0, Result).
+    ?assertEqual(120.0, Result),
+    % A module with an export whose signature is longer than 256 bytes
+    % starts: its signature does not overflow the buffer and end the VM.
+    {ok, WideFile} = file:read_file("test/test-wide.wasm"),
+    ?assertMatch({ok, _, _, _}, start(WideFile)).
 
 %% @doc Test that imported functions can be called from the WASM module.
 imported_function_test() ->

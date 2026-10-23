@@ -26,7 +26,8 @@
 %% @doc Execute a `call' request using a node's routes.
 %% 
 %% Supports the following options:
-%% - `target': The target message to relay. Defaults to the original message.
+%% - `relay-subject': The key of the request that contains the message to relay.
+%% Defaults to the original message.
 %% - `relay-path': The path to relay the message to. Defaults to the original path.
 %% - `method': The method to use for the request. Defaults to the original method.
 %% - `commit-request': Whether the request should be committed before dispatching.
@@ -34,7 +35,7 @@
 -spec call(
     #{ _ => _ },
     #{
-        target => binary(),
+        'relay-subject' => binary(),
         'relay-path' => binary(),
         method => binary(),
         peer => binary(),
@@ -44,7 +45,8 @@
 ) -> {ok, #{ _ => _ }} | {error, _}.
 call(M1, RawM2, Opts) ->
     ?event({relay_call, {m1, M1}, {raw_m2, RawM2}}),
-    {ok, BaseTarget} = hb_message:find_target(M1, RawM2, Opts),
+    {ok, BaseTarget} =
+        hb_message:find_subject(<<"relay-subject">>, M1, RawM2, Opts),
     ?event({relay_call, {message_to_relay, BaseTarget}}),
     RelayPath =
         hb_ao:get_first(
@@ -347,7 +349,7 @@ request(_Base, Req, Opts) ->
                     #{ <<"device">> => <<"relay@1.0">> },
                     #{
                         <<"path">> => <<"call">>,
-                        <<"target">> => <<"proxy-message">>,
+                        <<"relay-subject">> => <<"proxy-message">>,
                         <<"proxy-message">> =>
                             hb_util:ok(hb_maps:find(<<"request">>, Req, Opts))
                     }

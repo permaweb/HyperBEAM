@@ -1130,7 +1130,7 @@ maybe_sign(RawMsg, Codec, Opts) ->
 
 %% @doc Handle replying with cookies if the message contains them. Returns the
 %% new Cowboy `Req` object, and the message without the cookie keys that no
-%% commitment covers. Both `set-cookie' and `cookie' fields are treated as
+%% signature covers. Both `set-cookie' and `cookie' fields are treated as
 %% viable sources of cookies.
 reply_handle_cookies(Req, Message, Opts) ->
     {ok, Cookies} = hb_http:cookie(<<"extract">>, Message, #{}, Opts),
@@ -1169,11 +1169,19 @@ reply_handle_cookies(Req, Message, Opts) ->
                     Req,
                     SetCookieLines
                 ),
+            % If the message has no signers, remove its unsigned commitment
+            % with its cookie keys: `maybe_sign/3' commits to the keys that
+            % the reply sends.
             {
                 ok,
                 FinalReq,
                 hb_message:without_unless_signed(
-                    [<<"cookie">>, <<"set-cookie">>], Message, Opts
+                    [<<"cookie">>, <<"set-cookie">>],
+                    case hb_message:signers(Message, Opts) of
+                        [] -> hb_message:uncommitted(Message, Opts);
+                        _ -> Message
+                    end,
+                    Opts
                 )
             }
     end.

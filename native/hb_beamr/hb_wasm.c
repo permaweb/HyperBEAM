@@ -200,7 +200,7 @@ void wasm_initialize_runtime(void* raw) {
 
         //DRV_DEBUG("Import: %s.%s", module_name->data, name->data);
 
-        char* type_str = driver_alloc(256);
+        char* type_str = driver_alloc(function_sig_size(type));
         // TODO: What happpens here?
         if(!get_function_sig(type, type_str)) {
             // TODO: Handle other types of imports?
@@ -267,8 +267,16 @@ void wasm_initialize_runtime(void* raw) {
     proc->imports = imports;
     proc->externs = externs;
 
-    // Signatures of the exports, used until the init message is sent
-    char* export_sigs = driver_alloc(256 * exports.size);
+    // Signatures of the exports, used until the init message is sent. Each
+    // one is sized from its own type, as a function with many parameters
+    // needs more than the fixed 256 bytes.
+    size_t export_sigs_size = 0;
+    for (size_t i = 0; i < exports.size; i++) {
+        export_sigs_size +=
+            function_sig_size(wasm_exporttype_type(exports.data[i]));
+    }
+    char* export_sigs = driver_alloc(export_sigs_size);
+    size_t export_sig_offset = 0;
     for (size_t i = 0; i < exports.size; i++) {
         //DRV_DEBUG("Processing export %d", i);
         const wasm_exporttype_t* export = exports.data[i];
@@ -287,8 +295,9 @@ void wasm_initialize_runtime(void* raw) {
 
         }
 
-        char* type_str = export_sigs + (256 * i);
+        char* type_str = export_sigs + export_sig_offset;
         get_function_sig(type, type_str);
+        export_sig_offset += function_sig_size(type);
         DRV_DEBUG("Export: %s [%s] -> %s", name->data, kind_str, type_str);
 
         // 10 elements for each exported function

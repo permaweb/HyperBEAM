@@ -209,7 +209,7 @@ ID is `base64url(sha256(signature))`.
   fields, percent-decode field names, reconstruct `commitments` from
   the `signature` / `signature-input` fields (§5.9), and drop the wire-only fields
   (`signature`, `signature-input`, `content-digest`, a `multipart/*`
-  `content-type`, and `ao-body-key` unless it was a covered key). A binary or link
+  `content-type`, and `ao-body-key`). A binary or link
   base is returned unchanged.
 - **Returns:** `{ok, TABM}`.
 
@@ -309,13 +309,13 @@ produced for the commitment's `committed` key. The mapping is deterministic:
    such as `ao-types`, keeps its place), except for a `commit` request without
    `committed`, where it follows the order of the encoded message's keys.
 5. The **AO-Core** covered list (the commitment's `committed`) is built from the
-   wire list: `content-digest` is replaced by the covered keys carried in the
-   body that the list does not contain, in ascending byte order; each other
-   name has any `@`-prefix stripped and is percent-decoded; and, if the list
-   contains `ao-body-key`, `body` is replaced by its value and `ao-body-key` is
-   removed. This is a **plain ordered list** of the **original AO-Core key
-   names** (NOT a numbered message — the commitment's `committed` field is a
-   list; §5.2). Crucially:
+   wire list without its `ao-body-key` field (§6.1): `content-digest` is
+   replaced by the covered keys carried in the body that the list does not
+   contain, in ascending byte order; and each other name has any `@`-prefix
+   stripped and is percent-decoded. If the wire list contains `ao-body-key`,
+   `body` is replaced by its value. This is a **plain ordered list** of the
+   **original AO-Core key names** (NOT a numbered message — the commitment's
+   `committed` field is a list; §5.2). Crucially:
    - When a binary `body` (or a body-lifted field) was replaced by `content-digest`
      on the **wire**, the AO-Core `committed` list still names the **original body
      key(s)** (e.g. `body`, and any field whose value was lifted into the body) —
@@ -509,19 +509,31 @@ placed in the body):
 
 - A **binary** value of at most **4096 bytes** that does not start or end with a
   space or tab is emitted as a header field `name: value`, unless the name is
-  `signature`, `signature-input`, `content-digest`, `content-length`,
-  `connection`, `keep-alive`, `proxy-connection`, `te`, `trailer`,
-  `transfer-encoding` or `upgrade`, or the value is a `multipart/*` or
-  `application/x.ao.*` `content-type`. Every name is **percent-encoded** on the
-  wire: a byte other than `a-z`, `0-9` and the RFC 9110 `tchar` punctuation
-  other than `%` is encoded as `%xx` in lowercase hex. `from` decodes it.
+  `signature`, `signature-input`, `content-digest`, `ao-body-key`,
+  `content-length`, `connection`, `keep-alive`, `proxy-connection`, `te`,
+  `trailer`, `transfer-encoding` or `upgrade`, or the value is a `multipart/*` or
+  `application/x.ao.*` `content-type`, or it is the `content-type` of a message
+  that contains other messages, as values or as links: bundled, such a message
+  is multipart, so its own `content-type` is in a body part in every form.
+  Every name is **percent-encoded** on the wire: a byte other than `a-z`, `0-9`
+  and the RFC 9110 `tchar` punctuation other than `%` is encoded as `%xx` in
+  lowercase hex. `from` decodes it.
+- The keys are placed in the byte order of their names, and each header field
+  counts the bytes of its name and value, 32 more, and its name and 3 more for
+  its entry in a `signature-input`. A value that the rule above emits as a
+  header field is lifted into the body instead if its name is over 4096 bytes,
+  or if its field would bring the count over **12,288 bytes**. In a message with
+  commitments, a key that none of them covers is placed by the rule above and
+  not counted.
 - Any other **binary** value is lifted into the multipart body as its own part.
 - A **map** (nested message) value is encoded as a part of the multipart body,
-  recursively, preserving hierarchy.
-- The **inline body field** — `ao-body-key` if set, else `body`, else `data` — is
+  recursively, preserving hierarchy. The fields of a part are keys of its
+  message, `ao-body-key` included, and its body is its `body` key.
+- The **inline body field** — `body` if set, else `data` — is
   placed as the multipart `inline` part. If the message has only this one body
   value and no other body parts, it is emitted as the bare HTTP `body` with no
-  multipart wrapper.
+  multipart wrapper. An `ao-body-key: data` field gives a `data` inline body
+  field.
 
 ### 6.2 Multipart body
 
@@ -559,7 +571,7 @@ message).
 - `from(to(M))` yields `M`'s TABM, including reconstructed `commitments`, other
   than what `to` does not send (§4.4).
 - The wire-only fields `signature`, `signature-input`, `content-digest`, a
-  `multipart/*` `content-type`, and an unsigned `ao-body-key` are NOT present in
+  `multipart/*` `content-type`, and `ao-body-key` are NOT present in
   the decoded TABM.
 - Header-name casing on the wire is **lowercase**; names are percent-encoded
   (§6.1); values are emitted with `\`, CR and LF escaped as `\\`, `\r` and `\n`
@@ -683,7 +695,7 @@ An implementation MUST exhibit all of the following, each observable through
 13. **Codec round-trip.** `from(to(M))` reproduces `M`'s TABM and `commitments`,
     other than what `to` does not send (§4.4); the wire-only fields
     (`signature`, `signature-input`, `content-digest`, a `multipart/*`
-    `content-type`, an unsigned `ao-body-key`) are absent from the decoded TABM.
+    `content-type`, `ao-body-key`) are absent from the decoded TABM.
 14. **Multipart determinism.** The multipart boundary is
     `base64url(SHA-256(parts joined by CRLF))`; the same message always yields the
     same boundary and the same encoded bytes.

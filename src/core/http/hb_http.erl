@@ -271,10 +271,10 @@ only_result({ResponseStatus, Msg}, Opts) ->
                 {result_is_single_key, {key, Key}, {msg, Msg}},
                 Opts
             ),
-            case {Key, hb_maps:get(Key, Msg, undefined, Opts)} of
-                {<<"body">>, undefined} ->
+            case {Key, hb_maps:find(Key, Msg, Opts)} of
+                {<<"body">>, error} ->
                     {ResponseStatus, <<>>};
-                {_, undefined} ->
+                {_, error} ->
                     {failure,
                         <<
                             "Result key '",
@@ -282,7 +282,7 @@ only_result({ResponseStatus, Msg}, Opts) ->
                             "' not found in response."
                         >>
                     };
-                {_, Value} ->
+                {_, {ok, Value}} ->
                     {ResponseStatus, Value}
             end;
         false ->
@@ -727,6 +727,9 @@ simple_ao_resolve_unsigned_test() ->
         {ok, forbidden},
         post(URL, #{ <<"path">> => <<"//key2">>, <<"key2">> => forbidden }, test_opts())
     ),
+    % The atom `undefined' is a value of the result, not a missing body.
+    Undefined = #{ <<"path">> => <<"//key2">>, <<"key2">> => undefined },
+    ?assertEqual({ok, undefined}, post(URL, Undefined, test_opts())),
     % A request with no typed values of its own carries no `ao-types'.
     ?assertNotMatch(
         #{ headers := #{ <<"ao-types">> := _ } },
@@ -1167,6 +1170,26 @@ send_large_signed_request_test() ->
             hb_http_server:start_node(),
             <<"//node-message/short-trace-len">>,
             Req,
+            #{ <<"http-client">> => gun }
+        )
+    ),
+    % The keys that pass the budget of a message's headers go in the body.
+    ?assertMatch(
+        {ok, <<"value">>},
+        post(
+            hb_http_server:start_node(),
+            <<"//key">>,
+            hb_message:commit(
+                maps:from_list(
+                    [{<<"key">>, <<"value">>}] ++
+                        [
+                            {hb_util:human_id(crypto:strong_rand_bytes(32)), N}
+                        ||
+                            N <- lists:seq(1, 360)
+                        ]
+                ),
+                Opts
+            ),
             #{ <<"http-client">> => gun }
         )
     ).

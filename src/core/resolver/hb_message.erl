@@ -69,7 +69,7 @@
 -export([with_only_committed/2, with_only_committed/3]).
 -export([without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
--export([diff/3, match/2, match/3, match/4, find_target/3]).
+-export([diff/3, match/2, match/3, match/4, find_subject/4]).
 %%% Helpers:
 -export([default_tx_list/0, filter_default_keys/1]).
 %%% Debugging tools:
@@ -971,18 +971,16 @@ commitment_devices(#{ <<"commitments">> := Commitments }, Opts) ->
 commitment_devices(_Msg, _Opts) ->
     [].
 
-%% @doc Implements a standard pattern in which the target for an operation is
-%% found by looking for a `target' key in the request. If the target is `self',
-%% or not present, the operation is performed on the original message. Otherwise,
-%% the target names a key of the request, and the operation is performed on the
-%% value of that key. A `target' that names a key the request lacks gives
-%% `{error, not_found}'.
-find_target(Self, Req, Opts) ->
+%% @doc Return the message that an operation acts on. The value of `SubjectKey'
+%% in the request is the key of the request that contains the message. If that
+%% value is `self', or the request has no `SubjectKey', the message is `Self'.
+%% A key that the request lacks gives `{error, not_found}'.
+find_subject(SubjectKey, Self, Req, Opts) ->
 	GetOpts = Opts#{
         <<"hashpath">> => ignore,
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
     },
-    case hb_maps:get(<<"target">>, Req, <<"self">>, GetOpts) of
+    case hb_maps:get(SubjectKey, Req, <<"self">>, GetOpts) of
         <<"self">> -> {ok, Self};
         Key ->
             case hb_maps:find(Key, Req, GetOpts) of

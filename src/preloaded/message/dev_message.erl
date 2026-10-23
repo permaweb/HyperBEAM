@@ -301,7 +301,8 @@ committers(_, _, _) ->
     #{ _ => _ }
 ) -> {ok, #{ commitments := #{ _ => _ }, _ => _ }}.
 commit(Self, Req, Opts) ->
-    {ok, Base} = hb_message:find_target(Self, Req, Opts),
+    {ok, Base} =
+        hb_message:find_subject(<<"message-subject">>, Self, Req, Opts),
     % The empty key names no key, so no codec carries a commitment to it.
     case is_map_key(<<>>, Base) of
         true -> throw({invalid_key, <<>>});
@@ -393,22 +394,23 @@ keys_to_commit(Base, Req, Opts) ->
 %% commitments can be specified using the `ids' key. Each takes `all', `none',
 %% one address or ID, or a list of them. A message that lacks a committer or
 %% commitment the request names does not verify, nor does `committers=all'
-%% on a message without committers. The request is kept whole: `target' may
-%% name any of its keys as the message to verify, and its private element
-%% goes to the commitment device.
+%% on a message without committers. The request is kept whole: its
+%% `message-subject' may select any of its keys as the message to verify, and
+%% its private element goes to the commitment device.
 -spec verify(
     #{ _ => _ },
     #{
         committers => binary() | [binary()],
         ids => binary() | [binary()],
-        target => binary(),
+        'message-subject' => binary(),
         _ => _
     },
     #{ _ => _ }
 ) -> {ok, boolean()}.
 verify(Self, Req, Opts) ->
     % Get the target message of the verification request.
-    {ok, RawBase} = hb_message:find_target(Self, Req, Opts),
+    {ok, RawBase} =
+        hb_message:find_subject(<<"message-subject">>, Self, Req, Opts),
     CommitmentBase = ensure_commitments_loaded(RawBase, Opts),
     Commitments = maps:get(<<"commitments">>, CommitmentBase, #{}),
     % A request with neither `committers' nor `ids' verifies every
@@ -641,7 +643,8 @@ committed(Self, Req, Opts) ->
     % Get the target message of the verification request and ensure its 
     % commitments are loaded.
     {ok, RawBase} =
-        hb_message:find_target(
+        hb_message:find_subject(
+            <<"message-subject">>,
             Self,
             Req,
             Opts
@@ -1439,12 +1442,23 @@ test_verify(KeyType) ->
             #{ <<"hashpath">> => ignore }
         )
     ),
-    % A `target' naming a key the request lacks is refused, not answered.
+    % A request's `target', such as an item's, does not select the message.
+    ?assertEqual({ok, true},
+        hb_ao:resolve(
+            Signed,
+            #{ <<"path">> => <<"verify">>, <<"target">> => <<"process-id">> },
+            #{ <<"hashpath">> => ignore }
+        )
+    ),
+    % A `message-subject' that gives a key the request lacks is refused.
     ?assertError(
         {badmatch, {error, not_found}},
         hb_ao:resolve(
             Signed,
-            #{ <<"path">> => <<"verify">>, <<"target">> => <<"missing">> },
+            #{
+                <<"path">> => <<"verify">>,
+                <<"message-subject">> => <<"missing">>
+            },
             #{ <<"hashpath">> => ignore }
         )
     ),

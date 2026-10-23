@@ -66,7 +66,7 @@ preprocess(Msg1, Msg2, Opts) ->
                     #{ <<"device">> => <<"relay@1.0">> }, % Example: Relay device
                     #{
                         <<"path">> => <<"call">>,
-                        <<"target">> => <<"body">>, % Target the 'body' of the relay message
+                        <<"relay-subject">> => <<"body">>, % Relay the 'body' of the relay message
                         <<"body">> =>
                             % Get the raw request singleton
                             hb_ao:get(<<"request">>, Msg2, Opts#{ hashpath => ignore })

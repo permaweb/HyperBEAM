@@ -4,15 +4,18 @@
 -include("include/hb.hrl").
 
 fields_to_tx(TX, Prefix, Map, Opts) ->
-    TX#tx{
-        format = format_field(Prefix, Map, Opts),
-        target = target_field(Prefix, Map, Opts),
-        anchor = anchor_field(Prefix, Map, Opts),
-        quantity = quantity_field(Prefix, Map, Opts),
-        reward = reward_field(Prefix, Map, Opts),
-        data_root = data_root_field(Prefix, Map, Opts),
-        data_size = data_size_field(Prefix, Map, Opts)
-    }.
+    data_fields(
+        Prefix,
+        TX#tx{
+            format = format_field(Prefix, Map, Opts),
+            target = target_field(Prefix, Map, Opts),
+            anchor = anchor_field(Prefix, Map, Opts),
+            quantity = quantity_field(Prefix, Map, Opts),
+            reward = reward_field(Prefix, Map, Opts),
+            data_root = data_root_field(Prefix, Map, Opts),
+            data_size = data_size_field(Prefix, Map, Opts)
+        }
+    ).
 
 format_field(Prefix, Map, Opts) ->
     decoded_field(Prefix, <<"format">>, Map, 2, fun decode_format/1, Opts).
@@ -58,6 +61,17 @@ data_size_field(Prefix, Map, Opts) ->
         _ ->
             ?DEFAULT_DATA_SIZE
     end.
+
+%% @doc Keep a message's `data-root' and `data-size' as the fields of a format 2
+%% TX only together: Arweave verifies a TX with a data size only if it has a
+%% data root, and the reverse, so either one alone stays a tag. A commitment's
+%% `field-data-root' alone is the signed root of a TX with data.
+data_fields(Prefix, TX = #tx{ format = 2, data_root = Root, data_size = Size })
+        when Prefix =/= ?FIELD_PREFIX,
+             (Root =:= ?DEFAULT_DATA_ROOT) =/= (Size =:= ?DEFAULT_DATA_SIZE) ->
+    TX#tx{ data_root = ?DEFAULT_DATA_ROOT, data_size = ?DEFAULT_DATA_SIZE };
+data_fields(_Prefix, TX) ->
+    TX.
 
 excluded_tags(TX, TABM, Opts) ->
     lib_arweave_common:excluded_tags(TX, TABM, Opts) ++

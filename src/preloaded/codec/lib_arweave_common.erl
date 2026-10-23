@@ -6,7 +6,7 @@
 -export([verify_committed_keys/5]).
 -export([add_commitment/4]).
 -export([with_commitments/8]).
--export([bundle_hint/4, data/3, tags/5, excluded_tags/3]).
+-export([bundle_hint/4, data/4, tags/5, excluded_tags/3]).
 -export([item_hint/4, signed_children_hint/3]).
 -export([to/3, to/6, siginfo/6, fields_to_tx/4, decode/1]).
 -export([bundle_header/2, bundle_header/3]).
@@ -62,7 +62,7 @@ to(Device, TABM, Req, FieldsFun, ExcludedTagsFun, Opts) ->
             TABM,
             Opts
         ),
-    Data = data(TABM, Req, Opts),
+    Data = data(MaybeCommitment, TABM, Req, Opts),
     ?event({calculated_data, Data}),
     TX0 = siginfo(TABM, Req, Data, MaybeCommitment, FieldsFun, Opts),
     ?event({found_siginfo, TX0}),
@@ -399,6 +399,7 @@ with_unsigned_commitment(
         BaseFields, Item, Device, CommittedFields, Tags,
         UncommittedMessage, CommittedKeys, Opts) ->
     ID = hb_util:human_id(Item#tx.unsigned_id),
+    Bundle = bundle_commitment_key(Tags, UncommittedMessage, Opts),
     UncommittedMessage#{
         <<"commitments">> => #{
             ID =>
@@ -409,9 +410,10 @@ with_unsigned_commitment(
                             <<"commitment-device">> => Device,
                             <<"committed">> => CommittedKeys,
                             <<"type">> => <<"unsigned-sha256">>,
-                            <<"bundle">> => bundle_commitment_key(Tags, Opts),
+                            <<"bundle">> => Bundle,
                             <<"original-tags">> => original_tags(
-                                BaseFields, Item, Opts)
+                                BaseFields, Item, Opts),
+                            <<"avro-form">> => avro_form(Item)
                         },
                         Opts
                     ),
@@ -426,6 +428,7 @@ with_signed_commitment(
         BaseFields, Item, Device, FieldCommitments, Tags,
         UncommittedMessage, CommittedKeys, Opts) ->
     ID = hb_util:human_id(Item#tx.id),
+    Bundle = bundle_commitment_key(Tags, UncommittedMessage, Opts),
     ExtraCommitments = hb_maps:merge(
         FieldCommitments,
         hb_maps:with(?BUNDLE_KEYS, Tags),
@@ -442,9 +445,10 @@ with_signed_commitment(
                     <<"signature">> => hb_util:encode(Item#tx.signature),
                     <<"owner">> => hb_util:encode(Item#tx.owner),
                     <<"type">> => ar_tx:serialize_sig_type(Item#tx.signature_type),
-                    <<"bundle">> => bundle_commitment_key(Tags, Opts),
+                    <<"bundle">> => Bundle,
                     <<"original-tags">> => original_tags(
-                        BaseFields, Item, Opts)
+                        BaseFields, Item, Opts),
+                    <<"avro-form">> => avro_form(Item)
                 },
                 Opts
             ),
@@ -458,14 +462,16 @@ with_signed_commitment(
 
 %% @doc Return the bundle key for an item: whether its nested messages are
 %% bundled in its data. An item whose nested messages are not bundled links
-%% each with a tag whose value is an `ao:' URI, and bundles only the values
-%% that are too large for tags.
-bundle_commitment_key(Tags, Opts) ->
+%% each with an `ao:' URI, and bundles only the values that are too large for
+%% tags. The link of the message of the data key, or of a key too long for a
+%% tag name, is an item in the data, not a tag, so links are read from the
+%% values of `Message', the message decoded from the item.
+bundle_commitment_key(Tags, Message, Opts) ->
     hb_util:bin(
         hb_maps:is_key(<<"bundle-format">>, Tags, Opts) andalso
             not lists:any(
                 fun({Key, Value}) -> ?IS_LINK(hb_link:decode(Key, Value)) end,
-                hb_maps:to_list(Tags, Opts)
+                hb_maps:to_list(Message, Opts)
             )
     ).
 
@@ -494,6 +500,11 @@ original_tags(BaseFields, Item, _Opts) ->
         true -> unset;
         false -> encoded_tags_to_map(Item#tx.tags)
     end.
+
+%% @doc Return the base64url of the Avro form of an item's tags
+%% (`ar_bundles_avro'), or `unset' for an empty Avro form.
+avro_form(#tx{ avro_form = <<>> }) -> unset;
+avro_form(#tx{ avro_form = AvroForm }) -> hb_util:encode(AvroForm).
 
 %% @doc Convert an ANS-104 encoded tag list into a HyperBEAM-compatible map.
 encoded_tags_to_map(Tags) ->
@@ -683,7 +694,8 @@ request_fields(Req, Message, FieldsFun, Opts) ->
 %% @doc Convert a commitment to a base TX record. Its fields and tags are the
 %% commitment's while the message holds their values. A message changed after
 %% signing is given its own fields and committed keys' values instead, so the
-%% commitment's signature does not verify the item.
+%% commitment's signature does not verify the item. The Avro form of the tags
+%% is the commitment's, or empty for a changed message.
 commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts) ->
     Signature =
         hb_util:decode(
@@ -699,6 +711,8 @@ commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts) ->
             {ok, OriginalTags} -> original_tags_to_tags(OriginalTags);
             error -> []
         end,
+    AvroForm =
+        hb_util:decode(hb_maps:get(<<"avro-form">>, Commitment, <<>>, Opts)),
     SignatureType = ar_tx:deserialize_sig_type(
         maps:get(<<"type">>, Commitment)
     ),
@@ -710,11 +724,13 @@ commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts) ->
         owner = Owner,
         signature = Signature,
         signature_type = SignatureType,
-        tags = Tags
+        tags = Tags,
+        avro_form = AvroForm
     },
     case holds_signed_values(Commitment, Tags, Message, Data, Opts) of
         true -> FieldsFun(TX, ?FIELD_PREFIX, Commitment, Opts);
-        false -> FieldsFun(TX#tx{ tags = [] }, <<>>, Message, Opts)
+        false ->
+            FieldsFun(TX#tx{ tags = [], avro_form = <<>> }, <<>>, Message, Opts)
     end.
 
 %% @doc Check that a message still holds the values of the fields and tags
@@ -814,8 +830,8 @@ decode(Encoded) ->
     end.
 
 %% @doc Calculate the data field for a message.
-data(TABM, Req, Opts) ->
-    DataKey = inline_key(TABM),
+data(MaybeCommitment, TABM, Req, Opts) ->
+    DataKey = inline_key(MaybeCommitment, TABM, Opts),
     UnencodedNestedMsgs = data_messages(TABM, Opts),
     NestedMsgs =
         hb_maps:map(
@@ -838,11 +854,16 @@ data(TABM, Req, Opts) ->
 
 %% @doc Calculate data messages for large tag values or nested messages. A
 %% message's own `ao-type: binary' is carried in the data too, so that only the
-%% item of a bare binary has that tag.
+%% item of a bare binary has that tag. So is its own `ao-data-key': decoding
+%% reads an `ao-data-key' tag as the key of the item's data. A `target' that is
+%% an ID is the item's target field: it is neither carried in the data nor
+%% counted as a tag.
 data_messages(TABM, Opts) when is_map(TABM) ->
+    #tx{ target = Target } = fields_to_tx(#tx{}, <<>>, TABM, Opts),
     UncommittedTABM =
         hb_maps:without(
-            [<<"commitments">>, <<"data">>, <<"target">>],
+            [<<"commitments">>, <<"data">>] ++
+                [ <<"target">> || Target =/= ?DEFAULT_TARGET ],
             hb_private:reset(TABM),
             Opts
         ),
@@ -854,6 +875,7 @@ data_messages(TABM, Opts) when is_map(TABM) ->
                     byte_size(Value) > ?MAX_TAG_VALUE_SIZE
                     orelse byte_size(Key) > ?MAX_TAG_NAME_SIZE
                     orelse {Key, Value} =:= {<<"ao-type">>, <<"binary">>}
+                    orelse Key =:= <<"ao-data-key">>
             end
         end,
         UncommittedTABM,
@@ -881,7 +903,7 @@ tags(TX, MaybeCommitment, TABM, ExcludedTagKeys, Opts) ->
         CommittedTagKeys
     ),
     bundle_tags_to_tags(MaybeCommitment) ++
-        committed_tag_keys_to_tags(TABM, TagKeys, Opts).
+        committed_tag_keys_to_tags(MaybeCommitment, TABM, TagKeys, Opts).
 
 committed_tag_keys({ok, _, Commitment}, _TABM, Opts) ->
     lists:map(
@@ -922,8 +944,8 @@ exclude_anchor_tag(TX, TABM, Opts) ->
     end.
 
 %% @doc Apply the `ao-data-key' to the committed keys.
-committed_tag_keys_to_tags(TABM, Committed, Opts) ->
-    DataKey = inline_key(TABM),
+committed_tag_keys_to_tags(MaybeCommitment, TABM, Committed, Opts) ->
+    DataKey = inline_key(MaybeCommitment, TABM, Opts),
     ?event(
         {tags_before_data_key,
             {tag_keys, Committed},
@@ -958,20 +980,27 @@ bundle_tags_to_tags({ok, _, Commitment}) ->
 bundle_tags_to_tags(_) ->
     [].
 
-%% @doc Determine if an `ao-data-key' should be added to the message.
-inline_key(Msg) ->
-    InlineKey = maps:get(<<"ao-data-key">>, Msg, undefined),
+%% @doc Return the key whose value is the data of a message's item: `data' if
+%% the message has a `data'. Otherwise, a message with a commitment uses the
+%% value of the `ao-data-key' tag in the commitment's `original-tags', or
+%% `data'. A message without a commitment uses `body' if its `body' is not a
+%% link, or `data'.
+inline_key(MaybeCommitment, Msg, Opts) ->
     case {
-        InlineKey,
         maps:get(<<"data">>, Msg, ?DEFAULT_DATA) == ?DEFAULT_DATA,
+        MaybeCommitment,
         maps:is_key(<<"body">>, Msg)
             andalso not ?IS_LINK(
                 hb_link:decode(maps:get(<<"body">>, Msg, undefined))
             )
     } of
-        {Explicit, _, _} when Explicit =/= undefined ->
-            InlineKey;
-        {_, true, true} ->
+        {true, {ok, _, Commitment}, _} ->
+            OriginalTags =
+                hb_maps:get(<<"original-tags">>, Commitment, #{}, Opts),
+            Tags =
+                tags(#tx{ tags = original_tags_to_tags(OriginalTags) }, Opts),
+            maps:get(<<"ao-data-key">>, Tags, <<"data">>);
+        {true, _, true} ->
             <<"body">>;
         _ ->
             <<"data">>

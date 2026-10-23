@@ -76,7 +76,7 @@ read(_M1, M2, Opts) ->
             Failure
     end.
 
-%% @doc Write a binary or store request on behalf of the node operator.
+%% @doc Write a binary or a message on behalf of the node operator.
 %% The request must sign `type: cache-write'. Set `write-type: batch' to write
 %% each value in a map body separately.
 write(_Base, Req, Opts) ->
@@ -100,8 +100,8 @@ write(_Base, Req, Opts) ->
     end.
 
 %% @doc Helper function to write a single data item to the cache.
-%% Writes store-shaped request maps directly to the store layer, or stores
-%% direct binaries in the cache and returns their derived path.
+%% Writes a binary or a message to the cache, and returns its path: the `ni:'
+%% name of a binary, or the unsigned ID of a message.
 %%
 %% @param Body The data to be written.
 %% @param Opts A map of configuration options.
@@ -118,13 +118,11 @@ write_single(Body, Opts) ->
                     <<"body">> => <<"No body to write.">>
                 }
             };
-        Binary when is_binary(Binary) ->
-            ?event(dev_cache, {write_single, {processing_binary, Binary}}),
-            {ok, Path} = hb_cache:write(Binary, Opts),
-            ?event(dev_cache, {write_single, {binary_written, Path}}),
+        Value when is_binary(Value); is_map(Value); is_list(Value) ->
+            ?event(dev_cache, {write_single, {processing_value, Value}}),
+            {ok, Path} = hb_cache:write(Value, Opts),
+            ?event(dev_cache, {write_single, {value_written, Path}}),
             {ok, #{ <<"status">> => 200, <<"path">> => Path }};
-        Req when is_map(Req) ->
-            wrap_store_result(hb_store:write(Req, Opts));
         _Other ->
             ?event(dev_cache, {write_single, {error, <<"Invalid write type">>}}),
             {error,
@@ -134,11 +132,6 @@ write_single(Body, Opts) ->
                 }
             }
     end.
-
-wrap_store_result(ok) ->
-    {ok, #{ <<"status">> => 200 }};
-wrap_store_result(OtherResult) ->
-    OtherResult.
 
 %%%--------------------------------------------------------------------
 %%% Test Helpers
@@ -235,5 +228,20 @@ cache_write_binary_test() ->
     {ok, ReadData} = hb_cache:read(Path, Opts),
     ?event(dev_cache, {cache_api_test, {data_read, ReadData}}),
     ?assertEqual(TestData, ReadData),
+    % A message with a nested message reads back by the ID its write returns.
+    Msg = #{ <<"child">> => #{ <<"key">> => <<"value">> } },
+    {ok, #{ <<"path">> := ID }} =
+        hb_http:post(
+            Node,
+            hb_message:commit(
+                (hb_message:uncommitted(Write))#{ <<"body">> => Msg },
+                #{ <<"priv-wallet">> => Wallet }
+            ),
+            Opts
+        ),
+    ?assertEqual(
+        {ok, <<"value">>},
+        hb_http:get(Node, <<"/", ID/binary, "/child/key">>, Opts)
+    ),
     ?event(dev_cache, {cache_api_test}),
     ok.

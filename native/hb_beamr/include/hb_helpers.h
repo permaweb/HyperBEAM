@@ -85,6 +85,20 @@ int erl_terms_to_wasm_vals(wasm_val_vec_t* vals, ei_term* terms);
 ei_term* decode_list(char* buff, int* index);
 
 /*
+ * Function: function_sig_size
+ * --------------------
+ * Gives the number of bytes `get_function_sig' needs for a WASM external
+ * type, so its caller sizes the buffer from the type, not from a fixed
+ * length.
+ *
+ *  type: The WASM external type.
+ *
+ *  returns: '(' + one byte per parameter + ')' + one byte per result + the
+ *  closing '\0' for a function type; a fixed 256 for any other type.
+ */
+size_t function_sig_size(const wasm_externtype_t* type);
+
+/*
  * Function: get_function_sig
  * --------------------
  * Retrieves the function signature as a string from a WASM external type.

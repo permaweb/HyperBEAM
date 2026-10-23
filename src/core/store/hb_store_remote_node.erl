@@ -60,7 +60,7 @@ remote_read(Opts = #{ <<"node">> := Node }, Key) ->
     case HTTPRes of
         {ok, Res} ->
             % returning the whole response to get the test-key
-            Msg = without_transport_commitment(Res, Opts),
+            Msg = without_transport_commitment(Res, Key, Opts),
             ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
             case not ?IS_ID(Key) orelse has_id(Msg, Key, Opts) of
                 true ->
@@ -105,17 +105,34 @@ has_id(Msg, ID, Opts) when is_map(Msg) ->
 has_id(Bin, ID, Opts) ->
     hb_util:human_id(ID) == hb_message:id(Bin, none, Opts).
 
-%% @doc Remove the transport commitments from the response: the replying
-%% node's signature over `hashpath', and its unsigned commitment over the keys
-%% of its reply, once the keys that it does not cover are removed. The reply's
-%% `hashpath' is removed with them, unless a signed commitment of the message
-%% covers it. A message without signed commitments has no `commitments' key.
-%% A reply without commitments loses its `hashpath' and `status'.
-without_transport_commitment(Msg = #{ <<"commitments">> := _ }, Opts) ->
+%% @doc Remove the transport commitments from the response to a read of `Key':
+%% the replying node's signature over `hashpath', and its unsigned commitment
+%% over the keys of its reply, once the keys that it does not cover are
+%% removed. If `Key' is the ID of a commitment, keep that commitment, even if
+%% it covers only `hashpath'. Remove the reply's `hashpath' with the transport
+%% commitments, unless a signed commitment covers it, or the commitment with
+%% the ID `Key' does. If no signed commitment remains, remove the
+%% `commitments' key. A reply without commitments loses its `hashpath' and
+%% `status'.
+without_transport_commitment(Msg = #{ <<"commitments">> := _ }, Key, Opts) ->
+    ReadIDs = [hb_util:human_id(Key) || ?IS_ID(Key)],
+    OwnKeys =
+        hb_message:committed(
+            hb_message:with_commitments(ReadIDs, Msg, Opts),
+            #{ <<"ids">> => <<"all">> },
+            Opts
+        ),
     {ok, Committed} =
         hb_message:with_only_committed(
             hb_message:without_commitments(
-                #{ <<"committed">> => [<<"hashpath">>] },
+                hb_maps:keys(
+                    hb_message:commitments(
+                        #{ <<"committed">> => [<<"hashpath">>] },
+                        Msg,
+                        Opts
+                    ),
+                    Opts
+                ) -- ReadIDs,
                 Msg,
                 Opts
             ),
@@ -124,16 +141,16 @@ without_transport_commitment(Msg = #{ <<"commitments">> := _ }, Opts) ->
     Signed =
         hb_message:commitments(#{ <<"committer">> => '_' }, Committed, Opts),
     hb_message:without_unless_signed(
-        [<<"hashpath">>],
+        [<<"hashpath">>] -- OwnKeys,
         case hb_maps:size(Signed, Opts) of
             0 -> hb_message:uncommitted(Committed, Opts);
             _ -> Committed#{ <<"commitments">> => Signed }
         end,
         Opts
     );
-without_transport_commitment(Msg, _Opts) when is_map(Msg) ->
+without_transport_commitment(Msg, _Key, _Opts) when is_map(Msg) ->
     maps:without([<<"hashpath">>, <<"status">>], Msg);
-without_transport_commitment(Res, _Opts) ->
+without_transport_commitment(Res, _Key, _Opts) ->
     Res.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
@@ -245,6 +262,19 @@ read_test() ->
         {ok, []},
         hb_cache:read(
             hb_util:ok(hb_cache:write([], #{ <<"store">> => LocalStore })),
+            #{ <<"store">> => RemoteStore }
+        )
+    ),
+    % A message keeps a `hashpath' key of its own.
+    ?assertMatch(
+        {ok, #{ <<"hashpath">> := <<"x">> }},
+        hb_cache:read(
+            hb_util:ok(
+                hb_cache:write(
+                    #{ <<"hashpath">> => <<"x">> },
+                    #{ <<"store">> => LocalStore }
+                )
+            ),
             #{ <<"store">> => RemoteStore }
         )
     ),

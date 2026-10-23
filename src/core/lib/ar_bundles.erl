@@ -2,7 +2,7 @@
 -export([signer/1]).
 -export([id/1, id/2, hd/1, member/2, find/2]).
 -export([new_item/4, sign_item/2, verify_item/1]).
--export([encode_tags/1, decode_tags/1]).
+-export([decode_tags/1]).
 -export([serialize/1, deserialize/1, serialize_bundle/3]).
 -export([deserialize_header/1, deserialize_item_wrapper/1]).
 -export([data_item_signature_data/1]).
@@ -199,7 +199,7 @@ data_item_signature_data(RawItem) ->
         <<(Item#tx.owner)/binary>>,
         <<(Item#tx.target)/binary>>,
         <<(Item#tx.anchor)/binary>>,
-        encode_tags(Item#tx.tags),
+        ar_bundles_avro:encode(Item#tx.tags, Item#tx.avro_form),
         <<(Item#tx.data)/binary>>
     ]).
 
@@ -243,7 +243,7 @@ serialize(TX) when is_binary(TX) -> TX;
 serialize(RawTX) when is_record(RawTX, tx) ->
     true = enforce_valid_tx(RawTX),
     {_, TX} = ar_tx:serialize_data(RawTX),
-    EncodedTags = encode_tags(TX#tx.tags),
+    EncodedTags = ar_bundles_avro:encode(TX#tx.tags, TX#tx.avro_form),
     <<
         (encode_signature_type(TX#tx.signature_type))/binary,
         (TX#tx.signature)/binary,
@@ -364,63 +364,6 @@ encode_tags_size([], <<>>) ->
 encode_tags_size(Tags, EncodedTags) ->
     <<(length(Tags)):64/little-integer, (byte_size(EncodedTags)):64/little-integer>>.
 
-%% @doc Encode tags into a binary format using Apache Avro.
-encode_tags([]) ->
-    <<>>;
-encode_tags(Tags) ->
-    EncodedBlocks = lists:flatmap(
-        fun({Name, Value}) ->
-            Res = [encode_avro_name(Name), encode_avro_value(Value)],
-            case lists:member(error, Res) of
-                true ->
-                    throw({cannot_encode_empty_string, Name, Value});
-                false ->
-                    Res
-            end
-        end,
-        Tags
-    ),
-    TagCount = length(Tags),
-    ZigZagCount = encode_zigzag(TagCount),
-    <<ZigZagCount/binary, (list_to_binary(EncodedBlocks))/binary, 0>>.
-
-%% @doc Encode a string for Avro using ZigZag and VInt encoding.
-encode_avro_name(<<>>) ->
-    % Zero length names are treated as a special case, due to the Avro encoder.
-    << 0 >>;
-encode_avro_name(String) ->
-    StringBytes = utf8_encoded(String),
-    Length = byte_size(StringBytes),
-    <<(encode_zigzag(Length))/binary, StringBytes/binary>>.
-
-encode_avro_value(<<>>) ->
-    % Zero length values are treated as a special case, due to the Avro encoder.
-    << 0 >>;
-encode_avro_value(Value) when is_binary(Value) ->
-    % Tag values can be raw binaries
-    Length = byte_size(Value),
-    <<(encode_zigzag(Length))/binary, Value/binary>>.
-
-%% @doc Encode an integer using ZigZag encoding.
-encode_zigzag(Int) when Int >= 0 ->
-    encode_vint(Int bsl 1);
-encode_zigzag(Int) ->
-    encode_vint(Int bsl 1, -1).
-
-%% @doc Encode a ZigZag integer to VInt binary format.
-encode_vint(ZigZag) ->
-    encode_vint(ZigZag, []).
-
-encode_vint(0, Acc) ->
-    list_to_binary(lists:reverse(Acc));
-encode_vint(ZigZag, Acc) ->
-    VIntByte = ZigZag band 16#7F,
-    ZigZagShifted = ZigZag bsr 7,
-    case ZigZagShifted of
-        0 -> encode_vint(0, [VIntByte | Acc]);
-        _ -> encode_vint(ZigZagShifted, [VIntByte bor 16#80 | Acc])
-    end.
-
 %% @doc Convert binary data back to #tx record(s).
 %% When deserializing a binary, it is assumed the binary is an ans104 *item*,
 %% and *not* a bundle. It may be an item that contains a bundle, though.
@@ -450,7 +393,7 @@ deserialize_header(Binary) ->
     {SignatureType, Signature, Owner, Rest} = decode_signature(Binary),
     {Target, Rest2} = decode_optional_field(Rest),
     {Anchor, Rest3} = decode_optional_field(Rest2),
-    {Tags, RemainingData} = decode_tags(Rest3),
+    {Tags, AvroForm, RemainingData} = decode_tags(Rest3),
     HeaderSize = byte_size(Binary) - byte_size(RemainingData),
     {
         ok,
@@ -463,6 +406,7 @@ deserialize_header(Binary) ->
             target = Target,
             anchor = Anchor,
             tags = Tags,
+            avro_form = AvroForm,
             data = RemainingData,
             data_size = byte_size(RemainingData)
         }
@@ -587,15 +531,16 @@ decode_signature(Other) ->
         {sig_type, {explicit, SigType}}}),
     {unsupported_tx_format, SigType}.
 
-%% @doc Decode tags from a binary format using Apache Avro.
+%% @doc Decode tags from a binary format using Apache Avro, with their Avro
+%% form.
 decode_tags(<<0:64/little-integer, 0:64/little-integer, Rest/binary>>) ->
-    {[], Rest};
+    {[], <<>>, Rest};
 decode_tags(<<TagCount:64/little-integer, TagSize:64/little-integer, Binary/binary>>)
         when byte_size(Binary) >= TagSize ->
     <<TagsBinary:TagSize/binary, Rest/binary>> = Binary,
-    Tags = decode_avro_tag_section(TagsBinary),
+    {Tags, AvroForm} = ar_bundles_avro:decode(TagsBinary),
     case length(Tags) of
-        TagCount -> {Tags, Rest};
+        TagCount -> {Tags, AvroForm, Rest};
         _ -> throw({invalid_ans104_tags, tag_count_mismatch})
     end;
 decode_tags(<<_TagCount:64/little-integer, _TagSize:64/little-integer, _/binary>>) ->
@@ -607,90 +552,6 @@ decode_optional_field(<<0, Rest/binary>>) ->
     {<<>>, Rest};
 decode_optional_field(<<1:8/little-integer, Field:32/binary, Rest/binary>>) ->
     {Field, Rest}.
-
-%% @doc Decode Avro blocks (for tags) from binary.
-decode_avro_tag_section(TagsBinary) ->
-    case decode_avro_tag_array(TagsBinary, []) of
-        {Tags, <<>>} -> Tags;
-        {_Tags, _Residue} -> throw({invalid_ans104_tags, residue_in_tag_section})
-    end.
-
-decode_avro_tag_array(<<>>, _Acc) ->
-    throw({invalid_ans104_tags, missing_avro_array_terminator});
-decode_avro_tag_array(Binary, Acc) ->
-    {Count, Rest} = decode_zigzag(Binary),
-    decode_avro_tag_array_block(Count, Rest, Acc).
-
-decode_avro_tag_array_block(0, Rest, Acc) ->
-    {lists:reverse(Acc), Rest};
-decode_avro_tag_array_block(Count, Rest, Acc) when Count > 0 ->
-    {Tags, Rest2} = decode_avro_tags(Rest, Count),
-    decode_avro_tag_array(Rest2, lists:reverse(Tags, Acc));
-decode_avro_tag_array_block(Count, Rest, Acc) when Count < 0 ->
-    {BlockSize, BlockRest} = decode_zigzag(Rest),
-    case BlockSize >= 0 andalso byte_size(BlockRest) >= BlockSize of
-        true ->
-            <<Block:BlockSize/binary, Rest2/binary>> = BlockRest,
-            Tags = decode_avro_tag_block(Block, -Count),
-            decode_avro_tag_array(Rest2, lists:reverse(Tags, Acc));
-        false ->
-            throw({invalid_ans104_tags, invalid_avro_block_size})
-    end.
-
-decode_avro_tag_block(Block, Count) ->
-    case decode_avro_tags(Block, Count) of
-        {Tags, <<>>} -> Tags;
-        {_Tags, _Residue} -> throw({invalid_ans104_tags, residue_in_avro_block})
-    end.
-
-decode_avro_tags(Binary, Count) when Count =:= 0 ->
-    {[], Binary};
-decode_avro_tags(<<>>, _Count) ->
-    throw({invalid_ans104_tags, truncated_avro_tag_item});
-decode_avro_tags(Binary, Count) ->
-    {NameSize, Rest} = decode_zigzag(Binary),
-    decode_avro_name(NameSize, Rest, Count).
-
-decode_avro_name(0, Rest, _) ->
-    {[], Rest};
-decode_avro_name(NameSize, _Rest, _Count) when NameSize < 0 ->
-    throw({invalid_ans104_tags, invalid_avro_name_size});
-decode_avro_name(NameSize, Rest, _Count) when byte_size(Rest) < NameSize ->
-    throw({invalid_ans104_tags, truncated_avro_name});
-decode_avro_name(NameSize, Rest, Count) ->
-    <<Name:NameSize/binary, Rest2/binary>> = Rest,
-    {ValueSize, Rest3} = decode_zigzag(Rest2),
-    decode_avro_value(ValueSize, Name, Rest3, Count).
-
-decode_avro_value(0, Name, Rest, Count) ->
-    {DecodedTags, NonAvroRest} = decode_avro_tags(Rest, Count - 1),
-    {[{Name, <<>>} | DecodedTags], NonAvroRest};
-decode_avro_value(ValueSize, _Name, _Rest, _Count) when ValueSize < 0 ->
-    throw({invalid_ans104_tags, invalid_avro_value_size});
-decode_avro_value(ValueSize, _Name, Rest, _Count) when byte_size(Rest) < ValueSize ->
-    throw({invalid_ans104_tags, truncated_avro_value});
-decode_avro_value(ValueSize, Name, Rest, Count) ->
-    <<Value:ValueSize/binary, Rest2/binary>> = Rest,
-    {DecodedTags, NonAvroRest} = decode_avro_tags(Rest2, Count - 1),
-    {[{Name, Value} | DecodedTags], NonAvroRest}.
-
-%% @doc Decode a VInt encoded ZigZag integer from binary.
-decode_zigzag(Binary) ->
-    {ZigZag, Rest} = decode_vint(Binary, 0, 0),
-    case ZigZag band 1 of
-        1 -> {-(ZigZag bsr 1) - 1, Rest};
-        0 -> {ZigZag bsr 1, Rest}
-    end.
-
-decode_vint(<<>>, Result, _Shift) ->
-    {Result, <<>>};
-decode_vint(<<Byte, Rest/binary>>, Result, Shift) ->
-    VIntPart = Byte band 16#7F,
-    NewResult = Result bor (VIntPart bsl Shift),
-    case Byte band 16#80 of
-        0 -> {NewResult, Rest};
-        _ -> decode_vint(Rest, NewResult, Shift + 7)
-    end.
 
 %%%===================================================================
 %%% Unit tests.
@@ -712,29 +573,29 @@ encode_tags_test() ->
     ],
     lists:foreach(
         fun({Label, InputTags}) ->
-            Encoded = encode_tags(InputTags),
+            Encoded = ar_bundles_avro:encode(InputTags),
             Wrapped =
                 <<
                     (length(InputTags)):64/little,
                     (byte_size(Encoded)):64/little,
                     Encoded/binary
                 >>,
-            {DecodedTags, <<>>} = decode_tags(Wrapped),
+            {DecodedTags, <<>>, <<>>} = decode_tags(Wrapped),
             ?assertEqual(InputTags, DecodedTags, Label)
         end,
         TestCases
     ),
     % Test case: Empty tags list
     EmptyTags = [],
-    EncodedEmpty = encode_tags(EmptyTags),
+    EncodedEmpty = ar_bundles_avro:encode(EmptyTags),
     ?assertEqual(<<>>, EncodedEmpty),
     WrappedEmpty = <<0:64/little, 0:64/little>>,
-    {[], <<>>} = decode_tags(WrappedEmpty).
+    {[], <<>>, <<>>} = decode_tags(WrappedEmpty).
 
 tag_size_boundary_test() ->
     Tags = [{<<"Content-Type">>, <<"application/json">>}],
     Body = <<"{\"ok\":true}">>,
-    EncodedTags = encode_tags(Tags),
+    EncodedTags = ar_bundles_avro:encode(Tags),
     Wrapped =
         <<
             (length(Tags)):64/little,
@@ -742,11 +603,11 @@ tag_size_boundary_test() ->
             EncodedTags/binary,
             Body/binary
         >>,
-    ?assertEqual({Tags, Body}, decode_tags(Wrapped)).
+    ?assertEqual({Tags, <<>>, Body}, decode_tags(Wrapped)).
 
 missing_avro_tag_terminator_test() ->
     Tags = [{<<"Content-Type">>, <<"application/json">>}],
-    EncodedTags = encode_tags(Tags),
+    EncodedTags = ar_bundles_avro:encode(Tags),
     TagsWithoutTerminator = binary:part(EncodedTags, 0, byte_size(EncodedTags) - 1),
     Body = <<"{\"$schema\":\"https://example.invalid/schema\"}">>,
     Wrapped =
@@ -763,7 +624,7 @@ missing_avro_tag_terminator_test() ->
 
 tag_count_mismatch_test() ->
     Tags = [{<<"Content-Type">>, <<"application/json">>}],
-    EncodedTags = encode_tags(Tags),
+    EncodedTags = ar_bundles_avro:encode(Tags),
     Wrapped =
         <<
             (length(Tags) + 1):64/little,
@@ -774,7 +635,7 @@ tag_count_mismatch_test() ->
 
 residue_in_tag_section_test() ->
     Tags = [{<<"Content-Type">>, <<"application/json">>}],
-    EncodedTags = encode_tags(Tags),
+    EncodedTags = ar_bundles_avro:encode(Tags),
     Wrapped =
         <<
             (length(Tags)):64/little,

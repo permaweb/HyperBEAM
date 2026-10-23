@@ -1,6 +1,7 @@
 %%% @doc `push@1.0' takes a message or slot number, evaluates it, and recursively
 %%% pushes the resulting messages to other processes. The `push'ing mechanism
-%%% continues until the there are no remaining messages to push.
+%%% continues until there are no remaining messages to push, or until it
+%%% reaches its `max-depth' (see `push/3').
 -module(dev_push).
 -specification("../../../specs/push@1.0.md").
 -device_libraries([lib_process]).
@@ -27,7 +28,9 @@
 %%                    on its target -- `max-depth' only controls whether we
 %%                    then drive that next slot's `/push' synchronously
 %%                    to fan further downstream:
-%%                       omitted - unbounded recursion.
+%%                       omitted - the node's `push_max_depth' option:
+%%                                 30 by default, or `infinity' to
+%%                                 recurse until no messages remain.
 %%                       `0'     - schedule on each target then stop.
 %%                                 The target's compute is NOT invoked
 %%                                 here; its own scheduler-driven `/push'
@@ -37,13 +40,16 @@
 %%                       `N > 0' - recurse, with the inner `/push'
 %%                                 inheriting `max-depth = N - 1'.
 %%                                 Unwinds at most `N' levels deep.
+%%                    A request's `max-depth' can only lower the node's
+%%                    `push_max_depth': a higher value, or `infinity',
+%%                    gives the node's `push_max_depth'.
 -spec push(
     #{ _ => _ },
     #{
         slot => integer(),
         body => #{ _ => _ },
         async => boolean(),
-        'max-depth' => integer(),
+        'max-depth' => integer() | infinity,
         _ => _
     },
     #{ _ => _ }
@@ -147,11 +153,17 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             X when X > 0 -> Result;
             _ -> #{}
         end,
-    % Read the optional `max-depth' bound on recursive fan-out. `undefined'
-    % means unbounded; a non-negative integer decrements at each downstream
-    % `/push' and skips the recursion (target still scheduled) when it
-    % reaches `0'.
-    MaxDepth = parse_max_depth(hb_maps:get(<<"max-depth">>, Assignment, undefined, Opts)),
+    % Read the bound on recursive fan-out: the lower of the request's
+    % `max-depth' and the node's `push_max_depth' option. `infinity' is no
+    % bound; an integer decrements at each downstream `/push' and skips the
+    % recursion (target still scheduled) when it reaches `0'.
+    MaxDepth =
+        min(
+            parse_max_depth(
+                hb_maps:get(<<"max-depth">>, Assignment, infinity, Opts)
+            ),
+            parse_max_depth(hb_opts:get(push_max_depth, 30, Opts))
+        ),
     ?event(push_depth, {depth, IncludeDepth, {assignment, Assignment}}),
     ?event(push,
         {push_compute_result,
@@ -395,13 +407,16 @@ push_downstream(TargetID, NextSlotOnProc, Origin, Opts) ->
 
 %% @doc Push a downstream message on a remote node if a route can be found to
 %% perform the action. If no route is found, we execute the action locally.
+%% The path gives the remote node the decremented `max-depth'.
 push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
     Path =
         <<
             "/",
             TargetID/binary,
             "/push&slot=",
-            (hb_util:bin(NextSlotOnProc))/binary
+            (hb_util:bin(NextSlotOnProc))/binary,
+            "&max-depth=",
+            (hb_util:bin(next_depth(maps:get(<<"max-depth">>, Origin))))/binary
         >>,
     RouteReq =
         #{
@@ -461,8 +476,7 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
     end.
 
 %% @doc Push a resulting message recursively, executing the action on this node.
-%% We decrement `result-depth' (and, when set, `max-depth') so the recursion
-%% naturally winds down.
+%% We decrement `result-depth' and `max-depth' (`infinity' stays `infinity').
 push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
     ?event(push,
         {push_downstream_local,
@@ -471,38 +485,36 @@ push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
             {origin, Origin}
         }
     ),
-    BaseReq =
+    Req =
         #{
             <<"path">> => <<"push">>,
             <<"slot">> => NextSlotOnProc,
             <<"result-depth">> =>
-                hb_maps:get(<<"result-depth">>, Origin, 1, Opts) - 1
+                hb_maps:get(<<"result-depth">>, Origin, 1, Opts) - 1,
+            <<"max-depth">> => next_depth(maps:get(<<"max-depth">>, Origin))
         },
-    Req =
-        case parse_max_depth(hb_maps:get(<<"max-depth">>, Origin, undefined, Opts)) of
-            undefined -> BaseReq;
-            N when is_integer(N), N > 0 ->
-                BaseReq#{ <<"max-depth">> => N - 1 }
-        end,
     hb_ao:resolve(
         {as, <<"process@1.0">>, <<"ao:", TargetID/binary>>},
         Req,
         Opts#{ <<"cache-control">> => <<"always">> }
     ).
 
-%% @doc Normalise the `max-depth' value supplied by the caller. Accepts a
-%% non-negative integer (verbatim or as a binary), returns `undefined' when
-%% the value is absent or unparseable.
-parse_max_depth(undefined) -> undefined;
+%% @doc Normalise a `max-depth' or `push_max_depth' value. Accepts a
+%% non-negative integer (verbatim or as a binary), and returns `infinity' for
+%% any other value.
 parse_max_depth(N) when is_integer(N), N >= 0 -> N;
 parse_max_depth(Bin) when is_binary(Bin) ->
     try hb_util:int(Bin) of
         N when is_integer(N), N >= 0 -> N;
-        _ -> undefined
+        _ -> infinity
     catch
-        _:_ -> undefined
+        _:_ -> infinity
     end;
-parse_max_depth(_) -> undefined.
+parse_max_depth(_) -> infinity.
+
+%% @doc Return the `max-depth' of the next `/push'.
+next_depth(infinity) -> infinity;
+next_depth(MaxDepth) -> MaxDepth - 1.
 
 %% @doc Augment the message with from-* keys, if it doesn't already have them.
 normalize_message(MsgToPush, Opts) ->
@@ -1018,7 +1030,8 @@ test_full_push() ->
         <<"cache-control">> => <<"always">>,
         <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)],
         % Exercise the `push_result' paranoid check against a real signed push.
-        <<"paranoid-verify">> => [push_result]
+        <<"paranoid-verify">> => [push_result],
+        <<"push-max-depth">> => 2
     },
     Base = hb_process_test_vectors:aos_process(Opts),
     hb_cache:write(Base, Opts),
@@ -1043,7 +1056,16 @@ test_full_push() ->
             <<"path">> => <<"push">>,
             <<"slot">> => StartingMsgSlot
         },
-    {ok, _} = hb_ao:resolve(Base, Res, Opts),
+    {ok, Pushed} = hb_ao:resolve(Base, Res, Opts),
+    % A push with no `max-depth' stops at the node's `push_max_depth' of 2.
+    ?assertEqual(
+        <<"skipped">>,
+        hb_util:deep_get(
+            <<"1/resulted-in/1/resulted-in/1/resulted-in">>,
+            Pushed,
+            Opts
+        )
+    ),
     ?assertEqual(
         {ok, <<"Done.">>},
         hb_ao:resolve(Base, <<"now/results/data">>, Opts)
@@ -1656,18 +1678,19 @@ test_oracle_push() ->
     ?assertMatch({ok, _}, ComputeRes).
 
 %% @doc `parse_max_depth/1' contract: accept non-negative integers verbatim
-%% or as binaries; reject everything else as `undefined' (unbounded).
+%% or as binaries; read everything else as `infinity'.
 test_parse_max_depth() ->
-    ?assertEqual(undefined, parse_max_depth(undefined)),
+    ?assertEqual(infinity, parse_max_depth(undefined)),
     ?assertEqual(0, parse_max_depth(0)),
     ?assertEqual(7, parse_max_depth(7)),
     ?assertEqual(0, parse_max_depth(<<"0">>)),
     ?assertEqual(42, parse_max_depth(<<"42">>)),
-    ?assertEqual(undefined, parse_max_depth(<<"not-a-number">>)),
-    ?assertEqual(undefined, parse_max_depth(-1)),
-    ?assertEqual(undefined, parse_max_depth(<<>>)),
-    ?assertEqual(undefined, parse_max_depth(false)),
-    ?assertEqual(undefined, parse_max_depth(true)).
+    ?assertEqual(infinity, parse_max_depth(<<"infinity">>)),
+    ?assertEqual(infinity, parse_max_depth(<<"not-a-number">>)),
+    ?assertEqual(infinity, parse_max_depth(-1)),
+    ?assertEqual(infinity, parse_max_depth(<<>>)),
+    ?assertEqual(infinity, parse_max_depth(false)),
+    ?assertEqual(infinity, parse_max_depth(true)).
 
 %% @doc `max-depth = 0' on the outer push: the outbox of the source slot is
 %% still scheduled on each target (target's `slot/current' advances), but the

@@ -401,7 +401,9 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
     %    specifiers from the other keys and decode them. A `content-digest'
     %    key of the message is one of the body keys. A key of the body that
     %    is also a component of its own, such as a message that a commitment
-    %    covers by its link, keeps the place of that component.
+    %    covers by its link, keeps the place of that component. The
+    %    `ao-body-key' component gives the key of the body: the message's own
+    %    `ao-body-key' is one of the body keys.
     ComponentKeys =
         fun(<<"content-type">>) ->
                 ContentType =
@@ -410,6 +412,7 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
                     false -> [<<"content-type">>];
                     _ -> []
                 end;
+           (<<"ao-body-key">>) -> [];
            (<<"@", Key/binary>>) -> [hb_escape:decode(Key)];
            (Key) -> [hb_escape:decode(Key)]
         end,
@@ -425,8 +428,8 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
             end,
             SigInfoCommitted
         ),
-    % 2. Replace the `body' key again with the value of the `ao-body-key' key,
-    %    if present.
+    % 2. Replace the `body' key again with the value of the `ao-body-key'
+    %    header, if its component is present.
     ?event_debug(
         {from_siginfo_keys,
             {body_keys, BodyKeys},
@@ -435,7 +438,7 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
         }
     ),
     ListWithoutBodyKey =
-        case lists:member(<<"ao-body-key">>, WithBody) of
+        case lists:member(<<"ao-body-key">>, SigInfoCommitted) of
             true ->
                 WithOrigBodyKey =
                     hb_util:list_replace(
@@ -444,7 +447,7 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
                         maps:get(<<"ao-body-key">>, HTTPEncMsg)
                     ),
                 ?event_debug({with_orig_body_key, WithOrigBodyKey}),
-                WithOrigBodyKey -- [<<"ao-body-key">>];
+                WithOrigBodyKey;
             false ->
                 WithBody
         end,

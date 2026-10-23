@@ -66,10 +66,18 @@ from(Map, Req, Opts) when is_map(Map) ->
     {ok, binary() | #{ _ => _ }}.
 to(Bin, _, _Opts) when is_binary(Bin) -> {ok, Bin};
 to(List, Req, Opts) when is_list(List) ->
+    % `structured@1.0' gives the list as a numbered message, marked as a list.
     to(
-        (hb_util:list_to_numbered_message(List))#{
-            <<"ao-types">> => <<"list=(\".\")">>
-        },
+        hb_message:convert(
+            List,
+            tabm,
+            #{
+                <<"device">> => <<"structured@1.0">>,
+                <<"encode-types">> => [<<"list">>],
+                <<"bundle">> => true
+            },
+            Opts
+        ),
         Req,
         Opts
     );

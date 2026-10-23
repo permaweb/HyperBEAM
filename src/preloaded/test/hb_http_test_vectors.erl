@@ -925,41 +925,40 @@ exercise(remote, {Host, _}, {ID, _}, Expected, Transport, ClientOpts) ->
 exercise(Path, {_, PrimaryOpts}, {ID, Source} = Message, Expected, Transport,
         ClientOpts) when Path == post; Path == post_link ->
     #{ <<"store-module">> := Store } = maps:get(<<"store">>, PrimaryOpts),
-    PostOpts =
-        (options(Store))#{
-            <<"on">> =>
-                #{
-                    <<"request">> =>
-                        #{
-                            <<"device">> =>
-                                #{ <<"request">> => fun receive_post/3 }
-                        }
-                }
-        },
     with_node(
         PrimaryOpts,
-        PostOpts,
+        (options(Store))#{ <<"operator">> => hb_opts:address(PrimaryOpts) },
         fun(PostHost, NodeOpts) ->
             ?assertEqual({error, not_found}, hb_cache:read(ID, NodeOpts)),
-            % The upload loads the message's links from the primary's store,
-            % and caches into a store of its own, not the client's.
+            % The upload is a `cache-write' request with the message as its
+            % body, signed by the primary, which is the node's `operator'. It
+            % loads the message's links from the primary's store, and caches
+            % into a store of its own, not the client's.
             UploadStore = maps:get(<<"store">>, options()),
             UploadOpts =
                 ClientOpts#{
                     <<"store">> =>
-                        [UploadStore, maps:get(<<"store">>, PrimaryOpts)]
+                        [UploadStore, maps:get(<<"store">>, PrimaryOpts)],
+                    <<"priv-wallet">> =>
+                        maps:get(<<"priv-wallet">>, PrimaryOpts)
                 },
             try
-                {ok, Reply} =
+                {ok, _} =
                     hb_http:post(
                         PostHost,
-                        <<"/">>,
-                        (headers(Transport))#{ <<"body">> => Source },
+                        hb_message:commit(
+                            (headers(Transport))#{
+                                <<"path">> => <<"/~cache@1.0/write">>,
+                                <<"type">> => <<"cache-write">>,
+                                <<"body">> => Source
+                            },
+                            UploadOpts
+                        ),
                         UploadOpts
-                    ),
-                ?assertEqual(ID, hb_maps:get(<<"id">>, Reply, UploadOpts))
+                    )
             after hb_store:stop(UploadStore)
             end,
+            ?assertMatch({ok, _}, hb_cache:read(ID, NodeOpts)),
             ?assertEqual({error, not_found}, hb_cache:read(ID, ClientOpts)),
             exercise(
                 case Path of post -> direct; post_link -> link end,
@@ -986,7 +985,7 @@ exercise(relay, {Host, PrimaryOpts}, {ID, _}, Expected, Transport, ClientOpts) -
                     <<"path">> => <<"/~relay@1.0/call">>,
                     <<"peer">> => Host,
                     <<"relay-path">> => <<"/", ID/binary>>,
-                    <<"target">> => <<"proxy-message">>,
+                    <<"relay-subject">> => <<"proxy-message">>,
                     <<"proxy-message">> => headers(Transport)
                 },
             Actual =
@@ -1135,16 +1134,6 @@ send(Host, Request, Status, Transport, Opts) ->
         false -> ok
     end,
     payload(#{}, Loaded, Opts).
-
-%% @doc A request hook for the node that receives a POST: cache the posted
-%% message as it was sent, without loading its links, then reply with its ID.
-receive_post(_, #{ <<"request">> := #{ <<"method">> := <<"POST">> } = Request },
-        Opts) ->
-    Msg = hb_maps:get(<<"body">>, Request, Opts),
-    ?assertEqual(true, hb_message:deep_verify(Msg, Opts)),
-    {ok, _} = hb_cache:write(Msg, Opts),
-    {ok, #{ <<"body">> => [#{ <<"id">> => hb_message:id(Msg, all, Opts) }] }};
-receive_post(_, Request, _) -> {ok, Request}.
 
 %% @doc Run `Fun' with a fresh node, then stop it and remove its store. The node
 %% takes the first spare wallet of the node that starts it and keeps the rest,
