@@ -280,6 +280,25 @@ unauthorized_set_node_msg_fails_test() ->
         end,
         [<<"httpsig@1.0">>, <<"flat@1.0">>]
     ),
+    % A client's own `secret-provider' in `~auth-hook@1.0' gets no node key.
+    ?assertNotMatch(
+        {ok, _},
+        hb_http:post(
+            Node,
+            #{
+                <<"path">> => <<"/~auth-hook@1.0/request">>,
+                <<"secret-provider">> =>
+                    #{
+                        <<"device">> => <<"message@1.0">>,
+                        <<"secret">> => <<"test">>,
+                        <<"finalize-path">> => <<"commit">>
+                    },
+                <<"request">> => #{ <<"path">> => <<"/hello">> },
+                <<"body">> => <<"x">>
+            },
+            #{}
+        )
+    ),
     % A request to another device does not change the node message.
     NodeMsg = hb_http_server:get_opts(),
     hb_http:get(Node, <<"/~test-device@1.0/postprocess?body=x">>, #{}),
