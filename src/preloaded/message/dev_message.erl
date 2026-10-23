@@ -578,7 +578,8 @@ verify_commitment(Base, Commitment, Opts) ->
 %% ID, and the message read must have the base's unsigned ID: a commitment
 %% that is not found, or that is over another message, is refused. On the
 %% empty message, the commitments are attached to the message that the first
-%% of them is over.
+%% of them is over, with the keys that it lacks from the messages that the
+%% others are over.
 with_commitments(Base, Req, Opts) ->
     Loaded = ensure_commitments_loaded(Base, Opts),
     read_commitments(
@@ -590,18 +591,19 @@ with_commitments(Base, Req, Opts) ->
         Opts
     ).
 
-%% @doc Read each commitment by its ID and attach it to the message. The
-%% message read by the ID must have the given unsigned ID. The empty message is
-%% replaced by the first message read.
+%% @doc Read each commitment by its ID and attach it to the message, with the
+%% keys of the message read that the message lacks. The message read by the ID
+%% must have the given unsigned ID, unless that is `any'. The empty message is
+%% replaced by the first message read, and the unsigned ID becomes `any'.
 read_commitments([], Msg, _UnsignedID, _Opts) -> {ok, Msg};
 read_commitments([ID | IDs], Msg, UnsignedID, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Read = #{ <<"commitments">> := #{ ID := Commitment } }} ->
             case hb_message:id(Read, none, Opts) of
-                UnsignedID ->
+                ReadID when ReadID == UnsignedID; UnsignedID == any ->
                     read_commitments(
                         IDs,
-                        Msg#{
+                        (maps:merge(Read, Msg))#{
                             <<"commitments">> =>
                                 (maps:get(<<"commitments">>, Msg, #{}))#{
                                     ID => Commitment
@@ -610,8 +612,8 @@ read_commitments([ID | IDs], Msg, UnsignedID, Opts) ->
                         UnsignedID,
                         Opts
                     );
-                ReadID when ?IS_EMPTY_MESSAGE(Msg) ->
-                    read_commitments(IDs, Read, ReadID, Opts);
+                _ when ?IS_EMPTY_MESSAGE(Msg) ->
+                    read_commitments(IDs, Read, any, Opts);
                 _ ->
                     {error,
                         #{
@@ -1340,6 +1342,13 @@ set_new_key_drops_commitments_test() ->
             #{ <<"ids">> => <<"any">> },
             Opts
         )
+    ),
+    % A parent's cache write keeps both keys and both commitments.
+    {ok, ParentID} = hb_cache:write(#{ <<"c">> => PartiallySigned }, Opts),
+    {ok, Child} = hb_cache:read(<<ParentID/binary, "/c">>, Opts),
+    ?assertEqual(
+        PartiallySigned,
+        hb_private:reset(hb_cache:ensure_all_loaded(Child, Opts))
     ),
     {ok, Set} = hb_ao:resolve(
         PartiallySigned,

@@ -314,23 +314,38 @@ generate_binary_path(Bin, Opts) ->
 %% such that any of the committed or uncommitted IDs can be read, and once in
 %% memory all of the commitments are available. Commitments over different
 %% keys are written as separate messages, and the ID of the one with the most
-%% keys is returned.
+%% keys is returned (see `write_split/3').
 write(RawMsg, Opts) when is_map(RawMsg) ->
-    lists:last(
-        [
-            write_prepared(prepare_write(Msg, Opts), RawMsg, Opts)
-        ||
-            Msg <- split_commitments(RawMsg, Opts)
-        ]
-    );
+    write_split(prepare_write(RawMsg, Opts), RawMsg, Opts);
 write(List, Opts) when is_list(List) ->
     write(hb_message:convert(List, tabm, <<"structured@1.0">>, Opts), Opts);
 write(Bin, Opts) when is_binary(Bin) ->
     do_write_message(Bin, hb_opts:get(store, no_viable_store, Opts), Opts).
 
-%% @doc The message once for each set of keys its commitments cover, with only
-%% the commitments over that set, the set with the most keys last; the message
-%% itself when all of its commitments cover the same keys.
+%% @doc Write a prepared message once for each set of keys that its
+%% commitments cover, and return the result of the set with the most keys. If
+%% there is more than one set and more than one signed commitment, write at
+%% their combined ID the path that reads the message with all of them (see
+%% `commitments_path/1').
+write_split(Msg, RawMsg, Opts) ->
+    Sets = split_commitments(Msg, Opts),
+    Result = lists:last([ write_prepared(Set, RawMsg, Opts) || Set <- Sets ]),
+    case length(Sets) > 1 andalso calculate_all_ids(Msg, undefined, Opts) of
+        {SignedIDs, _, AllID} when length(SignedIDs) > 1 ->
+            hb_store:write(
+                hb_opts:get(store, no_viable_store, Opts),
+                #{ AllID => commitments_path(SignedIDs) },
+                Opts
+            );
+        _ -> ok
+    end,
+    Result.
+
+%% @doc Return the message once for each set of keys its commitments cover,
+%% with only those keys and the commitments over them, the set with the most
+%% keys last, or the message itself if all of its commitments cover the same
+%% keys. A list has no commitments, so it is returned as it is.
+split_commitments(List, _Opts) when is_list(List) -> [List];
 split_commitments(Msg, Opts) ->
     Groups =
         maps:groups_from_list(
@@ -351,9 +366,11 @@ split_commitments(Msg, Opts) ->
         N when N < 2 -> [Msg];
         _ ->
             [
-                Msg#{ <<"commitments">> => maps:from_list(Comms) }
+                (hb_maps:with([<<"commitments">> | Keys], Msg, Opts))#{
+                    <<"commitments">> => maps:from_list(Comms)
+                }
             ||
-                {_, Comms} <- lists:sort(maps:to_list(Groups))
+                {{_, Keys}, Comms} <- lists:sort(maps:to_list(Groups))
             ]
     end.
 
@@ -389,7 +406,7 @@ write_prepared(Msg, RawMsg, Opts) ->
             erlang:raise(Type, Reason, Stacktrace)
     end.
 
-%% @doc Write each child that conversion links with `write_prepared/3', as
+%% @doc Write each child that conversion links with `write_split/3', as
 %% `prepare_write/2' has already prepared it, and replace it with a link to its
 %% `all' ID, from the unsigned ID that the write gives. Values under private
 %% keys are not written. Conversion in `offload' mode writes the children it
@@ -406,7 +423,7 @@ link_prepared(Msg, Opts) ->
         Msg
     ).
 link_prepared(true, Child, Opts) when is_map(Child) orelse is_list(Child) ->
-    {ok, UncommittedID} = write_prepared(Child, Child, Opts),
+    {ok, UncommittedID} = write_split(Child, Child, Opts),
     {_, _, ID} = calculate_all_ids(Child, UncommittedID, Opts),
     {link, <<"ao:", ID/binary>>, #{}};
 link_prepared(_Prepared, Child, _Opts) -> Child.
@@ -414,8 +431,9 @@ link_prepared(_Prepared, Child, _Opts) -> Child.
 %% @doc Prepare a message to be written: prepare each child, except those under
 %% private keys, and each commitment message, then remove the commitments that
 %% do not verify. If commitments remain and do not commit every key that is not
-%% private, keep only the keys they commit, and again remove the commitments
-%% that do not verify over those keys. A message with an empty key is refused.
+%% private, keep only the keys that one of them commits, and again remove the
+%% commitments that do not verify over those keys. A message with an empty key
+%% is refused.
 prepare_write(Msg, Opts) when is_map(Msg) ->
     Deep = maps:map(
         fun
@@ -435,7 +453,7 @@ prepare_write(Msg, Opts) when is_map(Msg) ->
     Settings = #{ <<"verify">> => all, <<"add-unsigned">> => false,
         <<"depth">> => shallow },
     Verified = hb_message:normalize_commitments(Deep, Opts, Settings),
-    {ok, Committed} = hb_message:with_only_committed(Verified, Opts),
+    {ok, Committed} = hb_message:with_only_committed(Verified, any, Opts),
     case lists:all(fun hb_private:is_private/1,
             maps:keys(Verified) -- maps:keys(Committed)) of
         true -> Verified;
