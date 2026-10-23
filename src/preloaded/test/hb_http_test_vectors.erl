@@ -1243,7 +1243,7 @@ route(Request, Address, Opts) ->
     case hb_message:signers(Request, Opts) of
         [] -> #{ <<"tunnel-target">> => Address };
         _ ->
-            Label = base32:encode(hb_util:native_id(Address), [lower, nopad]),
+            Label = hb_committer:uri(Address),
             #{ <<"host">> => <<Label/binary, ".localhost">> }
     end.
 

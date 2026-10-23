@@ -5,7 +5,7 @@
 %%% then posts to `response'. Each request is dispatched once. A timeout means
 %%% execution may have occurred; the tunnel never retries application work.
 %%%
-%%% Install `request' on `on/request' to route a base32 wallet-address host or
+%%% Install `request' on `on/request' to route a wallet's DNS URI host or
 %%% an explicit `tunnel-target'. `call' accepts the target and a nested request.
 %%% Set `tunnel-host' to restrict host routing to that domain's direct children.
 %%% Hosts without a connected target pass unchanged to the next request handler.
@@ -274,8 +274,8 @@ target(Base, Req, Opts) ->
                     Opts
                 ),
             true = Parent =:= none orelse Suffix =:= [Parent],
-            52 = byte_size(Label),
-            {ok, ID} = address(base32:decode(Label)),
+            <<"uri-did-ar-", _/binary>> = Label,
+            {ok, ID} = hb_committer:address(Label),
             ID
         catch _:_ -> none
         end,

@@ -221,9 +221,9 @@ path(Path, #{id := ID}) ->
         end,
     <<Path/binary, Separator/binary, "tunnel-target=", ID/binary>>.
 
-%% @doc Give the host whose first label is the base32 form of a node's address.
+%% @doc Give the host whose first label is the DNS URI of a node's wallet.
 host(ID) ->
-    Label = base32:encode(hb_util:native_id(ID), [lower, nopad]),
+    Label = hb_committer:uri(ID),
     <<Label/binary, ".example">>.
 
 %% @doc Send a GET request to an origin through the broker.
@@ -509,8 +509,7 @@ scoped_host(Ctx = #{broker := Broker, first := First, caller := Opts}) ->
         (maps:get(opts, Broker))#{ <<"tunnel-host">> => <<"example">> }
     ),
     connect(Broker, First, 2),
-    Label =
-        base32:encode(hb_util:native_id(maps:get(id, First)), [lower, nopad]),
+    Label = hb_committer:uri(maps:get(id, First)),
     lists:foreach(
         fun({Suffix, Expected}) ->
             Result =
