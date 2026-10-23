@@ -28,6 +28,7 @@
 %%% All `length` values are read by decoding all of the remaining bytes in the 
 %%% offset encoding as an unsigned big-endian integer. This allows the length
 %%% to contract to only the number of bytes actually necessary to represent it.
+%%% `decode/1` throws `cannot_decode_offset` for a length of more than 64 bits.
 %%% 
 -module(hb_store_arweave_offset).
 -export([encode/3, decode/1, path/1]).
@@ -83,7 +84,8 @@ encode(IsTX, StartOffset, Length) ->
 decode(<<?FORMAT_VERSION:4, 0:4>>) ->
     {?FORMAT_VERSION, <<"tx@1.0">>, relative, 0};
 decode(<<Format:1/binary, ?OFFSET_MAX:?OFFSET_SZ,
-        ParentID:32/binary, RelOffset:?OFFSET_SZ, Length/binary>>) ->
+        ParentID:32/binary, RelOffset:?OFFSET_SZ, Length/binary>>)
+        when bit_size(Length) =< ?OFFSET_SZ ->
     {Version, CodecName} = decode_format(Format),
     {
         Version,
@@ -94,7 +96,8 @@ decode(<<Format:1/binary, ?OFFSET_MAX:?OFFSET_SZ,
         },
         binary:decode_unsigned(Length)
     };
-decode(<<Format:1/binary, StartOffset:?OFFSET_SZ, Length/binary>>) ->
+decode(<<Format:1/binary, StartOffset:?OFFSET_SZ, Length/binary>>)
+        when bit_size(Length) =< ?OFFSET_SZ ->
     {Version, CodecName} = decode_format(Format),
     {Version, CodecName, StartOffset, binary:decode_unsigned(Length)};
 decode(Binary) ->
@@ -132,4 +135,9 @@ relative_ref_round_trip_test() ->
     ?assertEqual(
         {?FORMAT_VERSION, <<"ans104@1.0">>, Offset, 654},
         decode(Encoded)
+    ),
+    % A length of 2^64 from the strict data split threshold does not decode.
+    ?assertThrow(
+        {cannot_decode_offset, _},
+        decode(encode(<<"ans104@1.0">>, ?STRICT_DATA_SPLIT_THRESHOLD, 1 bsl 64))
     ).
