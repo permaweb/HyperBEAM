@@ -144,8 +144,9 @@ certificate_time(Time) ->
 %% @doc Build SSL options only when the leaf carries the exact wallet key.
 socket_options(Wallet = #{ <<"type">> := Type = ?RSA_SIGN_TYPE },
         [Leaf | _] = Chain) ->
-    #{ <<"owner">> := N, <<"priv">> := #{ <<"d">> := D } } = Wallet,
+    #{ <<"owner">> := N } = Wallet,
     {rsa, E} = ar_tx:deserialize_sig_type(Type),
+    Key = ar_wallet:rsa_private_key(Wallet),
     try
         Certificate = public_key:pkix_decode_cert(Leaf, otp),
         TBS = Certificate#'OTPCertificate'.tbsCertificate,
@@ -153,9 +154,7 @@ socket_options(Wallet = #{ <<"type">> := Type = ?RSA_SIGN_TYPE },
         true = SPKI#'OTPSubjectPublicKeyInfo'.subjectPublicKey =:=
             rsa_public_key(E, N),
         Sign = fun(Data, Digest, Options) ->
-            crypto:sign(rsa, Digest, Data,
-                [E, binary:decode_unsigned(N), binary:decode_unsigned(D)],
-                Options)
+            public_key:sign(Data, Digest, Key, Options)
         end,
         {ok, [{certs_keys, [#{
             cert => Chain,
@@ -179,6 +178,8 @@ rsa_public_key(E, N) ->
 csr_key_test() ->
     Wallet = #{ <<"type">> := Type, <<"owner">> := N } =
         ar_wallet:load_keyfile("test/key-1.json"),
+    % Loading the key file keeps the primes of the key.
+    ?assertMatch(#{ <<"priv">> := #{ <<"p">> := _, <<"q">> := _ } }, Wallet),
     {rsa, E} = ar_tx:deserialize_sig_type(Type),
     Encoded = csr(Wallet, [<<"localhost">>, <<"node.example">>]),
     CSR = public_key:der_decode('CertificationRequest', Encoded),

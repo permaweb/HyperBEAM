@@ -5,6 +5,7 @@
 -export([new_keyfile/2, load_keyfile/1, load_keyfile/2, load_key/1, load_key/2]).
 -export([to_json/1, from_json/1, from_json/2]).
 -export([recover_key/3]).
+-export([rsa_private_key/1]).
 -export([compress_ecdsa_pubkey/1]).
 -include("include/ar.hrl").
 -include_lib("public_key/include/public_key.hrl").
@@ -15,13 +16,18 @@
 %%% Ed25519 or ECDSA key, and `did-pkh@1.0' for an Ethereum or Solana key. Its
 %%% `owner' is the public key, its `type' is the signature type of the key,
 %%% and `d' in its `priv' message is the private key, which no ID or encoding
-%%% of the wallet includes. `verify' needs only the `owner' and the `type'. Key
+%%% of the wallet includes. If the `priv' message of an RSA wallet also
+%%% contains the CRT values of the key (`p', `q', `dp', `dq' and `qi'), the
+%%% wallet signs with them. `verify' needs only the `owner' and the `type'. Key
 %%% files hold the key in the JWK format.
 
 -define(WALLET_DIR, ".").
 -define(WALLET_POOL_TARGET, 6).
 -define(SECP256K1_PRIME,
     16#FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F).
+%% The keys of the CRT values of an RSA key in a JWK and in the `priv' message
+%% of a wallet, ordered as `crypto:generate_key/2' gives the values.
+-define(RSA_CRT_KEYS, [<<"p">>, <<"q">>, <<"dp">>, <<"dq">>, <<"qi">>]).
 
 %%% Public interface.
 
@@ -43,11 +49,16 @@ new_ecdsa() ->
 
 %% @doc Make the wallet of a key from its type, private key and public key.
 new(KeyType, Priv, Pub) ->
+    new(KeyType, Priv, Pub, #{}).
+
+%% @doc Make the wallet of a key, with the CRT values of an RSA key in its
+%% `priv' message.
+new(KeyType, Priv, Pub, CRT) ->
     #{
         <<"device">> => committer_device(KeyType),
         <<"type">> => ar_tx:serialize_sig_type(KeyType),
         <<"owner">> => Pub,
-        <<"priv">> => #{ <<"d">> => Priv }
+        <<"priv">> => CRT#{ <<"d">> => Priv }
     }.
 
 %% @doc Return the device of the committer of a key: `did-ar@1.0' for a key
@@ -61,9 +72,9 @@ committer_device(_KeyType) ->
     <<"did-pkh@1.0">>.
 
 generate_wallet(KeyType = {KeyAlg, PublicExpnt}) when KeyType =:= {rsa, 65537} ->
-    {[_, Pub], [_, Pub, Priv|_]} = {[_, Pub], [_, Pub, Priv|_]}
-        = crypto:generate_key(KeyAlg, {4096, PublicExpnt}),
-    new(KeyType, Priv, Pub);
+    {[_, Pub], [_, Pub, Priv | CRT]} =
+        crypto:generate_key(KeyAlg, {4096, PublicExpnt}),
+    new(KeyType, Priv, Pub, maps:from_list(lists:zip(?RSA_CRT_KEYS, CRT)));
 generate_wallet(KeyType = {KeyAlg, KeyCrv}) when KeyAlg =:= ?ECDSA_SIGN_ALG andalso KeyCrv =:= secp256k1 ->
     {OrigPub, Priv} = crypto:generate_key(ecdh, KeyCrv),
     Pub = compress_ecdsa_pubkey(OrigPub),
@@ -151,18 +162,8 @@ sign(Wallet, Data) ->
 
 %% @doc sign some data, hashed using the provided DigestType.
 %% RSA and ECDSA signatures use wallet-level wrappers.
-sign(Wallet = #{ <<"type">> := Type = ?RSA_SIGN_TYPE }, Data, DigestType) ->
-    #{ <<"owner">> := Pub, <<"priv">> := #{ <<"d">> := Priv } } = Wallet,
-    {rsa, PublicExpnt} = ar_tx:deserialize_sig_type(Type),
-    rsa_pss:sign(
-        Data,
-        DigestType,
-        #'RSAPrivateKey'{
-            publicExponent = PublicExpnt,
-            modulus = binary:decode_unsigned(Pub),
-            privateExponent = binary:decode_unsigned(Priv)
-        }
-    );
+sign(Wallet = #{ <<"type">> := ?RSA_SIGN_TYPE }, Data, DigestType) ->
+    rsa_pss:sign(Data, DigestType, rsa_private_key(Wallet));
 sign(Wallet = #{ <<"type">> := ?ECDSA_SIGN_TYPE }, Data, _DigestType) ->
     #{ <<"priv">> := #{ <<"d">> := Priv } } = Wallet,
     secp256k1_nif:sign(Data, Priv);
@@ -172,6 +173,23 @@ sign(Wallet = #{ <<"type">> := ?EDDSA_SIGN_TYPE }, Data, _DigestType) ->
 sign(Wallet = #{ <<"type">> := ?ETHEREUM_SIGN_TYPE }, Data, _DigestType) ->
     #{ <<"priv">> := #{ <<"d">> := Priv } } = Wallet,
     secp256k1_nif:sign(Data, Priv, ethereum).
+
+%% @doc Return the `RSAPrivateKey' record of an RSA wallet, with the CRT values
+%% of the key if its `priv' message contains them.
+rsa_private_key(Wallet = #{ <<"type">> := Type }) ->
+    #{ <<"owner">> := Pub, <<"priv">> := Priv } = Wallet,
+    {rsa, PublicExpnt} = ar_tx:deserialize_sig_type(Type),
+    Ints = maps:map(fun(_, Value) -> binary:decode_unsigned(Value) end, Priv),
+    #'RSAPrivateKey'{
+        publicExponent = PublicExpnt,
+        modulus = binary:decode_unsigned(Pub),
+        privateExponent = maps:get(<<"d">>, Ints),
+        prime1 = maps:get(<<"p">>, Ints, undefined),
+        prime2 = maps:get(<<"q">>, Ints, undefined),
+        exponent1 = maps:get(<<"dp">>, Ints, undefined),
+        exponent2 = maps:get(<<"dq">>, Ints, undefined),
+        coefficient = maps:get(<<"qi">>, Ints, undefined)
+    }.
 
 hmac(Data) ->
     hmac(Data, sha256).
@@ -313,7 +331,13 @@ load_keyfile(File, Opts) ->
 to_json(Wallet = #{ <<"type">> := Type = ?RSA_SIGN_TYPE }) ->
     #{ <<"owner">> := Pub, <<"priv">> := #{ <<"d">> := Priv } } = Wallet,
     {?RSA_SIGN_ALG, PublicExpnt} = ar_tx:deserialize_sig_type(Type),
-    hb_json:encode(#{
+    % Add the CRT values of the key, if the wallet has them.
+    CRT =
+        maps:map(
+            fun(_, Value) -> hb_util:encode(Value) end,
+            maps:with(?RSA_CRT_KEYS, maps:get(<<"priv">>, Wallet))
+        ),
+    hb_json:encode(CRT#{
         kty => <<"RSA">>,
         ext => true,
         e => hb_util:encode(binary:encode_unsigned(PublicExpnt)),
@@ -374,7 +398,13 @@ from_json(JsonBinary, Opts) ->
                 KyType = {?RSA_SIGN_ALG, 65537},
                 {Pb, Prv, KyType}
         end,
-    new(KeyType, Priv, Pub).
+    % Keep the CRT values of an RSA key, if the JWK has them.
+    CRT =
+        maps:map(
+            fun(_, Value) -> hb_util:decode(Value) end,
+            hb_maps:with(?RSA_CRT_KEYS, Key, Opts)
+        ),
+    new(KeyType, Priv, Pub, CRT).
 
 %% @doc Recover the public key from a signature (for ECDSA).
 %% For ECDSA transactions, the public key is not included in the transaction,
