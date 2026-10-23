@@ -127,7 +127,9 @@ On `POST`, the message to schedule is located within `Req` in this order:
 2. `Req`'s `subject` key equals `self` → schedule `Req` itself.
 3. `Req`'s `subject` key has another value `K` → schedule the value of `Req`'s
    key `K`.
-4. No `subject` key → schedule `Req`'s `body` if present, else `Req` itself.
+4. No `subject` key → schedule `Req`'s `body` if it is a message. If `Req` has
+   no `body`, or its `body` is a literal, such as the data of an ANS-104 item,
+   schedule `Req` itself.
 
 The selected message MUST be fully loadable; if any linked component cannot be
 materialised the device MUST return `{status: 404, body: "Cannot fully load
