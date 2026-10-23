@@ -391,9 +391,9 @@ write_prepared(Msg, RawMsg, Opts) ->
 
 %% @doc Write each child that conversion links with `write_prepared/3', as
 %% `prepare_write/2' has already prepared it, and replace it with a link to its
-%% ID. Values under private keys are not written. Conversion in `offload' mode
-%% writes the children it loads from links with `write/2', which prepares them
-%% first.
+%% `all' ID, from the unsigned ID that the write gives. Values under private
+%% keys are not written. Conversion in `offload' mode writes the children it
+%% loads from links with `write/2', which prepares them first.
 link_prepared(List, Opts) when is_list(List) ->
     [ link_prepared(true, Child, Opts) || Child <- List ];
 link_prepared(Msg, Opts) ->
@@ -406,8 +406,8 @@ link_prepared(Msg, Opts) ->
         Msg
     ).
 link_prepared(true, Child, Opts) when is_map(Child) orelse is_list(Child) ->
-    write_prepared(Child, Child, Opts),
-    ID = hb_message:id(Child, all, Opts#{ <<"linkify-mode">> => discard }),
+    {ok, UncommittedID} = write_prepared(Child, Child, Opts),
+    {_, _, ID} = calculate_all_ids(Child, UncommittedID, Opts),
     {link, <<"ao:", ID/binary>>, #{}};
 link_prepared(_Prepared, Child, _Opts) -> Child.
 
@@ -733,6 +733,9 @@ prepare_commitments(RawCommitments, Opts) ->
 
 %% @doc Calculate the IDs for a message.
 calculate_all_ids(Bin, _UncommittedID, _Opts) when is_binary(Bin) -> [];
+calculate_all_ids(List, UncommittedID, _Opts) when is_list(List) ->
+    % A list has no commitments, so return its unsigned ID as its `all' ID.
+    {[], [UncommittedID], UncommittedID};
 calculate_all_ids(Msg, UncommittedID, Opts) ->
     CommIDs = 
         hb_maps:keys(
@@ -1450,7 +1453,14 @@ test_store_unsigned_nested_empty_message(Store) ->
             }
         },
     Opts = #{ <<"store">> => Store },
+    % The write computes one HMAC, the unsigned ID, of each of the 6 messages.
+    erlang:trace_pattern({crypto, mac, 4}, true, [call_time]),
+    erlang:trace(self(), true, [call]),
     {ok, Path} = write(Item, Opts),
+    {call_time, [{_, HMACs, _, _}]} =
+        erlang:trace_info({crypto, mac, 4}, call_time),
+    erlang:trace_pattern({crypto, mac, 4}, false, [call_time]),
+    ?assertEqual(6, HMACs),
     {ok, RetrievedItem} = read(Path, Opts),
     ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)).
 
