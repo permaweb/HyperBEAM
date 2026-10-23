@@ -457,9 +457,9 @@ normalize_for_encoding(Msg, Commitment, Ordered, Opts) ->
             },
             Opts
         ),
-    % Remove the signature and signature-input keys from the encoded message,
-    % convert the `body' key to a `content-digest' key, if present.
-    Encoded = add_content_digest(EncodedWithSigInfo, Opts),
+    % `to/3' adds the `content-digest' key of a binary body, so remove the
+    % `body' key from the encoded message.
+    Encoded = maps:without([<<"body">>], EncodedWithSigInfo),
     % Transform the list of requested keys to their `httpsig@1.0' equivalents.
     EncodedKeys = maps:keys(Encoded),
     EncodedKeysWithBodyKey =
@@ -674,7 +674,14 @@ commitment_identity_test() ->
     Msg = #{ <<"body">> => <<"authenticated">> },
     Victim = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
     Signed = hb_message:commit(Msg, Opts),
+    % The unsigned commitment hashes the body once.
+    erlang:trace_pattern({hb_crypto, sha256, 1}, true, [call_time]),
+    erlang:trace(self(), true, [call]),
     Unsigned = hb_message:commit(Msg, Opts, #{ <<"type">> => <<"unsigned">> }),
+    {call_time, [{_, Hashes, _, _}]} =
+        erlang:trace_info({hb_crypto, sha256, 1}, call_time),
+    erlang:trace_pattern({hb_crypto, sha256, 1}, false, [call_time]),
+    ?assertEqual(1, Hashes),
     % `commitment_devices/2' does not run the `device' of a commitment.
     Device =
         #{ <<"commitment-device">> => fun(_, _, _) -> {ok, <<"ran">>} end },
