@@ -990,9 +990,19 @@ vary_loaded(Base, Req, Opts) ->
             {ok, VBase, VReq, Target} -> {VBase, VReq, Target};
             no_spec -> {Base, Req, no_overlay}
         end,
+    % Commit to the varied inputs for the receipt, the context, the lookup and
+    % the store of the result. If the execution generates no receipts or
+    % context, it stores nothing: only remove their unsigned commitments, and
+    % a lookup computes their IDs from their content.
+    Mode =
+        case {hb_opts:get(hashpath, update, Opts),
+                hb_opts:get(return_context, false, Opts)} of
+            {ignore, false} -> strip;
+            _ -> root
+        end,
     {Resolver,
-        normalize_input(VariedBase, Opts),
-        normalize_input(VariedReq, Opts),
+        normalize_input(VariedBase, Mode, Opts),
+        normalize_input(VariedReq, Mode, Opts),
         Overlay
     }.
 
