@@ -1282,6 +1282,8 @@ encode_reply(Status, TABMReq, RawMessage, Opts) ->
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
         {_, <<"httpsig@1.0">>, _} ->
+            % Encode without the node's key material, as for the resolution of
+            % the request: the `index' of the result can run the client's code.
             EncMessage =
                 hb_message:convert(
                     Message,
@@ -1301,7 +1303,10 @@ encode_reply(Status, TABMReq, RawMessage, Opts) ->
                             }
                     end,
                     <<"structured@1.0">>,
-                    Opts#{ <<"topic">> => ao_internal }
+                    maps:without(
+                        ?NODE_KEY_OPTS,
+                        Opts#{ <<"topic">> => ao_internal }
+                    )
                 ),
             {
                 Status,
@@ -2388,7 +2393,37 @@ index_test() ->
             },
             #{}
         ),
-    ?assertEqual(<<"i like turtles!">>, Body).
+    ?assertEqual(<<"i like turtles!">>, Body),
+    % The `index' of a message does not commit with the node's key.
+    {ok, ID} =
+        hb_cache:write(
+            #{
+                <<"device">> => <<"lua@5.3a">>,
+                <<"module">> =>
+                    #{
+                        <<"content-type">> => <<"application/lua">>,
+                        <<"body">> =>
+                            <<
+                                "function index() return { body = "
+                                "ao.resolve({ device = 'message@1.0' }, "
+                                "{ path = 'commit' }) } end"
+                            >>
+                    }
+            },
+            get_opts()
+        ),
+    {ok, 200, _, CommitStatus} =
+        hb_http_client:request(
+            #{
+                peer => NodeURL,
+                path => <<"/", ID/binary>>,
+                method => <<"GET">>,
+                headers => #{ <<"accept-bundle">> => <<"false">> },
+                body => <<>>
+            },
+            #{}
+        ),
+    ?assertNotEqual(<<"ok">>, CommitStatus).
 
 index_request_test() ->
     URL = start_node(),
