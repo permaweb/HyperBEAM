@@ -598,6 +598,15 @@ cache_style_test() ->
     Result = hb_store:read(StoreOpts, <<"test-key">>, #{}),
     ?event_debug({cache_style_read_result, Result}),
     ?assertEqual({ok, <<"test-value">>}, Result),
+    % If the store's directory is replaced, as by a mount over it, a write
+    % goes to the new directory.
+    #{ <<"name">> := Dir } = StoreOpts,
+    ok = file:rename(Dir, <<Dir/binary, "-hidden">>),
+    ok = ensure_dir(Dir),
+    ok = hb_store:write(StoreOpts, #{ <<"mounted">> => <<"yes">> }, #{}),
+    ok = hb_store:flush(StoreOpts, #{}),
+    ok = hb_store:stop(StoreOpts),
+    ?assertEqual({ok, <<"yes">>}, hb_store:read(StoreOpts, <<"mounted">>, #{})),
     hb_store:stop(StoreOpts).
 
 read_prefix_composite_test() ->
