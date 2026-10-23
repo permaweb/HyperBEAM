@@ -5,7 +5,7 @@
 %%% There can only ever be one registrant for a given name at a time.
 -module(hb_name).
 -export([start/0, register/1, register/2, unregister/1, lookup/1, all/0]).
--export([singleton/2]).
+-export([singleton/2, atomic/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -define(NAME_TABLE, hb_name_registry).
@@ -98,6 +98,35 @@ singleton_spawn(Name, Fun) ->
         {spawn_failed, ReadyRef} -> singleton(Name, Fun)
     end.
 
+%% @doc Run `Fun' in a process registered under `Name' and return its result,
+%% or raise its exception in the caller. Calls under one name run one at a
+%% time: a caller that finds the name registered to another caller's process
+%% waits for that process to exit, then calls again. A `Fun' that calls
+%% `atomic/2' with its own `Name' waits for itself.
+atomic(Name, Fun) ->
+    Caller = self(),
+    Runner =
+        singleton(
+            Name,
+            fun() ->
+                Result =
+                    try {ok, Fun()}
+                    catch Class:Reason:Stack -> {Class, Reason, Stack}
+                    end,
+                Caller ! {atomic, self(), Result}
+            end
+        ),
+    Ref = erlang:monitor(process, Runner),
+    receive
+        {atomic, Runner, {ok, Value}} ->
+            erlang:demonitor(Ref, [flush]),
+            Value;
+        {atomic, Runner, {Class, Reason, Stack}} ->
+            erlang:demonitor(Ref, [flush]),
+            erlang:raise(Class, Reason, Stack);
+        {'DOWN', Ref, process, Runner, _} -> atomic(Name, Fun)
+    end.
+
 %%% @doc Lookup a name -> PID.
 lookup(Name) when is_atom(Name) ->
     case whereis(Name) of
@@ -166,6 +195,31 @@ singleton_returns_spawned_pid_test() ->
     ?assertNotEqual(self(), Pid),
     Pid ! stop,
     hb_name:unregister(Name).
+
+atomic_test() ->
+    Name = {atomic_test, os:timestamp()},
+    Running = atomics:new(1, []),
+    % Concurrent calls run one at a time, and each returns its own result.
+    ?assertEqual(
+        lists:seq(1, ?CONCURRENT_REGISTRATIONS),
+        hb_pmap:parallel_map(
+            lists:seq(1, ?CONCURRENT_REGISTRATIONS),
+            fun(N) ->
+                atomic(
+                    Name,
+                    fun() ->
+                        1 = atomics:add_get(Running, 1, 1),
+                        timer:sleep(1),
+                        0 = atomics:sub_get(Running, 1, 1),
+                        N
+                    end
+                )
+            end,
+            ?CONCURRENT_REGISTRATIONS
+        )
+    ),
+    % An exception in `Fun' is raised in the caller.
+    ?assertThrow(test, atomic(Name, fun() -> throw(test) end)).
 
 concurrency_test() ->
     Name = {concurrent_test, os:timestamp()},

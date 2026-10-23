@@ -199,35 +199,19 @@ do_find(StoreOpts = #{ <<"store-module">> := Mod }) ->
             ensure_instance_alive(StoreOpts, InstanceMessage)
     end.
 
-%% @doc Start a store in a process registered under its name, unless another
-%% process has, and return its instance. Others wait for that process to exit,
-%% then find the store again. A start that fails raises in the caller.
+%% @doc Start a store in a process registered under its name, one process at a
+%% time (`hb_name:atomic/2'), and return its instance. If another process has
+%% started the store, return its instance. A start that fails raises in the
+%% caller.
 start_via_singleton(StoreOpts, LookupName) ->
-    Caller = self(),
-    Starter =
-        hb_name:singleton(
-            LookupName,
-            fun() ->
-                Result =
-                    try {ok, persistent_term:get(LookupName)}
-                    catch error:badarg ->
-                        try {ok, spawn_instance(StoreOpts)}
-                        catch Class:Reason:Stack -> {Class, Reason, Stack}
-                        end
-                    end,
-                Caller ! {store_started, self(), Result}
+    hb_name:atomic(
+        LookupName,
+        fun() ->
+            try persistent_term:get(LookupName)
+            catch error:badarg -> spawn_instance(StoreOpts)
             end
-        ),
-    Ref = erlang:monitor(process, Starter),
-    receive
-        {store_started, Starter, {ok, Instance}} ->
-            erlang:demonitor(Ref, [flush]),
-            Instance;
-        {store_started, Starter, {Class, Reason, Stack}} ->
-            erlang:demonitor(Ref, [flush]),
-            erlang:raise(Class, Reason, Stack);
-        {'DOWN', Ref, process, Starter, _} -> do_find(StoreOpts)
-    end.
+        end
+    ).
 
 %% @doc Create a new instance of a store and return its term.
 spawn_instance(StoreOpts = #{ <<"store-module">> := Mod }) ->
