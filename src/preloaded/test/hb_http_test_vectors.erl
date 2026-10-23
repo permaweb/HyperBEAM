@@ -524,11 +524,6 @@ exceptions() ->
 %% They are not generated as tests.
 path_exceptions() ->
     [
-        {["unsigned status"], [tunnel, tunnel_remote],
-            "A broker replies to a tunneled request from its request hook, and "
-            "a request hook can end a request only with an error. The reply to "
-            "an error has the HTTP status of the message's `status' key if "
-            "that is an HTTP status, and 400 otherwise."},
         {["lua process"], [tunnel_remote],
             "The scheduler of the process is the primary, so its schedule is "
             "not in the primary's cache, which is all the origin reads."}

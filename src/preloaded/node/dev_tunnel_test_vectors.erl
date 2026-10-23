@@ -697,7 +697,12 @@ request_errors(Ctx = #{broker := Broker, first := First, caller := Opts}) ->
                     Opts
                 ),
             ?assertEqual(Status, hb_maps:get(<<"status">>, Direct, Opts)),
-            ?assertEqual(Status, hb_maps:get(<<"status">>, Tunnel, Opts))
+            ?assertEqual(Status, hb_maps:get(<<"status">>, Tunnel, Opts)),
+            % The origin replies to an exception as its HTTP server does.
+            ?assertEqual(
+                <<"throw">>,
+                hb_maps:get(<<"type">>, Tunnel, not_found, Opts)
+            )
         end,
         [{<<"/a/b~">>, 400}, {<<"/~tunnel-test@1.0/missing">>, 404}]
     ),
@@ -910,6 +915,11 @@ payloads(Ctx = #{broker := Broker, first := First, caller := Opts}) ->
                     ?assertEqual(
                         hb_private:reset(Value),
                         hb_private:reset(hb_maps:get(<<"body">>, Res, Opts))
+                    ),
+                    % The tunneled reply has the signers of the direct reply.
+                    ?assertEqual(
+                        hb_message:signers(Direct, Opts),
+                        hb_message:signers(Res, Opts)
                     )
                 end,
                 [false, true]
@@ -1249,7 +1259,7 @@ response_auth(Ctx = #{broker := Broker, first := First, caller := Opts}) ->
     Envelope =
         #{
             <<"tunnel-request-id">> => ID,
-            <<"status">> => 200,
+            <<"result-status">> => ok,
             <<"response">> => Inner
         },
     lists:foreach(

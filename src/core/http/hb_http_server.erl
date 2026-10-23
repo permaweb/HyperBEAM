@@ -108,7 +108,7 @@
 -export([set_default_opts/1, set_proc_server_id/1]).
 -export([static/3, static/4]).
 -export([start_node/0, start_node/1]).
--export([resolve_request/3, error_status/2]).
+-export([resolve_request/3, error_reply/4, commit_reply/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -812,6 +812,8 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
             ),
             Error;
         {failure, _} = Failure -> Failure;
+        % A hook that gives the reply, such as `tunnel@1.0', ends the request.
+        {reply, _} = Reply -> Reply;
         Other ->
             {error, Other}
     end.
@@ -819,6 +821,22 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
 %% @doc Return an error response to the client: a message the node cannot
 %% accept is the client's error, anything else is the server's.
 handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
+    Reply = error_reply(Type, Details, Stacktrace, NodeMsg),
+    ?event(
+        http_error,
+        {returning_error,
+            {method, cowboy_req:method(Req)},
+            {path, {string, cowboy_req:path(Req)}},
+            {error, Reply}
+        },
+        NodeMsg
+    ),
+    reply(Req, Singleton, Reply, NodeMsg).
+
+%% @doc Return the status and the message of the reply to an exception: the
+%% error's `type', `details' and `stacktrace', with the keys that
+%% `parse_error/1' gives.
+error_reply(Type, Details, Stacktrace, NodeMsg) ->
     DetailsStr = hb_util:bin(hb_format:message(Details, NodeMsg, 1)),
     StacktraceStr = hb_util:bin(hb_format:trace(Stacktrace)),
     ErrorMsg =
@@ -827,15 +845,6 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
             <<"details">> => DetailsStr,
             <<"stacktrace">> => StacktraceStr
         },
-    ?event(
-        http_error,
-        {returning_error,
-            {method, cowboy_req:method(Req)},
-            {path, {string, cowboy_req:path(Req)}},
-            {error, ErrorMsg}
-        },
-        NodeMsg
-    ),
     ErrorDetailsMaxSize = hb_opts:get(error_details_max_size, ?DEFAULT_ERROR_DETAILS_MAX_SIZE, NodeMsg),
     % Preserve indentation while removing trailing noise.
     FormattedErrorMsg =
@@ -848,12 +857,7 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
                         ErrorDetailsMaxSize
                 )
         },
-    reply(
-        Req,
-        Singleton,
-        {error_status(Type, Details), FormattedErrorMsg},
-        NodeMsg
-    ).
+    {error_status(Type, Details), FormattedErrorMsg}.
 
 %% @doc The status of an error response. A request whose commitments do not
 %% verify or that `hb_singleton' cannot parse is refused as the client's error.
@@ -1002,7 +1006,10 @@ scheme(NodeMsg) ->
 %% @doc Reply to the client's HTTP request with the result of resolving it. The
 %% HTTP status comes from the result and is not added to the message, which is
 %% sent with the node's signature on its hashpath (`maybe_sign/3'). A list is
-%% the `body' of the reply, which its `ao-result' key selects.
+%% the `body' of the reply, which its `ao-result' key selects. If a request hook
+%% gives the reply (`{reply, Result}'), send `Result'.
+reply(InitReq, TABMReq, {reply, Result}, Opts) ->
+    reply(InitReq, TABMReq, Result, Opts);
 reply(InitReq, TABMReq, {ErlStatus, List}, Opts) when is_list(List) ->
     Msg = #{ <<"ao-result">> => <<"body">>, <<"body">> => List },
     reply(InitReq, TABMReq, {ErlStatus, Msg}, Opts);
@@ -1127,6 +1134,18 @@ maybe_sign(RawMsg, Codec, Opts) ->
             end;
         _ -> Msg
     end.
+
+%% @doc Commit a result as the reply to a request commits it (`maybe_sign/3'),
+%% for a node that sends the reply for this node, such as a `tunnel@1.0'
+%% broker: only this node can sign the hashpath of the result. The cookie keys
+%% that the reply sends as headers stay in the result, uncommitted.
+commit_reply(TABMReq, Msg, Opts) ->
+    {ok, _, WithoutCookies} = reply_handle_cookies(#{}, Msg, Opts),
+    {Codec, _} = accept_to_codec(TABMReq, WithoutCookies, Opts),
+    maps:merge(
+        maps:with([<<"cookie">>, <<"set-cookie">>], Msg),
+        maybe_sign(WithoutCookies, Codec, accept_signature(TABMReq, Opts))
+    ).
 
 %% @doc Handle replying with cookies if the message contains them. Returns the
 %% new Cowboy `Req` object, and the message without the cookie keys that no
