@@ -619,4 +619,22 @@ read_prefix_composite_test() ->
         read(StoreOpts, #{ <<"read">> => <<"root">> }, #{})
     ),
     ?assertEqual({ok, [<<"a">>, <<"b">>]}, test_list(StoreOpts, <<"root">>)),
+    % If writes are pending, a read of a key with no value waits for their
+    % commit on a dirty IO scheduler: with one normal scheduler online, this
+    % process runs before the read returns.
+    test_write(StoreOpts, <<"root/d">>, <<"3">>),
+    Online = erlang:system_flag(schedulers_online, 1),
+    Self = self(),
+    spawn(
+        fun() ->
+            Self ! reading,
+            read(StoreOpts, #{ <<"read">> => <<"missing">> }, #{}),
+            Self ! read
+        end
+    ),
+    receive reading -> Self ! ran end,
+    First = receive Msg when Msg == ran; Msg == read -> Msg end,
+    erlang:system_flag(schedulers_online, Online),
+    receive Next when Next == ran; Next == read -> ok end,
+    ?assertEqual(ran, First),
     test_stop(StoreOpts).
