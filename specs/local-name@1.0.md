@@ -105,8 +105,9 @@ All keys are lowercase, hyphenated, binary on the wire.
 ### `lookup` — resolve a name to its value
 
 - **Reads:** `key` from `Req` (the name); the node's **names message** (from the
-  `local-names` node option, else loaded from durable storage — §5.3). Does not
-  read `Base`.
+  `local-names` node option, else loaded from durable storage — §5.3), and the
+  names in durable storage if the names message does not contain the name. Does
+  not read `Base`.
 - **Behaviour:**
   1. Obtain the current names message: read the `local-names` node option; if it
      is absent, **load** the registry from durable storage into a names message
@@ -118,13 +119,18 @@ All keys are lowercase, hyphenated, binary on the wire.
      and `get` lowercases `key` and matches exactly, so a name is found by any
      case (see §5.1); a present name returns its value, an absent name yields
      `not_found`.
+  3. If the names message does not contain the name, resolve `key` in the same
+     way against the names read from durable storage (§5.3 steps 1-2), and
+     return that result: a request may have read its node options before a
+     registration. This read does not change `local-names`.
 - **Returns:** `{ok, Value}` for a registered name; `{error, not_found}` for an
   unregistered name (the `not_found` arises from the base identity device's `get`
   of a missing key). The value is returned **as stored** (no dereferencing — that
   is `name@1.0`'s `load` concern).
 - **Side effects:** MAY, as a consequence of step 1 on a cold index, **read the
   durable registry and populate the `local-names` node option** (a node-state
-  update; see §6). No content is written. No commitment.
+  update; see §6). Step 3 reads the durable registry and updates nothing. No
+  content is written. No commitment.
 
 ### default handler — name-as-key lookup
 
@@ -245,8 +251,11 @@ its stored value (or `not_found`).
 
 - **Names index as cache.** `lookup` consults the `local-names` node option
   first; only when it is **absent** does it load from durable storage (and
-  populate the option). A successful `register` proactively reloads the index, so
-  a name is visible to subsequent lookups immediately after it is registered.
+  populate the option), and only when it does not contain the name does it read
+  the names in durable storage (§4 `lookup`, step 3). A successful `register`
+  proactively reloads the index, so a name is visible to subsequent lookups
+  immediately after it is registered, including the lookups of a request that
+  read its node options before the registration.
   The index is **node state mirroring durable storage**; it is not a `name@1.0`
   result cache.
 - **Authority for fresh reads.** `lookup` reads the `local-names` option in a
@@ -370,8 +379,9 @@ An implementation MUST exhibit the following externally observable behaviours:
    reads of that path return the value's content. The name is normalised
    identically on write and on enumeration.
 9. The names index is held on the node option `local-names`; `lookup` consults it
-   first and builds it from durable storage only when absent; a successful
-   `register` updates it. Resolution does not depend on name-enumeration order.
+   first, builds it from durable storage only when absent, and reads durable
+   storage for a name that it does not contain; a successful `register` updates
+   it. Resolution does not depend on name-enumeration order.
 10. `lookup` requires **no** authentication; `register` is the only authority-
     gated key; an unregistered-name lookup yields `not_found` rather than an
     error exposing the registry.
