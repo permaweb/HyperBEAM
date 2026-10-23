@@ -451,7 +451,12 @@ commit(Msg, NotOpts, CodecName) when not is_map(NotOpts) ->
 commit(Msg, Opts, CodecName) when is_binary(CodecName) ->
     commit(Msg, Opts, #{ <<"commitment-device">> => CodecName });
 commit(Msg, GivenOpts, Spec) ->
-    Opts = hb_http_server:with_node_committer(GivenOpts),
+    % Only a signed commitment takes the node's key material.
+    Opts =
+        case Spec of
+            #{ <<"type">> := <<"unsigned">> } -> GivenOpts;
+            _ -> hb_http_server:with_node_committer(GivenOpts)
+        end,
     % hb_ao:raw does not vary for us but ~message@1.0/commit|id expects a
     % ~structured@1.0 form, so we force an idempotent 'to' call to ensure it
     {ok, Structured} =
@@ -1048,6 +1053,9 @@ normalize_commitments_modes_test() ->
     [SignedA, SignedB, UnsignedA, UnsignedB] =
         [ commit(Msg, Opts, #{ <<"type">> => Type, <<"committed">> => [Key] })
         || Type <- [<<"signed">>, <<"unsigned">>], Key <- [<<"a">>, <<"b">>] ],
+    % An unsigned commitment needs no listener for the `http-server' of `Opts'.
+    ?assertEqual(UnsignedA, commit(Msg, #{ <<"http-server">> => <<"stopped">> },
+        #{ <<"type">> => <<"unsigned">>, <<"committed">> => [<<"a">>] })),
     Commitments = lists:foldl(
         fun(M, Acc) -> maps:merge(Acc, maps:get(<<"commitments">>, M)) end,
         #{},
