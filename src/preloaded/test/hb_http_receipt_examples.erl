@@ -320,7 +320,8 @@ observer_pipeline() ->
     ).
 
 %% @doc Native relay handlers can deliver the signed body to a real collector.
-%% The operator's collector route disables receipt hooks for report delivery.
+%% The relay handler sets `hook/recursive' to `false', so its request runs no
+%% receipt hook, though the request's route has one.
 collector_test_() ->
     {timeout, 30, fun collector/0}.
 
@@ -367,8 +368,8 @@ collector() ->
                                 <<"prefix">> => Sink,
                                 <<"opts">> => #{
                                     <<"on">> => #{
-                                        <<"http-client-receipt">> => [],
-                                        <<"http-client-admissible-receipt">> => []
+                                        <<"http-client-receipt">> =>
+                                            observer(Owner, Ref, transport)
                                     }
                                 }
                             }
@@ -380,7 +381,8 @@ collector() ->
                                 <<"device">> => <<"relay@1.0">>,
                                 <<"path">> => <<"call">>,
                                 <<"method">> => <<"POST">>,
-                                <<"relay-route">> => <<"/receipts">>
+                                <<"relay-route">> => <<"/receipts">>,
+                                <<"hook">> => #{ <<"recursive">> => false }
                             },
                             observer(Owner, Ref, delivered)
                         ]
@@ -399,6 +401,7 @@ collector() ->
                         <<"duration">>, hb_maps:get(<<"path">>, Report, Opts)
                     ),
                     ?assertEqual(<<"received">>, receipt(Ref, delivered, Opts)),
+                    % The relay's request runs no receipt hook of its route.
                     no_receipt(Ref)
                 end
             )

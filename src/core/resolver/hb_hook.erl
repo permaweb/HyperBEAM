@@ -29,7 +29,9 @@
 %%% the result of the execution should be discarded and the prior value (the
 %%% input to the hook) should be used instead. The `hook/commit-request' key can
 %%% also be set to `true' if the request should be committed by the node before
-%%% execution of the hook.
+%%% execution of the hook. The `hook/recursive' key can be set to `false' if the
+%%% hook should not run again for the work that the handler starts, even if a
+%%% route's `opts' add the hook again.
 %%% 
 %%% The default HyperBEAM node implements several useful hooks. They include:
 %%% 
@@ -57,7 +59,8 @@
 %%%             `request-path' and configured peer `reference'.
 %%%         This does not imply content verification unless configured.
 %%%     Both client receipt hooks run asynchronously; their results do not
-%%%         replace the HTTP result.
+%%%         replace the HTTP result. A request that a handler sends runs the
+%%%         hook again, unless the handler sets `hook/recursive' to `false'.
 %%% 
 -module(hb_hook).
 -export([on/3, find/2, find/3]).
@@ -74,7 +77,11 @@ on(HookName, Req, Opts) ->
     end.
 
 %% @doc Get all handlers for a specific hook from the node message options.
-%% Handlers are stored in the `on' key of this message.
+%% Handlers are stored in the `on' key of this message. A hook in the
+%% `hook-excluded' of the options has no handlers.
+find(HookName, #{ <<"hook-excluded">> := Hooks })
+        when is_map_key(HookName, Hooks) ->
+    [];
 find(HookName, Opts = #{ <<"on">> := On }) when is_map(On) ->
     case maps:get(HookName, On, []) of
         Handler when is_map(Handler) ->
@@ -189,7 +196,11 @@ execute_handler(HookName, Handler, Req, Opts) ->
             hb_ao:raw(
                 PreparedBase,
                 PreparedReq,
-                Opts#{ <<"hashpath">> => ignore }
+                handler_opts(
+                    HookName,
+                    Handler,
+                    Opts#{ <<"hashpath">> => ignore }
+                )
             ),
         case {Status, hb_util:deep_get(<<"hook/result">>, Handler, <<"return">>, Opts)} of
             {ok, <<"ignore">>} -> {Status, Req};
@@ -215,6 +226,24 @@ execute_handler(HookName, Handler, Req, Opts) ->
                 (iolist_to_binary(io_lib:format("~p:~p", [Error, Reason])))/binary
             >>}
     end.
+
+%% @doc Return the options that a handler executes with. If the handler sets
+%% `hook/recursive' to `false', we add its hook to the `hook-excluded' of
+%% `Opts', so the work that the handler starts finds no handlers for the hook,
+%% even if a route's `opts' add the hook again.
+handler_opts(
+    HookName,
+    #{ <<"hook">> := #{ <<"recursive">> := Recursive } },
+    Opts
+) ->
+    case hb_util:bool(Recursive) of
+        false ->
+            Hooks = maps:get(<<"hook-excluded">>, Opts, #{}),
+            Opts#{ <<"hook-excluded">> => Hooks#{ HookName => true } };
+        true -> Opts
+    end;
+handler_opts(_HookName, _Handler, Opts) ->
+    Opts.
 
 %%% Tests
 
