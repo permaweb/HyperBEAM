@@ -1937,7 +1937,7 @@ request_hook_reroute_to_nearest() ->
         Peers
     ),
     ?assert(HasValidSigner),
-    % A signed request holding a map is relayed as it was signed.
+    % A signed request with a map is relayed as it was signed.
     Signed =
         hb_message:commit(
             #{

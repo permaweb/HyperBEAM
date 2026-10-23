@@ -10,7 +10,7 @@
 %%% through to.
 %%%
 %%% Because the supply is one indivisible unit, those two things compose into a
-%%% name: exactly one address holds it, that address alone may say what the name
+%%% name: exactly one address owns it, only that address may say what the name
 %%% points at, and transferring the unit hands over that right with it. Selling
 %%% the unit -- with `~arweave-swap@1.0', which settles against the same
 %%% `balances' -- sells the name.
@@ -95,8 +95,8 @@ request(_Base, Req, Opts) ->
 %% A name that is for sale is settled in the same balances it keeps, so every
 %% message is offered to the selling device first -- including the ones this
 %% device would otherwise ignore, since the payment that buys a name is a
-%% transfer between two other addresses. Which device that is, is a scalar key
-%% on the process; see `swap/3' for why it is not a `~stack@1.0'.
+%% transfer between two other addresses. The process gives that device as a
+%% literal; see `swap/3' for why it is not a `~stack@1.0'.
 compute(Base, Assignment, Opts) ->
     Sold = swap(seed(Base, Opts), Assignment, Opts),
     Body = hb_maps:get(<<"body">>, Assignment, #{}, Opts),
@@ -114,7 +114,7 @@ compute(Base, Assignment, Opts) ->
 %% take back the state it produces.
 %%
 %% This is a `~stack@1.0' written out by hand, and deliberately so. A process
-%% spawned as an Arweave transaction can only carry flat, scalar tags: the
+%% spawned as an Arweave transaction can only carry literals as tags: the
 %% codec turns a submessage or a list into a link to content that is not on
 %% the weave, so nothing else can read it back. `device-stack' is a list, so a
 %% stack cannot survive the spawn -- but `swap-device' is one word.
@@ -135,7 +135,7 @@ swap(Base, Assignment, Opts) ->
 %%
 %% Neither can be written into the spawn directly: `balances' and the linked
 %% message are submessages, and a submessage does not cross the chain. What does
-%% cross is a scalar -- `initial-holder', an address, and `initial-value', the id
+%% cross is a literal: `initial-holder', an address, and `initial-value', the id
 %% of whatever the name should resolve to. Values keep their case, where keys are
 %% lowercased and a lowercased address is a different address.
 %%
@@ -297,7 +297,7 @@ value_of(Body, Opts) ->
         Value -> hb_cache:ensure_all_loaded(Value, Opts)
     end.
 
-%% @doc Whether an address may speak for the name: it must hold the share of the
+%% @doc Whether an address may speak for the name: it must own the share of the
 %% supply the token requires, which is all of it unless the token says
 %% otherwise. This is `token-1.0''s `supply-threshold-owner' rule, and it is
 %% evaluated against the balances as they stand -- so the authority moves with
@@ -613,7 +613,7 @@ set_without_value_inherits_own_keys_test() ->
     ?assertEqual(not_found, hb_ao:get(<<"action">>, Value, not_found, Opts)),
     ?assertEqual(not_found, hb_ao:get(<<"target">>, Value, not_found, Opts)).
 
-%% @doc Anybody who does not hold the name cannot speak for it.
+%% @doc Anybody who does not own the name cannot speak for it.
 set_by_stranger_test() ->
     Opts = test_opts(),
     {_, OwnerAddr} = party(),
@@ -626,7 +626,7 @@ set_by_stranger_test() ->
         ),
     ?assertEqual(#{}, value(Result, Opts)).
 
-%% @doc The authority is the holding, not a recorded owner: it goes with the
+%% @doc The authority is the balance, not a recorded owner: it goes with the
 %% unit and needs nothing kept in step. This is what makes a name sellable.
 authority_follows_the_unit_test() ->
     Opts = test_opts(),
@@ -653,7 +653,7 @@ authority_follows_the_unit_test() ->
     ?assertEqual(1, held_by(Fresh, BuyerAddr, Opts)),
     ?assertEqual(0, held_by(Fresh, OwnerAddr, Opts)).
 
-%% @doc A partial holding is not the whole supply, so it does not carry the
+%% @doc A partial balance is not the whole supply, so it does not carry the
 %% authority. (A name is indivisible, but the rule is the supply threshold.)
 partial_holding_cannot_set_test() ->
     Opts = test_opts(),
@@ -774,8 +774,8 @@ assigned_non_payment_test() ->
         ),
     ?assertEqual(1, held_by(Result, OwnerAddr, Opts)).
 
-%% @doc A name spawned as an Arweave transaction carries only scalars, so it
-%% names its first holder rather than holding a balances submessage. The unit
+%% @doc A name spawned as an Arweave transaction carries only literals, so it
+%% gives its first holder, not a balances submessage. The unit
 %% appears the first time it computes.
 seeded_from_initial_holder_test() ->
     Opts = test_opts(),
@@ -893,7 +893,7 @@ without_a_swap_device_test() ->
     ),
     ?assertEqual(not_found, state(<<"orders">>, Set, not_found, Opts)).
 
-%% @doc A sparse payment names this process in `Assign-To' while its real L1
+%% @doc A sparse payment gives this process in `Assign-To' while its real L1
 %% target is the seller. The swap settles it before the carrier applies its own
 %% addressed actions, moving the name's unit to the buyer.
 swap_payment_moves_the_unit_test() ->

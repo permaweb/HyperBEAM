@@ -79,7 +79,7 @@ write_path(Opts, PathComponents, Value) ->
     Path = add_prefix(Opts, hb_path:to_binary(PathComponents)),
     ?event({writing, Path, byte_size(Value)}),
     filelib:ensure_dir(Path),
-    % Keep a file that holds the value; replace any other entry.
+    % Keep a file that contains the value; replace any other entry.
     Make = fun(Temp) -> file:write_file(Temp, Value) end,
     case holds_value(Path, Value) of
         true -> ok;
@@ -123,7 +123,7 @@ name(File) ->
 %% unique path in the store's `~tmp' directory, by renaming it over the entry.
 %% The rename replaces the entry in one step: a concurrent read finds the old
 %% entry or the new one, and a crash leaves one of them whole. Escaped keys
-%% never contain `~', so no key names the directory or a path in it.
+%% never contain `~', so no key maps to the directory or a path in it.
 replace(#{ <<"name">> := DataDir }, Path, Make) ->
     Unique = hb_util:encode(crypto:strong_rand_bytes(16)),
     Temp = <<DataDir/binary, "/~tmp/", Unique/binary>>,
@@ -170,8 +170,8 @@ add_prefix(#{ <<"name">> := Prefix }, Path) ->
 %% normalization do not share a file.
 %%
 %% Keys are caller-supplied. `hb_escape:encode_path_component/1' escapes the
-%% message keys `.' and `..', so neither component names an AO-Core key and
-%% refusing them costs nothing; the operating system would otherwise walk `..'
+%% message keys `.' and `..', so neither component maps to an AO-Core key and
+%% refusing them costs nothing; the operating system would otherwise follow `..'
 %% out of the root.
 safe_path(Path) ->
     Parts = binary:split(hb_path:to_binary(Path), <<"/">>, [global]),

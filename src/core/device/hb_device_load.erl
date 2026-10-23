@@ -91,7 +91,7 @@ resolve(Ref, Opts) ->
         from_low_trust(Ref, Opts)
     end.
 
-%% @doc Look up a previously-resolved module: the process dictionary
+%% @doc Look up an already-resolved module: the process dictionary
 %% first, then the node's `loaded-device-store'. The first process to
 %% resolve a device spares every other the index read and archive
 %% extraction. The store defaults to `[]', which `hb_store' treats as
@@ -644,7 +644,7 @@ schema_memoised_test() ->
     SpecID = hb_message:id(Spec, signed, Opts),
     ?assertMatch({ok, [_ | _]}, implementations(SpecID, StoreOpts)).
 
-%% @doc Resolution against a preloaded store holding no devices must fail
+%% @doc Resolution against a preloaded store with no devices must fail
 %% promptly with a circular-resolution error, not recurse through `name@1.0'.
 circular_name_resolution_test() ->
     % Shed this (shared EUnit worker) process's memos of the devices used.

@@ -201,7 +201,7 @@ dns_record(Name, Type, Data) ->
         <<"data">> => Data
     }.
 
-%% @doc Return a certificate chain only to the listener holding its capability.
+%% @doc Return a certificate chain only to the listener with its capability.
 %% Both request and node message must carry the same private reference. A valid
 %% call returns `certificate-chain', or a 500 response if acquisition fails.
 obtain(_Base, Request, Opts) ->

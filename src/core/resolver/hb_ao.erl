@@ -785,7 +785,7 @@ subresolve(RawBase, DevID, Req, Opts) ->
     Base = ensure_message_loaded(RawBase, Opts),
     subresolve_loaded(Base, DevID, Req, Opts).
 
-%% @doc Device selection requires a message with fields, not a scalar.
+%% @doc Device selection requires a message with fields, not a literal.
 subresolve_loaded(Base, DevID, _Req, _Opts)
         when DevID =/= undefined, not is_map(Base), not is_list(Base) ->
     {error, #{

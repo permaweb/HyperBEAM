@@ -45,12 +45,12 @@
 %%% ordered by the bounds and their members as declared.
 %%%
 %%% `device' is always kept in the base and `path' in the request, so a
-%%% projection cannot detach an execution from its device or key. Scalar
+%%% projection cannot detach an execution from its device or key. Single-value
 %%% types coerce through the `hb_util' converters; lists, tuples, unions,
 %%% ranges and literals apply recursively. A value that cannot be coerced to
 %%% its type throws `{invalid_type, Path, Schema, Value}'; a required key that
-%%% is absent throws `{required_key_missing, Path}'. `Path' names the key from
-%%% the input that holds it: `base/deep/slot' or `request/slot'. A linked
+%%% is absent throws `{required_key_missing, Path}'. `Path' gives the key from
+%%% the input that contains it: `base/deep/slot' or `request/slot'. A linked
 %%% value that cannot be loaded throws `necessary_message_not_found' with its
 %%% path in the same form.
 %%%
@@ -63,8 +63,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% The built-in types that coerce and check as scalars, named as their
-%% normalized kinds are.
+%% The built-in single-value types, which coerce and check by their
+%% normalized names.
 -define(SCALARS,
     #{
         integer => true, non_neg_integer => true, pos_integer => true,
@@ -351,10 +351,10 @@ substitute(List, Env) when is_list(List) ->
     [substitute(Item, Env) || Item <- List];
 substitute(Value, _Env) -> Value.
 
-%% @doc Compile an abstract type into a schema. `TypeEnv' holds the module's
+%% @doc Compile an abstract type into a schema. `TypeEnv' contains the module's
 %% own types, `VarEnv' the schemas bound to the type variables of the one being
 %% expanded, and `Seen' the types under expansion, so that a recursive type
-%% becomes an alias rather than a loop.
+%% becomes an alias, not a loop.
 parse_type({ann_type, _, [_Var, Type]}, TypeEnv, VarEnv, Seen) ->
     parse_type(Type, TypeEnv, VarEnv, Seen);
 parse_type({var, _, '_'}, _TypeEnv, _VarEnv, _Seen) ->
@@ -457,7 +457,7 @@ field_presence(map_field_exact) -> required;
 field_presence(map_field_assoc) -> optional.
 
 %% @doc The message key a map field's key type names. A literal key is the
-%% key itself; `_' is the wildcard; any other type is named by its printed
+%% key itself; `_' is the wildcard; the key of any other type is its printed
 %% form, so that it can never match a real key.
 key_name({atom, _, Atom}, _TypeEnv, _VarEnv, _Seen) ->
     normalize_name(Atom);
@@ -584,7 +584,7 @@ apply_schema(
             throw({invalid_type, <<>>, Schema, Value})
     end;
 apply_schema(Type, Value, Opts) ->
-    % A scalar, literal or range: keep a value of the type, else coerce it.
+    % A single-value type, literal or range: keep a value of it, else coerce it.
     case check_type(Type, Value) of
         true ->
             {Value, false};

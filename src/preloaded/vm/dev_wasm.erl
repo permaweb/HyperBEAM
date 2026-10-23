@@ -278,7 +278,7 @@ compute(RawM1, M2, Opts) ->
                             % stores it as the slot's results. The trap does
                             % not unwind the instance's globals, so the
                             % instance is replaced with a new one of the
-                            % image holding the memory as the trap left it:
+                            % image loaded with the memory as the trap left it:
                             % the same steps a restore from a snapshot takes.
                             ok = reset(M1, M2, Opts),
                             {error, Res};
@@ -298,7 +298,7 @@ compute(RawM1, M2, Opts) ->
     end.
 
 %% @doc Replace an instance whose call trapped with a new instance of the
-%% image, holding the memory as the trapped call left it. The trapped call
+%% image, loaded with the memory as the trapped call left it. The trapped call
 %% keeps the instance's globals, such as the stack pointer, where the call
 %% stopped, while a restore from a snapshot starts at a new instance, so
 %% the process goes on from the new instance on every node. The worker's

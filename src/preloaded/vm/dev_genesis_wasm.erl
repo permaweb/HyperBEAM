@@ -462,7 +462,7 @@ latest_checkpoint(ProcID, TrustedSigners, Opts) ->
             end
     end.
 
-%% @doc Return the committers named by the `genesis-wasm-import-authorities'
+%% @doc Return the committers in the `genesis-wasm-import-authorities'
 %% option.
 import_authorities(Opts) ->
     [

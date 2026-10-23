@@ -241,8 +241,8 @@ declared_variables(FunEnv, Vars) ->
     ).
 
 %% @doc Give each binary in a GraphQL response that is not UTF-8 text as its
-%% base64url, typed `binary' in the `ao-types' of the object that holds it, as
-%% `json@1.0' does. Every response name is kept, including one that starts
+%% base64url, typed `binary' in the `ao-types' of the object that contains it,
+%% as `json@1.0' does. Every response name is kept, including one that starts
 %% with `priv': the names are the query's fields and aliases, not message keys.
 typed_binaries(Map, Opts) when is_map(Map) ->
     Typed = maps:map(fun(_, Value) -> typed_binaries(Value, Opts) end, Map),

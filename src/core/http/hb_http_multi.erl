@@ -218,7 +218,7 @@ start_workers(Count, Ref, Nodes, StopAfter, Method, Path, Message, Opts) ->
 
 %% @doc Request a message from one node. A request that raises is a failure,
 %% which is not admissible. The reply is whole: the admissibility checks read
-%% its `status', and `request/5' takes the value that it names in `ao-result'.
+%% its `status', and `request/5' takes the value that its `ao-result' selects.
 node_request(Method, Node, Path, Message, Opts) ->
     ReplyOpts = Opts#{ <<"http-only-result">> => false },
     try hb_http:request(Method, Node, Path, Message, ReplyOpts)

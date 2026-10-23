@@ -114,7 +114,7 @@
 %%%     except that it expects the key to store to be provided either directly
 %%%     via the `key' parameter as a `keyid' field in the cookie Structured-Fields
 %%%     map. Support for loading the key from the cookie is provided such that
-%%%     a previously-generated secret by the user can have its persistence mode
+%%%     an existing secret of the user can have its persistence mode
 %%%     changed.
 %%% 
 %%% /list
@@ -1242,7 +1242,7 @@ export_batch_all_wallets_test() ->
 sync_wallets_test() ->
     % Remove all previous cached wallets.
     hb_store:reset(hb_opts:get(priv_store, no_wallet_store, #{})),
-    % Start a node that holds the key of the second node's wallet admin as its
+    % Start a node with the key of the second node's wallet admin as its
     % `admin' identity.
     AdminWallet = ar_wallet:new(),
     Node =
@@ -1304,7 +1304,7 @@ sync_wallets_test() ->
         )
     ),
     % Test sync to the first node from the second, signed as `admin'. The
-    % response holds the `keyid' of the imported wallet, and not its key.
+    % response contains the `keyid' of the imported wallet, and not its key.
     {ok, SyncResponse} = Sync(<<"admin">>),
     ?assertEqual([WalletKeyID], export_response_to_list(SyncResponse, #{})),
     % The first node keeps its own key.

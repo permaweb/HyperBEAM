@@ -64,7 +64,7 @@ read(_M1, M2, Opts) ->
                     {ok, Res}
             end;
         {error, not_found} ->
-            % The cache does not have this ID, but the store may hold a value at
+            % The cache does not have this ID, but the store may have a value at
             % the path.
             % Store = hb_opts:get(store, [], Opts),
             Store = hb_opts:get(store, no_viable_store, Opts),

@@ -217,7 +217,7 @@ cache_source_to_cache_settings(Msg, Opts) ->
 %% normalized map of simply whether we should store and/or lookup the result.
 %% A header separates its directives with commas. Directives are ASCII tokens,
 %% compared without regard to case. A value that cannot be read as a list (its
-%% bytes are not UTF-8) names no directive.
+%% bytes are not UTF-8) gives no directive.
 %% Only binaries and atoms are directives: any other value, such as a message,
 %% is ignored.
 specifiers_to_cache_settings(CCSpecifier) when is_binary(CCSpecifier) ->
@@ -409,7 +409,7 @@ cache_message_result_test() ->
 
 %% @doc Changed results do not retain the input's commitments. Signed inputs
 %% exercise a device that mutates them directly; unsigned inputs are stripped
-%% before invocation. The cache holds each message under its own ID.
+%% before invocation. The cache contains each message under its own ID.
 mangled_result_does_not_poison_cache_test() ->
     Opts = #{
         <<"store">> => hb_test_utils:test_store(),
@@ -510,7 +510,7 @@ partial_unsigned_request_cache_isolation_test() ->
     ?assertEqual(<<"first">>, hb_maps:get(<<"x">>, First, Opts)),
     ?assertEqual(<<"second">>, hb_maps:get(<<"x">>, Second, Opts)).
 
-%% @doc Every computation address names the complete invocation inputs and
+%% @doc Every computation address identifies the complete invocation inputs and
 %% result. Partial commitments at any loaded depth cannot alias another call.
 varied_input_identity_test_() ->
     [

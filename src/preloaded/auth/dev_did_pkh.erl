@@ -1,5 +1,5 @@
 %%% @doc A device that implements the `did:pkh:' DID method. A `did:pkh:' URI
-%%% names the committer of a key by its blockchain account, which is written
+%%% identifies the committer of a key by its blockchain account, which is
 %%% in the CAIP-10 form. The account of each type of key is as follows:
 %%% <pre>
 %%%     eip155:1:ADDRESS         An Ethereum key. The address is checksummed.
@@ -11,8 +11,8 @@
 %%% the account as the `body' of the committer. The committer of an RSA,
 %%% Ed25519 or ECDSA key is `did-ar@1.0'.
 %%%
-%%% A committer that is read from its URI holds its account as its `body'. A
-%%% committer that holds a key has the public key as its `owner', the
+%%% A committer that is read from its URI has its account as its `body'. A
+%%% committer with a key has the public key as its `owner', the
 %%% signature type of the key as its `type', and the private key as `d' in
 %%% its `priv' message. The `commit' key signs the request's
 %%% `body' with the algorithm of the request's `type', and returns the

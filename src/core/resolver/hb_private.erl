@@ -131,7 +131,7 @@ opts(Opts) ->
 
 %% @doc Unset all of the private keys in a message or deep Erlang term.
 %% This function operates on all types of data, such that it can be used on
-%% non-message terms to ensure that `priv` elements can _never_ pass through.
+%% any term to ensure that `priv` elements can _never_ pass through.
 reset(Msg) when is_map(Msg) ->
     maps:map(
         fun(<<"commitments">>, Commitments) when is_map(Commitments) ->

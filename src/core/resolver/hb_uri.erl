@@ -101,7 +101,7 @@
 %%%       device that gives no URI in host form.</li>
 %%%   <li>`scheme/1' also returns `unsupported-uri-scheme' for a binary whose
 %%%       first 8000 bytes are all scheme characters. The HTTP server does not
-%%%       read request lines longer than 8000 bytes, so no path can hold a
+%%%       read request lines longer than 8000 bytes, so no path can contain a
 %%%       longer scheme.</li>
 %%% </ul>
 -module(hb_uri).

@@ -286,7 +286,7 @@ prepare_implementation_dir(RootMod, ImplementationID, Files, Opts) ->
 
 %% @doc Load archive contents unless every module is already in memory.
 %% `global:trans/2' locks `{?MODULE, Root}' for the calling process: `global'
-%% gives a lock at once to every process that names the same requester.
+%% gives a lock at once to every process with the same requester.
 load_new_archive(Root, ModBin, Modules, Resources, Opts) ->
     case loaded(Modules) of
         true -> {ok, Root};

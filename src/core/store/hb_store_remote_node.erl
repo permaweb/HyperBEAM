@@ -19,7 +19,7 @@
 scope(_StoreOpts) ->
     remote.
 
-%% @doc Read a key from the remote node. A key that is not an ID names the
+%% @doc Read a key from the remote node. A key that is not an ID refers to the
 %% remote node's own state, which its reply cannot be checked against, so it
 %% is read only if the store sets `trusted' to `true'.
 %%
@@ -95,7 +95,7 @@ read(StoreOpts, #{ <<"read">> := Key }, NodeOpts) ->
 %% @doc Return whether a message read by an ID has that ID: its uncommitted ID,
 %% the ID of one of its commitments, or the combined ID of its commitments, as
 %% `hb_cache:write/2' links it under. Its commitments must verify, as a reply
-%% names each one by the key that holds it. A binary has the ID of its data.
+%% gives each one's ID as the key it is under. A binary has the ID of its data.
 has_id(Msg, ID, Opts) when is_map(Msg) ->
     lists:member(
         hb_util:human_id(ID),

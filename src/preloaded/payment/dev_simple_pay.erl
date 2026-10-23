@@ -267,7 +267,7 @@ ledger(NodeMsg) ->
     }.
 
 %% @doc Get the balance of a user in the ledger. A request with no signer and
-%% no `target' names no user, and has a balance of 0.
+%% no `target' gives no user, and has a balance of 0.
 get_balance(undefined, _NodeMsg) -> 0;
 get_balance(Signer, NodeMsg) ->
     lib_volatile_ledger:balance(

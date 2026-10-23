@@ -34,7 +34,7 @@
 %%%    keys are taken from the query or the headers, and default to `*/*' and
 %%%    `false'. The cookies of the `cookie' header are placed in `priv/cookie',
 %%%    and the caller's address in `priv/ip'. An `ao-peer-port' key is
-%%%    replaced by an `ao-peer' key, which holds the caller's address and that
+%%%    replaced by an `ao-peer' key with the caller's address and that
 %%%    port. We remove the `content-length' key and an empty `body', unless
 %%%    they are signed.
 %%% 5. We verify every commitment of the request, and of the messages that it
@@ -56,7 +56,7 @@
 %%%    the code that `hb_http:status_code/2' gives for the result's Erlang
 %%%    status. We do not add a `status' key to the reply.
 %%% 2. If the result is a literal or a list, we send it as the `body' of a
-%%%    message, with an `ao-result' key that names `body'.
+%%%    message, with `ao-result' set to `body'.
 %%% 3. We find the codec of the reply from the request's `accept', read as RFC
 %%%    9110 gives: its media ranges in order of preference, by q-value and then
 %%%    by their order. The first range that the node can serve gives the codec.
@@ -894,7 +894,7 @@ set_opts(Opts) ->
         no_server_ref ->
             ok;
         ServerRef ->
-            % `Opts' from a request hold no key material: keep the node's.
+            % `Opts' from a request contain no key material: keep the node's.
             ok = cowboy:set_env(ServerRef, node_msg, with_node_committer(Opts))
     end.
 set_opts(Request, Opts) ->
@@ -936,7 +936,7 @@ update_opts(Fun, Opts) ->
         fun() -> Fun(get_opts(Opts)) end
     ).
 
-%% @doc Return `Opts' with the node message's key material if they hold no
+%% @doc Return `Opts' with the node message's key material if they contain no
 %% wallet, as request execution `Opts' do not. The node's `priv-wallet' is its
 %% committer. If `Opts' give `identities', keep them.
 with_node_committer(Opts) ->
@@ -1473,7 +1473,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                     ),
                 Committed;
             _ ->
-                % The body holds the whole message, encoded by the codec. If it
+                % The body is the whole message, encoded by the codec. If it
                 % has commitments, we keep only the keys that they cover.
                 {ok, Committed} =
                     hb_message:with_only_committed(

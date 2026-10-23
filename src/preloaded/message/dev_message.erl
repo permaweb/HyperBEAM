@@ -75,7 +75,7 @@ index(Msg, Req, Opts) ->
 
 %% @doc Return the info of the device of a message, or of the device in the
 %% request's `for' key. The info is a message for the node's `docs-device', so
-%% a browser that requests it receives that device's page. It holds the schema
+%% a browser that requests it receives that device's page. It has the schema
 %% of the device's module (`hb_types') and the device's signed specification.
 %% The info follows the implementation of the device that the node loads, so
 %% it is not stored. A device's own `info/3' answers in place of this function.
@@ -303,7 +303,7 @@ committers(_, _, _) ->
 commit(Self, Req, Opts) ->
     {ok, Base} =
         hb_message:find_subject(<<"message-subject">>, Self, Req, Opts),
-    % The empty key names no key, so no codec carries a commitment to it.
+    % No codec carries a commitment to an empty key, so we refuse it.
     case is_map_key(<<>>, Base) of
         true -> throw({invalid_key, <<>>});
         false -> ok
@@ -393,7 +393,7 @@ keys_to_commit(Base, Req, Opts) ->
 %% commitments from specific committers should be verified. Similarly, specific
 %% commitments can be specified using the `ids' key. Each takes `all', `none',
 %% one address or ID, or a list of them. A message that lacks a committer or
-%% commitment the request names does not verify, nor does `committers=all'
+%% commitment the request lists does not verify, nor does `committers=all'
 %% on a message without committers. The request is kept whole: its
 %% `message-subject' may select any of its keys as the message to verify, and
 %% its private element goes to the commitment device.
@@ -444,7 +444,7 @@ verify(Self, Req, Opts) ->
             )
     end.
 
-%% @doc Whether a message has what a verification request names: each
+%% @doc Whether a message has what a verification request gives: each
 %% committer and commitment it lists, and a committer if it asks for `all'.
 has_named(Base, Req, Opts) ->
     {ok, Committers} = committers(Base, #{}, Opts),
@@ -549,7 +549,7 @@ verify_ids(IDsToVerify, Commitments, CommitmentBase, Req, Opts) ->
 
 %% @doc Execute a function for a single commitment in the context of its
 %% parent message. A commitment device whose `verify' is this module's own
-%% `verify' holds no commitment scheme of its own: the device of a commitment
+%% `verify' has no commitment scheme of its own: the device of a commitment
 %% is read from the commitment itself, so dispatching would call this
 %% function with the same commitment again, without end. Such a commitment
 %% does not verify.
@@ -1480,7 +1480,7 @@ test_verify(KeyType) ->
     ),
     % A commitment relabelled `json@1.0' is verified by the `httpsig@1.0'
     % codec its device names -- `true' for an `httpsig@1.0' signature. A
-    % commitment relabelled `message@1.0' or `meta@1.0' names a device
+    % commitment relabelled `message@1.0' or `meta@1.0' has a device
     % with no commitment scheme of its own and does not verify.
     [{ID, Commitment}] = maps:to_list(maps:get(<<"commitments">>, Signed)),
     Relabelled =
@@ -1538,7 +1538,7 @@ vacuous_signed_commitment_test_() ->
     ].
 
 %% @doc Committing to a message keeps its private element as it is: a link in
-%% it is not loaded, even when the node does not hold its message.
+%% it is not loaded, even when the node does not have its message.
 commit_keeps_private_links_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     Missing =

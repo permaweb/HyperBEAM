@@ -1373,9 +1373,9 @@ index_ids_test_parallel() ->
     assert_item_read(
         <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>,
         Opts),
-    % This bundle previously triggered the ANS-104 tag-section boundary bug:
-    % the decoder ran past the declared tag bytes into the JSON body and
-    % crashed with a badmatch on the body content (the `"address":"0x..."'
+    % This bundle tests the ANS-104 tag-section boundary: a decoder that runs
+    % past the declared tag bytes into the JSON body crashes with a
+    % badmatch on the body content (the `"address":"0x..."'
     % string). With the strict tag-section boundary enforced, the item is
     % decoded and indexed correctly.
     ?assertMatch(
@@ -2176,7 +2176,7 @@ pending_bundle_children(Rejected, StoreModule) ->
         Wallet
     ),
     % A binary child large enough to encode as an item again: a smaller one
-    % decodes to a tag value and the bundle no longer verifies as signed.
+    % decodes to a tag value and the bundle does not verify as signed.
     Binary = binary:copy(<<"pending-binary-child">>, 256),
     BinaryChild = hb_message:convert(Binary, <<"ans104@1.0">>, DefaultOpts),
     {undefined, BundleData} =
@@ -2268,7 +2268,7 @@ pending_bundle_children(Rejected, StoreModule) ->
     RootMsg =
         hb_message:convert(
             RootTX, <<"structured@1.0">>, <<"tx@1.0">>, DefaultOpts),
-    % A node keeps no commitment that does not verify, so a remote holds the
+    % A node keeps no commitment that does not verify, so a remote has the
     % bundle only when every child verifies; the bytes of a bundle with a
     % rejected child are read from the network, as they are in production.
     case Rejected of

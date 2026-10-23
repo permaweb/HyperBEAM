@@ -52,8 +52,8 @@ call(Ledger, Request, Opts) ->
     end.
 
 %% @doc Return the PID of the ledger's process on this node, starting it if it
-%% is not running. The process is named by the ledger's `name' and the node's
-%% wallet address.
+%% is not running. The process is registered under the ledger's `name' and
+%% the node's wallet address.
 ensure_started(Ledger, Opts) ->
     ServerID =
         {

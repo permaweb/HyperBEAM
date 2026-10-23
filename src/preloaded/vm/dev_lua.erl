@@ -401,7 +401,7 @@ process_response({ok, [Status, MsgResult], NewState}, Priv, Opts) ->
         Msg when is_map(Msg) ->
             ?event(lua, {response, {status, Status}, {msg, Msg}}),
             % Each call encodes its arguments and results as new tables in
-            % the state. Luerl frees the tables that Lua no longer reaches
+            % the state. Luerl frees the tables that Lua cannot reach
             % only when it collects garbage, so collect after each call.
             {hb_util:atom(Status), Msg#{
                 <<"priv">> => Priv#{
@@ -556,7 +556,7 @@ do_decode(Msg, Opts) when is_map(Msg) ->
 do_decode(Other, _Opts) ->
     Other.
 
-%% @doc Decode a value of a message from Lua. Lua holds the Arweave committer
+%% @doc Decode a value of a message from Lua. Lua gives the Arweave committer
 %% of a commitment as its address, so we convert it back to its URI.
 decode_value(<<"commitments">>, Commitments) when is_map(Commitments) ->
     map_committers(fun hb_committer:uri/1, Commitments);
@@ -1199,7 +1199,7 @@ invoke_aos_test() ->
     {ok, _Assignment} =
         hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output">>, Opts),
-    % The process names its authority by address, and trusts its message.
+    % The process gives its authority by address, and trusts its message.
     ?assertEqual(<<"1">>, hb_ao:get(<<"data">>, Results, #{})),
     ?assertEqual(<<"aos> ">>, hb_ao:get(<<"prompt">>, Results, #{})),
     % A process that does not set `requires-determinism' cannot call

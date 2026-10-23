@@ -187,7 +187,7 @@ from_tabm(Msg, TargetFormat, OldPriv, Opts) ->
 
 %% @doc Add the existing `priv' sub-map back to a converted message, honoring
 %% any existing `priv' sub-map that may already be present. A `priv' key that
-%% holds a literal is not a sub-map, and is not restored.
+%% contains a literal is not a sub-map, and is not restored.
 restore_priv(Msg, OldPriv, _Opts)
         when not is_map(OldPriv); map_size(OldPriv) == 0 ->
     Msg;
@@ -1078,7 +1078,7 @@ normalize_commitments_modes_test() ->
          {unsigned, [SignedA, SignedB, UnsignedA]},
          {all, [SignedA, UnsignedA]}, {fast, [SignedA, UnsignedA]}]
     ),
-    % Adding an unsigned commitment names all fields, not just signed fields.
+    % Adding an unsigned commitment covers all fields, not just signed fields.
     Added = normalize_commitments(SignedA#{ <<"extra">> => 3 }, Opts, all),
     ?assertEqual(id(#{ <<"a">> => 1, <<"b">> => 1, <<"extra">> => 3 }, unsigned, Opts),
         id(Added, unsigned, Opts)),

@@ -530,7 +530,7 @@ path_exceptions() ->
     ].
 
 %% @doc Return the vectors whose message is posted with a link. The node that
-%% receives one holds the link, and not the message that it links to.
+%% receives one has the link, and not the message that it links to.
 posted_links() -> ["explicit link"].
 
 typed() ->
@@ -584,7 +584,7 @@ run(Name, Path, Transport, Store) ->
             execution_suite([Execution], [Path], [Selection], Store, true)
     end.
 
-%% @doc Generate the tests: one primary node holds every message, and each test
+%% @doc Generate the tests: one primary node has every message, and each test
 %% reads one message over one path and transport with fresh client stores.
 suite(Messages, Paths, Transports, Store, Full) ->
     {setup,
@@ -741,7 +741,7 @@ selected(false, CaseIndex, {PathIndex, PathCount}, TransportIndex, Store) ->
             ).
 
 %% @doc Return the path that a case reads its message over. A message that is
-%% posted with a link is read back from the node that holds the link.
+%% posted with a link is read back from the node that has the link.
 read_path(Name, post) ->
     case lists:member(Name, posted_links()) of
         true -> post_link;
@@ -866,8 +866,8 @@ exercise(direct, {Host, _}, {ID, _}, Expected, Transport, ClientOpts) ->
     validate(Expected, Actual, ClientOpts),
     check_wire(Host, wire_request(ID, Transport), Transport);
 exercise(link, {Host, _}, {ID, _}, Expected, Transport, ClientOpts) ->
-    % The node holds the link, and not the message that it links to. It
-    % cannot bundle that message, and its reply without a bundle holds the
+    % The node has the link, and not the message that it links to. It
+    % cannot bundle that message, and its reply without a bundle contains the
     % link.
     Request = (headers(Transport))#{ <<"path">> => <<"/", ID/binary>> },
     case maps:get(bundle, Transport) of
@@ -1302,7 +1302,7 @@ download(Host, Request, Expected, Transport, Opts) ->
         ),
     Loaded = hb_cache:ensure_all_loaded(Received, Opts),
     ?assertEqual(true, hb_message:deep_verify(Loaded, Opts)),
-    % A full reply holds a literal or list result under its `ao-result' key.
+    % A full reply contains a literal or list result under its `ao-result' key.
     Result =
         case is_map(Loaded)
                 andalso hb_maps:get(<<"ao-result">>, Loaded, false, Opts) of
@@ -1349,7 +1349,7 @@ payload(Expected, Received, Opts) when is_map(Expected), is_map(Received) ->
     );
 payload(_Expected, Received, _Opts) -> Received.
 
-%% @doc The keys that a reply adds, unless the message holds them itself.
+%% @doc The keys that a reply adds, unless the message has them itself.
 response_keys() ->
     [
         <<"status">>,

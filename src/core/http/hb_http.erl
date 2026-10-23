@@ -6,7 +6,7 @@
 %%% A message crosses HTTP in one of two forms. In the `httpsig@1.0' form, the
 %%% HTTP message is the message: its keys are the headers and the body, and its
 %%% commitments are in the `signature-input' and `signature' headers. In the
-%%% form of any other codec, the body holds the whole message, encoded by that
+%%% form of any other codec, the body is the whole message, encoded by that
 %%% codec, and the `content-type' gives the codec. A media type of the type
 %%% `application' gives a device by its subtype:
 %%%
@@ -556,7 +556,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                 Opts
             );
         _ ->
-            % The body holds the whole message, encoded by the codec, and the
+            % The body is the whole message, encoded by the codec, and the
             % `content-type' is the media type of the codec.
             ?event(debug_accept, {request_message, {message, Message}}),
             {ok, FilteredMessage} =
@@ -1064,7 +1064,7 @@ nested_signed_bundle_over_http_test() ->
         end,
     ?assert(hb_message:verify(Received, all, ServerOpts)),
     ReceivedInner = maps:get(<<"response">>, Received),
-    % A bundle holds the signed commitments of its nested messages alone.
+    % A bundle contains only the signed commitments of its nested messages.
     ?assertEqual(
         hb_message:with_only_committers(
             Inner,

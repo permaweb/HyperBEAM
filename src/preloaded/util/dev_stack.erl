@@ -59,7 +59,7 @@
 %%%     `Input-Prefix': The prefix that the device should use for its outputs
 %%%     and inputs.
 %%%
-%%%     `Output-Prefix': The device that was previously executed.
+%%%     `Output-Prefix': The prefix that the device should use for its outputs.
 %%%
 %%% All counters used by the stack are initialized to 1.
 %%%
@@ -218,7 +218,7 @@ transform(Base, Key, Opts) ->
         StackMsg ->
 			% Find the requested key in the device stack.
             % TODO: Should we use `as dev_message` here? After the first transform
-            % of a fold (for example), the message is no longer a stack, so its 
+            % of a fold (for example), the message is not a stack, so its
             % `GET' behavior may be different.
             NormKey = hb_ao:normalize_key(Key),
 			case hb_ao:resolve(StackMsg, #{ <<"path">> => NormKey }, Opts) of

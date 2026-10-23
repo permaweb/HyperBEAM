@@ -616,7 +616,7 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
                 % multipart body of the HTTP message
                 ?event_debug({encoding_multipart, {bodymap, {explicit, GroupedBodyMap}}}),
                 % The message's own `content-type' header moves into a part.
-                % Part bodies are not escaped, so the part holds the value as
+                % Part bodies are not escaped, so the part contains the value as
                 % given.
                 Parts =
                     maps:merge(
@@ -704,11 +704,11 @@ encode_keys(Value) -> Value.
 
 %% @doc Remove the unsigned commitments (those with no `committer') of a
 %% message and of each message nested in it. A nested message is read from a
-%% store with the commitments that the ID linking it names: its signed
+%% store with the commitments that the ID linking it selects: its signed
 %% commitments, or the unsigned commitment stored under its unsigned ID if it
-%% has none, whether or not it held that commitment when written. A signature
-%% over a bundled message covers its nested messages with their signed
-%% commitments alone, so it verifies after a write and a read.
+%% has none, whether or not it had that commitment when written. A signature
+%% over a bundled message covers its nested messages with only their signed
+%% commitments, so it verifies after a write and a read.
 without_unsigned_commitments(Msg, Opts) when is_map(Msg) ->
     maps:filtermap(
         fun(<<"commitments">>, Commitments) ->

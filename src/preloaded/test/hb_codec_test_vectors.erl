@@ -738,7 +738,7 @@ verify_nested_complex_signed_test(Codec, Opts) ->
     ?assert(MatchRes),
     ?assert(hb_message:verify(Decoded, all, Opts)),
     % % Ensure that both of the messages can be verified (and retreived).
-    % `hb_cache:read' no longer normalizes commitments, so `hb_maps:get' returns
+    % `hb_cache:read' does not normalize commitments, so `hb_maps:get' returns
     % the inner message exactly as it was signed. Re-normalizing it here would
     % mint an unsigned commitment for the nested `parameters' submessage -- a key
     % the outer signature was made over in its uncommitted form -- changing the
@@ -1661,8 +1661,8 @@ priv_survives_conversion_test(Codec, Opts) ->
         maps:get(<<"priv">>, Decoded)
     ).
 
-%% @doc A message whose `priv' key holds a literal converts, and decodes to its
-%% other keys.
+%% @doc A message whose `priv' key contains a literal converts, and decodes to
+%% its other keys.
 literal_priv_test(Codec, Opts) ->
     Msg = #{ <<"data">> => <<"TEST_DATA">>, <<"priv">> => <<"literal">> },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),

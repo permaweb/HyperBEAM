@@ -172,7 +172,7 @@ snapshot(RawBase, _Req, Opts) ->
 
 %% @doc Before computation begins, a boot phase is required. This phase
 %% allows devices on the execution stack to initialize themselves. We set the
-%% private `initialized' key to `true' to indicate that the state holds the
+%% private `initialized' key to `true' to indicate that the state contains the
 %% live state of its execution devices. The key is never stored, so a state
 %% read from the cache is not initialized.
 init(Base, Req, Opts) ->

@@ -1015,7 +1015,7 @@ dispatch_blocking_test() ->
         Item4 = new_data_item(4, 10),
         {Time4, {ok, _}} =
             timer:tc(fun() -> post_data_item(Node, Item4, ClientOpts) end),
-        %% Assert that the 4th item takes no longer than twice the slowest of
+        %% Assert that the 4th item takes at most twice the slowest of
         %% the first 3. This verifies that we aren't blocking on the tx
         %% bundle dispatching.
         Slowest = lists:max([Time1, Time2, Time3]),

@@ -271,7 +271,7 @@ send_response(Listener, GroupName, Req, Res) ->
     ),
     Listener ! {resolved, self(), GroupName, Req, Res}.
 
-%% @doc Start a worker process that will hold a message in memory for
+%% @doc Start a worker process that will keep a message in memory for
 %% future executions.
 
 start_worker(Msg, Opts) ->

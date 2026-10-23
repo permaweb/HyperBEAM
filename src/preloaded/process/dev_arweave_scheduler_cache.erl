@@ -1,4 +1,4 @@
-%%% @doc Persistent cache for `~arweave-scheduler@1.0'. The cache holds one
+%%% @doc Persistent cache for `~arweave-scheduler@1.0'. The cache contains one
 %%% global chain synchronization record, one materialization record per
 %%% process, the inverted target index, and contiguous process assignments.
 %%% State records are content-addressed messages whose stable paths link to
@@ -352,7 +352,7 @@ linked_state_and_target_test() ->
     ?assertEqual({ok, [<<"101-3">>]}, list_targets(ProcessID, Opts)),
     EmptyStore = hb_test_utils:test_store(hb_store_volatile, <<"empty">>),
     ok = hb_store:start(EmptyStore),
-    % With no scheduler store, a header that only a remote store holds is
+    % With no scheduler store, a header that is only in a remote store is
     % not read.
     ?assertEqual(
         {error, not_found},

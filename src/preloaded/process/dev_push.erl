@@ -1200,7 +1200,7 @@ test_multi_process_push() ->
             Opts
         ),
     ?event(push, {push_result, PushResult}),
-    % The pushed message holds the AOS `Tags' as keys, not as a `tags' list.
+    % The pushed message contains the AOS `Tags' as keys, not as a `tags' list.
     {ok, Pushed} =
         hb_cache:read(hb_util:deep_get(<<"1/id">>, PushResult, Opts), Opts),
     ?assertEqual(not_found, hb_ao:get(<<"tags">>, Pushed, Opts)),

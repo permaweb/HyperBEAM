@@ -1214,7 +1214,7 @@ block_transactions(Height, Range = #{ <<"direction">> := Direction }, After, Lim
 
 %% @doc The match the page resumes after, from the cursor of an
 %% index-served edge with its terminal marker dropped; a cursor of another
-%% form names a cached item, from which only `cached_transactions' resumes.
+%% form gives a cached item, from which only `cached_transactions' resumes.
 index_cursor(Args, Opts) ->
     case hb_maps:get(<<"after">>, Args, null, Opts) of
         Unset when Unset =:= null; Unset =:= undefined; Unset =:= <<>> ->
@@ -1264,7 +1264,7 @@ index_ranges(Direction, Args, Opts) ->
         || Range <- Bounds ].
 
 %% @doc The matches of a page: the ranges read in order from the cursor,
-%% which lies in the range holding its key.
+%% which lies in the range that contains its key.
 index_matches(Predicates, Ranges, After, Limit, Opts) ->
     % A cursor among the messages the weave never held resumes their range
     % alone: the second of the two an open ascending page reads.
@@ -1439,7 +1439,7 @@ l1_message(ID, Opts) ->
 %% fetch, and every byte a gateway serves when the chunk closes the bundle,
 %% as the weave's padding follows it -- or from a longer read when the
 %% header runs into the next chunk. The data is left out: neither the index
-%% nor the header holds its length.
+%% nor the header gives its length.
 header(Offset, Device, Opts) ->
     Tail =
         hb_ao:resolve(
@@ -1952,7 +1952,7 @@ unmined_pages_test() ->
 
 %% @doc A page served from the published index on Arweave, its items
 %% read from the weave: the twenty-four items of `action=Battle.Begin'
-%% page out in each order under cursors naming their keys, every item
+%% page out in each order under cursors with their keys, every item
 %% carrying the tag it was found by, the count is the whole set's, and the
 %% last page closes.
 published_pages_test_() ->

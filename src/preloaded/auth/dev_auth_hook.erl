@@ -444,7 +444,7 @@ call_provider(Key, Provider, Request, Opts) ->
                 _ -> {ok, Msg}
             end;
         {ok, _} = Res ->
-            % The result is a non-message. We return it as-is.
+            % The result is not a message. We return it as-is.
             Res;
         {error, Err} ->
             ?event({call_provider_error, {priv_error, Err}}),

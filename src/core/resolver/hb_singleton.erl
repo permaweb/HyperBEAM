@@ -120,7 +120,7 @@
 %%%   <li>Claims are only read at the end of a part, in the order that the
 %%%       grammar gives them. Anywhere else, `;', `@', `.' and `*' are
 %%%       ordinary characters of a key, as they are when the text after them
-%%%       is not an ID of 43 bytes. For example, `~meta@1.0' names a device,
+%%%       is not an ID of 43 bytes. For example, `~meta@1.0' is a device,
 %%%       and `a.b' is a key. These characters are not in the base64url
 %%%       alphabet of IDs, so a claim never needs to be escaped.</li>
 %%%   <li>A key is read in the same way whatever its length. A message is
@@ -358,8 +358,8 @@ to_part(<<"ao:", Path/binary>> = Hashpath) ->
 to_part(_) -> error.
 
 %% @doc Check that a binary can be written in a path part as it is. It must
-%% not hold any of the given characters, and if it is long enough to end in a
-%% claim, it must not hold a claim separator. Returns `{ok, Bin}' or `error'.
+%% not contain any of the given characters, and if it is long enough to end in a
+%% claim, it must not contain a claim separator. Returns `{ok, Bin}' or `error'.
 literal(Bin, Syntax) when is_binary(Bin) ->
     case binary:match(Bin, Syntax) of
         nomatch when byte_size(Bin) < 44 -> {ok, Bin};
@@ -388,7 +388,7 @@ from(RawMsg, Opts) ->
     requests(parse(RawMsg, Opts)).
 
 %% @doc Parse a singleton TABM message, a path or a hashpath into the contexts
-%% of its steps. The first context holds the base, and each context holds a
+%% of its steps. The first context has the base, and each context has a
 %% request and the claims that follow it in the path. A base or a request that
 %% is a URI is given as its `base-uri' or `request-uri', and each claim as the
 %% `ao:' URI of its ID. Throws as `from/2' does.
@@ -503,7 +503,7 @@ from_request(Req, Opts) ->
 
 %% @doc Parse the relative reference into its parts and its query. The parts
 %% of a hashpath follow its `ao:'. A path given as a list is already split:
-%% each element is one part, even if it holds a `/'.
+%% each element is one part, even if it contains a `/'.
 from_path(Parts) when is_list(Parts) -> {ok, lists:map(fun list_part/1, Parts), #{}};
 from_path(RelativeRef) when is_binary(RelativeRef) ->
     {PathTokens, QStr} = split_query(tokens(RelativeRef)),
@@ -691,7 +691,7 @@ token_text({_, _, Chars}) -> Chars;
 token_text({Separator, _}) -> atom_to_list(Separator).
 
 %% @doc Parse a query string into a message of its unquoted values, with the
-%% keys in lowercase, or throw `invalid_query' naming the query string.
+%% keys in lowercase, or throw `invalid_query' with the query string.
 parse_query(QStr) ->
     try
         maps:map(
@@ -1117,7 +1117,7 @@ simple_to_test() ->
     Expected = #{<<"path">> => <<"//a">>, <<"test-key">> => <<"test-value">>},
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})),
-    % A request that holds only the value of its key is written `key=value'.
+    % A request that contains only the value of its key is written `key=value'.
     KeyValue = [#{}, #{ <<"path">> => <<"k">>, <<"k">> => <<"v">> }],
     ?assertEqual(#{ <<"path">> => <<"//k=v">> }, to(KeyValue)),
     ?assertEqual(KeyValue, from(to(KeyValue), #{})),
@@ -1352,8 +1352,8 @@ typed_key_test() ->
     ?assertEqual(123, hb_maps:get(<<"test-key">>, Msg2, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Res, not_found)).
 
-%% @doc A link held by an untyped key is not loaded, even when the node does
-%% not hold its message. A link held by a typed key is loaded to apply the type.
+%% @doc A link under an untyped key is not loaded, even when the node does
+%% not have its message. A link under a typed key is loaded to apply the type.
 linked_key_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     {ok, ID} = hb_cache:write(<<"123">>, Opts),

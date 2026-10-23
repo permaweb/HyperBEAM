@@ -142,10 +142,10 @@ store_secret(Secret, Msg, Opts) ->
 secret_ref(Committer) ->
     hb_util:lowercase_key(<<"secret-", Committer/binary>>).
 
-%% @doc Verify that the caller holds the secret bound to the base message: the
+%% @doc Verify that the caller has the secret bound to the base message: the
 %% secret must hash to the `committer' recorded by `commit'. The secret is taken
 %% from the `secret' key of the request if present, and from the caller's cookie
-%% named by the committer otherwise.
+%% for the committer otherwise.
 -spec verify(
     #{ committer => binary(), _ => _ },
     #{ secret => binary(), _ => _ },

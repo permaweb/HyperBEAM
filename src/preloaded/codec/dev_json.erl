@@ -179,7 +179,7 @@ serialize(Base, Msg, Opts) ->
 
 %%% Tests
 
-%% @doc JSON reads preserve scalar values; unsupported chaining is a 400.
+%% @doc JSON reads preserve literals; unsupported chaining is a 400.
 scalar_http_read_test() ->
     Node = hb_http_server:start_node(#{
         <<"priv-wallet">> => ar_wallet:new(),

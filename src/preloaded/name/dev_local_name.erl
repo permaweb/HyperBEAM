@@ -122,7 +122,7 @@ read_names(Opts) ->
 %% with those names loaded into it.
 load_names(Opts) ->
     % The names in the store, which registrations write, take precedence over
-    % the names the node message already holds, such as those in its config.
+    % the names already in the node message, such as those in its config.
     update_names(
         maps:merge(
             hb_opts:get(local_names, #{}, Opts#{ <<"only">> => local }),

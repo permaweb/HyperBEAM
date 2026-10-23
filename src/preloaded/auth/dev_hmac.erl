@@ -74,7 +74,7 @@ verify(Committer, #{ <<"body">> := Base, <<"signature">> := Sig }, Opts) ->
     end.
 
 %% @doc Find the key of a committer. The secret of an `hmac:secret:' committer
-%% is read from its `priv', and must be the secret that the committer names.
+%% is read from its `priv', and must hash to the ID in the committer's `body'.
 key(#{ <<"body">> := <<"constant:", Value/binary>> }, _Opts) ->
     {ok, Value};
 key(Committer = #{ <<"body">> := <<"secret:", ID/binary>> }, Opts) ->

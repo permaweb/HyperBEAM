@@ -87,7 +87,7 @@ prep_call(RawM1, RawM2, Opts) ->
 
 %% @doc Encode a JSON-Struct as a JSON string. As in `json@1.0', a binary that
 %% is not UTF-8 text is given as its base64url, typed `binary' in the
-%% `ao-types' of the object that holds it.
+%% `ao-types' of the object that contains it.
 struct_to_json(Struct, Opts) ->
     hb_json:encode(
         hb_message:convert(
@@ -249,7 +249,7 @@ prepare_tags(Msg, RawMsg, Opts) ->
     end.
 
 %% @doc Convert a message without an `original-tags' field into a list of
-%% key-value pairs, with the keys in HTTP header-case. A key that holds a list
+%% key-value pairs, with the keys in HTTP header-case. A key with a list
 %% in the message gives a pair for each element of the list, because AOS reads
 %% several values of one tag as repeated tags.
 prepare_header_case_tags(TABM, RawMsg, Opts) ->
@@ -517,7 +517,7 @@ preprocess_results(Msg, Opts) ->
     ).
 
 %% @doc Convert a message with tags into a map of their key-value pairs. AOS
-%% JSON holds the tags under `Tags'.
+%% JSON contains the tags under `Tags'.
 tags_to_map(Msg, Opts) ->
     RawTags = hb_maps:get(<<"Tags">>, Msg, [], Opts),
     TagList =

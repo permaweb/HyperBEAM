@@ -19,7 +19,7 @@
 %%% of the wallet includes. If the `priv' message of an RSA wallet also
 %%% contains the CRT values of the key (`p', `q', `dp', `dq' and `qi'), the
 %%% wallet signs with them. `verify' needs only the `owner' and the `type'. Key
-%%% files hold the key in the JWK format.
+%%% files contain the key in the JWK format.
 
 -define(WALLET_DIR, ".").
 -define(WALLET_POOL_TARGET, 6).

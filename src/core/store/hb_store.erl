@@ -22,9 +22,9 @@
 %%%                   node operators to prioritize their stores for search.
 %%%     read/3:       Read the data at the given location, using a request map
 %%%                   of the form `#{ <<"read">> => Path }`. A location that
-%%%                   holds a value returns `{ok, Value}'. A location with keys
+%%%                   has a value returns `{ok, Value}'. A location with keys
 %%%                   below it returns `{composite, Children}'. A child that
-%%%                   holds a value is given as a `{Key, Value}' pair, and a
+%%%                   has a value is given as a `{Key, Value}' pair, and a
 %%%                   child with keys below it as its `Key'.
 %%%     write/3:      Write a request map of the form `#{ Path => Value }`.
 %%%     list/3:       For a path with keys below it, return child keys using a
@@ -959,7 +959,7 @@ implicit_children_test_() ->
             ok = write(Store, #{ <<"parent/child/value">> => <<"data">> }, #{}),
             ?assertEqual({ok, [<<"child">>]}, list(Store, <<"parent">>, #{})),
             % Reading a path with keys below it returns them, with the value of
-            % each key that holds one.
+            % each key that has one.
             ?assertEqual(
                 {composite, [<<"child">>]},
                 read(Store, <<"parent">>, #{})
@@ -1537,7 +1537,7 @@ normalize_without_body_store_test() ->
         )
     ).
 
-%% @doc Listed keys and paired values retain scalar singleton semantics.
+%% @doc Listed keys and paired values normalize as single values.
 normalize_children_test() ->
     Opts = #{ <<"store">> => [], <<"linkify-mode">> => false },
     lists:foreach(
