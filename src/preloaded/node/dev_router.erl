@@ -129,7 +129,12 @@ routes(M1, M2, Opts) ->
                                     end,
                                     [Route|Routes]
                                 ),
-                            ok = hb_http_server:set_opts(Opts#{ <<"routes">> => NewRoutes }),
+                            % Set the routes in the node message, not in `Opts'.
+                            NodeMsg = hb_http_server:get_opts(Opts),
+                            ok =
+                                hb_http_server:set_opts(
+                                    NodeMsg#{ <<"routes">> => NewRoutes }
+                                ),
                             {ok, <<"Route added.">>};
                         {error, _} -> {error, not_authorized}
                     end;
@@ -1821,6 +1826,7 @@ add_route() ->
             <<"operator">> => hb_test_utils:committer(Owner)
         }
     ),
+    NodeMsg = hb_http_server:get_opts(),
     Res =
         hb_http:post(
             Node,
@@ -1837,6 +1843,11 @@ add_route() ->
         ),
     ?event({post_res, Res}),
     ?assertMatch({ok, <<"Route added.">>}, Res),
+    % Only `routes' changes in the node message.
+    ?assertEqual(
+        maps:remove(<<"routes">>, NodeMsg),
+        maps:remove(<<"routes">>, hb_http_server:get_opts())
+    ),
     GetRes = hb_http:get(Node, <<"/~router@1.0/routes/2/node">>, #{}),
     ?event({get_res, GetRes}),
     {ok, Recvd} = GetRes,
