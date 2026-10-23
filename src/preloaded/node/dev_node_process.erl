@@ -39,11 +39,26 @@ lookup(Name, _Base, Req, Opts) ->
         {error, not_found} ->
             case hb_ao:get(<<"spawn">>, Req, true, Opts) of
                 true ->
-                    spawn_register(Name, Opts);
+                    spawn_via_singleton(Name, Opts);
                 false ->
                     {error, not_found}
             end
     end.
+
+%% @doc Spawn the node process for `Name' in an Erlang process registered under
+%% the name, one caller at a time (`hb_name:atomic/2'), and return it. If
+%% another caller has registered the name since this caller looked it up,
+%% return its process. A spawn that fails raises in the caller.
+spawn_via_singleton(Name, Opts) ->
+    hb_name:atomic(
+        {?MODULE, Name},
+        fun() ->
+            case lookup(Name, #{}, #{ <<"spawn">> => false }, Opts) of
+                {error, not_found} -> spawn_register(Name, Opts);
+                Found -> Found
+            end
+        end
+    ).
 
 %% @doc Spawn a new process according to the process definition found in the 
 %% node message, and register it with the given name.
@@ -171,20 +186,22 @@ lookup_no_spawn_test() ->
 
 lookup_spawn_test() ->
     {Name, Opts} = generate_test_opts(),
-    Res1 = {_, Process1} =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"node-process@1.0">> },
-            Name,
-            Opts
+    % Two first lookups of the name at once give one process.
+    [Res1 = {_, Process1}, {ok, Process2}] =
+        hb_pmap:parallel_map(
+            [Name, Name],
+            fun(N) ->
+                hb_ao:resolve(
+                    #{ <<"device">> => <<"node-process@1.0">> },
+                    N,
+                    Opts
+                )
+            end,
+            2
         ),
     ?assertMatch(
         {ok, #{ <<"device">> := <<"process@1.0">> }},
         Res1
-    ),
-    {ok, Process2} = hb_ao:resolve(
-        #{ <<"device">> => <<"node-process@1.0">> },
-        Name,
-        Opts
     ),
     LoadedProcess1 = 
         hb_message:normalize_commitments(
