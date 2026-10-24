@@ -200,7 +200,7 @@ call(WASM, FuncRef, Args, ImportFun, StateMsg, Opts)
             ?event({waiting_for_call_result, self(), WASM}),
             monitor_call(WASM, ImportFun, StateMsg, Opts);
         false ->
-            {error, {invalid_args, Args}}
+            {error, <<"invalid-parameters">>, StateMsg}
     end.
 
 %% @doc Stub import function for the WASM executor.

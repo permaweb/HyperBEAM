@@ -692,6 +692,11 @@ state_export_and_restore_test() ->
             <<"compute/results/undefined-calls">>,
             #{}
         )
+    ),
+    % Parameters that are not numbers make the call an error.
+    ?assertEqual(
+        {error, <<"invalid-parameters">>},
+        hb_ao:resolve(Req#{ <<"parameters">> => [<<"a">>] }, <<"compute">>, #{})
     ).
 
 %%% Test helpers
