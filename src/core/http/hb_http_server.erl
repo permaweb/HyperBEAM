@@ -127,7 +127,7 @@ start() ->
 
 %% @doc Start the application HTTP server and return its listener ID.
 start_application() ->
-    ?event(http, {start_store, <<"cache-mainnet">>}),
+    ?event(http, {start_store, <<"cache-mainnet/fs">>}),
     EnvConfig = hb_opts:default_message_with_env(),
     Loc = hb_opts:get(hb_config_location, <<"config.flat">>, EnvConfig),
     HBConfig = os:getenv("HB_CONFIG"),
@@ -1501,7 +1501,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                             <<"store">> =>
                                 #{
                                     <<"store-module">> => hb_store_fs,
-                                    <<"name">> => <<"cache-http">>
+                                    <<"name">> => <<"cache-mainnet/http">>
                                 }
                         }
                     );
