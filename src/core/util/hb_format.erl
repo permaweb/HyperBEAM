@@ -290,13 +290,17 @@ list_lines(MsgList, Footer, Opts, Indent) ->
                 IndentedFooterList ++
                 indent("}", [], Opts, Indent);
         true ->
+            % Reuse a multiline Line. Formatting its Msg again formats every
+            % nested list twice.
             "\n" ++
             lists:flatten(lists:map(
-                fun({N, Msg}) ->
-                    {_, Line} = list_item(multiline, N, Msg, Opts, Indent),
-                    Line
+                fun({{_N, _Msg}, {multiline, Line}}) -> Line;
+                   ({{N, Msg}, {short, _}}) ->
+                        {_, Line} =
+                            list_item(multiline, N, Msg, Opts, Indent),
+                        Line
                 end,
-                Numbered
+                lists:zip(Numbered, Lines)
             )) ++
             IndentedFooterList ++
             indent("}", [], Opts, Indent)
@@ -1202,6 +1206,27 @@ bounded_format(Render) ->
     after
         exit(Pid, kill),
         erlang:demonitor(Ref, [flush])
+    end.
+
+%% @doc A nested list is formatted once for each list element, not once per
+%% branch of the list formatter.
+nested_list_format_calls_test() ->
+    Nested = fun(Depth) ->
+        lists:foldl(fun(_, Acc) -> [Acc] end, 1, lists:seq(1, Depth))
+    end,
+    ?assertEqual(
+        "\nList [1] {\n  1 => \n    List [1] {\n      1 => "
+        "[[[[[[[[[[[[[[1]]]]]]]]]]]]]]\n    }\n}",
+        term(Nested(16), #{}, 0)
+    ),
+    try
+        erlang:trace_pattern({?MODULE, list_item, 4}, true, [call_count]),
+        _ = term(Nested(26), #{}, 0),
+        {call_count, Calls} =
+            erlang:trace_info({?MODULE, list_item, 4}, call_count),
+        ?assert(Calls < 1000)
+    after
+        erlang:trace_pattern({?MODULE, list_item, 4}, false, [call_count])
     end.
 
 truncate_no_truncation_test() ->
