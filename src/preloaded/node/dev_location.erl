@@ -289,7 +289,16 @@ generate_new_location(Nonce, Base, OnlyCommitted, Opts) ->
             CodecValue ->
                 CodecValue
         end,
-    generate_new_location(URL, Nonce, TimeToLive, Codec, Opts).
+    case is_binary(Codec) of
+        true ->
+            generate_new_location(URL, Nonce, TimeToLive, Codec, Opts);
+        false ->
+            {error,
+                #{
+                    <<"status">> => 400,
+                    <<"body">> => <<"Commitment device must be a codec name.">>
+                }}
+    end.
 generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
     NewSchedulerLocation =
         #{
