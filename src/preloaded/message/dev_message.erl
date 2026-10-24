@@ -1199,6 +1199,12 @@ key_from_device_test() ->
         hb_ao:resolve(Msg, <<"with-commitments">>, NoCache),
         hb_ao:resolve(Msg, <<"with-commitments">>, #{})
     ),
+    % `with_commitments' maps to the same function, and is computed too.
+    Underscored = #{ <<"with_commitments">> => 3 },
+    ?assertEqual(
+        hb_ao:resolve(Underscored, <<"with_commitments">>, NoCache),
+        hb_ao:resolve(Underscored, <<"with_commitments">>, #{})
+    ),
     % The device answers the key `info': it is not read from the message.
     ?assertNot(
         hb_device:is_direct_key_access(#{ <<"info">> => 4 }, <<"info">>, #{})
