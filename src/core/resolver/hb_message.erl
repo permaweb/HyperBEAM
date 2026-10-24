@@ -973,9 +973,13 @@ find_subject(SubjectKey, Self, Req, Opts) ->
     case hb_maps:get(SubjectKey, Req, <<"self">>, GetOpts) of
         <<"self">> -> {ok, Self};
         Key ->
-            case hb_maps:find(Key, Req, GetOpts) of
-                {ok, Target} -> {ok, Target};
-                error -> {error, not_found}
+            case hb_private:is_private(Key) of
+                true -> {error, not_found};
+                false ->
+                    case hb_maps:find(Key, Req, GetOpts) of
+                        {ok, Target} -> {ok, Target};
+                        error -> {error, not_found}
+                    end
             end
     end.
 
