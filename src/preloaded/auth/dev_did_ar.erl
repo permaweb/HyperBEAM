@@ -1,8 +1,8 @@
 %%% @doc A device that implements the `did:ar:' DID method. A `did:ar:' URI
-%%% holds the address of the committer of an Arweave key: the base64url
+%%% contains the address of the committer of an Arweave key: the base64url
 %%% SHA-256 of an RSA, Ed25519 or ECDSA public key. In host form (see
 %%% `hb_uri'), it is the label `uri-did-ar-<L><B>' that `hb_committer'
-%%% describes, which may also state the type of the key, or hold the ID of a
+%%% describes, which may also state the type of the key, or encode the ID of a
 %%% message.
 %%% <pre>
 %%%     did:ar:ADDRESS
@@ -15,7 +15,7 @@
 %%% `characters => host' the label with no key type, which is the URI that
 %%% commitments hold (see `hb_committer').
 %%%
-%%% A committer that holds a key has the public key as its `owner', the
+%%% A committer with a key has the public key as its `owner', the
 %%% signature type of the key as its `type', and the private key as `d' in
 %%% its `priv' message. The `commit' key signs the request's `body' with the
 %%% algorithm of the request's `type', and returns the `signature' and the

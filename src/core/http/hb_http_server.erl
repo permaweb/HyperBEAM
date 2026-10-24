@@ -34,7 +34,7 @@
 %%%    keys are taken from the query or the headers, and default to `*/*' and
 %%%    `false'. The cookies of the `cookie' header are placed in `priv/cookie',
 %%%    and the caller's address in `priv/ip'. An `ao-peer-port' key is
-%%%    replaced by an `ao-peer' key, which holds the caller's address and that
+%%%    replaced by an `ao-peer' key with the caller's address and that
 %%%    port. We remove the `content-length' key and an empty `body', unless
 %%%    they are signed.
 %%% 5. We verify every commitment of the request, and of the messages that it
@@ -56,7 +56,7 @@
 %%%    the code that `hb_http:status_code/2' gives for the result's Erlang
 %%%    status. We do not add a `status' key to the reply.
 %%% 2. If the result is a literal or a list, we send it as the `body' of a
-%%%    message, with an `ao-result' key that names `body'.
+%%%    message, with `ao-result' set to `body'.
 %%% 3. We find the codec of the reply from the request's `accept', read as RFC
 %%%    9110 gives: its media ranges in order of preference, by q-value and then
 %%%    by their order. The first range that the node can serve gives the codec.
@@ -105,10 +105,10 @@
 -module(hb_http_server).
 -export([start/0, start/1, start_application/0, allowed_methods/2, init/2]).
 -export([set_opts/1, set_opts/2, get_opts/0, get_opts/1, with_node_committer/1]).
--export([set_default_opts/1, set_proc_server_id/1]).
+-export([update_opts/2, set_default_opts/1, set_proc_server_id/1]).
 -export([static/3, static/4]).
 -export([start_node/0, start_node/1]).
--export([resolve_request/3, error_status/2]).
+-export([resolve_request/3, error_reply/4, commit_reply/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -812,6 +812,8 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
             ),
             Error;
         {failure, _} = Failure -> Failure;
+        % A hook that gives the reply, such as `tunnel@1.0', ends the request.
+        {reply, _} = Reply -> Reply;
         Other ->
             {error, Other}
     end.
@@ -819,6 +821,22 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
 %% @doc Return an error response to the client: a message the node cannot
 %% accept is the client's error, anything else is the server's.
 handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
+    Reply = error_reply(Type, Details, Stacktrace, NodeMsg),
+    ?event(
+        http_error,
+        {returning_error,
+            {method, cowboy_req:method(Req)},
+            {path, {string, cowboy_req:path(Req)}},
+            {error, Reply}
+        },
+        NodeMsg
+    ),
+    reply(Req, Singleton, Reply, NodeMsg).
+
+%% @doc Return the status and the message of the reply to an exception: the
+%% error's `type', `details' and `stacktrace', with the keys that
+%% `parse_error/1' gives.
+error_reply(Type, Details, Stacktrace, NodeMsg) ->
     DetailsStr = hb_util:bin(hb_format:message(Details, NodeMsg, 1)),
     StacktraceStr = hb_util:bin(hb_format:trace(Stacktrace)),
     ErrorMsg =
@@ -827,15 +845,6 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
             <<"details">> => DetailsStr,
             <<"stacktrace">> => StacktraceStr
         },
-    ?event(
-        http_error,
-        {returning_error,
-            {method, cowboy_req:method(Req)},
-            {path, {string, cowboy_req:path(Req)}},
-            {error, ErrorMsg}
-        },
-        NodeMsg
-    ),
     ErrorDetailsMaxSize = hb_opts:get(error_details_max_size, ?DEFAULT_ERROR_DETAILS_MAX_SIZE, NodeMsg),
     % Preserve indentation while removing trailing noise.
     FormattedErrorMsg =
@@ -848,12 +857,7 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
                         ErrorDetailsMaxSize
                 )
         },
-    reply(
-        Req,
-        Singleton,
-        {error_status(Type, Details), FormattedErrorMsg},
-        NodeMsg
-    ).
+    {error_status(Type, Details), FormattedErrorMsg}.
 
 %% @doc The status of an error response. A request whose commitments do not
 %% verify or that `hb_singleton' cannot parse is refused as the client's error.
@@ -890,7 +894,7 @@ set_opts(Opts) ->
         no_server_ref ->
             ok;
         ServerRef ->
-            % `Opts' from a request hold no key material: keep the node's.
+            % `Opts' from a request contain no key material: keep the node's.
             ok = cowboy:set_env(ServerRef, node_msg, with_node_committer(Opts))
     end.
 set_opts(Request, Opts) ->
@@ -922,13 +926,23 @@ get_opts(NodeMsg) ->
         ServerRef -> cowboy:get_env(ServerRef, node_msg, no_node_msg)
     end.
 
-%% @doc Return `Opts' with the node message's key material if they hold no
+%% @doc Call `Fun' with the node message of the server that `Opts' give, and
+%% return its result. Calls for one server run one at a time, so a `Fun' that
+%% sets the node message does not drop the change of another call. A `Fun'
+%% that calls `update_opts/2' for its own server waits for itself.
+update_opts(Fun, Opts) ->
+    hb_name:atomic(
+        {?MODULE, node_msg, hb_opts:get(http_server, no_server_ref, Opts)},
+        fun() -> Fun(get_opts(Opts)) end
+    ).
+
+%% @doc Return `Opts' with the node message's key material if they contain no
 %% wallet, as request execution `Opts' do not. The node's `priv-wallet' is its
-%% committer.
+%% committer. If `Opts' give `identities', keep them.
 with_node_committer(Opts) ->
     case hb_opts:get(priv_wallet, undefined, Opts#{ <<"only">> => local }) of
         undefined ->
-            maps:merge(Opts, maps:with(?NODE_KEY_OPTS, get_opts(Opts)));
+            maps:merge(maps:with(?NODE_KEY_OPTS, get_opts(Opts)), Opts);
         _ -> Opts
     end.
 
@@ -1002,7 +1016,10 @@ scheme(NodeMsg) ->
 %% @doc Reply to the client's HTTP request with the result of resolving it. The
 %% HTTP status comes from the result and is not added to the message, which is
 %% sent with the node's signature on its hashpath (`maybe_sign/3'). A list is
-%% the `body' of the reply, which its `ao-result' key selects.
+%% the `body' of the reply, which its `ao-result' key selects. If a request hook
+%% gives the reply (`{reply, Result}'), send `Result'.
+reply(InitReq, TABMReq, {reply, Result}, Opts) ->
+    reply(InitReq, TABMReq, Result, Opts);
 reply(InitReq, TABMReq, {ErlStatus, List}, Opts) when is_list(List) ->
     Msg = #{ <<"ao-result">> => <<"body">>, <<"body">> => List },
     reply(InitReq, TABMReq, {ErlStatus, Msg}, Opts);
@@ -1127,6 +1144,18 @@ maybe_sign(RawMsg, Codec, Opts) ->
             end;
         _ -> Msg
     end.
+
+%% @doc Commit a result as the reply to a request commits it (`maybe_sign/3'),
+%% for a node that sends the reply for this node, such as a `tunnel@1.0'
+%% broker: only this node can sign the hashpath of the result. The cookie keys
+%% that the reply sends as headers stay in the result, uncommitted.
+commit_reply(TABMReq, Msg, Opts) ->
+    {ok, _, WithoutCookies} = reply_handle_cookies(#{}, Msg, Opts),
+    {Codec, _} = accept_to_codec(TABMReq, WithoutCookies, Opts),
+    maps:merge(
+        maps:with([<<"cookie">>, <<"set-cookie">>], Msg),
+        maybe_sign(WithoutCookies, Codec, accept_signature(TABMReq, Opts))
+    ).
 
 %% @doc Handle replying with cookies if the message contains them. Returns the
 %% new Cowboy `Req` object, and the message without the cookie keys that no
@@ -1263,6 +1292,8 @@ encode_reply(Status, TABMReq, RawMessage, Opts) ->
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
         {_, <<"httpsig@1.0">>, _} ->
+            % Encode without the node's key material, as for the resolution of
+            % the request: the `index' of the result can run the client's code.
             EncMessage =
                 hb_message:convert(
                     Message,
@@ -1282,7 +1313,10 @@ encode_reply(Status, TABMReq, RawMessage, Opts) ->
                             }
                     end,
                     <<"structured@1.0">>,
-                    Opts#{ <<"topic">> => ao_internal }
+                    maps:without(
+                        ?NODE_KEY_OPTS,
+                        Opts#{ <<"topic">> => ao_internal }
+                    )
                 ),
             {
                 Status,
@@ -1439,7 +1473,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                     ),
                 Committed;
             _ ->
-                % The body holds the whole message, encoded by the codec. If it
+                % The body is the whole message, encoded by the codec. If it
                 % has commitments, we keep only the keys that they cover.
                 {ok, Committed} =
                     hb_message:with_only_committed(
@@ -1448,9 +1482,10 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                     ),
                 Committed
         end,
-    % Remove the commitments of an unsigned request, as `hb_ao' does for every
-    % execution input.
-    Input = hb_ao:execution_input(Decoded, Opts),
+    % Reset the request's private keys, which a codec can restore from the
+    % wire, before the node sets its own. Then remove the commitments of an
+    % unsigned request, as `hb_ao' does for every execution input.
+    Input = hb_ao:execution_input(hb_private:reset(Decoded), Opts),
     % Cookie-backed commitments need the request's cookie and peer context.
     Normalized = normalize_unsigned(PrimitiveMsg, Req, Input, Opts),
     maybe
@@ -1706,6 +1741,7 @@ set_opts_test() ->
     DefaultOpts = hb_opts:default_message_with_env(),
     start_node(DefaultOpts#{ 
         <<"priv-wallet">> => Wallet = ar_wallet:new(), 
+        <<"identities">> => #{},
         <<"port">> => rand:uniform(10000) + 10000 
     }),
     Opts = get_opts(#{ 
@@ -1740,7 +1776,27 @@ set_opts_test() ->
     Key3 = hb_opts:get(<<"hello3">>, not_found, UpdatedOpts3),
     ?event(debug_node_history, {node_history_length, length(NodeHistory3)}),
     ?assert(length(NodeHistory3) == 3),
-    ?assert(Key3 == <<"world3">>).
+    ?assert(Key3 == <<"world3">>),
+    % If request `Opts' give `identities', the node message keeps them.
+    Ids = #{ <<"zone">> => #{ <<"priv-wallet">> => ar_wallet:new() } },
+    set_opts(maps:remove(<<"priv-wallet">>, Opts#{ <<"identities">> => Ids })),
+    ?assertEqual(Ids, hb_opts:get(identities, not_found, get_opts(Opts))),
+    % Updates at once keep the key that each of them sets.
+    Keys = [ <<"update-", (hb_util:bin(N))/binary>> || N <- lists:seq(1, 10) ],
+    hb_pmap:parallel_map(
+        Keys,
+        fun(Key) ->
+            update_opts(
+                fun(NodeMsg) ->
+                    timer:sleep(1),
+                    set_opts(NodeMsg#{ Key => true })
+                end,
+                Opts
+            )
+        end,
+        10
+    ),
+    ?assertEqual([], Keys -- maps:keys(get_opts(Opts))).
 
 set_tls_opts_rejected_test() ->
     ?assertEqual(
@@ -2093,6 +2149,22 @@ ingress_json_links_test() ->
         {link, <<"ao:", ID/binary>>, _},
         maps:get(<<"reference">>, Decoded)
     ),
+    % A request cannot give the node a private key: a crafted `priv/hook-caller'
+    % does not reach the kernel-only gate that reads it.
+    ?assertEqual(
+        not_found,
+        hb_private:get(
+            <<"hook-caller">>,
+            req_to_tabm_singleton(
+                Req,
+                hb_json:encode(
+                    #{ <<"priv">> => #{ <<"hook-caller">> => <<"kernel">> } }
+                ),
+                Opts
+            ),
+            Opts
+        )
+    ),
     % An unsigned request carries no commitment once it is decoded.
     Unsigned = hb_message:normalize_commitments(#{ <<"a">> => <<"1">> }, Opts),
     ?assertNot(
@@ -2347,7 +2419,37 @@ index_test() ->
             },
             #{}
         ),
-    ?assertEqual(<<"i like turtles!">>, Body).
+    ?assertEqual(<<"i like turtles!">>, Body),
+    % The `index' of a message does not commit with the node's key.
+    {ok, ID} =
+        hb_cache:write(
+            #{
+                <<"device">> => <<"lua@5.3a">>,
+                <<"module">> =>
+                    #{
+                        <<"content-type">> => <<"application/lua">>,
+                        <<"body">> =>
+                            <<
+                                "function index() return { body = "
+                                "ao.resolve({ device = 'message@1.0' }, "
+                                "{ path = 'commit' }) } end"
+                            >>
+                    }
+            },
+            get_opts()
+        ),
+    {ok, 200, _, CommitStatus} =
+        hb_http_client:request(
+            #{
+                peer => NodeURL,
+                path => <<"/", ID/binary>>,
+                method => <<"GET">>,
+                headers => #{ <<"accept-bundle">> => <<"false">> },
+                body => <<>>
+            },
+            #{}
+        ),
+    ?assertNotEqual(<<"ok">>, CommitStatus).
 
 index_request_test() ->
     URL = start_node(),

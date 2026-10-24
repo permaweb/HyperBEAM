@@ -21,6 +21,7 @@ These keys are typically used within an execution stack (managed by [`dev_stack`
             *   A message map containing the Lua script in its `body` tag (Content-Type `application/lua` or `text/x-lua`).
             *   A map where keys are module names and values are script IDs/messages.
         *   `sandbox`: (Optional) Controls Lua sandboxing. Can be `true` (uses default sandbox list), `false` (no sandbox), or a map/list specifying functions to disable and their return values.
+        *   `requires-determinism`: (Optional) If `true`, `math.random`, `os.time`, `os.clock` and `os.date` are sandboxed, as their results depend on the node. `~process@1.0` sets it to `true` on the state of a process that does not set it.
     *   **Outputs (Stored in `priv/`):**
         *   `state`: The initialized `luerl` state handle.
 *   **`<FunctionName>` (Default Handler - `compute`)**

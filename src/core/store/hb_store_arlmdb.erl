@@ -8,7 +8,7 @@
 %%% the same way as that store serves its own: a read returns the value of a
 %%% path, or the values of its children, and a list returns the children of
 %%% a path. A main database in DUP mode
-%%% (`MDB_DUPSORT bor MDB_DUPFIXED') -- fixed-width keys, each holding a
+%%% (`MDB_DUPSORT bor MDB_DUPFIXED') -- fixed-width keys, each with a
 %%% sorted set of fixed-width duplicate values -- takes a request that is
 %%% a key, or a key followed by value bits:
 %%% ```
@@ -21,7 +21,7 @@
 %%%             list starts from. A request shorter than the key width
 %%%             lists the keys beginning with it instead.
 %%% '''
-%%% A file holding a single key serves that key's values, and its requests
+%%% A file with a single key serves that key's values, and its requests
 %%% leave the key out: they are value bits. A store definition with
 %%% `return-row' asks for rows instead: a request is any leading bits of a
 %%% row -- its key followed by its value -- and reads and lists answer with
@@ -80,22 +80,22 @@
 %%% entries -- like `lower' and `upper' -- are relative to the end of the
 %%% header. The meta pages are pages 0 and 1; the one with the higher
 %%% transaction ID wins. The main database is in the default mode or in DUP
-%%% mode. Its branch pages hold keys as node keys, the first node of each
-%%% standing for the least key. In the default mode a leaf node holds a
+%%% mode. Its branch pages contain keys as node keys, the first node of each
+%%% standing for the least key. In the default mode a leaf node contains a
 %%% value in the node's data, or `F_BIGDATA' with the value on overflow
-%%% pages from the page the data numbers. In DUP mode each leaf node holds
+%%% pages from the page the data numbers. In DUP mode each leaf node contains
 %%% a key's duplicate set in one of three forms: a single item as the
 %%% node's data; an `F_DUPDATA' sub-page, a whole fixed-width page image in
 %%% the node's data; or an `F_SUBDATA' sub-database, whose 48 byte record
-%%% the node holds and whose tree the store descends -- branch pages whose
-%%% keys are items, and `P_LEAF2' leaves holding no nodes and no slot array,
+%%% the node contains and whose tree the store descends -- branch pages whose
+%%% keys are items, and `P_LEAF2' leaves with no nodes and no slot array,
 %%% where item `I' is the `pad' bytes at page offset `24 + I * pad' and
 %%% `lower bsr 1' items fill the page, ascending strictly.
 %%%
 %%% Fetched chunks are retained in the stores under the `chunk-store' key
 %%% of the store definition, defaulting to a volatile store that expires
 %%% every five minutes; `[]' retains nothing. Published files are
-%%% defragmented -- the first chunk holds the meta pages and main root,
+%%% defragmented -- the first chunk contains the meta pages and main root,
 %%% branch pages cluster, and leaves follow in key order -- so the chunks a
 %%% read retains answer most of the reads that follow it.
 %%%
@@ -110,7 +110,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%% The byte-level constants of the LMDB 1.0 file.
-%% An Arweave chunk holds a whole number of pages of every admitted size, and
+%% An Arweave chunk is a whole number of pages of every admitted size, and
 %% a published file's data begins on a chunk boundary, so every page
 %% fetch lies within one chunk of the file.
 -define(CHUNK_SIZE, ?DATA_CHUNK_SIZE).
@@ -147,7 +147,7 @@ start(StoreOpts = #{ <<"root">> := Root }, _Req, _Opts) ->
         {ok, maps:merge(Meta, Layout)}
     end.
 
-%% @doc The instance holds no processes: nothing to stop.
+%% @doc The instance runs no Erlang processes: nothing to stop.
 stop(_StoreOpts, _Req, _NodeOpts) -> ok.
 
 %% @doc Reads are served by remote byte-range fetches.
@@ -193,7 +193,7 @@ list(StoreOpts, Req = #{ <<"list">> := Key }, _NodeOpts) ->
     end.
 
 %% @doc The values under a key -- those beginning with its value bits when
-%% it holds any -- or, for bits shorter than a key, the keys beginning
+%% it has any -- or, for bits shorter than a key, the keys beginning
 %% with them; from the request's `from', in its direction, up to its limit.
 set_list(StoreOpts, Bits, Req, Meta) ->
     #{ <<"from">> := From, <<"limit">> := Limit, <<"direction">> := Dir } =
@@ -212,8 +212,8 @@ set_list(StoreOpts, Bits, Req, Meta) ->
     end.
 
 %% @doc What a request's bits are, by the file's widths: a prefix of keys
-%% when shorter than a key; a key; or a key and value bits -- the value
-%% bits alone where the file holds one key. Under `return-row' the bits
+%% when shorter than a key; a key; or a key and value bits -- only the value
+%% bits where the file has one key. Under `return-row' the bits
 %% are the leading bits of rows. Bits longer than a row, and anything but
 %% bits, are refused.
 classify(Bits, Meta, StoreOpts) when is_bitstring(Bits) ->
@@ -443,7 +443,7 @@ gather(Leaf, Slot, Count, Prefix, Dir, Limit, Meta, Keys) ->
     end.
 
 %% @doc A main node's key, required to be of the file's key width: nothing
-%% where the file holds one key, which requests leave out.
+%% where the file has one key, which requests leave out.
 main_key(_Node, #{ <<"key-size">> := 0 }) ->
     {ok, <<>>};
 main_key(#{ key := Key }, #{ <<"key-size">> := KeySize })
@@ -452,8 +452,8 @@ main_key(#{ key := Key }, #{ <<"key-size">> := KeySize })
 main_key(#{ ksize := KSize }, _Meta) ->
     {error, {'invalid-key-size', KSize}}.
 
-%% @doc A key's duplicate set: the sole node's where the file holds one
-%% key, and the node the main tree holds for the key otherwise. A key the
+%% @doc A key's duplicate set: the sole node's where the file has one
+%% key, and the node the main tree has for the key otherwise. A key the
 %% tree lacks is not found.
 set_of(_Key, Meta = #{ <<"key-size">> := 0 }, Opts) ->
     maybe
@@ -509,7 +509,7 @@ seek(Prefix, From) when is_bitstring(From) ->
     {ok, <<Prefix/bitstring, From/bitstring>>};
 seek(_Prefix, From) -> {error, {'invalid-from', From}}.
 
-%% @doc The main leaf holding the target key's node, with the slot to start
+%% @doc The main leaf that has the target key's node, with the slot to start
 %% from: the sole node of a one-key file's root, and the leaf the descent
 %% reaches otherwise.
 main_leaf(_Target, _Dir, Meta = #{ <<"key-size">> := 0 }, Opts) ->
@@ -665,9 +665,9 @@ pad(asc, Bits, Width) -> <<Bits/bitstring, 0:(Width - bit_size(Bits))>>;
 pad(desc, Bits, Width) -> <<Bits/bitstring, -1:(Width - bit_size(Bits))>>.
 
 %% @doc Position on a duplicate set's values around the target: the
-%% fixed-width leaf holding them, the starting slot in it, its value count,
+%% fixed-width leaf with them, the starting slot in it, its value count,
 %% and the boundary key passed down for the leaf beyond it -- `none' for a
-%% set held in one leaf. A single value is read as a one-value leaf, and a
+%% set in one leaf. A single value is read as a one-value leaf, and a
 %% sub-page as the leaf its image is.
 position({item, Item}, Target, Dir, Pad, _Meta, _Opts) ->
     Leaf = <<0:(?PAGE_HDR * 8), Item/binary>>,
@@ -722,7 +722,7 @@ read_meta(Start, Size, Opts) ->
     end.
 
 %% @doc Parse a meta page: the `MDB_meta' record follows the page header,
-%% and the free database's `pad' holds the page size.
+%% and the free database's `pad' is the page size.
 parse_meta(
     <<
         _:?PAGE_HDR/binary,
@@ -798,7 +798,7 @@ instance(#{ page_size := PageSize, main := Main, last_page := LastPage },
     end.
 
 %% @doc Learn the file's layout from its main tree. A main database in the
-%% default mode holds paths. In DUP mode, a root that is one leaf holding
+%% default mode contains paths. In DUP mode, a root that is one leaf with
 %% one key is a one-key file, whose requests leave the key out: its key
 %% width is zero. Any other root's key width is that of the first node of
 %% its leftmost leaf. The value width is that of the first node's duplicate
@@ -851,7 +851,7 @@ single_root({?P_LEAF, 1}) -> {ok, 1};
 single_root({?P_LEAF, Count}) -> {error, {'invalid-main-entries', Count}};
 single_root({Flags, _}) -> {error, {'invalid-main-page-flags', Flags}}.
 
-%% @doc A main node's duplicate set, in the form the node holds it, requiring
+%% @doc A main node's duplicate set, in its form in the node, requiring
 %% its item width to be the file's.
 dup_set(Leaf, Node, #{ <<"value-size">> := Width }) ->
     maybe
@@ -877,7 +877,7 @@ dup_set(Leaf, Node = #{ flags := Flags }) ->
     end.
 
 %% @doc A sub-page: a whole fixed-width page image in a node's data, whose
-%% header holds the item width as `pad'. Its item count is checked against
+%% header gives the item width as `pad'. Its item count is checked against
 %% its own length, as a leaf's is against the page size.
 sub_page(
     Image =
@@ -935,7 +935,7 @@ beyond(desc, Bound) ->
 
 %%% Descending a tree.
 
-%% @doc Take one step of the descent to the leaf that would hold the target.
+%% @doc Take one step of the descent to the leaf that would contain the target.
 %% Branch pages recurse into the last child whose key is at-or-under it, with
 %% the first node standing for the least key. The `Leaf' argument gives the
 %% leaf form expected: the item width of a fixed-width tree, or `nodes' for
@@ -1160,14 +1160,14 @@ chunk_store(StoreOpts = #{ <<"root">> := Root }) ->
 %% A mined LMDB file that predates the published index format.
 -define(OLD_CONTAINER, <<"b159UDeD87YEFujWBMM8bISZ8DL8Wm1jLa-Bs_LQGAw">>).
 %% A published `hb_store_lmdb' layout: an LMDB 1.0 file of 4 KiB pages
-%% holding groups, links, a value on overflow pages and a child beside its
+%% with groups, links, a value on overflow pages and a child beside its
 %% own subtree,
 %% posted for these tests.
 -define(PATHS_INDEX, <<"aOLp1k7Rbatt0FRq6LBCJtvjLrKBGNfOo5qZs66gGuw">>).
 %% A mined transaction whose data is not an LMDB file.
 -define(NOT_LMDB, <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>).
 %% A published `~match@1.0' index: 10-byte keys -- a predicate's 39-bit name
-%% hash, 40-bit value hash and a pad bit -- each holding a duplicate set of
+%% hash, 40-bit value hash and a pad bit -- each with a duplicate set of
 %% 6-byte offsets.
 -define(MATCH_INDEX, <<"oWRzBr3KHhULAL-s5ULeXac1mb_WQOX5uFBRea16iRI">>).
 
@@ -1303,7 +1303,7 @@ chunk_retention() ->
         hb_store:read([Store], Fresh, #{})
     ).
 
-%% @doc The offset index holds one key, so its requests are value bits. A
+%% @doc The offset index has one key, so its requests are value bits. A
 %% list serves the values beginning with a key's bits: a full ID's is its
 %% read, and keys outside the index's prefix fall through. Mounted raw, the
 %% values resume inclusively from a value in either direction and answer
@@ -1434,7 +1434,7 @@ published_rows() ->
 
 %% @doc The match index as keys and values: the keys list from the file's
 %% start and under a name's hash; a predicate's
-%% key holds its rows' offsets as 48-bit values, listed whole, from a
+%% key contains its rows' offsets as 48-bit values, listed whole, from a
 %% value, and to a limit; a key reads its first value and a key with a
 %% value that value; and a key the index lacks is not found.
 published_keys_test_() ->

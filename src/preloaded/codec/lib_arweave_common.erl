@@ -268,7 +268,7 @@ base(CommittedKeys, Fields, Tags, Data, Opts) ->
 %% @doc Check that a commitment's ID and committer are those of the item
 %% encoded from the message. The item's values need no check here:
 %% `commitment_to_tx/4' takes the commitment's fields and tags only while the
-%% message holds their values, and gives a changed message its own, which the
+%% message contains their values, and gives a changed message its own, which the
 %% item's signature then does not verify.
 verify_identity(Item, TABM, Opts) ->
     [{ID, Commitment}] = maps:to_list(maps:get(<<"commitments">>, TABM)),
@@ -627,8 +627,8 @@ with_bundle(Commitment, Req, Opts) ->
 
 %% @doc Turn off bundling for a message with a nested message signed by a
 %% device other than `ans104@1.0': its nested messages are then linked. An item
-%% in a bundle can hold only its own ANS-104 signature, so bundling would drop
-%% the nested message's other commitments. Of a message whose hint names its
+%% in a bundle can have only its own ANS-104 signature, so bundling would drop
+%% the nested message's other commitments. If the hint of a message gives its
 %% committed keys, only the nested messages of those keys are encoded.
 signed_children_hint(Msg, {ok, Req = #{ <<"bundle">> := true }}, Opts) ->
     Encoded =
@@ -692,7 +692,7 @@ request_fields(Req, Message, FieldsFun, Opts) ->
     ).
 
 %% @doc Convert a commitment to a base TX record. Its fields and tags are the
-%% commitment's while the message holds their values. A message changed after
+%% commitment's while the message contains their values. A message changed after
 %% signing is given its own fields and committed keys' values instead, so the
 %% commitment's signature does not verify the item. The Avro form of the tags
 %% is the commitment's, or empty for a changed message.
@@ -733,7 +733,7 @@ commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts) ->
             FieldsFun(TX#tx{ tags = [], avro_form = <<>> }, <<>>, Message, Opts)
     end.
 
-%% @doc Check that a message still holds the values of the fields and tags
+%% @doc Check that a message still contains the values of the fields and tags
 %% that its commitment restores. Keys added after signing are not compared.
 holds_signed_values(Commitment, OriginalTags, TABM, Data, Opts) ->
     Fields =
@@ -755,7 +755,7 @@ holds_signed_values(Commitment, OriginalTags, TABM, Data, Opts) ->
     holds(MessageFields, TABM, Opts) andalso
         holds_tags(OriginalTags, maps:keys(MessageFields), TABM, Opts).
 
-%% @doc Check that a message holds the values of its commitment's tags. A tag
+%% @doc Check that a message contains the values of its commitment's tags. A tag
 %% with the name of a field is skipped: decoding takes the field's value. So is
 %% a tag with the name of a nested message, such as a list bundle's tag `1':
 %% decoding takes the item in the data.
@@ -777,7 +777,7 @@ holds_tags(OriginalTags, FieldKeys, TABM, Opts) ->
         ),
     holds(maps:with(Keys, Tags), TABM, Opts).
 
-%% @doc Check that a message holds the given values for their keys.
+%% @doc Check that a message contains the given values for their keys.
 holds(Values, TABM, _Opts) ->
     Values == maps:with(maps:keys(Values), TABM).
 

@@ -291,7 +291,7 @@ deserialize(WASM, Bin) when is_pid(WASM) andalso is_binary(Bin) ->
     Res.
 
 %% @doc Replace the WASM instance of a worker with a new instance of the
-%% image, holding the given memory: the state a restore from a snapshot
+%% image, loaded with the given memory: the state a restore from a snapshot
 %% gives. The worker keeps its pid, so every holder of the instance
 %% continues with a live, freshly initialized instance, with its globals at
 %% their start values.

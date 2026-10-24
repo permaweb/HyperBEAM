@@ -3,7 +3,7 @@
 %%% requires and its input lacks (`required-key-missing'), a value that the
 %%% spec cannot use as its type (`invalid-type'), and a message that the
 %%% resolution needs and cannot load (`necessary-message-not-found'). Each
-%%% names the input (`base' or `request') and the key in it, and the device
+%%% gives the input (`base' or `request') and the key in it, and the device
 %%% and key that were being resolved, as `resolving: ~device@1.0/key'.
 %%%
 %%% A resolution that needs a device that the node cannot load returns

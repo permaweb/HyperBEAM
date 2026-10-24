@@ -10,7 +10,7 @@
 %%%     name   = any bytes except `:' and `,'; `_' alone is padding
 %%%     size   = a positive decimal bit count | "_"
 %%% '''
-%%% For example, `_:77,start:49+integer,length:34+integer' names the two
+%%% For example, `_:77,start:49+integer,length:34+integer' decodes the two
 %%% trailing fields of a 160-bit row and discards its leading 77 bits, and
 %%% `repeat(start:64+integer,end:64+integer)' reads a body as consecutive
 %%% 128-bit records, decoding to the list of their messages in order. A
@@ -25,7 +25,7 @@
 %%% keeps the last field's value). `integer' fields decode as unsigned
 %%% big-endian integers of their bit size; `float' fields as IEEE floats of
 %%% 16, 32 or 64 bits; `atom' fields as the atom whose UTF-8 name fills the
-%%% field, at byte-multiple sizes; `enum' fields as the member named by the
+%%% field, at byte-multiple sizes; `enum' fields as the member given by the
 %%% field's unsigned integer value, zero-indexed, returned as a binary;
 %%% untyped fields decode as bitstrings, byte-aligned only when their size
 %%% is a multiple of eight. A final untyped field may use `_' to take
@@ -47,7 +47,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Decode the base message's body into a message of the fields named by
+%% @doc Decode the base message's body into a message of the fields in
 %% the format given as the key's argument, or into a list of such messages
 %% for a `repeat(...)' format.
 -spec from(

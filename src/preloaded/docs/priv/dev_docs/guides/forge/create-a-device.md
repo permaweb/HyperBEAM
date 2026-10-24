@@ -6,9 +6,9 @@ Complete root module:
 
 ```erlang
 -module(dev_echo_lens).
--export([info/1, echo/3, upper/3]).
+-export([device_info/1, echo/3, upper/3]).
 
-info(_) ->
+device_info(_) ->
     #{ exports => [<<"echo">>, <<"upper">>] }.
 
 echo(_Base, Req, Opts) ->

@@ -615,7 +615,7 @@ vary_child_commitments(Required, Slot, Mode, {KeepChild, KeepParent}) ->
     LazyChild = hb_maps:get(<<"child">>, Lazy, not_found, Opts),
     ?assertMatch({link, _, _}, maps:get(<<"slot">>, LazyChild)),
     ?assert(hb_message:verify(Lazy, [Signer], Opts)),
-    % Keep the parent's scalar inline so only its child needs loading.
+    % Keep the parent's literal inline so only its child needs loading.
     Input =
         case Mode of
             inline -> Parent;

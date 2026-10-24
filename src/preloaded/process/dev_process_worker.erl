@@ -158,7 +158,7 @@ notify_compute(GroupName, SlotToNotify, Res, Opts) ->
     notify_compute(GroupName, SlotToNotify, Res, Opts, 0).
 notify_compute(GroupName, SlotToNotify, Res, Opts, Count) ->
     ?event({notifying_of_computed_slot, {group, GroupName}, {slot, SlotToNotify}}),
-    % A request names its slot as `dev_process:target_slot/2' reads it: with
+    % A request gives its slot as `dev_process:target_slot/2' reads it: with
     % `compute', or else with `slot'.
     receive
         {resolve, Listener, GroupName, #{ <<"compute">> := SlotToNotify }, _ListenerOpts} ->

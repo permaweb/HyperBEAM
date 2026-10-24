@@ -172,15 +172,17 @@ snapshot(RawBase, _Req, Opts) ->
 
 %% @doc Before computation begins, a boot phase is required. This phase
 %% allows devices on the execution stack to initialize themselves. We set the
-%% private `initialized' key to `true' to indicate that the state holds the
+%% private `initialized' key to `true' to indicate that the state contains the
 %% live state of its execution devices. The key is never stored, so a state
 %% read from the cache is not initialized.
 init(Base, Req, Opts) ->
     ?event({init_called, {base, Base}, {req, Req}}),
+    % If the process does not set `requires-determinism', set it to `true',
+    % such that its execution devices give the same result on every node.
     {ok, Initialized} =
         lib_process:run_as(
             <<"execution">>,
-            Base,
+            hb_maps:merge(#{ <<"requires-determinism">> => true }, Base, Opts),
             #{ <<"path">> => <<"init">> },
             Opts
         ),
@@ -705,26 +707,28 @@ now(RawBase, Req, Opts) ->
     ProcessID = lib_process:process_id(Base, #{}, Opts),
     case hb_opts:get(process_now_from_cache, false, Opts) of
         false ->
-            {ok, CurrentSlot} =
-                hb_ao:resolve(
-                    Base,
-                    #{ <<"path">> => <<"slot/current">> },
+            maybe
+                {ok, CurrentSlot} ?=
+                    hb_ao:resolve(
+                        Base,
+                        #{ <<"path">> => <<"slot/current">> },
+                        Opts
+                    ),
+                ?event({now_called, {process, ProcessID}, {slot, CurrentSlot}}),
+                lib_process_cache:refresh(
+                    ProcessID,
+                    hb_util:int(CurrentSlot),
                     Opts
                 ),
-            ?event({now_called, {process, ProcessID}, {slot, CurrentSlot}}),
-            lib_process_cache:refresh(
-                ProcessID,
-                hb_util:int(CurrentSlot),
-                Opts
-            ),
-            hb_ao:resolve(
-                Base,
-                (hb_maps:with([<<"push">>], Req, Opts))#{
-                    <<"path">> => <<"compute">>,
-                    <<"slot">> => CurrentSlot
-                },
-                Opts
-            );
+                hb_ao:resolve(
+                    Base,
+                    (hb_maps:with([<<"push">>], Req, Opts))#{
+                        <<"path">> => <<"compute">>,
+                        <<"slot">> => CurrentSlot
+                    },
+                    Opts
+                )
+            end;
         CacheParam ->
             % We are serving the latest known state from the cache, rather
             % than computing it.

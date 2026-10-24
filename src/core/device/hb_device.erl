@@ -111,7 +111,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 						_ ->
 							% Case 6: The device has no default handler.
 							% We retry with the default unless the message
-							% already names it (loop guard).
+							% already has it as its `device' (loop guard).
 							case hb_maps:get(<<"device">>, Msg, undefined, Opts) of
 								?DEFAULT_DEVICE ->
 									throw({
@@ -298,7 +298,7 @@ maybe_normalize_device_key(Key, Mode) ->
 
 %% @doc Get the options map of a device, optionally giving it a message if the
 %% device's `device_info' function is parameterized by one. As `device_info' is
-%% never a key, we read it from the device directly: a map device holds it
+%% never a key, we read it from the device directly: a map device contains it
 %% under `device_info', and a module exports it with an arity of 0 to 2.
 device_info(Msg, Opts) -> device_info(message_to_device(Msg, Opts), Msg, Opts).
 device_info(Dev, Msg, Opts) when is_map(Dev) ->

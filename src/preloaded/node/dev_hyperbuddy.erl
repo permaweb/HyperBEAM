@@ -59,7 +59,7 @@ metrics(_, Req, Opts) ->
                     RawHeaderMap,
 					Opts
                 ),
-            % Prometheus names its exposition format in a `version' parameter.
+            % Prometheus states its exposition format in a `version' parameter.
             % `0.0.4' is not a valid structured-field value, so the parameter is
             % dropped and the bare media type served.
             {ok,

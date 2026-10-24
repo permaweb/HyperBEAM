@@ -114,7 +114,7 @@
 %%%     except that it expects the key to store to be provided either directly
 %%%     via the `key' parameter as a `keyid' field in the cookie Structured-Fields
 %%%     map. Support for loading the key from the cookie is provided such that
-%%%     a previously-generated secret by the user can have its persistence mode
+%%%     an existing secret of the user can have its persistence mode
 %%%     changed.
 %%% 
 %%% /list
@@ -714,13 +714,20 @@ parse_controllers(Address, _Opts) when is_binary(Address) -> [Address].
 
 %% @doc Store a wallet in the appropriate location.
 store_wallet(in_memory, KeyID, Details, Opts) ->
-    % Get existing wallets
-    CurrentWallets = hb_opts:get(priv_wallet_hosted, #{}, Opts),
-    % Add new wallet
-    UpdatedWallets = CurrentWallets#{ KeyID => Details },
-    ?event({wallet_store, {priv_updated_wallets, UpdatedWallets}}),
-    % Update the node's options with the new wallets.
-    hb_http_server:set_opts(Opts#{ <<"priv-wallet-hosted">> => UpdatedWallets }),
+    hb_http_server:update_opts(
+        fun(NodeMsg) ->
+            % Get existing wallets from the node message.
+            CurrentWallets = hb_opts:get(priv_wallet_hosted, #{}, NodeMsg),
+            % Add new wallet
+            UpdatedWallets = CurrentWallets#{ KeyID => Details },
+            ?event({wallet_store, {priv_updated_wallets, UpdatedWallets}}),
+            % Update the node's options with the new wallets.
+            hb_http_server:set_opts(
+                NodeMsg#{ <<"priv-wallet-hosted">> => UpdatedWallets }
+            )
+        end,
+        Opts
+    ),
     ok;
 store_wallet(non_volatile, KeyID, Details, Opts) ->
     % Find the private store of the node.
@@ -802,8 +809,14 @@ test_wallet_generate_and_verify(GeneratePath, ExpectedName, CommitParams) ->
     Node = hb_http_server:start_node(#{
         <<"priv-wallet">> => ar_wallet:new()
     }),
+    NodeMsg = hb_http_server:get_opts(),
     % Generate wallet with specified parameters
     {ok, GenResponse} = hb_http:get(Node, GeneratePath, #{}),
+    % Only `priv-wallet-hosted' changes in the node message.
+    ?assertEqual(
+        NodeMsg,
+        maps:without([<<"priv-wallet-hosted">>], hb_http_server:get_opts())
+    ),
     % Should get wallet name in body, wallet-address, and auth cookie
     ?assertMatch(#{<<"body">> := _}, GenResponse),
     WalletAddr = maps:get(<<"wallet-address">>, GenResponse),
@@ -1229,7 +1242,7 @@ export_batch_all_wallets_test() ->
 sync_wallets_test() ->
     % Remove all previous cached wallets.
     hb_store:reset(hb_opts:get(priv_store, no_wallet_store, #{})),
-    % Start a node that holds the key of the second node's wallet admin as its
+    % Start a node with the key of the second node's wallet admin as its
     % `admin' identity.
     AdminWallet = ar_wallet:new(),
     Node =
@@ -1291,7 +1304,7 @@ sync_wallets_test() ->
         )
     ),
     % Test sync to the first node from the second, signed as `admin'. The
-    % response holds the `keyid' of the imported wallet, and not its key.
+    % response contains the `keyid' of the imported wallet, and not its key.
     {ok, SyncResponse} = Sync(<<"admin">>),
     ?assertEqual([WalletKeyID], export_response_to_list(SyncResponse, #{})),
     % The first node keeps its own key.

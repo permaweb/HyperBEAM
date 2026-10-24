@@ -5,7 +5,7 @@
 %%% then posts to `response'. Each request is dispatched once. A timeout means
 %%% execution may have occurred; the tunnel never retries application work.
 %%%
-%%% Install `request' on `on/request' to route a base32 wallet-address host or
+%%% Install `request' on `on/request' to route a wallet's DNS URI host or
 %%% an explicit `tunnel-target'. `call' accepts the target and a nested request.
 %%% Set `tunnel-host' to restrict host routing to that domain's direct children.
 %%% Hosts without a connected target pass unchanged to the next request handler.
@@ -15,7 +15,8 @@
 %%%
 %%% Application messages are loaded at their source and carried unchanged
 %%% inside signed envelopes. A response is the message that the origin's HTTP
-%%% server replies with, and its envelope gives the HTTP status of the reply.
+%%% server replies with, committed as that server commits it. The origin posts
+%%% it to `response' with its Erlang result tag.
 -module(dev_tunnel).
 -specification("../../../specs/tunnel@1.0.md").
 -export([device_info/1, register/3, response/3, call/3, request/3]).
@@ -59,15 +60,15 @@ register(_Base, Req, Opts) ->
         end
     end.
 
-%% @doc Accept a response only from the node to which the request was sent. A
-%% response without a `status' key is given the HTTP status of the origin's
-%% reply as `status', so that the broker replies with that status.
+%% @doc Accept a response only from the node to which the request was sent, and
+%% give the caller the origin's reply with its Erlang result tag
+%% (`result-status').
 response(_Base, Req, Opts) ->
     maybe
         {ok, Address, Control} ?=
             authenticate(
                 Req,
-                [<<"tunnel-request-id">>, <<"status">>, <<"response">>],
+                [<<"tunnel-request-id">>, <<"result-status">>, <<"response">>],
                 Opts
             ),
         ID = hb_maps:get(<<"tunnel-request-id">>, Control, none, Opts),
@@ -77,14 +78,12 @@ response(_Base, Req, Opts) ->
                 broker(Opts),
                 ID,
                 Address,
-                case hb_maps:is_key(<<"status">>, Response, Opts) of
-                    true -> Response;
-                    false ->
-                        Response#{
-                            <<"status">> =>
-                                hb_maps:get(<<"status">>, Control, none, Opts)
-                        }
-                end
+                {
+                    hb_util:atom(
+                        hb_maps:get(<<"result-status">>, Control, none, Opts)
+                    ),
+                    maybe_add_unsigned(Response, Opts)
+                }
             ),
         {ok, #{ <<"status">> => 202, <<"tunnel-request-id">> => ID }}
     end.
@@ -127,7 +126,7 @@ request(Base, Hook, Opts) ->
                         dev_tunnel_server:connected(Broker, Address) orelse
                         {ok, Hook},
                 {ok, Forwarded} ?= forward(Mode, Raw, Opts),
-                {ok, Result} ?=
+                Reply =
                     dev_tunnel_server:call(
                         Broker,
                         Address,
@@ -135,7 +134,7 @@ request(Base, Hook, Opts) ->
                         response_timeout(Base, Raw, Opts),
                         Mode
                     ),
-                {error, Result}
+                {reply, Reply}
             end
     end.
 
@@ -255,6 +254,29 @@ sign(Message, Opts) ->
         }
     ).
 
+%% @doc If the only commitments of a reply sign its hashpath, add its unsigned
+%% commitment, over its keys other than `hashpath', as the origin's HTTP server
+%% gives it: the response message carries the reply with only its signed
+%% commitments (`dev_httpsig_conv:to/4').
+maybe_add_unsigned(Reply, Opts) ->
+    case hb_message:committed(Reply, #{ <<"ids">> => <<"any">> }, Opts) of
+        [<<"hashpath">>] ->
+            #{ <<"commitments">> := Unsigned } =
+                hb_message:commit(
+                    maps:without([<<"commitments">>, <<"hashpath">>], Reply),
+                    Opts,
+                    #{
+                        <<"commitment-device">> => <<"httpsig@1.0">>,
+                        <<"type">> => <<"unsigned">>
+                    }
+                ),
+            Reply#{
+                <<"commitments">> =>
+                    maps:merge(maps:get(<<"commitments">>, Reply), Unsigned)
+            };
+        _ -> Reply
+    end.
+
 %% @doc Prefer the wallet-address host to an explicit target or query argument.
 target(Base, Req, Opts) ->
     Host = hb_maps:get(<<"host">>, Req, <<>>, Opts),
@@ -274,8 +296,8 @@ target(Base, Req, Opts) ->
                     Opts
                 ),
             true = Parent =:= none orelse Suffix =:= [Parent],
-            52 = byte_size(Label),
-            {ok, ID} = address(base32:decode(Label)),
+            <<"uri-did-ar-", _/binary>> = Label,
+            {ok, ID} = hb_committer:address(Label),
             ID
         catch _:_ -> none
         end,
@@ -495,7 +517,7 @@ client(Peer, Address, Stop, Opts) ->
                             #{
                                 <<"codec-device">> => <<"httpsig@1.0">>,
                                 <<"tunnel-request-id">> => ID,
-                                <<"status">> => Status,
+                                <<"result-status">> => Status,
                                 <<"response">> => Response
                             },
                             Current
@@ -537,7 +559,8 @@ client(Peer, Address, Stop, Opts) ->
     end.
 
 %% @doc Execute through the node's normal HTTP request and response hooks, and
-%% return the HTTP status and the message of the reply.
+%% return the Erlang result tag and the message of the reply. An exception gets
+%% the reply that the HTTP server gives it (`hb_http_server:error_reply/4').
 execute(Request, Opts) ->
     try
         Singleton = singleton(Request, Opts),
@@ -558,32 +581,35 @@ execute(Request, Opts) ->
                     hb_http_server:resolve_request(Path, Singleton, Opts),
                 HTTPResult
             end,
-        reply(Result, Opts)
+        reply(Singleton, Result, Opts)
     catch
-        Class:Reason ->
+        Class:Reason:Stacktrace ->
             ?event(tunnel, {execution_failed, Class, Reason}),
-            reply(
-                {
-                    hb_http_server:error_status(Class, Reason),
-                    #{ <<"body">> => <<"Tunnel execution failed.">> }
-                },
-                Opts
-            )
+            hb_http_server:error_reply(Class, Reason, Stacktrace, Opts)
     end.
 
-%% @doc Return the HTTP status and the message that the HTTP server replies to a
-%% result with. A list is the `body' of a message whose `ao-result' is `body'.
-%% The message is loaded, as the caller cannot reach this node to load its
-%% links.
-reply({Status, List}, Opts) when is_list(List) ->
+%% @doc Return the Erlang result tag and the message that the HTTP server
+%% replies to a result with, committed as it commits its reply to the request
+%% (`hb_http_server:commit_reply/3'). A list is the `body' of a message whose
+%% `ao-result' is `body'. If a request hook gives the reply (`{reply, Result}'),
+%% reply to `Result'. The message is loaded, as the caller cannot reach this
+%% node to load its links.
+reply(Request, {reply, Result}, Opts) -> reply(Request, Result, Opts);
+reply(Request, {Status, List}, Opts) when is_list(List) ->
     reply(
+        Request,
         {Status, #{ <<"ao-result">> => <<"body">>, <<"body">> => List }},
         Opts
     );
-reply(Result, Opts) ->
+reply(Request, Result, Opts) ->
     {Status, Message} = hb_ao:force_message(Result, Opts),
-    Loaded = load(hb_private:reset(hb_ao:normalize_keys(Message, Opts)), Opts),
-    {hb_http:status_code({Status, Loaded}, Opts), Loaded}.
+    Committed =
+        hb_http_server:commit_reply(
+            Request,
+            hb_ao:normalize_keys(Message, Opts),
+            Opts
+        ),
+    {Status, load(hb_private:reset(Committed), Opts)}.
 
 %% @doc Accept either a raw singleton or the canonical sequence form.
 singleton(Request, Opts) when is_map(Request) ->

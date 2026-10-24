@@ -392,9 +392,15 @@ finalize(KeyProvider, SignedReq, MessageSequence, Opts) ->
 
 %%% Utility functions
 
-%% @doc Refresh the options and log an event if they have changed.
+%% @doc Refresh the options from the node message and log an event if they
+%% have changed. If `Opts' do not have `priv-wallet' or `identities', as
+%% request execution `Opts' do not, remove that key from the result.
 refresh_opts(Opts) ->
-    NewOpts = hb_http_server:get_opts(Opts),
+    NewOpts =
+        maps:without(
+            [Key || Key <- ?NODE_KEY_OPTS, not is_map_key(Key, Opts)],
+            hb_http_server:get_opts(Opts)
+        ),
     case NewOpts of
         Opts -> ?event(auth_hook_no_opts_change);
         _ ->
@@ -438,7 +444,7 @@ call_provider(Key, Provider, Request, Opts) ->
                 _ -> {ok, Msg}
             end;
         {ok, _} = Res ->
-            % The result is a non-message. We return it as-is.
+            % The result is not a message. We return it as-is.
             Res;
         {error, Err} ->
             ?event({call_provider_error, {priv_error, Err}}),

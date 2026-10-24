@@ -1,4 +1,4 @@
-%%% @doc Persistent cache for `~arweave-scheduler@1.0'. The cache holds one
+%%% @doc Persistent cache for `~arweave-scheduler@1.0'. The cache contains one
 %%% global chain synchronization record, one materialization record per
 %%% process, the inverted target index, and contiguous process assignments.
 %%% State records are content-addressed messages whose stable paths link to
@@ -18,13 +18,18 @@
 
 -define(CACHE_PREFIX, <<"~arweave-scheduler@1.0">>).
 
-%% @doc Use the scheduler store when one is configured.
+%% @doc Use the scheduler store when one is configured. Otherwise, use the
+%% stores of the node's `store' list whose scope is `local'.
 opts(Opts) ->
     Opts#{
         <<"store">> =>
             hb_opts:get(
                 scheduler_store,
-                hb_opts:get(store, no_viable_store, Opts),
+                hb_opts:get(
+                    store,
+                    no_viable_store,
+                    hb_store:scope(Opts, local)
+                ),
                 Opts
             )
     }.
@@ -347,6 +352,15 @@ linked_state_and_target_test() ->
     ?assertEqual({ok, [<<"101-3">>]}, list_targets(ProcessID, Opts)),
     EmptyStore = hb_test_utils:test_store(hb_store_volatile, <<"empty">>),
     ok = hb_store:start(EmptyStore),
+    % With no scheduler store, a header that is only in a remote store is
+    % not read.
+    ?assertEqual(
+        {error, not_found},
+        read_header(
+            TXID,
+            #{ <<"store">> => [EmptyStore, Store#{ <<"scope">> => remote }] }
+        )
+    ),
     ReadOpts = Opts#{ <<"scheduler-store">> => [EmptyStore, Store] },
     {ok, ReadTXID, ReadHeader} = read_target(ProcessID, <<"101-3">>, ReadOpts),
     ?assertEqual(TXID, ReadTXID),

@@ -321,7 +321,7 @@ resolve_test_parallel() ->
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 2">>}}, 
         hb_http:get(Node, << LegacyManifestID/binary, "/nested/page2" >>, Opts)),
-    % A legacy manifest named by an `ao:' URI is cast in the same way.
+    % A legacy manifest given by an `ao:' URI is cast in the same way.
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 1">> }},
         hb_http:get(Node, << "/ao:", LegacyManifestID/binary, "/index" >>, Opts)

@@ -178,6 +178,10 @@ verify_legacy({digest, Digest}, DigestType, Signature, PublicKey=#'RSAPublicKey'
 %%%-------------------------------------------------------------------
 
 %% @private
+dp(B, PrivateKey = #'RSAPrivateKey'{prime1=P}) when is_integer(P) ->
+    % If the key has its primes, compute with them (CRT) in OpenSSL, which
+    % checks the result before it returns it.
+    public_key:encrypt_private(B, PrivateKey, [{rsa_padding, rsa_no_padding}]);
 dp(B, #'RSAPrivateKey'{modulus=N, privateExponent=E}) ->
     crypto:mod_pow(B, binary:encode_unsigned(E), binary:encode_unsigned(N)).
 

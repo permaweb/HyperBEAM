@@ -366,7 +366,7 @@ report_every_test() ->
     TestWorkerPid ! {get, self()},
     receive {state, State} -> ?assertNot(maps:is_key(<<"every">>, State)) end,
     EveryStopPath = <<"/~cron@1.0/stop=", CronTaskID/binary>>,
-    % The stop reply holds the task's ID under `task-id', as the report does.
+    % The stop reply contains the task's ID under `task-id', as the report does.
     ?assertMatch(
         {ok, #{<<"body">> := #{<<"task-id">> := CronTaskID}}},
         hb_http:get(Node, EveryStopPath, #{})

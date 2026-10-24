@@ -117,7 +117,8 @@ add_dynamic_keys(NodeMsg) ->
     add_identity_addresses(UpdatedNodeMsg).
 
 add_identity_addresses(NodeMsg) ->
-    Identities = hb_opts:get(identities, #{}, NodeMsg),
+    NodeOpts = hb_http_server:with_node_committer(NodeMsg),
+    Identities = hb_opts:get(identities, #{}, NodeOpts),
     NewIdentities = maps:map(fun(_, Identity) ->
         Identity#{
             <<"address">> => hb:address(
@@ -165,7 +166,13 @@ adopt_node_message(Request, NodeMsg) ->
         true ->
             {error, <<"Node message is already permanent.">>};
         false ->
-            hb_http_server:set_opts(Request, NodeMsg)
+            % Merge the request into the server's node message.
+            hb_http_server:update_opts(
+                fun(ServerOpts) ->
+                    hb_http_server:set_opts(Request, ServerOpts)
+                end,
+                NodeMsg
+            )
     end.
 
 is_permanent(NodeMsg) ->
@@ -187,16 +194,24 @@ config_test() ->
 
 %% @doc Test that we can't get the node message if the requested key is private.
 priv_inaccessible_test() ->
+    Wallet = ar_wallet:new(),
     Node = hb_http_server:start_node(
         #{
             <<"test-config-item">> => <<"test">>,
-            <<"priv-key">> => <<"BAD">>
+            <<"priv-key">> => <<"BAD">>,
+            <<"identities">> =>
+                #{ <<"test">> => #{ <<"priv-wallet">> => Wallet } }
         }
     ),
     {ok, Res} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
     ?event({res, Res}),
     ?assertEqual(<<"test">>, hb_ao:get(<<"test-config-item">>, Res, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"priv-key">>, Res, #{})).
+    ?assertEqual(not_found, hb_ao:get(<<"priv-key">>, Res, #{})),
+    % An identity of the node is listed by its address, without its wallet.
+    ?assertEqual(
+        #{ <<"test">> => #{ <<"address">> => hb:address(Wallet) } },
+        hb_maps:get(<<"identities">>, Res, not_found, #{})
+    ).
 
 %% @doc A request that carries a link to a message the node does not hold is
 %% answered when its path does not read the link.
@@ -280,6 +295,25 @@ unauthorized_set_node_msg_fails_test() ->
         end,
         [<<"httpsig@1.0">>, <<"flat@1.0">>]
     ),
+    % A client's own `secret-provider' in `~auth-hook@1.0' gets no node key.
+    ?assertNotMatch(
+        {ok, _},
+        hb_http:post(
+            Node,
+            #{
+                <<"path">> => <<"/~auth-hook@1.0/request">>,
+                <<"secret-provider">> =>
+                    #{
+                        <<"device">> => <<"message@1.0">>,
+                        <<"secret">> => <<"test">>,
+                        <<"finalize-path">> => <<"commit">>
+                    },
+                <<"request">> => #{ <<"path">> => <<"/hello">> },
+                <<"body">> => <<"x">>
+            },
+            #{}
+        )
+    ),
     % A request to another device does not change the node message.
     NodeMsg = hb_http_server:get_opts(),
     hb_http:get(Node, <<"/~test-device@1.0/postprocess?body=x">>, #{}),
@@ -297,6 +331,7 @@ authorized_set_node_msg_succeeds_test() ->
 			<<"store">> => StoreOpts
         }
     ),
+    NodeMsg = hb_http_server:get_opts(),
     {ok, SetRes} =
         hb_http:post(
             Node,
@@ -311,6 +346,14 @@ authorized_set_node_msg_succeeds_test() ->
             Opts
         ),
     ?event({res, SetRes}),
+    % Only the keys of the request and `node-history' change in the node
+    % message.
+    Changed =
+        [<<"path">>, <<"type">>, <<"test-config-item">>, <<"node-history">>],
+    ?assertEqual(
+        maps:without(Changed, NodeMsg),
+        maps:without(Changed, hb_http_server:get_opts())
+    ),
     {ok, Res} = hb_http:get(Node, <<"/~meta@1.0/info">>, Opts),
     ?event({res, Res}),
     ?assertEqual(<<"test2">>, hb_ao:get(<<"test-config-item">>, Res, Opts)),

@@ -7,7 +7,7 @@
 %%% it, the recipes for the device through the node's GraphQL, and the
 %%% implementations of the device, and renders them.
 %%%
-%%% The package of the device holds the whole site: the page, its scripts and
+%%% The package of the device contains the whole site: the page, its scripts and
 %%% styles, its fonts, and its guides. The device's keys are:
 %%% <pre>
 %%%     index: the page, `index.html'. It is the same for every device.

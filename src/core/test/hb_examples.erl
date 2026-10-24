@@ -305,7 +305,7 @@ bundler_completion_payment_hook() ->
 
 %% @doc Route an awaited bundle upload across two bundlers in serial. The first
 %% bundler's wallet is unfunded on the Arweave node, so its upload is rejected
-%% and it holds the awaited request open while retrying; the router gives up on
+%% and it keeps the awaited request open while retrying; the router gives up on
 %% it (a short receive timeout) and falls through to the second, funded bundler.
 %% We confirm the outcome by reading the completed bundle from the second
 %% bundler's cache and checking that it was signed by the second bundler.
@@ -373,7 +373,7 @@ bundler_route_peer_opts(Wallet, GatewayOpts) ->
 
 %% @doc Build the routing node that relays bundle uploads to peers in order. Each
 %% peer is given a short receive timeout so the router gives up on the unfunded
-%% first bundler (which holds the awaited request open while it retries) and
+%% first bundler (which keeps the awaited request open while it retries) and
 %% falls through to the second.
 bundler_route_router_opts(FirstBundler, SecondBundler) ->
     PeerOpts =
@@ -554,7 +554,7 @@ create_schedule_aos2_test_disabled() ->
     % Scheduler	Specifies the scheduler unit by Wallet Address or Name, and can
     %   be referenced by a recent Scheduler-Location.	1-1	{ADDRESS}
     % Cron-Interval	An interval at which a particular Cron Message is recevied by the process,
-    %   in the format X-Y, where X is a scalar value, and Y is milliseconds,
+    %   in the format X-Y, where X is a number, and Y is milliseconds,
     %   seconds, minutes, hours, days, months, years, or blocks	0-n	1-second
     % Cron-Tag-{Name}	defines tags for Cron Messages at set intervals,
     %   specifying relevant metadata.	0-1	

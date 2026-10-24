@@ -10,7 +10,7 @@
 %%%     ;VB+VR      The IDs of the varied base and request: the inputs of the
 %%%                 execution, as the spec of the executed function selects
 %%%                 them.
-%%%     @D          The ID of the dependencies: the message that names the
+%%%     @D          The ID of the dependencies: the message that gives the
 %%%                 origin of each varied input.
 %%%     .R          The ID of the result, which replaces the state.
 %%%     *P          The ID of a patch, which extends the base: the result is
@@ -66,8 +66,8 @@ format([First | Rest], Opts) ->
 format(Ctx = #{ <<"varied-result">> := Result }, Opts)
         when not is_map(Result), not is_binary(Result), not is_list(Result),
              not ?IS_LINK(Result) ->
-    % A native scalar has no standalone message ID. Its executable compact
-    % address names the value without mistaking it for a pre-result context.
+    % A native literal has no standalone message ID. Its executable compact
+    % address gives the value without mistaking it for a pre-result context.
     format(
         maps:with(
             [<<"base">>, <<"base-uri">>, <<"request">>, <<"request-uri">>],
@@ -206,7 +206,7 @@ format_normalizer(#{ <<"normalizer">> := base }, _Opts) -> <<"*">>;
 format_normalizer(_, _) -> <<".">>.
 
 %% @doc A request overlay replaces the base with the fully overlaid request.
-%% Its receipt therefore names that replacement, rather than the generic patch.
+%% Its receipt therefore states that replacement, not the generic patch.
 equivalence_context(
     Ctx = #{ <<"normalizer">> := request, <<"result">> := Result },
     _Opts
@@ -497,8 +497,8 @@ verify_id(Name, Claim, Executed, Opts) ->
     end.
 
 %% @doc Re-execute a claim through the resolver without trusting cached results.
-%% Every message layer of the addressed pair must verify: the identity vary
-%% names no dependency leaves through which a forged layer would be found.
+%% Every message layer of the base and request must verify: the identity vary
+%% gives no dependency leaves through which a forged layer would be found.
 execute(Ctx, Opts) ->
     maybe
         {ok, Base} ?= load_field(<<"base">>, Ctx, Opts),
@@ -612,7 +612,7 @@ load_field(Name, Ctx, Opts) ->
         error -> {error, {missing, Name}}
     end.
 
-%% @doc Read the value at a URI. The store holds the value of an `ao:' URI
+%% @doc Read the value at a URI. The store contains the value of an `ao:' URI
 %% under its ID.
 read(<<"ao:", ID/binary>>, Opts) ->
     case hb_cache:read(ID, Opts) of
@@ -750,7 +750,7 @@ reset(Result) when is_map(Result) ->
     };
 reset(Result) -> Result.
 
-%% @doc Keep a receipt only while it still names the returned state.
+%% @doc Keep a receipt only while it still gives the ID of the returned state.
 attach(Result, HP, Opts) when is_map(Result) ->
     Priv = hb_private:from_message(Result),
     Result#{
@@ -812,7 +812,7 @@ compact_form_round_trip_test() ->
               "*cGF0Y2gtaWQtMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA">>,
             % A base that is only a device is written as `~Device'.
             <<"ao:~test-device@1.0/compute">>,
-            % A request that holds only the value of its key is written as
+            % A request that contains only the value of its key is written as
             % `key=value'.
             <<"ao:BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4/k=v">>,
             % A request that is only a device is written as `~Device'.

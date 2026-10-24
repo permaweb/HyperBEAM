@@ -1,7 +1,7 @@
 %%% @doc A battery of test vectors exercising the `bundle' / `hint-device'
 %%% machinery of the `message@1.0' device across a three-level message tree.
 %%%
-%%% The tree is built bottom-up; each level holds the level below it as a
+%%% The tree is built bottom-up; each level contains the level below it as a
 %%% sub-message:
 %%%
 %%% <pre>

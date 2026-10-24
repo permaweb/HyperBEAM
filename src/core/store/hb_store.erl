@@ -22,9 +22,9 @@
 %%%                   node operators to prioritize their stores for search.
 %%%     read/3:       Read the data at the given location, using a request map
 %%%                   of the form `#{ <<"read">> => Path }`. A location that
-%%%                   holds a value returns `{ok, Value}'. A location with keys
+%%%                   has a value returns `{ok, Value}'. A location with keys
 %%%                   below it returns `{composite, Children}'. A child that
-%%%                   holds a value is given as a `{Key, Value}' pair, and a
+%%%                   has a value is given as a `{Key, Value}' pair, and a
 %%%                   child with keys below it as its `Key'.
 %%%     write/3:      Write a request map of the form `#{ Path => Value }`.
 %%%     list/3:       For a path with keys below it, return child keys using a
@@ -199,35 +199,19 @@ do_find(StoreOpts = #{ <<"store-module">> := Mod }) ->
             ensure_instance_alive(StoreOpts, InstanceMessage)
     end.
 
-%% @doc Start a store in a process registered under its name, unless another
-%% process has, and return its instance. Others wait for that process to exit,
-%% then find the store again. A start that fails raises in the caller.
+%% @doc Start a store in a process registered under its name, one process at a
+%% time (`hb_name:atomic/2'), and return its instance. If another process has
+%% started the store, return its instance. A start that fails raises in the
+%% caller.
 start_via_singleton(StoreOpts, LookupName) ->
-    Caller = self(),
-    Starter =
-        hb_name:singleton(
-            LookupName,
-            fun() ->
-                Result =
-                    try {ok, persistent_term:get(LookupName)}
-                    catch error:badarg ->
-                        try {ok, spawn_instance(StoreOpts)}
-                        catch Class:Reason:Stack -> {Class, Reason, Stack}
-                        end
-                    end,
-                Caller ! {store_started, self(), Result}
+    hb_name:atomic(
+        LookupName,
+        fun() ->
+            try persistent_term:get(LookupName)
+            catch error:badarg -> spawn_instance(StoreOpts)
             end
-        ),
-    Ref = erlang:monitor(process, Starter),
-    receive
-        {store_started, Starter, {ok, Instance}} ->
-            erlang:demonitor(Ref, [flush]),
-            Instance;
-        {store_started, Starter, {Class, Reason, Stack}} ->
-            erlang:demonitor(Ref, [flush]),
-            erlang:raise(Class, Reason, Stack);
-        {'DOWN', Ref, process, Starter, _} -> do_find(StoreOpts)
-    end.
+        end
+    ).
 
 %% @doc Create a new instance of a store and return its term.
 spawn_instance(StoreOpts = #{ <<"store-module">> := Mod }) ->
@@ -975,7 +959,7 @@ implicit_children_test_() ->
             ok = write(Store, #{ <<"parent/child/value">> => <<"data">> }, #{}),
             ?assertEqual({ok, [<<"child">>]}, list(Store, <<"parent">>, #{})),
             % Reading a path with keys below it returns them, with the value of
-            % each key that holds one.
+            % each key that has one.
             ?assertEqual(
                 {composite, [<<"child">>]},
                 read(Store, <<"parent">>, #{})
@@ -1553,7 +1537,7 @@ normalize_without_body_store_test() ->
         )
     ).
 
-%% @doc Listed keys and paired values retain scalar singleton semantics.
+%% @doc Listed keys and paired values normalize as single values.
 normalize_children_test() ->
     Opts = #{ <<"store">> => [], <<"linkify-mode">> => false },
     lists:foreach(

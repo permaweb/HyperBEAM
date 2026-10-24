@@ -10,7 +10,7 @@
 %%%
 %%% A process using this device is sequenced by `~arweave-scheduler@1.0'.
 %%% Control transactions target the process directly. A payment between two
-%%% addresses names the process in its `Assign-To' tag, so it also becomes a
+%%% addresses gives the process in its `Assign-To' tag, so it also becomes a
 %%% slot that the process can settle against. Its process message reads:
 %%% <pre>
 %%%     scheduler-device: arweave-scheduler@1.0
@@ -29,7 +29,7 @@
 %%%       amount cannot be called `quantity': that is a transaction's own value
 %%%       field, so the codec would carry it as winston of AR sent to the
 %%%       process -- an address with no key, which would destroy it.</li>
-%%%   <li>`register-interest' (to the process, from a buyer), naming an
+%%%   <li>`register-interest' (to the process, from a buyer), with an
 %%%       `order-id' and optionally a `fill-quantity' (the whole offer by
 %%%       default). A partial registration reserves that slice while its
 %%%       remainder stays open under the registration's id. For `deadline' blocks
@@ -42,12 +42,12 @@
 %%%       stranding it at the process's address, which is a transaction id with
 %%%       no key behind it. Being denominated in AR it asks nothing of a buyer
 %%%       who holds none of the token.</li>
-%%%   <li>`cancel-order' (to the process, from the seller), naming an
+%%%   <li>`cancel-order' (to the process, from the seller), with an
 %%%       `order-id'. Returns the escrowed goods and removes the offer. It is
 %%%       refused while a reservation stands.</li>
 %%%   <li>The payment itself: an ordinary transfer whose `target' is the
 %%%       order's `recipient', whose `quantity' is at least the `asking'
-%%%       winston, tagged with the `order-id' and with `Assign-To' naming the
+%%%       winston, tagged with the `order-id' and with `Assign-To' set to the
 %%%       process.</li>
 %%% </ul>
 %%%
@@ -58,7 +58,7 @@
 %%% and then abandoning it -- pledged when they register, returned when they
 %%% pay, forfeit to the seller when their reservation lapses unpaid. It is
 %%% denominated in the process's own token because that is the only thing this
-%%% device can decline to honour: a registration naming an offer that is
+%%% device can decline to honour: a registration for an offer that is
 %%% already gone takes nothing. AR could not serve, because AR settles on the
 %%% weave whatever any process decides.
 %%%
@@ -177,7 +177,7 @@ make_offer(Base, Body, Height, Opts) ->
         true ?= Fee >= 0,
         true ?= Deadline >= 1,
         % The seller escrows the goods and nothing else: the deposit is asked
-        % of the buyer, not staked by the seller. A seller whose whole holding
+        % of the buyer, not staked by the seller. A seller whose whole balance
         % is the thing being sold -- the single unit of a name -- can therefore
         % still make an offer that asks collateral.
         true ?= balance(Base, Seller, Opts) >= Quantity,
@@ -241,7 +241,7 @@ cancel_order(Base, Body, Opts) ->
 %% is collateral, pledged from the buyer's own balance and forfeit to the
 %% seller if the reservation lapses unpaid. It is denominated in the token
 %% because a pledge is only honoured while there is an offer to honour it
-%% against: a registration naming an order that has gone takes nothing at all.
+%% against: a registration for an order that has gone takes nothing at all.
 register_interest(Base, Body, Height, Opts) ->
     maybe
         {ok, Buyer} ?= signer(Body, Opts),
@@ -317,7 +317,7 @@ register_interest(Base, Body, Height, Opts) ->
     end.
 
 %% @doc Settle against a layer-1 payment. The transaction is not addressed to
-%% the process at all: it is a transfer between two user addresses that names an
+%% the process at all: it is a transfer between two user addresses that gives an
 %% `order-id' and declares this process in `Assign-To'. It counts as payment for
 %% an order when it is addressed to that order's `recipient' and carries at
 %% least the asking winston.
@@ -354,7 +354,7 @@ payment(Base, Body, Target, Height, Opts) ->
 %% pledged to reserve it comes back to them. The AR was always the seller's
 %% directly -- no process ever held it, and none could return it.
 %%
-%% The order then leaves the book, so a later payment naming it finds nothing
+%% The order then leaves the book, so a later payment for it finds nothing
 %% and does nothing. That is the only honest answer available: the goods are no
 %% longer there to give, and the AR is not there to refund.
 settle(Base, Order, Buyer, Opts) ->
@@ -504,7 +504,7 @@ orders(Base, Opts) ->
 
 order_book(Base, Opts) -> state(<<"orders">>, Base, #{}, Opts).
 
-%% @doc Read the order a message names, if the process holds it.
+%% @doc Read the order that a message gives, if the process has it.
 %%
 %% The name comes from a stranger's transaction, so it is looked up as a key of
 %% the order book rather than resolved as a path: a path would let
@@ -627,7 +627,7 @@ party() ->
     Wallet = ar_wallet:new(),
     {Wallet, hb_util:human_id(ar_wallet:to_address(Wallet))}.
 
-%% @doc A process base holding the given balances and nothing else.
+%% @doc A process base with the given balances and nothing else.
 base(Balances) ->
     #{ ?BALANCES => Balances }.
 
@@ -794,7 +794,7 @@ order_action(Wallet, Action, OrderID) ->
     ).
 
 %% @doc The payment leg: an ordinary transfer to the seller that the process is
-%% not addressed by, naming the order it settles.
+%% not addressed by, tagged with the order it settles.
 pay(Wallet, To, Winston, OrderID) ->
     tx(
         Wallet,
@@ -943,7 +943,7 @@ settlement_test() ->
             120,
             Opts
         ),
-    % The offer is complete, so it is no longer an offer.
+    % The offer is complete, so no orders remain.
     ?assertEqual([], orders(Settled, Opts)),
     ?assertEqual(10, balance(Settled, BuyerAddr, Opts)),
     ?assertEqual(90, balance(Settled, SellerAddr, Opts)).
@@ -1036,7 +1036,7 @@ underpayment_test() ->
     ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Result, Opts))),
     ?assertEqual(0, balance(Result, BuyerAddr, Opts)).
 
-%% @doc A payment that names the order but is addressed to somebody else is not
+%% @doc A payment tagged with the order but addressed to somebody else is not
 %% a payment for it.
 payment_to_wrong_address_test() ->
     Opts = test_opts(),
@@ -1177,7 +1177,7 @@ double_settlement_test() ->
     ?assertEqual(0, balance(Again, LateAddr, Opts)),
     ?assertEqual(90, balance(Again, SellerAddr, Opts)).
 
-%% @doc A payment naming an order the process has never heard of is ordinary
+%% @doc A payment for an order the process has never heard of is ordinary
 %% Arweave traffic, and is ignored.
 unknown_order_test() ->
     Opts = test_opts(),
@@ -1199,7 +1199,7 @@ unknown_order_test() ->
         ),
     ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Result, Opts))).
 
-%% @doc A transaction assigned to this process but naming no live order moves
+%% @doc A transaction assigned to this process for no live order moves
 %% the clock and nothing else.
 assigned_non_payment_test() ->
     Opts = test_opts(),
@@ -1292,7 +1292,7 @@ collateral_must_be_held_test() ->
     ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Tried, Opts))),
     ?assertEqual(4, balance(Tried, BuyerAddr, Opts)).
 
-%% @doc A registration naming an offer that has gone takes nothing.
+%% @doc A registration for an offer that has gone takes nothing.
 %%
 %% This is why collateral is denominated in the token: the process can decline
 %% to honour a pledge when there is nothing to honour it against. AR could not
@@ -1608,7 +1608,7 @@ no_minimum_fee_registers_free_test() ->
         maps:get(<<"status">>, only_order(Reserved, Opts))
     ).
 
-%% @doc A seller whose whole holding is the single unit they are selling can
+%% @doc A seller whose whole balance is the single unit they are selling can
 %% still offer it: an offer escrows the goods and asks nothing else of them.
 single_unit_offer_test() ->
     Opts = test_opts(),

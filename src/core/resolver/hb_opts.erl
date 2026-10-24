@@ -66,7 +66,7 @@
     <<"name">> => <<"cache-mainnet/lmdb">>,
     <<"store-module">> => hb_store_lmdb
 }).
-%% The published Arweave offset index: a mined transaction holding
+%% The published Arweave offset index: a mined transaction with
 %% 8,560,638,056 packed rows mapping ANS-104 data item IDs to their weave
 %% byte ranges, read in place by `hb_store_arlmdb'. Offset resolution
 %% through it is served by Arweave peers alone. The store pipeline maps
@@ -861,7 +861,7 @@ address(Default, Opts) ->
     end.
 
 %% @doc Return the URI of the `priv-wallet' in `Opts'. Request execution `Opts'
-%% hold no wallet, so for them we return the `committer' option. If neither is
+%% have no wallet, so for them we return the `committer' option. If neither is
 %% set, we return the URI of `Default'.
 committer(Opts) -> committer(undefined, Opts).
 committer(Default, Opts) ->

@@ -160,8 +160,8 @@ write(Opts, Req, _NodeOpts) ->
             end
     end.
 
-%% @doc Read a value from the database by key. If the key holds no value, but
-%% has keys below it, we return those keys, each with its value if it holds
+%% @doc Read a value from the database by key. If the key has no value, but
+%% has keys below it, we return those keys, each with its value if it has
 %% one.
 %%
 %% @param Opts Database configuration map
@@ -199,9 +199,9 @@ read_result(Opts, Path) ->
     Result.
 
 %% @doc Read a key's value, or the rows below it. We read the value with one
-%% `elmdb:get' of the key. For a key that holds no value, we read the rows
+%% `elmdb:get' of the key. For a key that has no value, we read the rows
 %% below it with one `elmdb:read_prefix' of the key and a `/', and return the
-%% key's immediate children, each with its value if it holds one.
+%% key's immediate children, each with its value if it has one.
 read_key(EnvOpts, Path) ->
     case read_direct(EnvOpts, Path) of
         not_found ->
@@ -303,7 +303,7 @@ list(Opts, Req = #{ <<"list">> := Path }, _NodeOpts) ->
     end.
 
 %% @doc List the children of a path through the NIF's cursor: every one, or
-%% those the request names from its `from' in its direction, no more than
+%% those the request selects from its `from' in its direction, no more than
 %% its limit. A `batch' uses the store's `list-batch-size' (default 256,
 %% minimum 2 for inclusive cursor progress), independently of the write
 %% flush threshold `batch-size'. An `all' request remains unbounded.
@@ -598,6 +598,15 @@ cache_style_test() ->
     Result = hb_store:read(StoreOpts, <<"test-key">>, #{}),
     ?event_debug({cache_style_read_result, Result}),
     ?assertEqual({ok, <<"test-value">>}, Result),
+    % If the store's directory is replaced, as by a mount over it, a write
+    % goes to the new directory.
+    #{ <<"name">> := Dir } = StoreOpts,
+    ok = file:rename(Dir, <<Dir/binary, "-hidden">>),
+    ok = ensure_dir(Dir),
+    ok = hb_store:write(StoreOpts, #{ <<"mounted">> => <<"yes">> }, #{}),
+    ok = hb_store:flush(StoreOpts, #{}),
+    ok = hb_store:stop(StoreOpts),
+    ?assertEqual({ok, <<"yes">>}, hb_store:read(StoreOpts, <<"mounted">>, #{})),
     hb_store:stop(StoreOpts).
 
 read_prefix_composite_test() ->
@@ -610,4 +619,22 @@ read_prefix_composite_test() ->
         read(StoreOpts, #{ <<"read">> => <<"root">> }, #{})
     ),
     ?assertEqual({ok, [<<"a">>, <<"b">>]}, test_list(StoreOpts, <<"root">>)),
+    % If writes are pending, a read of a key with no value waits for their
+    % commit on a dirty IO scheduler: with one normal scheduler online, this
+    % process runs before the read returns.
+    test_write(StoreOpts, <<"root/d">>, <<"3">>),
+    Online = erlang:system_flag(schedulers_online, 1),
+    Self = self(),
+    spawn(
+        fun() ->
+            Self ! reading,
+            read(StoreOpts, #{ <<"read">> => <<"missing">> }, #{}),
+            Self ! read
+        end
+    ),
+    receive reading -> Self ! ran end,
+    First = receive Msg when Msg == ran; Msg == read -> Msg end,
+    erlang:system_flag(schedulers_online, Online),
+    receive Next when Next == ran; Next == read -> ok end,
+    ?assertEqual(ran, First),
     test_stop(StoreOpts).

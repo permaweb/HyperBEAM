@@ -9,15 +9,15 @@
 %%% There are three layers to HyperBEAMs internal data representation on-disk:
 %%%
 %%% 1. The raw binary data, written to the store under its `ni:' name, which
-%%%    holds the hash of the content. Storing binary paths in this way
+%%%    contains the hash of the content. Storing binary paths in this way
 %%%    effectively deduplicates the data.
 %%% 2. Messages, whose keys are written under the ID of the message without
 %%%    its commitments (its unsigned ID). Each key is written at `<ID>/<key>'.
 %%%    The keys of a nested message are written under the key's path, and the
 %%%    keys of each commitment under `<ID>/commitments/<CommitmentID>'. A
 %%%    binary of 60 bytes or more is written under its `ni:' name, and the key
-%%%    holds the name. Each of the message's other IDs, such as its signed ID,
-%%%    holds `ao:' and the unsigned ID.
+%%%    contains the name. Each of the message's other IDs, such as its signed
+%%%    ID, contains `ao:' and the unsigned ID.
 %%% 3. Computations, stored separately in `attested-store'. The path
 %%%    `VBaseID/VReqID' holds `ao:<VResID>', or the `ni:' name of a binary
 %%%    result. Portable hashpath receipts describe the execution and its
@@ -89,7 +89,7 @@ ensure_loaded(Ref, {link, ID, LinkOpts = #{ <<"execution-input">> := true }}, Op
 ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
     % If the user provided their own options, we merge them and _overwrite_
     % the options that are already set in the link. We read the value from the
-    % stores named in the link first, then from the caller's stores.
+    % stores in the link first, then from the caller's stores.
     Opts = link_opts(LinkOpts, RawOpts),
     Stores =
         lists:uniq(
@@ -146,7 +146,7 @@ ensure_loaded(Ref, Link = {link, URI, LinkOpts}, RawOpts) ->
 ensure_loaded(_Ref, Msg, _Opts) when not ?IS_LINK(Msg) ->
     Msg.
 
-%% @doc Merge the options of a link over the caller's. A link that names stores
+%% @doc Merge the options of a link over the caller's. A link with stores
 %% is read from them first, and then from the caller's stores.
 link_opts(LinkOpts, RawOpts) ->
     Opts = hb_util:deep_merge(RawOpts, LinkOpts, RawOpts),
@@ -224,7 +224,7 @@ list(PathBin, Stores, AllStores, Opts) ->
     case hb_store:list(Stores, PathBin, Opts) of
         {ok, Names} -> Names;
         _ ->
-            % If the path holds a link, we list the keys of the link's target.
+            % If the path has a link, we list the keys of the link's target.
             case lookup(PathBin, PathBin, Stores, Opts, 0) of
                 {ok, _Target, Resolved, _} when Resolved =/= PathBin ->
                     list(Resolved, AllStores, Opts);
@@ -308,29 +308,44 @@ generate_binary_path(Bin, Opts) ->
     hb_escape:encode_path_component(?NI_URI(hb_path:hashpath(Bin, Opts))).
 
 %% @doc Write a message to the cache. For raw binaries, we write the data under
-%% its `ni:' name, which holds the SHA2-256 hash of the data. For messages, we
+%% its `ni:' name, which has the SHA2-256 hash of the data. For messages, we
 %% write each key under the unsigned ID of the message (see `key_ops/3'). We
 %% then write `ao:' and the unsigned ID at each of the message's other IDs,
 %% such that any of the committed or uncommitted IDs can be read, and once in
 %% memory all of the commitments are available. Commitments over different
 %% keys are written as separate messages, and the ID of the one with the most
-%% keys is returned.
+%% keys is returned (see `write_split/3').
 write(RawMsg, Opts) when is_map(RawMsg) ->
-    lists:last(
-        [
-            write_prepared(prepare_write(Msg, Opts), RawMsg, Opts)
-        ||
-            Msg <- split_commitments(RawMsg, Opts)
-        ]
-    );
+    write_split(prepare_write(RawMsg, Opts), RawMsg, Opts);
 write(List, Opts) when is_list(List) ->
     write(hb_message:convert(List, tabm, <<"structured@1.0">>, Opts), Opts);
 write(Bin, Opts) when is_binary(Bin) ->
     do_write_message(Bin, hb_opts:get(store, no_viable_store, Opts), Opts).
 
-%% @doc The message once for each set of keys its commitments cover, with only
-%% the commitments over that set, the set with the most keys last; the message
-%% itself when all of its commitments cover the same keys.
+%% @doc Write a prepared message once for each set of keys that its
+%% commitments cover, and return the result of the set with the most keys. If
+%% there is more than one set and more than one signed commitment, write at
+%% their combined ID the path that reads the message with all of them (see
+%% `commitments_path/1').
+write_split(Msg, RawMsg, Opts) ->
+    Sets = split_commitments(Msg, Opts),
+    Result = lists:last([ write_prepared(Set, RawMsg, Opts) || Set <- Sets ]),
+    case length(Sets) > 1 andalso calculate_all_ids(Msg, undefined, Opts) of
+        {SignedIDs, _, AllID} when length(SignedIDs) > 1 ->
+            hb_store:write(
+                hb_opts:get(store, no_viable_store, Opts),
+                #{ AllID => commitments_path(SignedIDs) },
+                Opts
+            );
+        _ -> ok
+    end,
+    Result.
+
+%% @doc Return the message once for each set of keys its commitments cover,
+%% with only those keys and the commitments over them, the set with the most
+%% keys last, or the message itself if all of its commitments cover the same
+%% keys. A list has no commitments, so it is returned as it is.
+split_commitments(List, _Opts) when is_list(List) -> [List];
 split_commitments(Msg, Opts) ->
     Groups =
         maps:groups_from_list(
@@ -351,9 +366,11 @@ split_commitments(Msg, Opts) ->
         N when N < 2 -> [Msg];
         _ ->
             [
-                Msg#{ <<"commitments">> => maps:from_list(Comms) }
+                (hb_maps:with([<<"commitments">> | Keys], Msg, Opts))#{
+                    <<"commitments">> => maps:from_list(Comms)
+                }
             ||
-                {_, Comms} <- lists:sort(maps:to_list(Groups))
+                {{_, Keys}, Comms} <- lists:sort(maps:to_list(Groups))
             ]
     end.
 
@@ -389,11 +406,11 @@ write_prepared(Msg, RawMsg, Opts) ->
             erlang:raise(Type, Reason, Stacktrace)
     end.
 
-%% @doc Write each child that conversion links with `write_prepared/3', as
+%% @doc Write each child that conversion links with `write_split/3', as
 %% `prepare_write/2' has already prepared it, and replace it with a link to its
-%% ID. Values under private keys are not written. Conversion in `offload' mode
-%% writes the children it loads from links with `write/2', which prepares them
-%% first.
+%% `all' ID, from the unsigned ID that the write gives. Values under private
+%% keys are not written. Conversion in `offload' mode writes the children it
+%% loads from links with `write/2', which prepares them first.
 link_prepared(List, Opts) when is_list(List) ->
     [ link_prepared(true, Child, Opts) || Child <- List ];
 link_prepared(Msg, Opts) ->
@@ -406,20 +423,21 @@ link_prepared(Msg, Opts) ->
         Msg
     ).
 link_prepared(true, Child, Opts) when is_map(Child) orelse is_list(Child) ->
-    write_prepared(Child, Child, Opts),
-    ID = hb_message:id(Child, all, Opts#{ <<"linkify-mode">> => discard }),
+    {ok, UncommittedID} = write_split(Child, Child, Opts),
+    {_, _, ID} = calculate_all_ids(Child, UncommittedID, Opts),
     {link, <<"ao:", ID/binary>>, #{}};
 link_prepared(_Prepared, Child, _Opts) -> Child.
 
 %% @doc Prepare a message to be written: prepare each child, except those under
 %% private keys, and each commitment message, then remove the commitments that
 %% do not verify. If commitments remain and do not commit every key that is not
-%% private, keep only the keys they commit, and again remove the commitments
-%% that do not verify over those keys. A message with an empty key is refused.
+%% private, keep only the keys that one of them commits, and again remove the
+%% commitments that do not verify over those keys. A message with an empty key
+%% is refused.
 prepare_write(Msg, Opts) when is_map(Msg) ->
     Deep = maps:map(
         fun
-            % The empty key names no key, and its store path is the parent's own.
+            % An empty key has its parent's store path, so we refuse it.
             (Key, _Value) when Key =:= <<>> ->
                 throw({invalid_key, Key});
            (<<"commitments">>, Value) ->
@@ -435,7 +453,7 @@ prepare_write(Msg, Opts) when is_map(Msg) ->
     Settings = #{ <<"verify">> => all, <<"add-unsigned">> => false,
         <<"depth">> => shallow },
     Verified = hb_message:normalize_commitments(Deep, Opts, Settings),
-    {ok, Committed} = hb_message:with_only_committed(Verified, Opts),
+    {ok, Committed} = hb_message:with_only_committed(Verified, any, Opts),
     case lists:all(fun hb_private:is_private/1,
             maps:keys(Verified) -- maps:keys(Committed)) of
         true -> Verified;
@@ -600,7 +618,7 @@ write_key_ops(Path, Key, Value, Opts, Acc) ->
 
 %% @doc Add the write operations for a value at a key's path. A nested message
 %% has its keys written under the path. A binary of `?DIRECT_VALUE_LENGTH'
-%% bytes or more is written under its `ni:' name, and the path holds the name.
+%% bytes or more is written under its `ni:' name, and the path has the name.
 %% A shorter binary is written at the path itself, encoded by `encode_value/1'.
 value_ops(KeyPath, Value, Opts, Acc) when is_map(Value) ->
     prepend_reversed(key_ops(KeyPath, Value, Opts), Acc);
@@ -733,6 +751,9 @@ prepare_commitments(RawCommitments, Opts) ->
 
 %% @doc Calculate the IDs for a message.
 calculate_all_ids(Bin, _UncommittedID, _Opts) when is_binary(Bin) -> [];
+calculate_all_ids(List, UncommittedID, _Opts) when is_list(List) ->
+    % A list has no commitments, so return its unsigned ID as its `all' ID.
+    {[], [UncommittedID], UncommittedID};
 calculate_all_ids(Msg, UncommittedID, Opts) ->
     CommIDs = 
         hb_maps:keys(
@@ -765,12 +786,12 @@ calculate_all_ids(Msg, UncommittedID, Opts) ->
 
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either
 %% a richly typed map or a direct binary. A URI is read by the device of its
-%% scheme (`hb_uri'), except a `ni:' name, under which the stores hold a
+%% scheme (`hb_uri'), except a `ni:' name, under which the stores contain a
 %% binary (`write/2'), and `ao:<ID>', which is read as the ID: `ao@1.0' reads
 %% it so, and a link then loads without a resolution. If `cache-read-mode' is
 %% `raw', composite reads return lazy links without decoding `ao-types'. We
 %% follow the `ao:' and `ni:' references that the cache writes (see
-%% `lookup/5'). An ID that holds an `ao://' path is read by
+%% `lookup/5'). An ID that contains an `ao://' path is read by
 %% `read_commitments_path/2'.
 read(<<"ni:", _/binary>> = Name, Opts) ->
     do_read(Name, Opts);
@@ -893,8 +914,8 @@ store_read(Target, Path, Store, Opts) ->
 %% values. A `ni:' name is followed to the binary stored under it, and
 %% `ao:<ID>' to the message with that ID. The `ao:' values of `path' and
 %% `hashpath' keys, and those in a commitment, are not followed. We read from
-%% the local stores first. If they do not hold the path, but its first part is
-%% an ID that holds `ao:<ID>' in them, we read the path under that ID instead.
+%% the local stores first. If they do not have the path, but its first part is
+%% an ID that has `ao:<ID>' in them, we read the path under that ID instead.
 %% Only then do we ask the other stores for the path. A chain of more than
 %% `?MAX_REDIRECTS' references is refused. Returns the ID that selects the
 %% commitment of a message, the path read, and the store's result for it.
@@ -983,7 +1004,7 @@ link_target(Target, ID) ->
 
 %% @doc Rewrite a path whose first part is an ID that holds `ao:<ID>', such
 %% that the rest of the path is read under the ID in that value. An ID with
-%% keys below it holds a message, so it is not an alias. We read an ID for its
+%% keys below it is a message, so it is not an alias. We read an ID for its
 %% `ao:' value only if it has no keys.
 alias(Path, Store, Opts) ->
     case binary:split(Path, <<"/">>) of
@@ -1205,7 +1226,7 @@ apply_type_to_immediate(Value, _LinkOpts, _Opts) ->
 %% list of subpaths, returning a map of keys and their types. Composite reads
 %% already return small inline `ao-types' values, so reuse them when present.
 %% An `ao-types' that does not parse is returned as a key of the message, and
-%% holds no types.
+%% gives no types.
 read_ao_types(Path, Subpaths, Values, Store, Opts) ->
     ?event_debug({reading_ao_types, {path, Path}, {subpaths, {explicit, Subpaths}}}),
     case lists:member(<<"ao-types">>, Subpaths) of
@@ -1244,7 +1265,7 @@ types_to_implicit(Types) ->
     ).
 
 %% @doc Decode the `ao-types' field through the structured device. An empty
-%% value is the `ao-types' of a message with no keys, and holds no types.
+%% value is the `ao-types' of a message with no keys, and gives no types.
 structured_decode_types(<<>>, _Opts) -> {ok, #{}};
 structured_decode_types(Types, Opts) ->
     hb_ao:raw(
@@ -1410,7 +1431,7 @@ test_store_binary(Store) ->
     % A binary whose bytes are a store marker reads back as those bytes.
     {ok, Marker} = write(<<"group">>, Opts),
     ?assertEqual({ok, <<"group">>}, read(Marker, Opts)),
-    % A key with a value of 60 bytes or more holds the value's `ni:' name.
+    % A key with a value of 60 bytes or more contains the value's `ni:' name.
     Long = binary:copy(<<"x">>, 60),
     {ok, LongID} = write(#{ <<"long">> => Long }, Opts),
     ?assertEqual(
@@ -1450,7 +1471,14 @@ test_store_unsigned_nested_empty_message(Store) ->
             }
         },
     Opts = #{ <<"store">> => Store },
+    % The write computes one HMAC, the unsigned ID, of each of the 6 messages.
+    erlang:trace_pattern({crypto, mac, 4}, true, [call_time]),
+    erlang:trace(self(), true, [call]),
     {ok, Path} = write(Item, Opts),
+    {call_time, [{_, HMACs, _, _}]} =
+        erlang:trace_info({crypto, mac, 4}, call_time),
+    erlang:trace_pattern({crypto, mac, 4}, false, [call_time]),
+    ?assertEqual(6, HMACs),
     {ok, RetrievedItem} = read(Path, Opts),
     ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)).
 
@@ -2020,7 +2048,7 @@ isolated_nested_store_test() ->
     ok = hb_store:stop(Store).
 
 %% @doc A message changed after normalization is written under the ID of its
-%% content rather than the ID its stale unsigned commitment names.
+%% content, not the ID of its stale unsigned commitment.
 write_changed_normalized_message_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     Msg = hb_message:normalize_commitments(#{ <<"a">> => 1 }, Opts),
@@ -2031,7 +2059,7 @@ write_changed_normalized_message_test() ->
     ?assertEqual(1, hb_maps:get(<<"a">>, Read, undefined, Opts)).
 
 %% @doc Projecting mixed commitments cannot retain an ID covering a removed
-%% field, either at the root or in a child named by its parent.
+%% field, either at the root or in a child of another message.
 projected_commitments_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store(),
         <<"priv-wallet">> => ar_wallet:new() },

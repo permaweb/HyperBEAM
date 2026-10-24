@@ -44,10 +44,10 @@ Replace `src/dev_echo_lens.erl` with this complete device:
 
 ```erlang
 -module(dev_echo_lens).
--export([info/1, echo/3, upper/3]).
+-export([device_info/1, echo/3, upper/3]).
 -include_lib("eunit/include/eunit.hrl").
 
-info(_) ->
+device_info(_) ->
     #{
         exports => [<<"echo">>, <<"upper">>]
     }.

@@ -1442,7 +1442,7 @@ find_target_id(Base, Req, Opts) ->
 %% 1. A key in `Req' with the value `self', indicating that the entire message
 %%    is the subject.
 %% 2. A key in `Req' with another value, present in that message.
-%% 3. The body of the message.
+%% 3. The body of `Req', if it is a message.
 %% 4. The message itself.
 find_message_to_schedule(Base, Req, Opts) ->
     Subject =
@@ -1456,7 +1456,14 @@ find_message_to_schedule(Base, Req, Opts) ->
         <<"base">> -> Base;
         <<"self">> -> Req;
         not_found ->
-            hb_ao:get(<<"body">>, Req, Req, Opts#{ <<"hashpath">> => ignore });
+            % If `Req' has no body, or its body is a literal, such as the data
+            % of an ANS-104 item, schedule `Req' itself.
+            case
+                hb_ao:get(<<"body">>, Req, Opts#{ <<"hashpath">> => ignore })
+            of
+                Body when is_map(Body) -> Body;
+                _ -> Req
+            end;
         Subject ->
             hb_ao:get(Subject, Req, Opts#{ <<"hashpath">> => ignore })
     end.
@@ -1812,7 +1819,27 @@ http_post_schedule() ->
             Opts
         ),
     ?assertEqual(<<"test-message">>, hb_ao:get(<<"body/inner">>, Res2, Opts)),
-    ?assertMatch({ok, #{ <<"current">> := 1 }}, http_get_slot(N, PMsg)).
+    ?assertMatch({ok, #{ <<"current">> := 1 }}, http_get_slot(N, PMsg)),
+    % An ANS-104 item with a literal `body' is scheduled as itself.
+    Item =
+        hb_message:commit(
+            #{
+                <<"target">> => hb_message:id(PMsg, all, Opts),
+                <<"body">> => <<"test-data">>
+            },
+            Opts,
+            <<"ans104@1.0">>
+        ),
+    {ok, Res3} =
+        hb_http:post(
+            N,
+            Item#{ <<"path">> => <<"/~scheduler@1.0/schedule">> },
+            Opts#{ <<"http-codec">> => <<"ans104@1.0">> }
+        ),
+    ?assertEqual(
+        hb_message:id(Item, signed, Opts),
+        hb_message:id(hb_ao:get(<<"body">>, Res3, Opts), signed, Opts)
+    ).
 
 http_get_schedule_test_parallel_() ->
 	{timeout, 20, fun() ->
@@ -1851,7 +1878,7 @@ http_get_schedule_test_parallel_() ->
 				{ok, Schedule} = http_get_schedule(Node, PMsg, 0, 3),
 				Assignments = hb_ao:get(<<"assignments">>, Schedule, Opts),
 				?assertEqual(
-					4, % 4 assignments: a bundle holds no unsigned commitments.
+					4, % 4 assignments: a bundle has no unsigned commitments.
 					hb_maps:size(hb_private:reset(Assignments), Opts)
 				)
 			end}.

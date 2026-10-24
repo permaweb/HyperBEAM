@@ -334,6 +334,15 @@ hashpath_reset_test() ->
         Opts#{ <<"hashpath">> => ignore }),
     % The invocation removes the loaded child's unsigned commitment.
     ?assertEqual(hb_message:uncommitted(Result, Opts), Ignored),
+    % An execution that ignores its hashpath does not commit to its inputs.
+    BaseHook = fun(_Base, Req, _Opts) ->
+        {ok, Req#{ <<"body">> => maps:get(<<"base">>, Req) }}
+    end,
+    {ok, Varied} = hb_ao:resolve(Container, <<"result">>, Opts#{
+        <<"hashpath">> => ignore,
+        <<"on">> => #{ <<"step">> => #{ <<"device">> => #{ step => BaseHook } } }
+    }),
+    ?assertEqual(hb_message:uncommitted_deep(Container, Opts), Varied),
     {ok, Reset} = hb_ao:resolve(Container, <<"result">>,
         Opts#{ <<"hashpath">> => reset }),
     Hook = fun(_Base, Req, _Opts) -> {ok, Req#{ <<"status">> => error }} end,

@@ -8,7 +8,7 @@
 %%% of these forms: a committer message, a message that it committed, a URI in
 %%% either form (see `hb_uri'), or an Arweave address. `uri/2' gives each of
 %%% them in one form, so that the URIs of one committer compare equal.
-%%% Commitments, signers lists and ledgers hold this form:
+%%% Commitments, signers lists and ledgers use this form:
 %%% <ul>
 %%%   <li>The committer of an Arweave key, whose address is the SHA-256 of the
 %%%       key (an RSA, Ed25519 or ECDSA key), is `did-ar@1.0'. Its URI is
@@ -17,7 +17,7 @@
 %%%   <li>The URI of any other committer is the one that its device gives.</li>
 %%% </ul>
 %%%
-%%% `uri-did-ar-<L><B>' is 63 characters, one DNS label, and holds an address
+%%% `uri-did-ar-<L><B>' is 63 characters, one DNS label, and encodes an address
 %%% or the ID of a message:
 %%% <pre>
 %%%     L   The 43 base64url characters of the address or ID, in lowercase,

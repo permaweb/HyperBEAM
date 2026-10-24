@@ -18,16 +18,18 @@ device_info(_Opts) ->
     }.
 
 %% @doc Takes a `key' argument and returns the value of the name, if it exists.
+%% If the names in the node message do not contain the key, look it up in the
+%% names in the store: another request may have registered it since this
+%% request read the node message.
 -spec lookup(#{ _ => _ }, #{ key := binary(), _ => _ }, #{ _ => _ }) ->
     {ok, _} | {error, _}.
 lookup(_, Req, Opts) ->
     Key = hb_ao:get(<<"key">>, Req, no_key_specified, Opts),
     ?event(local_name, {lookup, Key}),
-    hb_ao:resolve(
-        find_names(Opts),
-        Key,
-        Opts
-    ).
+    case hb_ao:resolve(find_names(Opts), Key, Opts) of
+        {error, not_found} -> hb_ao:resolve(read_names(Opts), Key, Opts);
+        Found -> Found
+    end.
 
 %% @doc Handle all other requests by delegating to the lookup function.
 -spec default_lookup(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
@@ -96,9 +98,8 @@ find_names(Opts) ->
             LocalNames
     end.
 
-%% @doc Loads all known names from the cache and returns the new `node message'
-%% with those names loaded into it.
-load_names(Opts) ->
+%% @doc Returns a message containing the names registered in the store.
+read_names(Opts) ->
     LocalNames =
         maps:from_list(lists:map(
             fun(Key) ->
@@ -115,12 +116,17 @@ load_names(Opts) ->
             hb_cache:list(?DEV_CACHE, Opts)
         )),
     ?event(local_name, {found_cache_keys, LocalNames}),
+    LocalNames.
+
+%% @doc Loads all known names from the cache and returns the new `node message'
+%% with those names loaded into it.
+load_names(Opts) ->
     % The names in the store, which registrations write, take precedence over
-    % the names the node message already holds, such as those in its config.
+    % the names already in the node message, such as those in its config.
     update_names(
         maps:merge(
             hb_opts:get(local_names, #{}, Opts#{ <<"only">> => local }),
-            LocalNames
+            read_names(Opts)
         ),
         Opts
     ).
@@ -134,9 +140,23 @@ update_names(LocalNames, Opts) ->
         no_server_ref ->
             ok;
         _ ->
-            ServerOpts = hb_http_server:get_opts(Opts),
-            hb_http_server:set_opts(
-                ServerOpts#{ <<"local-names">> => LocalNames }
+            hb_http_server:update_opts(
+                fun(ServerOpts) ->
+                    % Add `LocalNames' to the names in the node message.
+                    ServerNames =
+                        hb_opts:get(
+                            local_names,
+                            #{},
+                            ServerOpts#{ <<"only">> => local }
+                        ),
+                    hb_http_server:set_opts(
+                        ServerOpts#{
+                            <<"local-names">> =>
+                                maps:merge(ServerNames, LocalNames)
+                        }
+                    )
+                end,
+                Opts
             )
     end,
     NewOpts.
@@ -183,6 +203,15 @@ register_test() ->
     ?assertEqual(
         {ok, Value},
         lookup(#{}, #{ <<"key">> => TestName, <<"load">> => false }, Opts)
+    ),
+    % If the node message's names predate the registration, lookup finds it.
+    ?assertEqual(
+        {ok, Value},
+        lookup(
+            #{},
+            #{ <<"key">> => TestName },
+            Opts#{ <<"local-names">> => #{} }
+        )
     ).
 
 unauthorized_test() ->

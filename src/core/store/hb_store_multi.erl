@@ -199,7 +199,7 @@ dispatch(Worker, Function, Args) ->
     {Ref, {waiting, Worker}}.
 
 %% @doc Collect result messages from worker processes, cancelling operations
-%% that are no longer needed.
+%% that are still waiting when `Required' results have arrived.
 collect(Required, RefStates) when is_list(RefStates) ->
     collect(Required, maps:from_list(RefStates));
 collect(0, RefStates) ->

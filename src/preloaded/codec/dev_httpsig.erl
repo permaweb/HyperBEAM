@@ -87,7 +87,7 @@ verify(Base, Req, RawOpts) ->
     end.
 
 %% @doc Verify a commitment whose committed keys the base carries. We
-%% regenerate the signature base, and the committer named by the `keyid'
+%% regenerate the signature base, and the committer that the `keyid' gives
 %% verifies the signature against it.
 do_verify(Base, Req, Opts) ->
     {ok, EncMsg, EncComm, _} = normalize_for_encoding(Base, Req, Opts),
@@ -121,7 +121,7 @@ strong_key(_Req) ->
 
 %% @doc Load the committer from a `keyid' and ask it to verify the signature of
 %% a signature base. The request is the commitment. Its `priv' message is given
-%% to the committer, as it holds the verifier's key material, such as a
+%% to the committer, as it contains the verifier's key material, such as a
 %% secret. The `keyid' must be the URI of the committer. A `keyid' in any
 %% other form does not verify.
 committer_verifies(KeyID, SigBase, Req, Opts) ->
@@ -280,7 +280,7 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
         }
     };
 commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
-    % Find the committer of the request and the URI that names it. If the
+    % Find the committer of the request and its URI. If the
     % request gives no committer, we use the committer of unsigned commitments.
     Opts = opts(RawOpts),
     {ok, CommitterMsg, KeyID} =
@@ -421,7 +421,7 @@ add_content_digest(Msg, _Opts) ->
 %% of the keys that the commitment lists. When `Ordered' is false, as for a
 %% commitment made without a `committed' list in its request, they follow the
 %% order of the keys of the encoded message. Every key of the message is
-%% encoded: the message holds the keys of the commitment alone.
+%% encoded: the message contains only the keys of the commitment.
 -spec normalize_for_encoding(
     #{ _ => _ },
     #{ committed => [_], _ => _ },
@@ -457,9 +457,9 @@ normalize_for_encoding(Msg, Commitment, Ordered, Opts) ->
             },
             Opts
         ),
-    % Remove the signature and signature-input keys from the encoded message,
-    % convert the `body' key to a `content-digest' key, if present.
-    Encoded = add_content_digest(EncodedWithSigInfo, Opts),
+    % `to/3' adds the `content-digest' key of a binary body, so remove the
+    % `body' key from the encoded message.
+    Encoded = maps:without([<<"body">>], EncodedWithSigInfo),
     % Transform the list of requested keys to their `httpsig@1.0' equivalents.
     EncodedKeys = maps:keys(Encoded),
     EncodedKeysWithBodyKey =
@@ -674,7 +674,14 @@ commitment_identity_test() ->
     Msg = #{ <<"body">> => <<"authenticated">> },
     Victim = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
     Signed = hb_message:commit(Msg, Opts),
+    % The unsigned commitment hashes the body once.
+    erlang:trace_pattern({hb_crypto, sha256, 1}, true, [call_time]),
+    erlang:trace(self(), true, [call]),
     Unsigned = hb_message:commit(Msg, Opts, #{ <<"type">> => <<"unsigned">> }),
+    {call_time, [{_, Hashes, _, _}]} =
+        erlang:trace_info({hb_crypto, sha256, 1}, call_time),
+    erlang:trace_pattern({hb_crypto, sha256, 1}, false, [call_time]),
+    ?assertEqual(1, Hashes),
     % `commitment_devices/2' does not run the `device' of a commitment.
     Device =
         #{ <<"commitment-device">> => fun(_, _, _) -> {ok, <<"ran">>} end },
@@ -691,7 +698,7 @@ commitment_identity_test() ->
             Opts
         )
     ),
-    % An unsigned commitment is named by the committer of unsigned commitments.
+    % The `keyid' of an unsigned commitment is `?UNSIGNED_COMMITTER'.
     ?assertMatch(
         [#{ <<"keyid">> := ?UNSIGNED_COMMITTER }],
         maps:values(maps:get(<<"commitments">>, Unsigned))
@@ -940,7 +947,7 @@ committed_id_test() ->
     ?assertNot(
         hb_message:verify(Committed#{ <<"a b">> => <<"1">> }, all, Opts)
     ),
-    % Both forms of a signed message hold its signature as a header.
+    % Both forms of a signed message contain its signature as a header.
     HTTPSigSigned =
         hb_message:commit(Msg#{ <<"device">> => <<"httpsig@1.0">> }, Opts),
     ?assertMatch(
@@ -977,7 +984,7 @@ commit_secret_key_test() ->
         ),
     ?event_debug({committed_msg, CommittedMsg}),
     Committers = hb_message:signers(CommittedMsg, #{}),
-    % The commitment of a secret is named by its `hmac:secret:' committer.
+    % The commitment of a secret has its `hmac:secret:' committer as its signer.
     ?assertEqual([<<"hmac:secret:", ID/binary>>], Committers),
     ?event_debug({committers, Committers}),
     ?assert(

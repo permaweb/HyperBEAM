@@ -22,8 +22,8 @@
 %%% '''
 %%% Templates exclude private keys and top-level commitments. Structured
 %%% values are converted to TABM and the top-level `ao-types' field is removed;
-%%% top-level scalar types are not distinguished by matching. Other public keys,
-%%% including `device', are predicates.
+%%% the types of top-level literals are not distinguished by matching. Other
+%%% public keys, including `device', are predicates.
 %%% The request may add `predicates': a list of messages with `name' and
 %%% `values'. Values within each predicate are ORed; predicates and the base's
 %%% pairs are ANDed. An empty values list matches nothing. Ordinary template
@@ -77,7 +77,7 @@
 %%% single path component. The value path is a binary's hashpath or a nested
 %%% message's uncommitted ID.
 %%% Writes have empty values and entry keys with an additional `path' that
-%%% holds the group. `hb_store' applies prefix handling and `to-key' to these
+%%% gives the group. `hb_store' applies prefix handling and `to-key' to these
 %%% keys.
 %%% The encoder also receives binary group paths and pathless entry messages
 %%% for list bounds. List results pass through `from-key' to become entries.
@@ -140,8 +140,8 @@
     #{ <<"committer">> => <<"committers~message@1.0">> }
 ).
 
-%% @doc Default all non-message@1.0 and device keys to match a single key in the
-%% index.
+%% @doc Default all keys other than `message@1.0' and device keys to match a
+%% single key in the index.
 device_info() ->
     #{
         excludes => [<<"set">>, <<"remove">>, <<"id">>, <<"verify">>],
@@ -247,7 +247,7 @@ parse(Offset, <<ID:43/binary, Device/binary>>) ->
 parse(Offset, ID) ->
     #{ <<"offset">> => Offset, <<"id">> => ID, <<"commitment-device">> => <<>> }.
 
-%% @doc The position of a key: its offset and ID. An empty ID names an
+%% @doc The position of a key: its offset and ID. An empty ID is an
 %% offset boundary, closing the offset when reading down.
 position(desc, #{ <<"offset">> := Offset, <<"id">> := <<>> }) ->
     {Offset, ?LAST_ID};
@@ -257,7 +257,7 @@ position(_Direction, #{ <<"offset">> := Offset, <<"id">> := ID }) ->
 %%% Writing the index.
 
 %% @doc Write the message in the request's `body' under each of its pairs,
-%% per ID the request names, at the offset of its `priv/offset': a weave
+%% per ID the request gives, at the offset of its `priv/offset': a weave
 %% offset, `infinity', or `-1' when it carries none. A node without stores
 %% of the index, or with none that takes the keys, writes nothing. Only the
 %% kernel's `cache-write' hook is served: it marks its request in a private
@@ -352,8 +352,8 @@ pairs(Handler, Msg, Names, Opts) ->
             Element <- elements(List)
         ].
 
-%% @doc The pairs a map of paths names, each the value its path resolves to
-%% on the message. The node's options hold the map, else the hook's handler
+%% @doc The pairs that a map of paths gives, each the value its path resolves to
+%% on the message. The node's options give the map, else the hook's handler
 %% message, else the default.
 %% A computed key may select its device with `KEY~DEVICE'. Without `~DEVICE',
 %% indexing attempts to load each message's device, subject to the node's
@@ -468,7 +468,7 @@ groups(Base, Req, Opts) ->
             Name <- [hb_maps:get(<<"name">>, Predicate, not_found, Opts)]
         ].
 
-%% @doc The pairs a base message names: every key but its commitments and
+%% @doc The pairs of a base message: every key but its commitments and
 %% private keys, in the wire form the index is written from.
 template(Base, Opts) ->
     hb_maps:to_list(
@@ -700,8 +700,8 @@ first_of(desc, Heads) ->
 
 %% @doc One store's page of a group's keys from the cursor, in the
 %% direction: the batch the store finds without further work. A batch
-%% holding nothing past the cursor ends the store's part, so a store's
-%% batch must hold a key past it while any remains. A store without the
+%% with nothing past the cursor ends the store's part, so a store's
+%% batch must contain a key past it while any remains. A store without the
 %% group has none.
 page(Direction, Group, Cursor, Exclusive, Store, Opts) ->
     Request =
@@ -737,7 +737,7 @@ resume_offset_row(Rows, Request, Cursor, Store, Opts) ->
             end
     end.
 
-%% @doc The key a store's page is read from: a cursor naming no ID stands
+%% @doc The key a store's page is read from: a cursor with no ID stands
 %% for every key of its offset, so reading down it closes with the byte
 %% above every ID. Exclusive offset bounds seek past all IDs at that offset.
 from(asc, #{ <<"id">> := <<>> } = Cursor, true) ->
@@ -774,7 +774,7 @@ row(#{ <<"offset">> := Offset }, {_, _, OffsetBits}) ->
         _ -> <<Max:OffsetBits>>
     end;
 row(Body, {KeyBits, ValueBits, _OffsetBits}) ->
-    % A value path holds no `=', so the name ends at the last one.
+    % A value path contains no `=', so the name ends at the last one.
     {At, 1} = lists:last(binary:matches(Body, <<"=">>)),
     <<Escaped:At/binary, "=", ValuePath/binary>> = Body,
     Name = hb_escape:decode_path_component(Escaped),
@@ -1109,7 +1109,7 @@ alignment_test() ->
     ).
 
 %% @doc Each signed ID is indexed under its own committer, and a
-%% `match-all-paths' map in the node's options names the pair over the
+%% `match-all-paths' map in the node's options gives the pair over the
 %% hook's handler message's.
 paths_test() ->
     Opts = test_opts(),

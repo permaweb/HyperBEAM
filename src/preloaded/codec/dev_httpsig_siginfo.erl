@@ -109,7 +109,7 @@ derived_commitment_id(Sig) ->
 
 %% @doc Generate the `signature-input' of a commitment: the inner list of its
 %% components, with the other keys of the commitment as its parameters, sorted.
-%% The `alg' parameter holds the `commitment-device' and `type' of the
+%% The `alg' parameter contains the `commitment-device' and `type' of the
 %% commitment. The `@signature-params' line of a signature base is this list,
 %% so the signature covers every parameter that is sent. HTTPSig derives the
 %% committer of a commitment from its `keyid', so it does not send it.

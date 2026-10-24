@@ -289,9 +289,9 @@ strip_cookies(Msg, Opts) ->
         Opts
     ).
 
-%% @doc Returns `true` if the host named by `URI` is blocked by the relay's
-%% allowed hosts configuration, or if `URI' names a host that cannot be
-%% determined. `undefined' names no host to vet and is not blocked.
+%% @doc Returns `true` if the host that `URI` gives is blocked by the relay's
+%% allowed hosts configuration, or if `URI' gives a host that cannot be
+%% determined. `undefined' gives no host to vet and is not blocked.
 %%
 %% The configuration supports:
 %% 1. Blocking internal hosts (e.g. `localhost`, `127.0.0.1`, etc.) if the
@@ -387,8 +387,8 @@ internal_host_block_test() ->
     ),
     ?assertEqual(false, is_blocked_host(<<"https://1.1.1.1/">>, #{})),
     ?assertEqual(false, is_blocked_host(<<"https://[2606:4700:4700::1111]/">>, #{})),
-    % `undefined' names no host to vet, so it is not blocked: a relative
-    % `relay-path' is routed by the node, not checked here. A value that names
+    % `undefined' gives no host to vet, so it is not blocked: a relative
+    % `relay-path' is routed by the node, not checked here. A value that gives
     % no resolvable host fails closed.
     ?assertEqual(false, is_blocked_host(undefined, #{})),
     ?assert(is_blocked_host(<<"/arweave/info">>, #{})),
@@ -692,7 +692,7 @@ relay_absolute_allowed_test() ->
         ),
     ?assertEqual(Address, hb_ao:get(<<"body">>, Res, #{})).
 
-%% @doc A relative `relay-path' names no host: the node routes it through its
+%% @doc A relative `relay-path' gives no host: the node routes it through its
 %% own routes. A route to an internal host is the operator's own, so the
 %% request is reached even with internal hosts blocked.
 relay_relative_routed_test() ->
@@ -764,8 +764,8 @@ relay_relative_unroutable_refused_test() ->
         ),
     ?assertMatch({failure, _}, Res).
 
-%% @doc A `call' whose `peer' names no resolvable host is refused: the check
-%% fails closed rather than contacting an unknown host.
+%% @doc A `call' whose `peer' gives no resolvable host is refused: the check
+%% fails closed and does not contact an unknown host.
 relay_undeterminable_host_blocked_test() ->
     ?assertEqual(
         {error, blocked_host},

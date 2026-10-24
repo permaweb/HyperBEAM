@@ -34,8 +34,15 @@ ensure_host(Opts) ->
             case bootstrap_node_echo(Opts) of
                 {ok, Host} ->
                     % Set the host information in the persisted node message.
-                    hb_http_server:set_opts(NewOpts = Opts#{ <<"node-host">> => Host }),
-                    {ok, NewOpts};
+                    hb_http_server:update_opts(
+                        fun(NodeMsg) ->
+                            hb_http_server:set_opts(
+                                NodeMsg#{ <<"node-host">> => Host }
+                            )
+                        end,
+                        Opts
+                    ),
+                    {ok, Opts#{ <<"node-host">> => Host }};
                 Error ->
                     Error
             end;
@@ -66,7 +73,13 @@ find_self_test() ->
             <<"host-bootstrap-node">> => BoostrapNode,
             <<"http-client">> => httpc
         }),
+    NodeMsg = hb_http_server:get_opts(),
     ?event({nodes, {peer, PeerNode}, {bootstrap, BoostrapNode}}),
     {ok, ReceivedPeerHost} = hb_http:get(PeerNode, <<"/~whois@1.0/node">>, #{}),
     ?event({find_self_test, ReceivedPeerHost}),
-    ?assertEqual(<<"127.0.0.1:", (hb_util:bin(Port))/binary>>, ReceivedPeerHost).
+    ?assertEqual(<<"127.0.0.1:", (hb_util:bin(Port))/binary>>, ReceivedPeerHost),
+    % Only `node-host' changes in the node message.
+    ?assertEqual(
+        NodeMsg,
+        maps:remove(<<"node-host">>, hb_http_server:get_opts())
+    ).

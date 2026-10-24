@@ -228,6 +228,34 @@ get_scheduler_slot_test_parallel() ->
         hb_ao:resolve(Base, Req, Opts)
     ).
 
+%% @doc Scheduler errors retain their details through latest-state requests.
+now_scheduler_error_test_() ->
+    [
+        {integer_to_list(Status) ++ ": " ++ binary_to_list(Path), fun() ->
+            Opts = test_opts(#{ <<"hashpath">> => ignore }),
+            Process = base_process(Opts),
+            Error = {error, #{
+                <<"status">> => Status,
+                <<"reason">> => <<"Schedule unavailable.">>,
+                <<"process">> => hb_message:id(Process, signed, Opts)
+            }},
+            Base = #{
+                <<"device">> => <<"process@1.0">>,
+                <<"process">> => Process,
+                <<"scheduler-device">> => #{
+                    <<"slot">> => fun(_, _, _) -> Error end
+                }
+            },
+            SchedulerError = hb_ao:resolve(Base, <<"slot/current">>, Opts),
+            ?assertMatch({error, #{ <<"status">> := Status }}, SchedulerError),
+            ?assertEqual(
+                SchedulerError,
+                hb_ao:resolve(Base, #{ <<"path">> => Path }, Opts)
+            )
+        end}
+     || Status <- [404, 409, 422, 502], Path <- [<<"now">>, <<"compute">>]
+    ].
+
 recursive_path_resolution_test_parallel() ->
     Opts = test_opts(),
     Base = base_process(Opts),

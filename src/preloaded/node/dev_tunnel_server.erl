@@ -276,7 +276,7 @@ deliver_response(ID, Address, Response, State) ->
                 ),
             case alive(Call) of
                 true ->
-                    gen_server:reply(Call#waiting.from, {ok, Response}),
+                    gen_server:reply(Call#waiting.from, Response),
                     {{ok, accepted}, Next};
                 false -> {unknown_request(ID), Next}
             end;

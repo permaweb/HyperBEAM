@@ -28,6 +28,16 @@
     {['_G', os, tmpname], <<"sandboxed">>}
 ]).
 
+%%% The set of functions that will be sandboxed if the base sets
+%%% `requires-determinism': their results depend on the node's random seed,
+%%% clock and time zone.
+-define(DETERMINISTIC_SANDBOX, [
+    {['_G', math, random], <<"sandboxed">>},
+    {['_G', os, clock], <<"sandboxed">>},
+    {['_G', os, date], <<"sandboxed">>},
+    {['_G', os, time], <<"sandboxed">>}
+]).
+
 %% @doc All keys that are not directly available in the base message are 
 %% resolved by calling the Lua function in the module of the same name.
 %% Additionally, we exclude the `keys', `set', `encode' and `decode' functions
@@ -59,6 +69,7 @@ device_info(Base) ->
         'content-type' => binary(),
         body => _,
         sandbox => _,
+        'requires-determinism' => _,
         _ => _
     },
     #{ _ => _ },
@@ -196,14 +207,21 @@ load_modules([Module|Rest], Opts, Acc) when is_map(Module) ->
 initialize(Base, Modules, Opts) ->
     % Apply the node's minimum sandbox and install the disk-free `require'
     % before loading any modules, such that code run while a module loads
-    % cannot escape them. The message may add further restrictions via
+    % cannot escape them. If the base sets `requires-determinism', also
+    % sandbox the functions whose results depend on the node, with or without
+    % the minimum sandbox. The message may add further restrictions via
     % `sandbox', but cannot lift these.
+    DeterministicSpec =
+        case hb_util:bool(hb_maps:get(<<"requires-determinism">>, Base, false, Opts)) of
+            true -> ?DETERMINISTIC_SANDBOX;
+            false -> []
+        end,
     State0 =
         case hb_opts:get(<<"lua-minimum-sandbox">>, ?DEFAULT_MIN_SANDBOX, Opts) of
-            false -> luerl:init();
+            false -> sandbox(luerl:init(), DeterministicSpec, Opts);
             MinSpec ->
                 dev_lua_require:install(
-                    sandbox(luerl:init(), MinSpec, Opts),
+                    sandbox(luerl:init(), MinSpec ++ DeterministicSpec, Opts),
                     Opts
                 )
         end,
@@ -383,7 +401,7 @@ process_response({ok, [Status, MsgResult], NewState}, Priv, Opts) ->
         Msg when is_map(Msg) ->
             ?event(lua, {response, {status, Status}, {msg, Msg}}),
             % Each call encodes its arguments and results as new tables in
-            % the state. Luerl frees the tables that Lua no longer reaches
+            % the state. Luerl frees the tables that Lua cannot reach
             % only when it collects garbage, so collect after each call.
             {hb_util:atom(Status), Msg#{
                 <<"priv">> => Priv#{
@@ -538,7 +556,7 @@ do_decode(Msg, Opts) when is_map(Msg) ->
 do_decode(Other, _Opts) ->
     Other.
 
-%% @doc Decode a value of a message from Lua. Lua holds the Arweave committer
+%% @doc Decode a value of a message from Lua. Lua gives the Arweave committer
 %% of a commitment as its address, so we convert it back to its URI.
 decode_value(<<"commitments">>, Commitments) when is_map(Commitments) ->
     map_committers(fun hb_committer:uri/1, Commitments);
@@ -1181,9 +1199,18 @@ invoke_aos_test() ->
     {ok, _Assignment} =
         hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output">>, Opts),
-    % The process names its authority by address, and trusts its message.
+    % The process gives its authority by address, and trusts its message.
     ?assertEqual(<<"1">>, hb_ao:get(<<"data">>, Results, #{})),
-    ?assertEqual(<<"aos> ">>, hb_ao:get(<<"prompt">>, Results, #{})).
+    ?assertEqual(<<"aos> ">>, hb_ao:get(<<"prompt">>, Results, #{})),
+    % A process that does not set `requires-determinism' cannot call
+    % `math.random'.
+    RandomMessage = generate_test_message(Process, Opts, <<"math.random">>),
+    {ok, _} =
+        hb_ao:resolve(Process, RandomMessage, Opts#{ <<"hashpath">> => ignore }),
+    ?assertEqual(
+        {ok, <<"sandboxed">>},
+        hb_ao:resolve(Process, <<"now/results/output/data">>, Opts)
+    ).
 
 aos_authority_not_trusted_test() ->
     Opts = #{ <<"priv-wallet">> => ar_wallet:new() },

@@ -97,7 +97,7 @@ reset_store(Opts) ->
 %% @doc Write one or more entries. Request maps are folded into individual
 %% writes. Any raw entry at an ancestor path is converted to a group marker
 %% (raw entries have no descendants, so no subtree purge is needed). If the
-%% target key previously held a group, its descendants are deleted first.
+%% target key is a group, its descendants are deleted first.
 write(Opts, Req, _NodeOpts) when is_map(Req) ->
     maps:fold(
         fun(Path, Value, ok) ->
@@ -110,7 +110,7 @@ write(Opts, Req, _NodeOpts) when is_map(Req) ->
     ).
 
 %% @doc Read a value. Group paths return `{composite, Children}`: their
-%% immediate children, each with its value if it holds one.
+%% immediate children, each with its value if it has one.
 read(Opts, #{ <<"read">> := RawKey }, _NodeOpts) ->
     Key = hb_path:to_binary(RawKey),
     case lookup_entry(Opts, Key) of
@@ -139,13 +139,13 @@ list_path(Opts, Path, Req) ->
             Children = immediate_children(Opts, Path),
             {ok, hb_store_utils:apply_list_bounds(Children, Req, Opts)};
         _ ->
-            % A path that holds a value has no children to list. An empty
+            % A path with a value has no children to list. An empty
             % store returns `not_found` for the root too, so that a chained
             % store can serve the request.
             {error, not_found}
     end.
 
-%% @doc Return a listed child with its value if it holds one, or its name if
+%% @doc Return a listed child with its value if it has one, or its name if
 %% it is a group.
 child(Table, Path, Name) ->
     case lookup_entry(Table, next_group_path(Path, Name)) of
@@ -204,7 +204,7 @@ next_group_path(?ROOT_GROUP, Next) ->
 next_group_path(CurrentGroup, Next) ->
     hb_path:to_binary([CurrentGroup, Next]).
 
-%% @doc If `Key` currently holds a `group` marker, delete all descendants
+%% @doc If `Key` currently has a `group` marker, delete all descendants
 %% (entries whose path starts with `<<Key/binary, $/>>`).
 maybe_delete_subtree(Table, Key) ->
     case lookup_entry(Table, Key) of

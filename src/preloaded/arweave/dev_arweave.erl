@@ -411,7 +411,7 @@ get_raw(Base, Request, Opts) ->
 %% @doc Extract the start and end of the range a request asks for from an item
 %% of `Length' bytes: `bytes=A-B', `bytes=A-' (to the end) or `bytes=-N' (the
 %% last `N' bytes), as RFC 9110 (section 14.1.2) defines them. The end is at
-%% most the item's last byte. A range that does not parse, or that holds no
+%% most the item's last byte. A range that does not parse, or that contains no
 %% byte of the item, returns a 416 error.
 parse_range_params(<<"bytes=", ByteDescriptor/binary>>, Length, Opts) ->
     parse_range_params(<<"bytes ", ByteDescriptor/binary>>, Length, Opts);
@@ -755,7 +755,7 @@ pending_relative_chunk_offsets(Offset, Length, DataSize) ->
     end.
 
 %% @doc Decode a chunk response into a {Start, End, Binary} tuple, if the chunk
-%% holds the byte at the offset it was fetched for.
+%% contains the byte at the offset it was fetched for.
 %% Runs inside the pmap worker so raw JSON is GC'd per-worker.
 decode_chunk(Offset, {ok, JSON}) ->
     AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
@@ -1137,7 +1137,7 @@ block_proofs(Block, Req, Opts) ->
 %% @doc Name the fields of a block as message keys: `-' in place of `_', as in
 %% `indep-hash', in the block and in the messages nested in it, and
 %% `block-signature' and `block-nonce' for the block's `signature' and `nonce'.
-%% In `httpsig@1.0', `signature' names the header that carries the signatures
+%% In `httpsig@1.0', `signature' is the header that carries the signatures
 %% of a message and `nonce' one of their parameters.
 block_keys(Block) ->
     maps:from_list(
@@ -1552,6 +1552,9 @@ block_index_reindex_test() ->
     hb_cache:link(ID, Hash, #{ <<"store">> => Store }),
     hb_cache:link(ID, <<"~arweave@2.9/block/height/4">>, #{ <<"store">> => Store }),
     ?assertEqual({ok, 4}, store_block_index([Entry], #{}, 4, 4, Opts)),
+    % The node does not read its block index from a store of remote scope.
+    ?assertEqual({ok, []}, hb_ao:resolve(<<"~arweave@2.9/blocks&height=4">>,
+        #{ <<"store">> => [Store#{ <<"scope">> => remote }] })),
     NewHash = hb_util:encode(crypto:strong_rand_bytes(48)),
     New = Entry#{ <<"hash">> := NewHash, <<"weave_size">> := <<"101">> },
     ?assertEqual({ok, 4}, store_block_index([New], #{ <<"reindex">> => false }, 4, 4, Opts)),

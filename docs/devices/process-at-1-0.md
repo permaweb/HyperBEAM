@@ -69,4 +69,6 @@ This defines a process that uses:
 
 Processes often require an initialization step before they can process messages. This is typically triggered by calling the `init` key on the configured Execution Device via the process path (`/<ProcessID>~process@1.0/init`). This allows components within the execution stack (like WASM modules) to set up their initial state.
 
+If the process does not set `requires-determinism`, `~process@1.0` sets it to `true` on the process state before the execution devices initialize, such that they give the same result on every node: `~lua@5.3a`, for example, then sandboxes `math.random`, `os.time`, `os.clock` and `os.date`.
+
 [process module](../resources/source-code/dev_process.md)
