@@ -397,7 +397,7 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
         Opts
     ),
     case Res of
-        {ok, NewProcStateMsg} ->
+        {ok, NewProcStateMsg} when is_map(NewProcStateMsg) ->
             % We have now transformed slot n -> n + 1. Increment the current slot.
             NewProcStateMsgWithSlot =
                 hb_ao:set(
@@ -455,8 +455,9 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
             % caller polls `/now' or `/compute'.
             maybe_trigger_push(State, Slot, InitReq, Opts),
             {ok, ProcStateWithSnapshot};
-        {error, Error} ->
-            % An error occurred while computing the slot. The slot's
+        {Status, Error} when Status == ok; Status == error ->
+            % An error occurred while computing the slot, or its result is
+            % not a message, so it cannot be the process state. The slot's
             % message leaves the state as it found it: the error becomes
             % the slot's results over the inbound state, the slot is
             % stored as usual, and computing carries on to the next slot
@@ -836,31 +837,9 @@ ensure_loaded(Base, Req, Opts) ->
                     % the public component of a message) into memory.
                     % Do not update the hashpath while we do this, and remove
                     % the snapshot key after we have normalized the message.
-                    Process = 
-                        hb_maps:get(
-                            <<"process">>,
-                            SnapshotMsg,
-                            undefined,
-                            Opts
-                        ),
-                    #{ <<"commitments">> := HmacCommits} =
-                        hb_message:with_commitments(
-                            #{ <<"type">> => <<"hmac-sha256">>},
-                            Process,
-                            Opts
-                        ),
-                    #{ <<"commitments">> := SignCommits } =
-                        hb_message:with_commitments(ProcID, Process, Opts),
-                    UpdateProcess =
-                        hb_maps:put(
-                            <<"commitments">>,
-                            hb_maps:merge(HmacCommits, SignCommits),
-                            Process,
-                            Opts
-                        ),
                     SnapshotReq =
                         hb_private:set(
-                            SnapshotMsg#{ <<"process">> => UpdateProcess },
+                            SnapshotMsg,
                             <<"initialized">>,
                             <<"true">>,
                             Opts

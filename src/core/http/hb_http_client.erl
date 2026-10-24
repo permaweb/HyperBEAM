@@ -51,7 +51,9 @@ request(Args, RemainingRetries, Opts) ->
 %% @doc Make a request, following a `307' or `308' response to the absolute URL
 %% in its `location' with the same method, headers and body, up to
 %% `http-redirects' times. One more redirect is `{error, 'too-many-redirects'}'.
-%% With `http-redirects' at 0, the redirect is the response.
+%% With `http-redirects' at 0, the redirect is the response. If
+%% `hb_hostname:is_blocked/2' blocks the host of a `location', return
+%% `{error, blocked_host}' without following it.
 redirect(Args, Redirects, Opts) ->
     Response =
         request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts), Opts),
@@ -60,11 +62,18 @@ redirect(Args, Redirects, Opts) ->
     case uri_string:parse(Location) of
         URI = #{ scheme := _, host := _ } when Redirects < MaxRedirects ->
             Path = uri_string:recompose(maps:with([path, query], URI)),
-            redirect(
-                Args#{ peer => Location, path => hb_path:normalize(Path) },
-                Redirects + 1,
-                Opts
-            );
+            case hb_hostname:is_blocked(Location, Opts) of
+                true -> {error, blocked_host};
+                false ->
+                    redirect(
+                        Args#{
+                            peer => Location,
+                            path => hb_path:normalize(Path)
+                        },
+                        Redirects + 1,
+                        Opts
+                    )
+            end;
         #{ scheme := _, host := _ } when MaxRedirects > 0 ->
             {error, 'too-many-redirects'};
         _ -> Response

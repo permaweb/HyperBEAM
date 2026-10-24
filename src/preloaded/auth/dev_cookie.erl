@@ -34,6 +34,7 @@
 %%% `/from': Converts a message containing encoded cookies into a message
 %%% containing the cookies parsed and normalized.
 -module(dev_cookie).
+-export([device_info/1]).
 %%% Public cookie manipulation API.
 -export([get_cookie/3, store/3, extract/3, reset/2, reset/3]).
 %%% Public message codec API.
@@ -46,6 +47,9 @@
 -export([opts/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
+
+%% @doc Exclude the `opts' utility from the keys of the device.
+device_info(_) -> #{ excludes => [<<"opts">>] }.
 
 %% @doc Get the private store options to use for functions in the cookie device.
 opts(Opts) -> hb_private:opts(Opts).

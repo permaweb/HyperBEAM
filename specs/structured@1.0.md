@@ -67,8 +67,9 @@ pins the wire format exactly.
        `max-integer`.
     4. If any types were recorded, emit an **`ao-types`** field: an SF
        **dictionary** with a member for each type, whose value is an inner list
-       of the keys of that type as SF strings (e.g. `integer=("n")`), the types
-       and the keys of each type ordered by their bytes (§5).
+       of the keys of that type as SF strings or byte sequences (e.g.
+       `integer=("n")`), the types and the keys of each type ordered by their
+       bytes (§5).
   - A **list** converts by first turning it into a numbered message (`1`,`2`,…)
     and encoding that as a map; then, if `list` ∈ `encode-types` or the encoded
     map already carries an `ao-types`, the result is a map with `.` ⇒ `list`
@@ -99,21 +100,25 @@ pins the wire format exactly.
 ## 5. Data formats & encodings (normative — byte-exact)
 
 ### Key escaping (for the keys in `ao-types`)
-Each key is an SF **string**: bytes `0x20`–`0x7e` are emitted as-is, except `"`
-and `\`, which are emitted as `\"` and `\\`. `from` throws
-`{invalid_ao_types_key, Key}` for a typed key with any other byte. Decoding
-reverses this, and `to` lowercases the key.
+A key whose bytes are all `0x20`–`0x7e` is an SF **string**: its bytes are
+emitted as-is, except `"` and `\`, which are emitted as `\"` and `\\`. A key
+with any other byte is an SF **byte sequence**: its bytes in base64 (RFC 4648
+§4, with `=` padding and the bits past the last byte zero) between colons, so
+`café` is `:Y2Fmw6k=:`. Decoding reverses this, and refuses a key in any other
+form: a byte sequence for a key that a string can contain, or one with a bit
+set past the last byte. `to` lowercases the key.
 
 ### `ao-types` field
 An SF **dictionary** with a member for each type: the type name ⇒ an inner list
-of the keys of that type, each an SF **string** (a **double-quoted** string) —
-e.g. `integer=("1" "n"), list=(".")` — where the type name is `atom`, `binary`,
+of the keys of that type, each an SF **string** (a **double-quoted** string) or
+an SF **byte sequence** (key escaping, above) — e.g.
+`integer=("1" "n"), list=(".")` — where the type name is `atom`, `binary`,
 `float`, `integer`, or `list`. Members are ordered by type name and the keys of
 each member by their bytes; members are joined by `, ` (comma-space) and keys by
 a space. A key absent from `ao-types` is a plain binary, which `to` decodes to a
 link if it starts with `ao:`, except under `path`, `hashpath`, a private key or
-in `commitments`. (Note: the keys are quoted SF *strings* — the quotes are part
-of the content-addressed bytes.)
+in `commitments`. (Note: the quotes and colons around the keys are part of the
+content-addressed bytes.)
 
 ### Per-type value encoding (`from`)
 - **integer** → SF integer (decimal text). Type name `integer`.
@@ -197,8 +202,6 @@ the **last** member: `integer=("1" "2"), list=(".")`.
 - An `ao-types` type name that `to` does not recognise is no error: the
   `ao-types` does not parse, so `to` keeps it as a key of the message and
   applies no types.
-- `from` throws `{invalid_ao_types_key, Key}` for a typed key with a byte
-  outside `0x20`–`0x7e`.
 
 ## 9. Composition
 
@@ -213,12 +216,13 @@ the **last** member: `integer=("1" "2"), list=(".")`.
    `ao:` round-trips unchanged through `from` then `to`.
 2. `from` of a map with an integer/atom value produces a TABM whose value
    is the SF encoding of §5 and whose `ao-types` dictionary records the key as a
-   quoted SF string in the member of its type (`<type>=("key")`); `to` reverses
-   it exactly.
+   quoted SF string in the member of its type (`<type>=("key")`), or as an SF
+   byte sequence for a key with a byte outside `0x20`–`0x7e`
+   (`integer=(:Y2Fmw6k=:)` for `café`); `to` reverses it exactly.
 3. `ao-types` is an SF dictionary with a member for each type, ordered by type
    name, members joined by `, `; each member's value is an inner list of the
-   keys of that type as SF strings, ordered by their bytes and joined by a
-   space.
+   keys of that type as SF strings or byte sequences (§5), ordered by their
+   bytes and joined by a space.
 4. Integer encoding is SF-integer decimal text; atom encoding is an SF token of
    the atom name; float encoding is the SF Decimal of its rounding to three
    places with its `binary64` parameter (§5). `from` NEVER emits the standalone

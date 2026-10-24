@@ -81,7 +81,10 @@ certificate_file() ->
         HTTP2 = http2_connection(Hostname, Port, CAs),
         try http2_address(HTTP2, ServerID) after gun:close(HTTP2) end,
         ?assertEqual(undefined, hb_name:lookup({<<"tls@1.0">>, ServerID})),
-        {ok, DefaultHTTP} = hb_http:get(SecureURL, <<"/~tls@1.0/csr">>, #{
+        % Request the node by `localhost', the host that its certificate is for.
+        HostnameURL =
+            <<"https://", Hostname/binary, ":", (hb_util:bin(Port))/binary>>,
+        {ok, DefaultHTTP} = hb_http:get(HostnameURL, <<"/~tls@1.0/csr">>, #{
             <<"http-client">> => gun,
             <<"protocol">> => http2,
             <<"http-client-tls-ca">> => CAs

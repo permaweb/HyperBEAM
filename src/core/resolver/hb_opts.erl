@@ -471,11 +471,11 @@ raw_default_message() ->
                 ?DEFAULT_PRIMARY_STORE,
                 #{
                     <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-mainnet">>
+                    <<"name">> => <<"cache-mainnet/fs">>
                 },
                 #{
                     <<"store-module">> => hb_store_arweave,
-                    <<"name">> => <<"cache-arweave">>,
+                    <<"name">> => <<"cache-mainnet/arweave">>,
                     <<"index-store">> =>
                         [?DEFAULT_PRIMARY_STORE, ?DEFAULT_OFFSET_INDEX],
                     <<"local-store">> => [?DEFAULT_PRIMARY_STORE],
@@ -486,13 +486,13 @@ raw_default_message() ->
         <<"attested-store">> =>
             #{
                 <<"store-module">> => hb_store_lmdb,
-                <<"name">> => <<"cache-attested">>
+                <<"name">> => <<"cache-mainnet/attested">>
             },
         <<"priv-store">> =>
             [
                 #{
                     <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-priv">>
+                    <<"name">> => <<"cache-mainnet/priv">>
                 }
             ],
         % default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
@@ -840,7 +840,8 @@ coerce_value(_DefaultValue, Value) ->
 
 %% @doc Find a given identity from the `identities' map, and return the options
 %% merged with the sub-options for that identity.
-as(Identity, Opts) ->
+as(RawIdentity, Opts) ->
+    Identity = hb_committer:uri(RawIdentity, Opts),
     case identities(hb_http_server:with_node_committer(Opts)) of
         #{ Identity := SubOpts } ->
             ?event({found_identity_sub_opts_are, SubOpts}),
@@ -1049,7 +1050,21 @@ global_get_test() ->
     ?assertEqual(false, ?MODULE:get(debug_log)),
     ?assertEqual(<<"logs">>, ?MODULE:get(log_dir)),
     ?assertEqual(5, ?MODULE:get(log_max_files)),
-    ?assertEqual(52428800, ?MODULE:get(log_max_bytes)).
+    ?assertEqual(52428800, ?MODULE:get(log_max_bytes)),
+    % No default store's directory is inside another's.
+    Stores =
+        ?MODULE:get(store) ++ ?MODULE:get(priv_store) ++
+            [?MODULE:get(attested_store)],
+    ?assertEqual(
+        [],
+        [
+            {Outer, Inner}
+        ||
+            #{ <<"name">> := Outer } <- Stores,
+            #{ <<"name">> := Inner } <- Stores,
+            string:prefix(Inner, <<Outer/binary, "/">>) =/= nomatch
+        ]
+    ).
 
 local_get_test() ->
     Local = #{ <<"only">> => local },
@@ -1206,6 +1221,11 @@ as_identity_test() ->
     ?assertMatch(
         {ok, #{ <<"priv-wallet">> := TestWallet1, <<"test-key">> := 1 }},
         as(hb_test_utils:committer(TestWallet1), Opts)
+    ),
+    % `as/2' finds an identity by the address of its wallet, as by its URI.
+    ?assertMatch(
+        {ok, #{ <<"priv-wallet">> := TestWallet1, <<"test-key">> := 1 }},
+        as(hb:address(TestWallet1), Opts)
     ),
     ?assertMatch(
         {ok, #{ <<"priv-wallet">> := TestWallet2, <<"test-key">> := 2 }},

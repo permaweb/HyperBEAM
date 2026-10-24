@@ -37,8 +37,6 @@
 -implements(<<"json-iface@1.0">>).
 -specification("../../../specs/json-iface@1.0.md").
 -export([init/3, compute/3, to/3, from/3]).
-%%% Public interface helpers:
--export([message_to_json_struct/2, json_to_message/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 

@@ -111,13 +111,19 @@ routes(M1, M2, Opts) ->
             case hb_maps:get(<<"registrar">>, RouterOpts, not_found, Opts) of
                 not_found ->
                     % There is no registrar; register if and only if the message
-                    % is signed by an authorized operator. The new route holds
-                    % only the keys that the route owner signed.
+                    % is signed by an authorized operator and the routes do not
+                    % come from a provider. The new route is the `route' of the
+                    % message, as `register/3' sends it, else the message. It
+                    % contains only the keys that the route owner signed.
                     ?event(debug_route_reg, no_registrar),
-                    Owner = hb_opts:get(operator, undefined, Opts),
-                    RouteOwners = hb_opts:get(route_owners, [Owner], Opts),
+                    Operators = lib_meta:role(operator, Opts),
+                    RouteOwners = hb_opts:get(route_owners, Operators, Opts),
                     case lib_meta:authorized(RouteOwners, M2, Opts) of
-                        {ok, Route} ->
+                        {ok, _} when is_map_key(<<"provider">>, RouterOpts) ->
+                            {error, <<"Routes come from the provider.">>};
+                        {ok, Signed} ->
+                            Route =
+                                hb_maps:get(<<"route">>, Signed, Signed, Opts),
                             ok = insert_route(Route, Opts),
                             {ok, <<"Route added.">>};
                         {error, _} -> {error, not_authorized}
@@ -165,7 +171,7 @@ insert_route(Route, Opts) ->
                 lists:sort(
                     fun(X, Y) ->
                         hb_ao:get(<<"priority">>, X, SortOpts)
-                            < hb_ao:get(<<"priority">>, Y, SortOpts)
+                            =< hb_ao:get(<<"priority">>, Y, SortOpts)
                     end,
                     [Route | hb_opts:get(routes, [], NodeMsg)]
                 ),
@@ -837,6 +843,7 @@ test_provider() ->
         hb_http_server:start_node(Opts =
             #{
                 <<"store">> => hb_test_utils:test_store(),
+                <<"priv-wallet">> => ar_wallet:new(),
                 <<"router-opts">> => #{
                     <<"provider">> => #{
                         <<"path">> => <<"//test-key/routes">>,
@@ -855,6 +862,21 @@ test_provider() ->
     ?assertEqual(
         {ok, <<"testnode">>},
         hb_http:get(Node, <<"/~router@1.0/routes/1/node">>, Opts)
+    ),
+    % A signed route is refused, as the routes come from the provider.
+    ?assertEqual(
+        {error, <<"Routes come from the provider.">>},
+        hb_http:post(
+            Node,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~router@1.0/routes">>,
+                    <<"node">> => <<"new">>
+                },
+                Opts
+            ),
+            Opts
+        )
     ).
 
 dynamic_provider_test_parallel_() ->
@@ -1817,6 +1839,7 @@ add_route_test_parallel_() ->
     {timeout, 30, fun add_route/0}.
 add_route() ->
     Owner = ar_wallet:new(),
+    % The node's own key is a route owner, as the node's operator.
     Node = hb_http_server:start_node(
         #{
             <<"force-signed">> => false,
@@ -1825,21 +1848,31 @@ add_route() ->
                     <<"template">> => <<"/some/path">>,
                     <<"node">> => <<"old">>,
                     <<"priority">> => 10
+                },
+                #{
+                    <<"template">> => <<"/some/other/path">>,
+                    <<"node">> => <<"other">>,
+                    <<"priority">> => 10
                 }
             ],
-            <<"operator">> => hb_test_utils:committer(Owner)
+            <<"priv-wallet">> => Owner
         }
     ),
     NodeMsg = hb_http_server:get_opts(),
+    % A `register' message adds its `route'.
     Res =
         hb_http:post(
             Node,
             hb_message:commit(
                 #{
                     <<"path">> => <<"/~router@1.0/routes">>,
-                    <<"template">> => <<"/some/new/path">>,
-                    <<"node">> => <<"new">>,
-                    <<"priority">> => 15
+                    <<"action">> => <<"register">>,
+                    <<"route">> =>
+                        #{
+                            <<"template">> => <<"/some/new/path">>,
+                            <<"node">> => <<"new">>,
+                            <<"priority">> => 15
+                        }
                 },
                 #{ <<"priv-wallet">> => Owner }
             ),
@@ -1852,10 +1885,15 @@ add_route() ->
         maps:remove(<<"routes">>, NodeMsg),
         maps:remove(<<"routes">>, hb_http_server:get_opts())
     ),
-    GetRes = hb_http:get(Node, <<"/~router@1.0/routes/2/node">>, #{}),
+    GetRes = hb_http:get(Node, <<"/~router@1.0/routes/3/node">>, #{}),
     ?event({get_res, GetRes}),
     {ok, Recvd} = GetRes,
     ?assertMatch(<<"new">>, Recvd),
+    % Routes of the same `priority' keep their order.
+    ?assertEqual(
+        {ok, <<"old">>},
+        hb_http:get(Node, <<"/~router@1.0/routes/1/node">>, #{})
+    ),
     % A query parameter does not change the route that its owner signed.
     {ok, _} =
         hb_http:post(
@@ -1873,7 +1911,7 @@ add_route() ->
         ),
     ?assertEqual(
         {ok, <<"signed">>},
-        hb_http:get(Node, <<"/~router@1.0/routes/3/node">>, #{})
+        hb_http:get(Node, <<"/~router@1.0/routes/4/node">>, #{})
     ).
 
 %% @doc Test that the `preprocess/3' function re-routes a request to remote

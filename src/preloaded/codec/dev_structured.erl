@@ -16,7 +16,8 @@
 %%% 
 %%% `ao-types' gives the types of a message's values: an RFC 9651 dictionary
 %%% with a member for each type, whose inner list contains the keys of that type
-%%% as strings. Types, and the keys of each type, are sorted by their bytes,
+%%% as strings, and a key with a byte outside `0x20' to `0x7e' as a byte
+%%% sequence. Types, and the keys of each type, are sorted by their bytes,
 %%% and the key `.' of type `list' marks a message that is a list:
 %%% `integer=("1" "2"), list=(".")'. `to/3' refuses any other encoding, and a
 %%% type for a key with no binary value.
@@ -408,7 +409,8 @@ encode_types(Base, Req, Opts) ->
 
 %% @doc Encode a map of keys and their types as an `ao-types' dictionary: a
 %% member for each type, whose inner list contains the keys of that type as
-%% strings. Types, and the keys of each type, are sorted by their bytes.
+%% strings or byte sequences (`encode_ao_types_key/1'). Types, and the keys of
+%% each type, are sorted by their bytes.
 encode_ao_types(Types, _Opts) ->
     Groups =
         maps:groups_from_list(
@@ -417,18 +419,18 @@ encode_ao_types(Types, _Opts) ->
         ),
     iolist_to_binary(hb_structured_fields:dictionary(
         [
-            {Type, {list, lists:map(fun encode_key/1, Keys), []}}
+            {Type, {list, lists:map(fun encode_ao_types_key/1, Keys), []}}
         ||
             {Type, Keys} <- hb_util:to_sorted_list(Groups)
         ]
     )).
 
 %% @doc Encode a key of `ao-types' as a string, which allows the bytes `0x20'
-%% to `0x7e'. A key with any other byte cannot have a typed value.
-encode_key(Key) ->
+%% to `0x7e', or as a byte sequence if the key has any other byte.
+encode_ao_types_key(Key) ->
     case << <<C>> || <<C>> <= Key, C < 16#20 orelse C > 16#7e >> of
         <<>> -> {item, {string, Key}, []};
-        _ -> throw({invalid_ao_types_key, Key})
+        _ -> {item, {binary, Key}, []}
     end.
 
 %% @doc Device key for parsing an `ao-types' field.
@@ -489,14 +491,28 @@ decode_ao_types(Bin, [Type | Types], Acc) ->
         _ -> decode_ao_types(Bin, Types, Acc)
     end.
 
-%% @doc Read the keys of an `ao-types' member up to its `)': strings,
-%% separated by a space.
+%% @doc Read the keys of an `ao-types' member up to its `)': strings and byte
+%% sequences, separated by a space.
 decode_ao_types_keys(Bin, Keys) ->
-    {{string, Key}, Rest} = hb_structured_fields:parse_bare_item(Bin),
+    {Item, Rest} = hb_structured_fields:parse_bare_item(Bin),
+    Key =
+        decode_ao_types_key(
+            Item,
+            binary:part(Bin, 0, byte_size(Bin) - byte_size(Rest))
+        ),
     case Rest of
         <<")", Next/binary>> -> {lists:reverse([Key | Keys]), Next};
         <<" ", More/binary>> -> decode_ao_types_keys(More, [Key | Keys])
     end.
+
+%% @doc Decode a key of `ao-types' from its item, a string or a byte sequence.
+%% Refuse a byte sequence if `Form', the bytes of the item, is not the form
+%% that `encode_ao_types_key/1' gives for its key. A string has only one form.
+decode_ao_types_key({string, Key}, _Form) -> Key;
+decode_ao_types_key({binary, Key}, Form) ->
+    Form =
+        iolist_to_binary(hb_structured_fields:item(encode_ao_types_key(Key))),
+    Key.
 
 %% @doc Determine if the `ao-types' field of a TABM indicates that the message
 %% is a list.
@@ -663,7 +679,8 @@ malformed_types_return_error_test() ->
             <<"unknown-type=(\"a\")">>, <<"a=\"integer\"">>]
     ),
     % `ao-types' in an encoding that `from/3' does not write: empty, a member
-    % for each key, keys or types out of order, a key of two types, a space.
+    % for each key, keys or types out of order, a key of two types, a space, a
+    % byte sequence for the key `a', and one with a bit set past its last byte.
     lists:foreach(
         fun(Types) ->
             ?assertMatch({error, #{ <<"status">> := 400 }}, hb_ao:raw(
@@ -672,7 +689,8 @@ malformed_types_return_error_test() ->
         end,
         [<<>>, <<"a=1">>, <<"a=\"integer\"">>, <<"integer=(\"b\" \"a\")">>,
             <<"list=(\".\"), integer=(\"a\")">>,
-            <<"atom=(\"a\"), integer=(\"a\")">>, <<"integer=( \"a\")">>]
+            <<"atom=(\"a\"), integer=(\"a\")">>, <<"integer=( \"a\")">>,
+            <<"integer=(:YQ==:)">>, <<"integer=(:Y2Fmw6l=:)">>]
     ),
     ?assertEqual({ok, #{ <<"a">> => 42 }}, hb_ao:raw(
         <<"structured@1.0">>, <<"to">>,
@@ -729,11 +747,19 @@ malformed_types_return_error_test() ->
         [{0.0625, <<"0.062;binary64=\"P7AAAAAAAAA\"">>},
             {0.1, <<"0.1;binary64=\"P7mZmZmZmZo\"">>}]
     ),
-    % A key with a byte outside `0x20'-`0x7e' cannot have a typed value.
-    ?assertThrow({invalid_ao_types_key, _}, hb_ao:raw(
+    % A key with a byte outside `0x20'-`0x7e' is a byte sequence in `ao-types'.
+    TABM =
+        #{
+            <<"ao-types">> => <<"integer=(:Y2Fmw6k=:)">>,
+            <<"caf", 195, 169>> => <<"1">>
+        },
+    ?assertEqual({ok, TABM}, hb_ao:raw(
         <<"structured@1.0">>, <<"from">>,
         #{ <<"caf", 195, 169>> => 1 },
         #{}, #{}
+    )),
+    ?assertEqual({ok, #{ <<"caf", 195, 169>> => 1 }}, hb_ao:raw(
+        <<"structured@1.0">>, <<"to">>, TABM, #{}, #{}
     )).
 
 %% @doc Keys are lowercased, a link key gives a link, keys that become one key

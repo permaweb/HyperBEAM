@@ -3,6 +3,7 @@
 %%% non-volatile storage of the node message to store the names long-term.
 -module(dev_local_name).
 -specification("../../../specs/local-name@1.0.md").
+-device_libraries([lib_meta]).
 -export([device_info/1, lookup/3, register/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -38,7 +39,8 @@ default_lookup(Key, _, Req, Opts) ->
     lookup(Key, Req#{ <<"key">> => Key }, Opts).
 
 %% @doc Takes a `key' and `value' argument and registers the name. The caller
-%% must be the node operator in order to register a name.
+%% must be the node operator in order to register a name. We read the `key' and
+%% the `value' only from the keys that the operator signed.
 -spec register(
     #{ _ => _ },
     #{ key := binary(), value := _, _ => _ },
@@ -48,20 +50,16 @@ default_lookup(Key, _, Req, Opts) ->
     | {error, #{ status := integer(), message := binary() }}
     | not_found.
 register(_, Req, Opts) ->
-    case hb_ao:resolve(
-        #{ <<"device">> => <<"meta@1.0">> },
-        #{ <<"path">> => <<"is-operator">>, <<"body">> => Req },
-        Opts#{ <<"hashpath">> => ignore }
-    ) of
-        {ok, false} ->
+    case lib_meta:authorized(lib_meta:role(operator, Opts), Req, Opts) of
+        {error, _} ->
             {error,
                 #{
                     <<"status">> => 403,
                     <<"message">> => <<"Unauthorized.">>
                 }
             };
-        {ok, true} ->
-            direct_register(Req, Opts)
+        {ok, Signed} ->
+            direct_register(Signed, Opts)
     end.
 
 %% @doc Register a name without checking if the caller is an operator. Exported
@@ -231,9 +229,10 @@ unauthorized_test() ->
 http_test() ->
     Opts = generate_test_opts(),
     Node = hb_http_server:start_node(Opts),
+    % A query parameter does not change the `value' that the operator signed.
     hb_http:post(
         Node,
-        <<"/~local-name@1.0/register">>,
+        <<"/~local-name@1.0/register?value=value2">>,
         hb_message:commit(
             #{ <<"key">> => <<"name1">>, <<"value">> => <<"value1">> },
             Opts

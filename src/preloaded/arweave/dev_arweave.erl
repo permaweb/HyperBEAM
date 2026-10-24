@@ -27,10 +27,20 @@
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
 
 %% @doc Route unknown keys through offset resolution first, then fall back to
-%% the message device for direct key access.
+%% the message device for direct key access. The exported helper functions are
+%% not keys of the device.
 device_info() ->
     #{
-        excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>],
+        excludes =>
+            [
+                <<"keys">>,
+                <<"set">>,
+                <<"set-path">>,
+                <<"remove">>,
+                <<"post-tx-header">>,
+                <<"post-chunk">>,
+                <<"get-chunk">>
+            ],
         default => fun dev_arweave_offset:get/4
     }.
 
@@ -1377,6 +1387,15 @@ to_message(Path = <<"/block_index/", _/binary>>, <<"GET">>,
     {ok, hb_json:decode(Body)};
 to_message(Path = <<"/unconfirmed_tx/", ID/binary>>, <<"GET">>, Result, LogExtra, Req, Opts) ->
     to_tx_message(pending, ID, Path, Result, LogExtra, Req, Opts);
+to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>,
+        {ok, #{ <<"status">> := 202 }}, LogExtra, Req, Opts) ->
+    % A node answers 202, with no header, for a TX in its mempool. The TX is
+    % read as `pending' reads it, and carries status 202.
+    event_request(Path, <<"GET">>, 202, LogExtra),
+    maybe
+        {ok, TX} ?= pending(#{ <<"pending">> => TXID }, Req, Opts),
+        {ok, TX#{ <<"status">> => 202 }}
+    end;
 to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, Result, LogExtra, Req, Opts) ->
     to_tx_message(tx, TXID, Path, Result, LogExtra, Req, Opts);
 to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, Response}, LogExtra, _Req, Opts) ->
@@ -1686,7 +1705,21 @@ unprocessable_transaction_test() ->
         {failure, _},
         to_message(<<"/tx/test">>, <<"GET">>,
             {error, #{ <<"status">> => 422 }}, [], Req, Opts)
-    ).
+    ),
+    % A 202 to `GET /tx/<ID>' gives the TX as `pending' reads it, with
+    % status 202.
+    {ID, _Data, PeerOpts, Handle} = start_pending_peer([10], 0, Opts),
+    try
+        {ok, Pending} = pending(#{ <<"pending">> => ID }, Req, PeerOpts),
+        ?assertEqual(
+            {ok, Pending#{ <<"status">> => 202 }},
+            to_message(<<"/tx/", ID/binary>>, <<"GET">>,
+                {ok, #{ <<"status">> => 202, <<"body">> => <<"Pending">> }},
+                [], Req, PeerOpts)
+        )
+    after
+        hb_mock_server:stop(Handle)
+    end.
 
 %% @doc A fixed bad interior offset from a live TX is rejected by
 %% bundle_header/3 as invalid_bundle_header.
@@ -2412,7 +2445,17 @@ get_bad_tx_test_parallel() ->
     Node = hb_http_server:start_node(),
     Path = <<"/~arweave@2.9/tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
-    ?assertEqual({error, not_found}, Res).
+    ?assertEqual({error, not_found}, Res),
+    % The exported helper functions are not keys of the device.
+    lists:foreach(
+        fun(Key) ->
+            ?assertEqual(
+                {error, not_found},
+                hb_http:get(Node, <<"/~arweave@2.9/", Key/binary>>, #{})
+            )
+        end,
+        [<<"post-tx-header">>, <<"get-chunk">>, <<"post-chunk">>]
+    ).
 
 %% @doc Chunk reads check the received bytes and proof before returning a range.
 chunk_proof_test_() ->

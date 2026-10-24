@@ -70,8 +70,6 @@
 -export([without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
 -export([diff/3, match/2, match/3, match/4, find_subject/4]).
-%%% Helpers:
--export([default_tx_list/0, filter_default_keys/1]).
 %%% Debugging tools:
 -export([print/1]).
 -include("include/hb.hrl").
@@ -406,7 +404,8 @@ with_only_committed(Msg, _, _) ->
 %% @doc Return the message with only the specified committers attached.
 with_only_committers(Msg, Committers) ->
     with_only_committers(Msg, Committers, #{}).
-with_only_committers(Msg, Committers, Opts) when is_map(Msg) ->
+with_only_committers(Msg, RawCommitters, Opts) when is_map(Msg) ->
+    Committers = [hb_committer:uri(C, Opts) || C <- RawCommitters],
     NewCommitments =
         hb_maps:filter(
             fun(_, #{ <<"committer">> := Committer }) ->
@@ -730,23 +729,11 @@ unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
     Map2 = RawMap2#{ <<"commitments">> => SignedCommitments2 },
     Keys1 =
         hb_maps:keys(
-            NormMap1 =
-                minimize(
-                    normalize(
-                        hb_ao:normalize_keys(Map1, Opts),
-                        Opts
-                    )
-                )
+            NormMap1 = minimize(hb_ao:normalize_keys(Map1, Opts))
         ),
     Keys2 =
         hb_maps:keys(
-            NormMap2 =
-                minimize(
-                    normalize(
-                        hb_ao:normalize_keys(Map2, Opts),
-                        Opts
-                    )
-                )
+            NormMap2 = minimize(hb_ao:normalize_keys(Map2, Opts))
         ),
     PrimaryKeysPresent =
         (Mode == primary) andalso
@@ -822,9 +809,6 @@ unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
                 }
             )
     end.
-	
-matchable_keys(Map) ->
-    lists:sort(lists:map(fun hb_ao:normalize_key/1, hb_maps:keys(Map))).
 
 %% @doc Return the numeric differences between two messages, matching deeply
 %% across nested messages. If the values are non-numeric, the new value is 
@@ -937,7 +921,8 @@ commitment(Spec, Msg, Opts) ->
 commitments(ID, Link, Opts) when ?IS_LINK(Link) ->
     commitments(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
 commitments(CommitterID, Msg, Opts) when is_binary(CommitterID) ->
-    commitments(#{ <<"committer">> => CommitterID }, Msg, Opts);
+    Committer = hb_committer:uri(CommitterID, Opts),
+    commitments(#{ <<"committer">> => Committer }, Msg, Opts);
 commitments(Spec = #{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
     % Unsigned is a special case: Match all of the commitments with a committer
     % first, remove them, then call `commitments` again with the remainder of
@@ -1009,39 +994,6 @@ minimize(Map, ExtraKeys) ->
         end,
         maps:map(fun(_K, V) -> minimize(V) end, Map)
     ).
-
-%% @doc Return a map with only the keys that necessary, without those that can
-%% be regenerated.
-normalize(Map, Opts) when is_map(Map) orelse is_list(Map) ->
-    NormalizedMap = hb_ao:normalize_keys(Map, Opts),
-    FilteredMap = filter_default_keys(NormalizedMap),
-    hb_maps:with(matchable_keys(FilteredMap), FilteredMap);
-normalize(Other, _Opts) ->
-    Other.
-
-%% @doc Remove keys from a map that have the default values found in the tx
-%% record.
-filter_default_keys(Map) ->
-    DefaultsMap = default_tx_message(),
-    maps:filter(
-        fun(Key, Value) ->
-            case hb_maps:find(hb_ao:normalize_key(Key), DefaultsMap) of
-                {ok, Value} -> false;
-                _ -> true
-            end
-        end,
-        Map
-    ).
-
-%% @doc Get the normalized fields and default values of the tx record.
-default_tx_message() ->
-    hb_maps:from_list(default_tx_list()).
-
-%% @doc Get the ordered list of fields as AO-Core keys and default values of
-%% the tx record.
-default_tx_list() ->
-    Keys = lists:map(fun hb_ao:normalize_key/1, record_info(fields, tx)),
-    lists:zip(Keys, tl(tuple_to_list(#tx{}))).
 
 %%% Tests
 

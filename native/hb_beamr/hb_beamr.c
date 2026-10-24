@@ -208,6 +208,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         msg[0] = ERL_DRV_ATOM;
         msg[1] = atom_ok;
         erl_drv_output_term(proc->port_term, msg, 2);
+        driver_free(msg);
     }
     else if (strcmp(command, "read") == 0) {
         DRV_DEBUG("Read received");
@@ -260,6 +261,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         msg[msg_index++] = ERL_DRV_TUPLE;
         msg[msg_index++] = 2;
         erl_drv_output_term(proc->port_term, msg, msg_index);
+        driver_free(msg);
     }
     else if (strcmp(command, "grow") == 0) {
         DRV_DEBUG("Grow received");
@@ -274,6 +276,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         msg[0] = ERL_DRV_ATOM;
         msg[1] = atom_ok;
         erl_drv_output_term(proc->port_term, msg, 2);
+        driver_free(msg);
     }
     else {
         DRV_DEBUG("Unknown command: %s", command);

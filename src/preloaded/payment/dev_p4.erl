@@ -38,11 +38,12 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%%% The default list of routes that should not be charged for.
+%%% The default list of routes that should not be charged for. Each template
+%%% is a regular expression that matches from the start of the path.
 -define(DEFAULT_NON_CHARGABLE_ROUTES, [
-    #{ <<"template">> => <<"/~p4@1.0/balance">> },
-    #{ <<"template">> => <<"/~p4@1.0/topup">> },
-    #{ <<"template">> => <<"/~meta@1.0/*">> }
+    #{ <<"template">> => <<"^/~p4@1\\.0/balance$">> },
+    #{ <<"template">> => <<"^/~p4@1\\.0/topup$">> },
+    #{ <<"template">> => <<"^/~meta@1\\.0">> }
 ]).
 
 %% @doc Estimate the cost of a transaction and decide whether to proceed with
@@ -348,7 +349,8 @@ p4_handler(Handlers, NodeMsg) ->
     end.
 
 %% @doc The node operator may elect to make certain routes non-chargable, using
-%% the `routes' syntax also used to declare routes in `router@1.0'.
+%% the `routes' syntax also used to declare routes in `router@1.0'. The routes
+%% are matched against the path of the request without its query.
 is_chargable_req(Req, NodeMsg) ->
     NonChargableRoutes =
         hb_opts:get(
@@ -356,6 +358,8 @@ is_chargable_req(Req, NodeMsg) ->
             ?DEFAULT_NON_CHARGABLE_ROUTES,
             NodeMsg
         ),
+    [Path | _] =
+        binary:split(hb_maps:get(<<"path">>, Req, <<>>, NodeMsg), <<"?">>),
     Matches =
         hb_ao:raw(
             #{
@@ -364,7 +368,7 @@ is_chargable_req(Req, NodeMsg) ->
             },
             Req#{
                 <<"path">> => <<"match">>,
-                <<"route-path">> => hb_maps:get(<<"path">>, Req, no_path, NodeMsg)
+                <<"route-path">> => Path
             },
             NodeMsg
         ),
@@ -424,7 +428,16 @@ faff_test() ->
     {ok, Res} = hb_http:get(Node, GoodSignedReq, #{}),
     ?event(payment, {res, Res}),
     ?assertEqual(<<"Hello, world!">>, Res),
-    ?assertMatch({error, _}, hb_http:get(Node, BadSignedReq, #{})).
+    ?assertMatch({error, _}, hb_http:get(Node, BadSignedReq, #{})),
+    % A free route inside the path does not make a request free.
+    ?assertMatch(
+        {error, <<"Node will not service", _/binary>>},
+        hb_http:get(
+            Node,
+            Req#{ <<"path">> => <<"//greeting/~meta@1.0/info">> },
+            #{}
+        )
+    ).
 
 %% @doc Test P4 in the middle of a request hook pipeline.
 multi_request_hook_test() ->
@@ -515,6 +528,11 @@ non_chargable_route_test() ->
     Res3 = hb_http:get(Node, BadSignedReq3, #{}),
     ?event({res3, Res3}),
     ?assertMatch({error, _}, Res3),
+    % A free route in the query does not make a request free.
+    ?assertMatch(
+        {error, #{ <<"status">> := 402 }},
+        hb_http:get(Node, <<"/~scheduler@1.0?x=/~meta@1.0/a/b">>, #{})
+    ),
     % A wallet that signs twice is one signer, and its balance is too low.
     ?assertMatch(
         {error, #{ <<"status">> := 402 }},

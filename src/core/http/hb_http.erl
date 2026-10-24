@@ -853,7 +853,7 @@ relayed_signed_request_test() ->
             <<"store">> =>
                 #{
                     <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-http">>
+                    <<"name">> => <<"cache-mainnet/http">>
                 }
         },
     {ok, Stored} = hb_cache:read(SignedID, StoreOpts),

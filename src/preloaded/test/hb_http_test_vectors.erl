@@ -969,8 +969,8 @@ exercise(relay, {Host, PrimaryOpts}, {ID, _}, Expected, Transport, ClientOpts) -
     with_node(
         PrimaryOpts,
         (options())#{
-            <<"relay-block-internal">> => false,
-            <<"relay-allowed-hosts">> => [<<"localhost">>]
+            <<"hosts-block-internal">> => false,
+            <<"hosts-allowed">> => [<<"127.0.0.1">>]
         },
         fun(RelayHost, _Opts) ->
             % The relay asks the primary for the transport's codec, and the

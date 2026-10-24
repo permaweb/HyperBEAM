@@ -180,7 +180,7 @@ do_relay(Method, Path, Body, Headers, Opts) ->
                     <<"content-type">> => ContentType
                 }
         },
-        Opts#{ <<"relay-block-internal">> => false }
+        Opts#{ <<"hosts-block-internal">> => false }
     ).
 
 %% @doc Extract the JSON response from the delegated compute response. An
@@ -288,7 +288,7 @@ snapshot(Msg, Req, Opts) ->
             Opts#{
                 <<"hashpath">> => ignore,
                 <<"cache-control">> => [<<"no-store">>, <<"no-cache">>],
-                <<"relay-block-internal">> => false
+                <<"hosts-block-internal">> => false
             }
         ),
     ?event({snapshotting_result, Res}),

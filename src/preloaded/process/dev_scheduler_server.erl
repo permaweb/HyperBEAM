@@ -22,6 +22,11 @@
 %% caller.
 start(ProcID, Proc, Opts) ->
     ?event(scheduling, {starting_scheduling_server, {proc_id, ProcID}}),
+    case hb_opts:get(scheduling_mode, disabled, Opts) of
+        disabled ->
+            throw({scheduling_disabled_on_node, {requested_for, ProcID}});
+        _ -> ok
+    end,
     Ref = make_ref(),
     Caller = self(),
     spawn(
@@ -46,11 +51,6 @@ start(ProcID, Proc, Opts) ->
             % Write the process to the cache. We are the provider-of-last-resort
             % for this data.
             dev_scheduler_cache:write_spawn(Proc, Opts),
-            case hb_opts:get(scheduling_mode, disabled, Opts) of
-                disabled ->
-                    throw({scheduling_disabled_on_node, {requested_for, ProcID}});
-                _ -> ok
-            end,
             HashpathAlg = hb_path:hashpath_alg(Proc, Opts),
             {CurrentSlot, BaseStateHashpath} =
                 try dev_scheduler_cache:latest(ProcID, Opts) of

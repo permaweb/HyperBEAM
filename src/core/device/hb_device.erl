@@ -18,12 +18,14 @@
     <<"info">>,
     <<"set">>,
     <<"set-path">>,
+    <<"set_path">>,
     <<"remove">>,
     <<"keys">>,
     <<"id">>,
     <<"commit">>,
     <<"verify">>,
     <<"with-commitments">>,
+    <<"with_commitments">>,
     <<"committers">>,
     <<"committed">>
 ]).

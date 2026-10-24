@@ -5,7 +5,6 @@
 -specification("../../../specs/genesis-wasm@1.0.md").
 -device_libraries([lib_process, lib_process_cache]).
 -export([init/3, compute/3, normalize/3, snapshot/3, import/3]).
--export([latest_checkpoint/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
@@ -53,8 +52,10 @@ normalize(Msg, Req, Opts) ->
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {error, _}.
 compute(Msg, Req, Opts) ->
+    % Give an assignment its `hash-chain', and the state the next one.
+    {Msg2, Req2} = add_hash_chain(Msg, Req, Opts),
     % Validate whether the genesis-wasm feature is enabled.
-    case delegate_request(Msg, Req, Opts) of
+    case delegate_request(Msg2, Req2, Opts) of
         {ok, Res} ->
             % Resolve the `patch@1.0' device.
             {ok, Msg4} =
@@ -80,6 +81,38 @@ compute(Msg, Req, Opts) ->
             % The server did not compute the message, which is a failure of
             % this node.
             {failure, Failure}
+    end.
+
+%% @doc Give an assignment the `hash-chain' that the CU checks: its own, the
+%% state's, or the process ID at slot 0. Set the state's `hash-chain' to the
+%% chain of the next assignment, as the CU computes it: the SHA-256 of the
+%% assignment's signed ID followed by its chain. After a skipped slot the CU
+%% hashes its `original-assignment-id', the same signed ID. Other requests are
+%% returned unchanged.
+add_hash_chain(State, Req, Opts) ->
+    case hb_ao:get(<<"type">>, Req, not_found, Opts) of
+        <<"Assignment">> ->
+            HashChain =
+                case hb_maps:get_first(
+                    [{Req, <<"hash-chain">>}, {State, <<"hash-chain">>}],
+                    Opts
+                ) of
+                    not_found -> lib_process:process_id(State, #{}, Opts);
+                    Found -> Found
+                end,
+            NextHashChain =
+                hb_util:human_id(
+                    hb_crypto:sha256_chain(
+                        hb_util:native_id(hb_message:id(Req, signed, Opts)),
+                        hb_util:native_id(HashChain)
+                    )
+                ),
+            {
+                hb_ao:set(State, #{ <<"hash-chain">> => NextHashChain }, Opts),
+                Req#{ <<"hash-chain">> => HashChain }
+            };
+        _ ->
+            {State, Req}
     end.
 
 %% @doc Snapshot the state of the process via the `delegated-compute@1.0' device.
@@ -655,7 +688,19 @@ signed_checkpoint_import_test() ->
     {ok, 2, Cached} = lib_process_cache:latest(ProcID, Opts),
     Snapshot = hb_maps:get(<<"snapshot">>, Cached, Opts),
     ?assert(hb_message:verify(Snapshot, all, Opts)),
-    ?assertEqual(CheckpointID, hb_message:id(Snapshot, signed, Opts)).
+    ?assertEqual(CheckpointID, hb_message:id(Snapshot, signed, Opts)),
+    % `latest-checkpoint' is not a key of the device.
+    ?assertEqual(
+        {error, not_found},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"genesis-wasm@1.0">> },
+            #{
+                <<"path">> => <<"latest-checkpoint">>,
+                <<"genesis-wasm-import-authorities">> => []
+            },
+            Opts
+        )
+    ).
 
 %% @doc Genesis requests stay on their configured server, independently of
 %% the routing table used by standalone delegated computation.
@@ -742,7 +787,7 @@ routing_test_node(Parent) ->
             <<"request">> => fun(_, #{ <<"request">> := Req }, _) ->
                 Port = integer_to_binary(ranch:get_port(ID)),
                 Parent ! {routing_request,
-                    <<"http://localhost:", Port/binary, "/">>, Req},
+                    <<"http://127.0.0.1:", Port/binary, "/">>, Req},
                 {error, #{
                     <<"status">> => 200,
                     <<"content-type">> => <<"application/json">>,
@@ -843,6 +888,16 @@ checkpoint_roundtrip(Opts) ->
         #{ <<"path">> => <<"compute">>, <<"slot">> => 1 }, Opts),
     ?assertEqual(<<"41">>, hb_ao:get(<<"results/data">>, State, Opts)),
     {Meta, Memory} = test_snapshot(State, Opts),
+    % The state gives slot 2 the chain that the CU computes from slot 1.
+    ?assertEqual(
+        hb_util:human_id(
+            hb_crypto:sha256_chain(
+                hb_util:native_id(hb_maps:get(<<"assignmentId">>, Meta)),
+                hb_util:native_id(hb_maps:get(<<"hashChain">>, Meta))
+            )
+        ),
+        hb_ao:get(<<"hash-chain">>, State, Opts)
+    ),
     Checkpoint = hb_message:commit(#{
         <<"type">> => <<"Checkpoint">>,
         <<"process">> => ProcID,

@@ -1,7 +1,7 @@
 # `local-name@1.0` — node-local name registry & resolver
 
 - **Device name:** `local-name@1.0`
-- **Depends-on:** `message@1.0` (the base identity device whose `get`/`keys`/`set` behaviour the looked-up names message and the excluded keys fall through to; commitment/`signers` semantics for authority), `name@1.0` (the multi-resolver host this device plugs into as a resolver), and `meta@1.0` (the node-meta device whose `is-operator` key this device delegates the register authority check to — §7). All three specs are provided to reimplementers.
+- **Depends-on:** `message@1.0` (the base identity device whose `get`/`keys`/`set` behaviour the looked-up names message and the excluded keys fall through to; commitment/`signers` semantics for authority), `name@1.0` (the multi-resolver host this device plugs into as a resolver), and `meta@1.0` (the node-meta device; only the node's operator may register a name — §7). All three specs are provided to reimplementers.
 - **Status:** Draft
 
 ## 1. Overview
@@ -45,8 +45,9 @@ bare name lookup against `name@1.0` consults this registry. It also answers
   state.
 - **Operator:** the node's controlling identity — the committer configured as the
   node operator, or, if none is configured, the committer of the node's own
-  signing key; a node with neither is **unclaimed**. Operator authority is
-  evaluated by delegating to the node-meta device's `is-operator` contract (§7).
+  signing key; a node with neither is **unclaimed**. Operator authority is a
+  verified commitment of the operator on the request, and extends only to the
+  keys that the commitment covers (§7).
 
 ## 3. Device interface
 
@@ -94,8 +95,7 @@ All keys are lowercase, hyphenated, binary on the wire.
     (§5.1).
   - `value` (required) — the value to bind to the name (typically a pointer).
   - The request MUST be **committed by the operator** for the registration to be
-    authorised (§7). The operator check inspects the request's signers / the
-    request carried in `body`.
+    authorised, and the operator's commitment MUST cover `key` and `value` (§7).
   The base message is not read by `register`.
 
 ## 4. Resolved keys (normative)
@@ -144,19 +144,20 @@ All keys are lowercase, hyphenated, binary on the wire.
 
 ### `register` — bind a name to a value (operator only)
 
-- **Reads:** `key` and `value` from `Req`; the request's commitment/signers for
-  the authority check; the configured operator identity (node option / node key).
-  Does not read `Base`.
+- **Reads:** the request's commitments by the operator, and `key` and `value`
+  from the keys of `Req` that those commitments cover; the configured operator
+  identity (node option / node key). Does not read `Base`.
 - **Behaviour:**
-  1. **Authorise.** Determine whether the request is from the **operator** by
-     delegating to the node-meta `is-operator` contract (§7), passing the request
-     so its signers can be checked. If the node is **unclaimed** (no operator and
-     no node key), the check denies every caller.
-     - If **not** the operator → return the authorisation error (§8): an error
+  1. **Authorise.** Verify the commitments of the **operator** on the request
+     (§7), and take the keys that they cover. For a request received over HTTP,
+     the commitments are verified on the request as the client sent it, before
+     its path is split into messages.
+     - If no commitment of the operator verifies, as on an **unclaimed** node (no
+       operator and no node key) → return the authorisation error (§8): an error
        whose `status` is `403` and whose `message` is the binary `Unauthorized.`.
        **No** name is registered.
   2. **Register** (operator confirmed): perform the unconditional registration
-     (§5.2):
+     (§5.2) with the `key` and `value` of step 1:
      a. Write `value` into the node's content store, obtaining its storage path /
         identifier.
      b. **Link** that stored value at the registry path
@@ -275,24 +276,20 @@ its stored value (or `not_found`).
 ## 7. Security & authority
 
 - **Register is operator-gated, failure-closed.** Only the **operator** may
-  register a name. The device determines operator status by delegating to the
-  node-meta `is-operator` contract: the request's **signers** (committers) are
-  compared against the URI that `hb_committer:uri/2` gives for the operator
-  (else the node's own signing key). A request not signed by the operator is
-  **denied** with the `403`/`Unauthorized.` error and changes nothing. Concretely,
-  the check resolves the `is-operator` key on a `meta@1.0`-bound message, passing
-  the committed register request under `body` —
-  `hb_ao:resolve(#{<<"device">> => <<"meta@1.0">>}, #{<<"path">> =>
-  <<"is-operator">>, <<"body">> => Req}, Opts#{<<"hashpath">> => ignore})` — and
-  branches on the contract's return: `{ok, true}` (operator) → register;
-  `{ok, false}` → deny. The signer extraction from `body` is
-  `meta@1.0`'s concern (see its spec); this device only reads the boolean.
-- **Unclaimed node.** If the node has **no** configured operator **and no**
-  signing key (it is *unclaimed*), the operator check fails for **every**
-  caller, so no one can register a name. (This mirrors the node-meta
-  `is-operator` semantics; registration requires the operator's signature.)
-  Reimplementers MUST NOT add an independent authority model — the gate is
-  exactly "is the request from the operator".
+  register a name, and only with the `key` and `value` that it signed. The device
+  verifies each commitment of the request by the committer that
+  `hb_committer:uri/2` gives for the operator (else for the node's own signing
+  key), and reads `key` and `value` only from the keys that those commitments
+  cover. For a request received over HTTP, they are verified on the request as
+  the client sent it, before its path is split into messages. A `key` or `value`
+  that only another signer's commitment, or the path or query of the request,
+  gives is not read. A request with no verifying commitment of the operator is
+  **denied** with the `403`/`Unauthorized.` error and changes nothing.
+- **Unclaimed node.** If the node has **no** configured operator **and no** signing
+  key (it is *unclaimed*), no commitment is the operator's, so every registration
+  is denied. Reimplementers MUST NOT add an independent authority model — the
+  gate is exactly "the request carries a verified commitment of the operator,
+  which covers `key` and `value`".
 - **Lookup is unauthenticated.** Resolving a name (`lookup` / default / via
   `name@1.0`) requires **no** commitment and is answerable for any caller. It
   discloses only values the operator chose to register. An unregistered name
@@ -317,9 +314,10 @@ its stored value (or `not_found`).
   `Unauthorized.` are normative.)
 - This device defines **no** error for an unauthenticated `lookup` (lookup never
   requires authority).
-- Errors arising inside the delegated operator check or the storage layer (other
-  than the write-failure mapped to `not_found` above) propagate as encountered;
-  this device does not re-wrap them.
+- An error while verifying the operator's commitments gives the authorisation
+  error. Errors arising inside the storage layer (other than the write-failure
+  mapped to `not_found` above) propagate as encountered; this device does not
+  re-wrap them.
 
 ## 9. Composition
 
@@ -366,12 +364,14 @@ An implementation MUST exhibit the following externally observable behaviours:
    `value` to the content store, links it at the durable path
    `local-name@1.0/<normalised-key>`, refreshes the in-node names index, and
    returns `{ok, <<"Registered.">>}`. Immediately afterwards, a `lookup` of that
-   name returns the registered value.
+   name returns the registered value. The `key` and `value` are those that the
+   operator's commitment covers: a `key` or `value` that another signer, or the
+   path or query of the request, gives is never registered.
 5. `register` from a **non-operator** caller (on a claimed node) registers nothing
    and returns the structured error with `status = 403` and `message =
    Unauthorized.`.
-6. On an **unclaimed** node (no operator and no node key), `register` returns
-   the `403` error for every caller (the operator gate fails).
+6. On an **unclaimed** node (no operator and no node key), `register` denies
+   every caller with that error.
 7. `register` returns the bare atom `not_found` if the durable write of the value
    fails, and in that case stores no name and creates no link.
 8. The registry namespace is the literal binary `local-name@1.0`; each name is
@@ -401,9 +401,9 @@ An implementation MUST exhibit the following externally observable behaviours:
   stored values (only the observable registry path `local-name@1.0/<normalised-name>`,
   the `local-names` option key, and the keyed-`get` resolution semantics are
   normative).
-- The cryptographic details of the operator/signer check (see `message@1.0`
-  commitment/`signers` semantics and the node-meta `is-operator` contract) — only
-  that registration succeeds iff the request is the operator's.
+- The cryptographic details of the operator check (see `message@1.0` commitment
+  semantics) — only that registration succeeds iff a commitment of the operator
+  verifies on the request and covers its `key` and `value`.
 - The mechanics of `name@1.0` resolver iteration, matching, and the `load`
   dereferencing of a resolved pointer (see `name@1.0`) — this spec constrains only
   what value this device returns for a given name.
@@ -429,8 +429,3 @@ An implementation MUST exhibit the following externally observable behaviours:
   the two are distinguished by the operation (register vs lookup), not by the
   value. Flagged as a slightly surprising error shape an implementer must
   reproduce for parity.
-- **Operator-check source of signers.** The authority check evaluates the request
-  in `body` (the committed request envelope) for its signers, consistent with the
-  node-meta `is-operator` contract; the exact unwrapping (whole request vs its
-  `body`) is that contract's concern. An implementer MUST defer to the node-meta
-  `is-operator` semantics rather than re-deriving signer extraction here.

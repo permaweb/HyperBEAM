@@ -72,7 +72,7 @@ read(Address, Variant, Opts) ->
         {ok, Cached}
     else
         _ ->
-            case hb_client_gateway:location(Address, Variant, Opts) of
+            case gateway_location(Address, Variant, Opts) of
                 {ok, Location} ->
                     dev_location_cache:write(Location, Opts),
                     {ok, Location};
@@ -85,6 +85,20 @@ read(Address, Variant, Opts) ->
                         }
                     }
             end
+    end.
+
+%% @doc Read the location record of an address from a gateway. A gateway may
+%% answer a query with a record that another wallet signed, so we return the
+%% record only if the address is its sole signer. We compare the signers with
+%% the URI of the address, so the address matches in any of its forms.
+gateway_location(Address, Variant, Opts) ->
+    maybe
+        {ok, Location} ?= hb_client_gateway:location(Address, Variant, Opts),
+        Signers = hb_message:signers(Location, Opts),
+        true ?=
+            Signers =:= [hb_committer:uri(Address, Opts)]
+            orelse {error, <<"Address is not the sole signer of the record.">>},
+        {ok, Location}
     end.
 
 %% @doc Find the latest known nonce for an address by checking the local cache
@@ -343,13 +357,14 @@ write_foreign(Base, RawReq, Opts) ->
             )
             orelse {error, <<"Invalid location record type.">>},
         true ?=
-            (hb_maps:get(<<"url">>, MaybeLocation, Opts) =/= not_found)
+            (hb_maps:get(<<"url">>, MaybeLocation, not_found, Opts) =/= not_found)
             orelse {error, <<"Missing location record URL.">>},
         true ?=
-            (hb_maps:get(<<"nonce">>, MaybeLocation, Opts) =/= not_found)
+            (hb_maps:get(<<"nonce">>, MaybeLocation, not_found, Opts) =/= not_found)
             orelse {error, <<"Missing location record nonce.">>},
         true ?=
-            (hb_maps:get(<<"time-to-live">>, MaybeLocation, Opts) =/= not_found)
+            (hb_maps:get(<<"time-to-live">>, MaybeLocation, not_found, Opts)
+                =/= not_found)
             orelse {error, <<"Missing location record time-to-live.">>},
         Nonce = hb_util:int(hb_ao:get(<<"nonce">>, MaybeLocation, 0, Opts)),
         SignerChecks =
@@ -484,6 +499,31 @@ register_scheduler_test() ->
         )
     ).
 
+%% @doc `known' refuses a signed location record that has no nonce.
+known_requires_nonce_test() ->
+    Opts =
+        #{
+            <<"store">> => [hb_test_utils:test_store()],
+            <<"priv-wallet">> => ar_wallet:new()
+        },
+    Record =
+        hb_message:commit(
+            #{
+                <<"type">> => <<"location">>,
+                <<"url">> => <<"https://hyperbeam-test-ignore.com">>,
+                <<"time-to-live">> => 60 * 60 * 1000
+            },
+            Opts
+        ),
+    ?assertEqual(
+        {error, <<"Missing location record nonce.">>},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"location@1.0">> },
+            Record#{ <<"path">> => <<"known">>, <<"method">> => <<"POST">> },
+            Opts
+        )
+    ).
+
 %% @doc Test that unsigned GET calls to `node' return the same location record
 %% once one has been generated.
 unsigned_get_node_is_idempotent_test() ->
@@ -497,6 +537,8 @@ unsigned_get_node_is_idempotent_test() ->
     FirstLocation = hb_ao:get(<<"body">>, FirstRes, FirstRes, #{}),
     Address = hb_test_utils:committer(Wallet),
     {ok, CachedAfterFirst} = dev_location_cache:read(Address, Opts),
+    % The cached record keeps the signature of the node that signed it.
+    ?assertEqual([Address], hb_message:signers(CachedAfterFirst, Opts)),
     timer:sleep(10),
     {ok, SecondRes} = hb_http:get(Node, <<"/~location@1.0/node">>, #{}),
     SecondLocation = hb_ao:get(<<"body">>, SecondRes, SecondRes, #{}),

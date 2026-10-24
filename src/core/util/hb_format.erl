@@ -413,11 +413,16 @@ error(ErrorMsg, Opts) ->
     Stacktrace = hb_maps:get(<<"stacktrace">>, ErrorMsg, <<"[No trace]">>, Opts),
     hb_util:bin(
         [
-            <<"Termination type: '">>, Type,
-            <<"'\n\nStacktrace:\n\n">>, Stacktrace,
-            <<"\n\nError details:\n\n">>, Details
+            <<"Termination type: '">>, error_value(Type, Opts),
+            <<"'\n\nStacktrace:\n\n">>, error_value(Stacktrace, Opts),
+            <<"\n\nError details:\n\n">>, error_value(Details, Opts)
         ]
     ).
+
+%% @doc Format a value of an error message as a string. A binary is returned
+%% as is. Any other term is printed by `term/2'.
+error_value(Bin, _Opts) when is_binary(Bin) -> Bin;
+error_value(Term, Opts) -> term(Term, Opts).
 
 %% @doc Take a series of strings or a combined string and format as a
 %% single string with newlines and indentation to the given level. Note: This
@@ -1125,6 +1130,11 @@ private_message_test() ->
     ?assertEqual(
         "priv_wallet: redacted",
         term({priv_wallet, <<"private-marker">>})
+    ),
+    % `error/2' prints a message in `details' without its private keys.
+    ?assertEqual(
+        ?MODULE:error(#{ <<"details">> => #{} }, #{}),
+        ?MODULE:error(#{ <<"details">> => #{ <<"priv">> => 1 } }, #{})
     ).
 
 private_trace_test() ->

@@ -15,7 +15,7 @@
 %%% available for reading instantly (`optimistically'), even before the
 %%% transaction is dispatched.
 -module(dev_bundler).
--export([tx/3, item/3, ensure_server/1]).
+-export([device_info/1, tx/3, item/3, ensure_server/1]).
 -export([get_state/0, get_state/1]).
 
 -include("include/hb.hrl").
@@ -29,6 +29,9 @@
 -define(DEFAULT_MAX_ITEMS, 1000).
 
 %%% Public interface.
+
+%% @doc Export `tx' and `item' as keys; the server functions are not keys.
+device_info(_) -> #{ exports => [<<"tx">>, <<"item">>] }.
 
 %% @doc An alias for `item/3'.
 -spec tx(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
@@ -921,7 +924,10 @@ unsigned_dataitem_test_parallel() ->
                 <<"error">> := <<"invalid-item">>,
                 <<"details">> := <<"unsigned-item">>
             }},
-            Response)
+            Response),
+        % The server functions are not keys, so a client cannot start a server.
+        ?assertEqual({error, not_found},
+            hb_http:get(Node, <<"/~bundler@1.0/ensure-server">>, ClientOpts))
     after
         %% Always cleanup, even if test fails
         stop_test_servers(ServerHandle, NodeOpts)
@@ -1141,7 +1147,7 @@ await_bundle_test_parallel() ->
     {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         chunk => fun(_Req) ->
             Parent ! {chunk_started, self()},
-            receive release_chunk -> ok after 1000 -> ok end,
+            receive release_chunk -> ok end,
             {200, <<"OK">>}
         end,
         price => {200, integer_to_binary(Price)},
@@ -1174,8 +1180,6 @@ await_bundle_test_parallel() ->
         ChunkHandler =
             receive
                 {chunk_started, PID} -> PID
-            after 1000 ->
-                error(await_bundle_chunk_not_started)
             end,
         receive
             {await_bundle_result, _EarlyResult} ->
@@ -1187,8 +1191,6 @@ await_bundle_test_parallel() ->
         Result =
             receive
                 {await_bundle_result, AwaitResult} -> AwaitResult
-            after 2000 ->
-                error(await_bundle_result_timeout)
             end,
         ?assertMatch(
             {ok, #{

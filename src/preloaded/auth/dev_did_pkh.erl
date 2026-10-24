@@ -51,9 +51,9 @@ from(Committer, #{ <<"type">> := <<"uri">> }, _Opts) ->
     #{ type := binary(), _ => _ },
     #{ _ => _ }
 ) -> {ok, binary()} | {error, _}.
-to(Committer, #{ <<"type">> := <<"uri">> }, _Opts) ->
+to(Committer, #{ <<"type">> := <<"uri">> }, Opts) ->
     maybe
-        {ok, Account} ?= account(Committer),
+        {ok, Account} ?= account(Committer, Opts),
         {ok, <<"did:pkh:", Account/binary>>}
     end.
 
@@ -82,17 +82,17 @@ commit(Committer, Req, _Opts) ->
     },
     #{ _ => _ }
 ) -> {ok, boolean()}.
-verify(Committer, Req, _Opts) ->
-    case account(Committer) of
+verify(Committer, Req, Opts) ->
+    case account(Committer, Opts) of
         {ok, Account} -> lib_did:verify(Account, Req, fun key_account/2);
         {error, _} -> {ok, false}
     end.
 
 %% @doc Return the account of a committer: its `body' if it has one, else the
 %% account of its key.
-account(#{ <<"body">> := Account }) ->
-    {ok, Account};
-account(#{ <<"owner">> := Owner, <<"type">> := Type }) ->
+account(#{ <<"body">> := Account }, Opts) ->
+    {ok, hb_cache:ensure_loaded(Account, Opts)};
+account(#{ <<"owner">> := Owner, <<"type">> := Type }, _Opts) ->
     key_account(Owner, lib_did:key_type(Type)).
 
 %% @doc Return the CAIP-10 account of a public key, using the address that
@@ -151,6 +151,16 @@ uri_test() ->
         {ok, <<"did:pkh:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:",
             "7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv">>},
         hb_uri:to(Solana, #{ <<"scheme">> => <<"did">> }, Opts)
+    ),
+    % Check that the committer of the Solana URI gives the same URI after it is
+    % written to the store and read back, with its 84-byte `body' as a link.
+    {ok, SolanaURI} = hb_uri:to(Solana, #{ <<"scheme">> => <<"did">> }, Opts),
+    {ok, SolanaCommitter} = hb_uri:from(SolanaURI, Opts),
+    {ok, SolanaID} = hb_cache:write(SolanaCommitter, Opts),
+    {ok, SolanaRead} = hb_cache:read(SolanaID, Opts),
+    ?assertEqual(
+        {ok, SolanaURI},
+        hb_uri:to(SolanaRead, #{ <<"scheme">> => <<"did">> }, Opts)
     ).
 
 %% @doc Ensure that a committer's signature verifies with the committer read

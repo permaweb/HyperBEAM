@@ -454,7 +454,9 @@ has_named(Base, Req, Opts) ->
         <<"none">> -> true;
         NamedCommitters ->
             lists:all(
-                fun(Committer) -> lists:member(Committer, Committers) end,
+                fun(Committer) ->
+                    lists:member(hb_committer:uri(Committer, Opts), Committers)
+                end,
                 lists:flatten([NamedCommitters])
             )
     end andalso
@@ -713,7 +715,9 @@ with_relevant_commitments(Base, Req, Opts) ->
 %% the returned list will be the union of the two lists. In each case, they
 %% may specify `all' or `none' for each group. `any' selects every
 %% commitment, as `all' does. If no specifiers are provided,
-%% the default is `all' for commitments -- also implying `all' for committers.
+%% the default is `none' for both commitments and committers. With `none' for
+%% both, the returned list holds the unsigned commitments of the default
+%% commitment device, if there are any.
 commitment_ids_from_request(Base, Req, Opts) ->
     Commitments = maps:get(<<"commitments">>, Base, #{}),
     ReqCommitters =
@@ -761,7 +765,8 @@ commitment_ids_from_request(Base, Req, Opts) ->
                     if is_list(RawCommitterAddrs) -> RawCommitterAddrs;
                     true -> [RawCommitterAddrs]
                     end,
-                commitment_ids_from_committers(CommitterAddrs, Commitments, Opts)
+                URIs = [hb_committer:uri(C, Opts) || C <- CommitterAddrs],
+                commitment_ids_from_committers(URIs, Commitments, Opts)
         end,
     Res =
         case FromCommitterAddrs ++ FromCommitmentIDs of
@@ -1198,6 +1203,12 @@ key_from_device_test() ->
     ?assertEqual(
         hb_ao:resolve(Msg, <<"with-commitments">>, NoCache),
         hb_ao:resolve(Msg, <<"with-commitments">>, #{})
+    ),
+    % `with_commitments' maps to the same function, and is computed too.
+    Underscored = #{ <<"with_commitments">> => 3 },
+    ?assertEqual(
+        hb_ao:resolve(Underscored, <<"with_commitments">>, NoCache),
+        hb_ao:resolve(Underscored, <<"with_commitments">>, #{})
     ),
     % The device answers the key `info': it is not read from the message.
     ?assertNot(

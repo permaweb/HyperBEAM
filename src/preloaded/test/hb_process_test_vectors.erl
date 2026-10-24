@@ -613,6 +613,9 @@ error_slot_is_skipped_test_parallel() ->
                 function throw(base)
                     error("The process failed.")
                 end
+                function text(base)
+                    return "x"
+                end
                 """
             >>,
             Opts
@@ -621,6 +624,7 @@ error_slot_is_skipped_test_parallel() ->
     schedule_test_message(Base, <<"inc">>, #{ <<"path">> => <<"inc">> }, Opts),
     schedule_test_message(Base, <<"fail">>, #{ <<"path">> => <<"fail">> }, Opts),
     schedule_test_message(Base, <<"inc">>, #{ <<"path">> => <<"inc">> }, Opts),
+    schedule_test_message(Base, <<"text">>, #{ <<"path">> => <<"text">> }, Opts),
     schedule_test_message(Base, <<"throw">>, #{ <<"path">> => <<"throw">> }, Opts),
     % The later slot computes from the state before the erroring slot.
     {ok, Res} =
@@ -636,11 +640,15 @@ error_slot_is_skipped_test_parallel() ->
         hb_ao:resolve(Base, #{ <<"path">> => <<"compute">>, <<"slot">> => 2 }, Opts),
     ?assertEqual(<<"error">>, hb_ao:get(<<"results/type">>, ErrSlot, Opts)),
     ?assertEqual(2, hb_ao:get(<<"count">>, ErrSlot, Opts)),
+    % A slot whose result is not a message is stored as an error.
+    {ok, TextSlot} =
+        hb_ao:resolve(Base, #{ <<"path">> => <<"compute">>, <<"slot">> => 4 }, Opts),
+    ?assertEqual(<<"error">>, hb_ao:get(<<"results/type">>, TextSlot, Opts)),
     % An error that the script raises and does not catch is a failure, so the
     % slot is not stored.
     ?assertMatch(
         {failure, _},
-        hb_ao:resolve(Base, #{ <<"path">> => <<"compute">>, <<"slot">> => 4 }, Opts)
+        hb_ao:resolve(Base, #{ <<"path">> => <<"compute">>, <<"slot">> => 5 }, Opts)
     ),
     % A compute server that does not answer is a failure of this node, not an
     % error of the process, so the slot is not stored.
