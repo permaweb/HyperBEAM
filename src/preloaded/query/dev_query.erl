@@ -35,12 +35,13 @@
 -include("include/hb.hrl").
 
 %%% Keys that should typically be excluded from searches: the request's
-%%% `commitments', the device's parameters, and the keys that the node's
-%%% HTTP server sets on every request.
+%%% `commitments', the device's parameters, the keys that the node's HTTP
+%%% server sets on every request, and the caller's `ao-peer' and `user-agent'.
 -define(
     DEFAULT_EXCLUDES,
     [<<"path">>, <<"commitments">>, <<"return">>, <<"exclude">>, <<"only">>,
-        <<"method">>, <<"accept">>, <<"accept-bundle">>, <<"host">>]
+        <<"method">>, <<"accept">>, <<"accept-bundle">>, <<"host">>,
+        <<"ao-peer">>, <<"user-agent">>]
 ).
 
 device_info(_Opts) ->
@@ -444,4 +445,13 @@ http_test() ->
             Opts
         ),
     ?assertEqual(<<"binary-value">>, hb_maps:get(<<"basic">>, Msg, Opts)),
+    % `all' leaves out the caller's `ao-peer' and `user-agent'.
+    ?assertEqual(
+        {ok, 1},
+        hb_http:get(
+            Node,
+            <<"~query@1.0/all?basic=binary-value&return=count">>,
+            Opts
+        )
+    ),
     ok.
