@@ -80,9 +80,10 @@ purposes of `get`/`set`/`keys`/commitment.
   base also carries the trie structure (edge labels / `node-value` / implicit
   leaves) and a `commitments` map (§4 `set`).
 - **`set` request shape:** a request message whose `path` is `set`. Every key of
-  the request **other than `path`** is an `(stored-key, value)` pair to
+  the request **except `path` and `device`** is an `(stored-key, value)` pair to
   insert/update. There is no separate "values" envelope — the request keys *are*
   the stored keys. Multiple keys MAY be supplied in one request (bulk insert).
+  A `device` key sets the `device` of the base message (§4 `set`).
 - **`get`/default request shape:** the key to look up is supplied either as the
   resolved key name (the default-handler path segment) or as a `key` field in the
   request. A lookup MUST be given a key; absent one it errors (§8).
@@ -97,7 +98,8 @@ purposes of `get`/`set`/`keys`/commitment.
      pairs are applied MUST NOT affect the resulting trie topology or stored
      values (insertion is order-independent — see §6).
   2. For each `(K, V)` apply the **insertion algorithm** (below) to the trie,
-     threading the updated trie into the next pair.
+     threading the updated trie into the next pair. If `K` is `device`, set
+     the root's `device` to `V` instead.
   3. After all pairs are applied, produce the committed result:
      a. Strip all existing commitments from the trie and from every nested
         submessage (the structure changed, so prior signatures no longer apply),

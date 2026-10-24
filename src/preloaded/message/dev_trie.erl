@@ -95,7 +95,7 @@ get(TrieNode, Req, Opts) ->
             end
     end.
 
-%% @doc Set keys and their values in the trie.
+%% @doc Set keys and their values in the trie, and `device' on the message.
 -spec set(#{ _ => _ }, #{ path => binary(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ _ => _ }}.
 set(Trie, Req, Opts) ->
@@ -112,6 +112,8 @@ do_set(Trie, [], Opts) ->
         ),
     {ok, _} = hb_cache:write(CommittedTrie, Opts),
     CommittedTrie;
+do_set(Trie, [{<<"device">>, Device} | KeyVals], Opts) ->
+    do_set(Trie#{<<"device">> => Device}, KeyVals, Opts);
 do_set(Trie, [{Key, Val} | KeyVals], Opts) ->
     NewTrie = insert(Trie, Key, Val, Opts),
     do_set(NewTrie, KeyVals, Opts).
@@ -520,6 +522,15 @@ device_prefix_test() ->
                 Entries
             ),
             ?assertEqual(<<"trie@1.0">>, hb_maps:get(<<"device">>, Trie, Opts)),
+            % `set' of `device' changes it on the message, not in the trie.
+            ?assertEqual(
+                <<"message@1.0">>,
+                hb_maps:get(
+                    <<"device">>,
+                    hb_ao:set(Trie, <<"device">>, <<"message@1.0">>, Opts),
+                    Opts
+                )
+            ),
             {ok, ID} = hb_cache:write(Trie, Opts),
             {ok, Loaded} = hb_cache:read(ID, Opts),
             lists:foreach(
