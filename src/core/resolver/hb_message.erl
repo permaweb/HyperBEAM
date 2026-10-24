@@ -70,8 +70,6 @@
 -export([without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
 -export([diff/3, match/2, match/3, match/4, find_subject/4]).
-%%% Helpers:
--export([default_tx_list/0, filter_default_keys/1]).
 %%% Debugging tools:
 -export([print/1]).
 -include("include/hb.hrl").
@@ -730,23 +728,11 @@ unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
     Map2 = RawMap2#{ <<"commitments">> => SignedCommitments2 },
     Keys1 =
         hb_maps:keys(
-            NormMap1 =
-                minimize(
-                    normalize(
-                        hb_ao:normalize_keys(Map1, Opts),
-                        Opts
-                    )
-                )
+            NormMap1 = minimize(hb_ao:normalize_keys(Map1, Opts))
         ),
     Keys2 =
         hb_maps:keys(
-            NormMap2 =
-                minimize(
-                    normalize(
-                        hb_ao:normalize_keys(Map2, Opts),
-                        Opts
-                    )
-                )
+            NormMap2 = minimize(hb_ao:normalize_keys(Map2, Opts))
         ),
     PrimaryKeysPresent =
         (Mode == primary) andalso
@@ -822,9 +808,6 @@ unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
                 }
             )
     end.
-	
-matchable_keys(Map) ->
-    lists:sort(lists:map(fun hb_ao:normalize_key/1, hb_maps:keys(Map))).
 
 %% @doc Return the numeric differences between two messages, matching deeply
 %% across nested messages. If the values are non-numeric, the new value is 
@@ -1009,41 +992,6 @@ minimize(Map, ExtraKeys) ->
         end,
         maps:map(fun(_K, V) -> minimize(V) end, Map)
     ).
-
-%% @doc Return a map with only the keys that necessary, without those that can
-%% be regenerated.
-normalize(Map, Opts) when is_map(Map) orelse is_list(Map) ->
-    NormalizedMap = hb_ao:normalize_keys(Map, Opts),
-    FilteredMap = filter_default_keys(NormalizedMap, Opts),
-    hb_maps:with(matchable_keys(FilteredMap), FilteredMap);
-normalize(Other, _Opts) ->
-    Other.
-
-%% @doc Remove keys from a map that have the default values found in the tx
-%% record. A value given as a link is loaded before it is compared.
-filter_default_keys(Map) -> filter_default_keys(Map, #{}).
-filter_default_keys(Map, Opts) ->
-    DefaultsMap = default_tx_message(),
-    maps:filter(
-        fun(Key, Value) ->
-            case hb_maps:find(hb_ao:normalize_key(Key), DefaultsMap) of
-                {ok, Default} ->
-                    hb_cache:ensure_loaded(Value, Opts) =/= Default;
-                _ -> true
-            end
-        end,
-        Map
-    ).
-
-%% @doc Get the normalized fields and default values of the tx record.
-default_tx_message() ->
-    hb_maps:from_list(default_tx_list()).
-
-%% @doc Get the ordered list of fields as AO-Core keys and default values of
-%% the tx record.
-default_tx_list() ->
-    Keys = lists:map(fun hb_ao:normalize_key/1, record_info(fields, tx)),
-    lists:zip(Keys, tl(tuple_to_list(#tx{}))).
 
 %%% Tests
 

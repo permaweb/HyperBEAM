@@ -387,24 +387,6 @@ codec_roundtrip_conversion_is_idempotent_test(Codec, Opts) ->
     ?assert(is_idempotent(Roundtrip, Signed, Opts)),
     ?assert(is_idempotent(Roundtrip, ComplexMsg, Opts)).
 
-%% @doc Test that the filter_default_keys/1 function removes TX fields
-%% that have the default values found in the tx record, but not those that
-%% have been set by the user.
-default_keys_removed_test() ->
-    TX = #tx { unsigned_id = << 1:256 >>, anchor = << 2:256 >> },
-    TXMap = #{
-        <<"unsigned_id">> => TX#tx.unsigned_id,
-        <<"anchor">> => TX#tx.anchor,
-        <<"owner">> => TX#tx.owner,
-        <<"target">> => TX#tx.target,
-        <<"data">> => TX#tx.data
-    },
-    FilteredMap = hb_message:filter_default_keys(TXMap),
-    ?assertEqual(<< 1:256 >>, hb_maps:get(<<"unsigned_id">>, FilteredMap)),
-    ?assertEqual(<< 2:256 >>, hb_maps:get(<<"anchor">>, FilteredMap, not_found)),
-    ?assertEqual(not_found, hb_maps:get(<<"owner">>, FilteredMap, not_found)),
-    ?assertEqual(not_found, hb_maps:get(<<"target">>, FilteredMap, not_found)).
-
 minimization_test() ->
     Msg = #{
         <<"unsigned_id">> => << 1:256 >>,
@@ -420,6 +402,8 @@ match_modes_test() ->
     Res = #{ <<"a">> => 1, <<"b">> => 2, <<"c">> => 3 },
     ?assert(hb_message:match(Base, Req, only_present)),
     ?assert(hb_message:match(Req, Base, strict) =/= true),
+    % `match' compares a key with a `#tx{}' default value like any other key.
+    ?assert(hb_message:match(#{ <<"quantity">> => 0 }, #{}, strict) =/= true),
     ?assert(hb_message:match(Base, Res, primary)),
     ?assert(hb_message:match(Res, Base, primary) =/= true),
     StrictMap =
