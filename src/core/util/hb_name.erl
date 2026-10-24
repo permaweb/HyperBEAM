@@ -5,7 +5,7 @@
 %%% There can only ever be one registrant for a given name at a time.
 -module(hb_name).
 -export([start/0, register/1, register/2, unregister/1, lookup/1, all/0]).
--export([singleton/2, atomic/2]).
+-export([singleton/2, atomic/2, ok_or_atomic_apply/2, ok_or_atomic_apply/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -define(NAME_TABLE, hb_name_registry).
@@ -127,6 +127,33 @@ atomic(Name, Fun) ->
         {'DOWN', Ref, process, Runner, _} -> atomic(Name, Fun)
     end.
 
+%% @doc Call `Fun' and return its result. If it returns `{error, _}', call
+%% `Fun' again under `Name', one caller at a time (`atomic/2'), and return
+%% its result. If that is `{error, _}' too and `AtomicErrFun' is given, call
+%% `AtomicErrFun' and return its result. To make a value once for concurrent
+%% callers, give a `Fun' that reads the value and returns `{ok, Value}', or
+%% `{error, not_found}' if there is none, and an `AtomicErrFun' that makes the
+%% value where `Fun' reads it and returns `{ok, Value}'. One caller makes the
+%% value, and the others read it with `Fun'. An exception in either function
+%% is raised in the caller.
+ok_or_atomic_apply(Name, Fun) ->
+    ok_or_atomic_apply(Name, Fun, undefined).
+ok_or_atomic_apply(Name, Fun, AtomicErrFun) ->
+    case Fun() of
+        {error, _} ->
+            atomic(
+                Name,
+                fun() ->
+                    case Fun() of
+                        {error, _} when AtomicErrFun =/= undefined ->
+                            AtomicErrFun();
+                        Else -> Else
+                    end
+                end
+            );
+        Else -> Else
+    end.
+
 %%% @doc Lookup a name -> PID.
 lookup(Name) when is_atom(Name) ->
     case whereis(Name) of
@@ -220,6 +247,35 @@ atomic_test() ->
     ),
     % An exception in `Fun' is raised in the caller.
     ?assertThrow(test, atomic(Name, fun() -> throw(test) end)).
+
+ok_or_atomic_apply_test() ->
+    Name = {ok_or_atomic_apply_test, os:timestamp()},
+    Made = atomics:new(1, []),
+    % Concurrent callers call `AtomicErrFun' once, and each gets its value.
+    ?assertEqual(
+        lists:duplicate(?CONCURRENT_REGISTRATIONS, {ok, 1}),
+        hb_pmap:parallel_map(
+            lists:seq(1, ?CONCURRENT_REGISTRATIONS),
+            fun(_) ->
+                ok_or_atomic_apply(
+                    Name,
+                    fun() ->
+                        case atomics:get(Made, 1) of
+                            0 -> {error, not_found};
+                            N -> {ok, N}
+                        end
+                    end,
+                    fun() -> {ok, atomics:add_get(Made, 1, 1)} end
+                )
+            end,
+            ?CONCURRENT_REGISTRATIONS
+        )
+    ),
+    % With no `AtomicErrFun', the error of the second call of `Fun' is returned.
+    ?assertEqual(
+        {error, not_found},
+        ok_or_atomic_apply(Name, fun() -> {error, not_found} end)
+    ).
 
 concurrency_test() ->
     Name = {concurrent_test, os:timestamp()},

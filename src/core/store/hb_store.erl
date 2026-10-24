@@ -185,33 +185,21 @@ find(StoreOpts) ->
 do_find(StoreOpts = #{ <<"store-module">> := Mod }) ->
     Name = maps:get(<<"name">>, StoreOpts, Mod),
     LookupName = {store, Mod, Name},
-    case get(LookupName) of
-        undefined ->
-            try persistent_term:get(LookupName) of
-                Instance1 ->
-                    EnsuredInstance = ensure_instance_alive(StoreOpts, Instance1),
-                    put(LookupName, EnsuredInstance),
-                    EnsuredInstance
-            catch
-                error:badarg -> start_via_singleton(StoreOpts, LookupName)
-            end;
-        InstanceMessage ->
-            ensure_instance_alive(StoreOpts, InstanceMessage)
+    case live(get(LookupName)) of
+        {error, not_found} ->
+            % Find the store's live instance, or start the store once.
+            {ok, Instance} =
+                hb_name:ok_or_atomic_apply(
+                    LookupName,
+                    fun() ->
+                        live(persistent_term:get(LookupName, undefined))
+                    end,
+                    fun() -> {ok, spawn_instance(StoreOpts)} end
+                ),
+            put(LookupName, Instance),
+            Instance;
+        {ok, Instance} -> Instance
     end.
-
-%% @doc Start a store in a process registered under its name, one process at a
-%% time (`hb_name:atomic/2'), and return its instance. If another process has
-%% started the store, return its instance. A start that fails raises in the
-%% caller.
-start_via_singleton(StoreOpts, LookupName) ->
-    hb_name:atomic(
-        LookupName,
-        fun() ->
-            try persistent_term:get(LookupName)
-            catch error:badarg -> spawn_instance(StoreOpts)
-            end
-        end
-    ).
 
 %% @doc Create a new instance of a store and return its term.
 spawn_instance(StoreOpts = #{ <<"store-module">> := Mod }) ->
@@ -232,15 +220,16 @@ spawn_instance(StoreOpts = #{ <<"store-module">> := Mod }) ->
         ok
     end.
 
-%% @doc Handle a found instance message. If it contains a PID, we check if it
-%% is alive. If it does not, we return it as is.
-ensure_instance_alive(StoreOpts, InstanceMessage = #{ <<"pid">> := Pid }) ->
+%% @doc Return `{ok, InstanceMessage}', or `{error, not_found}' if it is
+%% `undefined' or contains the PID of a process that has exited.
+live(undefined) -> {error, not_found};
+live(InstanceMessage = #{ <<"pid">> := Pid }) ->
     case is_process_alive(Pid) of
-        true -> InstanceMessage;
-        false -> spawn_instance(StoreOpts)
+        true -> {ok, InstanceMessage};
+        false -> {error, not_found}
     end;
-ensure_instance_alive(_, InstanceMessage) ->
-    InstanceMessage.
+live(InstanceMessage) ->
+    {ok, InstanceMessage}.
 
 %%% Library wrapper implementations.
 
@@ -1485,6 +1474,11 @@ reset_shared_instance_test() ->
     Store = hb_test_utils:test_store(hb_store_volatile),
     % Two processes that first use a store at once find one instance of it.
     ?assertMatch([I, I], hb_pmap:parallel_map([Store, Store], fun find/1, 2)),
+    % After its owner is killed, two Erlang processes at once find one instance.
+    #{ <<"pid">> := Owner } = find(Store),
+    exit(Owner, kill),
+    false = is_process_alive(Owner),
+    ?assertMatch([J, J], hb_pmap:parallel_map([Store, Store], fun find/1, 2)),
     ok = write(Store, #{ <<"before">> => <<"old">> }, #{}),
     {PID, Ref} =
         spawn_monitor(

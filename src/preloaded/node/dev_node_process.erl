@@ -39,26 +39,18 @@ lookup(Name, _Base, Req, Opts) ->
         {error, not_found} ->
             case hb_ao:get(<<"spawn">>, Req, true, Opts) of
                 true ->
-                    spawn_via_singleton(Name, Opts);
+                    % Spawn one process for lookups of the name at once.
+                    hb_name:ok_or_atomic_apply(
+                        {?MODULE, Name},
+                        fun() ->
+                            lookup(Name, #{}, #{ <<"spawn">> => false }, Opts)
+                        end,
+                        fun() -> spawn_register(Name, Opts) end
+                    );
                 false ->
                     {error, not_found}
             end
     end.
-
-%% @doc Spawn the node process for `Name' in an Erlang process registered under
-%% the name, one caller at a time (`hb_name:atomic/2'), and return it. If
-%% another caller has registered the name since this caller looked it up,
-%% return its process. A spawn that fails raises in the caller.
-spawn_via_singleton(Name, Opts) ->
-    hb_name:atomic(
-        {?MODULE, Name},
-        fun() ->
-            case lookup(Name, #{}, #{ <<"spawn">> => false }, Opts) of
-                {error, not_found} -> spawn_register(Name, Opts);
-                Found -> Found
-            end
-        end
-    ).
 
 %% @doc Spawn a new process according to the process definition found in the 
 %% node message, and register it with the given name.
