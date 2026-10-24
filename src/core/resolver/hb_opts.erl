@@ -840,7 +840,8 @@ coerce_value(_DefaultValue, Value) ->
 
 %% @doc Find a given identity from the `identities' map, and return the options
 %% merged with the sub-options for that identity.
-as(Identity, Opts) ->
+as(RawIdentity, Opts) ->
+    Identity = hb_committer:uri(RawIdentity, Opts),
     case identities(hb_http_server:with_node_committer(Opts)) of
         #{ Identity := SubOpts } ->
             ?event({found_identity_sub_opts_are, SubOpts}),
@@ -1220,6 +1221,11 @@ as_identity_test() ->
     ?assertMatch(
         {ok, #{ <<"priv-wallet">> := TestWallet1, <<"test-key">> := 1 }},
         as(hb_test_utils:committer(TestWallet1), Opts)
+    ),
+    % `as/2' finds an identity by the address of its wallet, as by its URI.
+    ?assertMatch(
+        {ok, #{ <<"priv-wallet">> := TestWallet1, <<"test-key">> := 1 }},
+        as(hb:address(TestWallet1), Opts)
     ),
     ?assertMatch(
         {ok, #{ <<"priv-wallet">> := TestWallet2, <<"test-key">> := 2 }},

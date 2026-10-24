@@ -87,7 +87,9 @@ uri(Value) ->
 %% @doc Return the URI of a committer given in any form, as `uri/1' does for
 %% a binary. A message that holds commitments gives the URI of its one signer,
 %% and a committer message gives the URI that its device's `to' gives with
-%% `characters => host'. Any other value is returned as it is.
+%% `characters => host'. Any other value is returned as it is. We leave out
+%% the query of a binary, such as the `?hint=' of a scheduler, so that the
+%% URIs of one committer compare equal.
 uri(Msg = #{ <<"commitments">> := _ }, Opts) ->
     case hb_message:signers(Msg, Opts) of
         [Signer] -> Signer;
@@ -104,6 +106,9 @@ uri(Committer = #{ <<"device">> := _ }, Opts) ->
         {ok, URI} -> URI;
         {error, _} -> Committer
     end;
+uri(Value, _Opts) when is_binary(Value) ->
+    [Main | _Query] = binary:split(Value, <<"?">>),
+    uri(Main);
 uri(Value, _Opts) ->
     uri(Value).
 
@@ -256,6 +261,8 @@ uri_test() ->
     ?assertEqual(URI, uri(<<"did:ar:", Address/binary>>)),
     ?assertEqual(URI, uri(encode({address, ?RSA_KEY_TYPE}, Address))),
     ?assertEqual(<<URI/binary, "?hint=x">>, uri(<<Address/binary, "?hint=x">>)),
+    % `uri/2' leaves the query out.
+    ?assertEqual(URI, uri(<<Address/binary, "?hint=x">>, Opts)),
     ?assertEqual(URI, uri(Wallet, Opts)),
     Signed =
         hb_message:commit(

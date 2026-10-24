@@ -89,15 +89,14 @@ read(Address, Variant, Opts) ->
 
 %% @doc Read the location record of an address from a gateway. A gateway may
 %% answer a query with a record that another wallet signed, so we return the
-%% record only if the address is its sole signer. We compare the signers and the
-%% address as addresses, so a committer matches in any of its forms.
+%% record only if the address is its sole signer. We compare the signers with
+%% the URI of the address, so the address matches in any of its forms.
 gateway_location(Address, Variant, Opts) ->
     maybe
         {ok, Location} ?= hb_client_gateway:location(Address, Variant, Opts),
         Signers = hb_message:signers(Location, Opts),
         true ?=
-            (lists:map(fun hb_util:committer_address/1, Signers)
-                =:= [hb_util:committer_address(Address)])
+            Signers =:= [hb_committer:uri(Address, Opts)]
             orelse {error, <<"Address is not the sole signer of the record.">>},
         {ok, Location}
     end.

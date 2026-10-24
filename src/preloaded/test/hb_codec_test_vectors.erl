@@ -1150,7 +1150,21 @@ deep_multisignature_test() ->
     Committers = hb_message:signers(MsgSignedTwice, Opts),
     ?event({committers, Committers}),
     ?assert(lists:member(hb_test_utils:committer(Wallet1), Committers)),
-    ?assert(lists:member(hb_test_utils:committer(Wallet2), Committers)).
+    ?assert(lists:member(hb_test_utils:committer(Wallet2), Committers)),
+    % A committer given by its address selects only its own commitment.
+    Address1 = hb:address(Wallet1),
+    ?assert(hb_message:verify(MsgSignedTwice, [Address1], Opts)),
+    ?assertMatch(
+        {ok, _, _},
+        hb_message:commitment(Address1, MsgSignedTwice, Opts)
+    ),
+    ?assertEqual(
+        [hb_test_utils:committer(Wallet1)],
+        hb_message:signers(
+            hb_message:with_only_committers(MsgSignedTwice, [Address1], Opts),
+            Opts
+        )
+    ).
 
 deep_typed_message_id_test(Codec, Opts) ->
     Msg = #{

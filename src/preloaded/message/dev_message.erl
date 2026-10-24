@@ -454,7 +454,9 @@ has_named(Base, Req, Opts) ->
         <<"none">> -> true;
         NamedCommitters ->
             lists:all(
-                fun(Committer) -> lists:member(Committer, Committers) end,
+                fun(Committer) ->
+                    lists:member(hb_committer:uri(Committer, Opts), Committers)
+                end,
                 lists:flatten([NamedCommitters])
             )
     end andalso
@@ -763,7 +765,8 @@ commitment_ids_from_request(Base, Req, Opts) ->
                     if is_list(RawCommitterAddrs) -> RawCommitterAddrs;
                     true -> [RawCommitterAddrs]
                     end,
-                commitment_ids_from_committers(CommitterAddrs, Commitments, Opts)
+                URIs = [hb_committer:uri(C, Opts) || C <- CommitterAddrs],
+                commitment_ids_from_committers(URIs, Commitments, Opts)
         end,
     Res =
         case FromCommitterAddrs ++ FromCommitmentIDs of

@@ -404,7 +404,8 @@ with_only_committed(Msg, _, _) ->
 %% @doc Return the message with only the specified committers attached.
 with_only_committers(Msg, Committers) ->
     with_only_committers(Msg, Committers, #{}).
-with_only_committers(Msg, Committers, Opts) when is_map(Msg) ->
+with_only_committers(Msg, RawCommitters, Opts) when is_map(Msg) ->
+    Committers = [hb_committer:uri(C, Opts) || C <- RawCommitters],
     NewCommitments =
         hb_maps:filter(
             fun(_, #{ <<"committer">> := Committer }) ->
@@ -920,7 +921,8 @@ commitment(Spec, Msg, Opts) ->
 commitments(ID, Link, Opts) when ?IS_LINK(Link) ->
     commitments(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
 commitments(CommitterID, Msg, Opts) when is_binary(CommitterID) ->
-    commitments(#{ <<"committer">> => CommitterID }, Msg, Opts);
+    Committer = hb_committer:uri(CommitterID, Opts),
+    commitments(#{ <<"committer">> => Committer }, Msg, Opts);
 commitments(Spec = #{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
     % Unsigned is a special case: Match all of the commitments with a committer
     % first, remove them, then call `commitments` again with the remainder of
