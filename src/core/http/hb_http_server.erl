@@ -516,6 +516,8 @@ listener_protocol_options(ServerID, NodeMsg) ->
         env => #{ dispatch => Dispatcher, node_msg => NodeMsg },
         stream_handlers => [cowboy_stream_h],
         max_connections => infinity,
+        max_concurrent_streams =>
+            hb_opts:get(max_concurrent_streams, 100, NodeMsg),
         idle_timeout => hb_opts:get(idle_timeout, 300000, NodeMsg),
         proxy_header => hb_opts:get(http_proxy_protocol, false, NodeMsg),
         % `httpsig@1.0' sends a header for each key of a message whose value
@@ -1835,6 +1837,19 @@ proxy_protocol_options_test() ->
     Challenge = challenge_node(#{}, test, Opts),
     ?assertEqual(false,
         maps:get(proxy_header, listener_protocol_options(test, Challenge))).
+
+%% @doc An HTTP/2 listener bounds the concurrent streams of one connection and
+%% lets the node lower or raise the bound.
+http2_max_concurrent_streams_test() ->
+    ?assertEqual(100,
+        maps:get(max_concurrent_streams, listener_protocol_options(test, #{}))),
+    ?assertEqual(25,
+        maps:get(
+            max_concurrent_streams,
+            listener_protocol_options(
+                test, #{ <<"max-concurrent-streams">> => 25 }
+            )
+        )).
 
 %% @doc Check that the caller's IP is the PROXY header's source address or the
 %% socket's peer address, never an `x-real-ip' header, and that `ao-peer'
