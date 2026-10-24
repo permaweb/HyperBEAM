@@ -177,10 +177,12 @@ snapshot(RawBase, _Req, Opts) ->
 %% read from the cache is not initialized.
 init(Base, Req, Opts) ->
     ?event({init_called, {base, Base}, {req, Req}}),
+    % If the process does not set `requires-determinism', set it to `true',
+    % such that its execution devices give the same result on every node.
     {ok, Initialized} =
         lib_process:run_as(
             <<"execution">>,
-            Base,
+            hb_maps:merge(#{ <<"requires-determinism">> => true }, Base, Opts),
             #{ <<"path">> => <<"init">> },
             Opts
         ),

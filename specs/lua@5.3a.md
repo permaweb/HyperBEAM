@@ -105,6 +105,7 @@ rules are normative.
   | `module` | id \| message \| list \| name-map | one of `module` / inline body | The Lua source module(s) to load (§4.`init`). |
   | `content-type` + `body` (or `data`) | binary + binary | (alt. to `module`) | If `content-type` is a Lua content type, `body`, else `data`, is treated as an inline literal Lua module. |
   | `sandbox` | boolean \| list \| map | no (default `false`) | Standard-library sandbox spec (§7.1). |
+  | `requires-determinism` | boolean | no (default `false`) | Sandboxes the functions whose results depend on the node (§7.1). |
   | `device-sandbox` | list of device names | no (default unrestricted) | AO-Core device allow-list for host resolutions (§7.2). |
   | `function` | binary | no | Overrides the function name to call (else the resolved key) (§4.`compute`). |
   | `parameters` | list | no | Overrides the Lua call arguments (§4.`compute`). |
@@ -132,8 +133,8 @@ rules are normative.
 
 ### `init` (Base, Req → result) — load modules, build the Lua state
 
-- **Reads:** `module`, `content-type` + `body`, `sandbox`, `device-sandbox` from
-  the base message; node options.
+- **Reads:** `module`, `content-type` + `body`, `sandbox`,
+  `requires-determinism`, `device-sandbox` from the base message; node options.
 - **Behaviour (MUST):**
   1. **Idempotence.** If the base message's private area already holds a `state`,
      return the base message unchanged (the state is already initialised).
@@ -141,7 +142,8 @@ rules are normative.
      message (§4.1). With no `module` field and no inline body module, error
      (§8, `no Lua modules found`).
   3. **Create state.** Create a fresh Lua 5.3 interpreter state, and apply the
-     node option `lua-minimum-sandbox` to it (§7.1).
+     node option `lua-minimum-sandbox` to it, and the deterministic sandbox if
+     `requires-determinism` is set (§7.1).
   4. **Load each module** into the state, **in order**, evaluating the chunk so
      its top-level definitions (functions, globals) take effect. Each module is
      loaded under its **module reference** as the chunk name (used in stack
@@ -233,9 +235,9 @@ reserved key and not an existing field of the base message (§3).
      that carries `device => lua@5.3a` re-enters this same catch-all handler (it
      tries to call a Lua function named `function`/`parameters`) and does **not
      terminate**. The identical rule applies to **every** config field this
-     device reads off its own base — `module`, `sandbox`, `device-sandbox`, and
-     the snapshot location read by `normalize` (below): they are read as data or
-     as `message@1.0`, never through this device.
+     device reads off its own base — `module`, `sandbox`, `requires-determinism`,
+     `device-sandbox`, and the snapshot location read by `normalize` (below):
+     they are read as data or as `message@1.0`, never through this device.
   4. **Fully resolve** the arguments (force any lazy links to concrete values).
   5. **Encode** the arguments to Lua values (§5.1) and **call** the named global
      Lua function with them as its positional arguments, against the current
@@ -507,7 +509,9 @@ the carrier the process orchestrator snapshots via §4.`snapshot`.
   does not consult non-deterministic host facilities. The default sandbox is
   designed to remove the obvious sources of non-determinism and side effects
   (`os.execute`, `os.exit`, `os.getenv`, `os.remove`, `os.rename`, `os.tmpname`,
-  `loadfile`, `dofile`, `require` from disk) — see §7.1. A script that performs
+  `loadfile`, `dofile`, `require` from disk) — see §7.1. With
+  `requires-determinism`, `math.random`, `os.time`, `os.clock` and `os.date`
+  are sandboxed too (§7.1). A script that performs
   `ao.resolve` of a non-deterministic path, or that reads a non-sandboxed
   non-deterministic function, is **not** deterministic; determinism for process
   replay relies on the script restricting itself to deterministic inputs.
@@ -526,8 +530,9 @@ the carrier the process orchestrator snapshots via §4.`snapshot`.
 
 ### 7.1 Standard-library sandbox
 
-The node option `lua-minimum-sandbox` and the `sandbox` field on the base
-message control which Lua standard-library facilities are reachable. The device
+The node option `lua-minimum-sandbox` and the `sandbox` and
+`requires-determinism` fields on the base message control which Lua
+standard-library facilities are reachable. The device
 replaces each sandboxed path with an inert value (so calling/indexing it yields
 that value instead of the real function), addressing each function as a
 **path**, a list of keys through the global table (e.g. `os.execute` is the
@@ -540,6 +545,10 @@ path `["_G", "os", "execute"]`).
   - `loadfile`, `dofile`, `package.searchers`, `package.searchpath`;
   - `os.execute`, `os.exit`, `os.getenv`, `os.remove`, `os.rename`, `os.tmpname`.
   With `lua-minimum-sandbox => false`, neither applies.
+- `requires-determinism = true`: before the modules load, `math.random`,
+  `os.time`, `os.clock` and `os.date` are each replaced with `"sandboxed"`, as
+  their results depend on the node's random seed, clock and time zone. This
+  applies with `lua-minimum-sandbox => false` too.
 - `sandbox = false` (**default**) or `sandbox = true`: nothing more.
 - `sandbox = <list of paths>`: sandbox **each** listed path, each replaced with
   the inert string `"sandboxed"`.
@@ -720,7 +729,8 @@ unreachable/offline path).
     `lua-minimum-sandbox => false` and no `sandbox` list or map, the standard
     library is available. A `sandbox` **map** replaces each named path with the
     caller's specified value; a `sandbox` **list** replaces each with
-    `"sandboxed"`.
+    `"sandboxed"`. With `requires-determinism`, calling `math.random`,
+    `os.time`, `os.clock` or `os.date` gives a failure.
 11. **Host library present.** Every loaded state exposes `ao.resolve`, `ao.get`,
     `ao.set`, `ao.event` on the global `ao` table, merged over any `ao` table the
     script defined.
