@@ -99,6 +99,7 @@ the result mapping, the lifecycle, and the trust rules are normative here.
   | `slot` | integer | for an assignment | the slot being computed; identifies the assignment to the CU |
   | `process-id` | binary (43-char base64url id) | conditionally | the process id; used when it cannot be derived from `Base` (§5) |
   | `body` | message | for an assignment | the scheduled message being applied (its `data` is the evaluation input) |
+  | `hash-chain` | binary (43-char base64url id) | no | the assignment's chain, if its scheduler gives one; the device gives one to an assignment without it (§5) |
 
   All keys are **lowercase, hyphenated, binary on the wire**; ids are
   **base64url**, never hex.
@@ -124,9 +125,9 @@ The per-slot computation. It is the composition of an **ensure-started** guard, 
 delegated CU call, and a **patch-apply** step, wrapped with **once-only**
 deduplication.
 
-- **Reads:** `type`, `slot`, `process-id`, `body` from `Req` (§3); the process
-  definition and current `at-slot` from `Base`; the CU configuration and dedup
-  seen-set from `Base`/`Opts`.
+- **Reads:** `type`, `slot`, `process-id`, `body`, `hash-chain` from `Req` (§3);
+  the process definition, current `at-slot` and `hash-chain` from `Base`; the CU
+  configuration and dedup seen-set from `Base`/`Opts`.
 - **Behaviour (MUST):**
   1. **Ensure the legacy CU is started** (§4.6). If it cannot be made live, return
      `{failure, #{ <<"status">> => 500, <<"message">> => Msg }}` (the binary key
@@ -152,7 +153,7 @@ deduplication.
      decoded results message under the state's `results` key (and the raw decoded
      JSON under `results/raw`). On a CU/transport failure, or a CU answer that
      is not a result (§5), it returns `{failure, _}`, which this device
-     propagates unchanged.
+     propagates unchanged. An assignment's `Req` carries its `hash-chain` (§5).
   4. **Apply the emitted patches.** Resolve the `patch@1.0` behaviour against the
      result with `patch-from = /results/outbox`, lifting every outbox submessage
      that is a patch (`method: PATCH` or `device: patch@1.0`) onto the live state
@@ -160,7 +161,8 @@ deduplication.
      outbox entries are left in place.
   5. Return the patched state message.
 - **Returns:** `{ok, State'}` — the post-compute, post-patch process state
-  (with `results` populated and patches applied), or `{failure, Failure}` if
+  (with `results` populated, patches applied and, for an assignment, the
+  `hash-chain` of the next assignment, §5), or `{failure, Failure}` if
   ensure-started failed (§4.6) or the delegated CU call failed (§5/§8).
   `process@1.0` stores nothing for a slot whose `compute` returns
   `{failure, _}`, so a later `compute` of the slot calls the CU again.
@@ -393,6 +395,14 @@ Contract requirements (MUST):
 - **Assignment vs dryrun selection.** `type == Assignment` ⇒ the assignment
   compute endpoint with the concrete `slot`; **any other `type` (or none)** ⇒ the
   dryrun endpoint with no slot. A dryrun MUST NOT change persisted process state.
+- **Hash chain.** An assignment carries `hash-chain`: its own, else the state's
+  `hash-chain`, else (at slot 0) the process id. The device sets the state's
+  `hash-chain` to the chain of the next assignment: the base64url SHA-256 of the
+  assignment's signed id followed by its chain, both as 32 bytes. Once slot 0
+  of the process has a block height of at least 1,440,000, the CU refuses (422
+  `HashChain invalid`) an assignment with any other `Hash-Chain`; at slot 0 it
+  requires only the tag, and at a skipped slot it takes the
+  `Original-Assignment-Id`, the same signed id, as the assignment's id.
 - **Result decoding.** The response body is treated as AOS2 JSON and converted to
   an AO-Core results message by the `json-iface@1.0` `from` mapping (`outbox`,
   `patches`, `data`, …). A transport/HTTP failure, or a body that holds no
@@ -608,6 +618,9 @@ ensure-started / failure-closed paths.
     never hex; committers are URIs (`hb_committer:uri/2`); CU request bodies are
     JSON, except the `/state` body (the snapshot `data`); the slot is a decimal
     integer in the assignment-compute path.
+17. **Hash chain.** Every assignment sent to the CU carries the `hash-chain` of
+    §5, and the state that `compute` returns for it carries the chain of the
+    next assignment.
 
 ## 11. Out of scope
 
