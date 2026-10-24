@@ -787,7 +787,7 @@ routing_test_node(Parent) ->
             <<"request">> => fun(_, #{ <<"request">> := Req }, _) ->
                 Port = integer_to_binary(ranch:get_port(ID)),
                 Parent ! {routing_request,
-                    <<"http://localhost:", Port/binary, "/">>, Req},
+                    <<"http://127.0.0.1:", Port/binary, "/">>, Req},
                 {error, #{
                     <<"status">> => 200,
                     <<"content-type">> => <<"application/json">>,

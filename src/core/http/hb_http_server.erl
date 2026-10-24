@@ -1014,7 +1014,8 @@ start_node(Opts) ->
     ok = hb_system_monitor:ensure_started(ServerOpts),
     {ok, _Listener, Port} = new_server(ServerOpts),
     Scheme = scheme(get_opts()),
-    <<Scheme/binary, "://localhost:", (hb_util:bin(Port))/binary, "/">>.
+    % Return the URL with 127.0.0.1, as the node listens on IPv4 only.
+    <<Scheme/binary, "://127.0.0.1:", (hb_util:bin(Port))/binary, "/">>.
 
 scheme(NodeMsg) ->
     case hb_tls:config(NodeMsg) of

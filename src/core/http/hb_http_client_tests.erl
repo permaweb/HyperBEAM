@@ -11,7 +11,7 @@ hackney_pool_restart_test_() ->
         Peer = hb_http_server:start_node(#{ <<"test-key">> => <<"pool-settings">> }),
         Server = hb_opts:get(http_server, undefined, hb_http_server:get_opts()),
         #{ port := Port } = uri_string:parse(Peer),
-        Pool = {?HACKNEY_POOL, <<"http">>, "localhost", Port},
+        Pool = {?HACKNEY_POOL, <<"http">>, "127.0.0.1", Port},
         try
             lists:foreach(
                 fun({Max, Timeout}) ->
