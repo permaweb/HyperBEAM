@@ -99,7 +99,8 @@ get(TrieNode, Req, Opts) ->
 -spec set(#{ _ => _ }, #{ path => binary(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ _ => _ }}.
 set(Trie, Req, Opts) ->
-    Insertable = hb_maps:without([<<"path">>], Req, Opts),
+    % A request is caller input, so its private keys are not trie data.
+    Insertable = hb_private:reset(hb_maps:without([<<"path">>], Req, Opts)),
     KeyVals = hb_maps:to_list(Insertable, Opts),
     {ok, do_set(Trie, KeyVals, Opts)}.
 do_set(Trie, [], Opts) ->
