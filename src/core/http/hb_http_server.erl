@@ -1055,15 +1055,15 @@ reply(InitReq, TABMReq, Result, Opts) ->
     % Get the CORS request headers from the message, if they exist.
     ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
-    % A reply to a `HEAD' request, or with a 204 or 304 status, carries no
-    % body, so it carries no `content-digest' either. Every other reply carries
-    % the `content-length' of its body: without it, hackney reads a reply whose
-    % connection closes early as a whole reply.
+    % A bodyless reply carries no `content-digest' either. Every other reply
+    % carries the `content-length' of its body: without it, hackney reads a
+    % reply whose connection closes early as a whole reply.
+    Bodyless = is_bodyless_reply(cowboy_req:method(Req), Status),
     ReplyHeaders =
-        case cowboy_req:method(Req) of
-            Method when Method == <<"HEAD">>; Status == 204; Status == 304 ->
+        case Bodyless of
+            true ->
                 hb_maps:without([<<"content-digest">>], HeadersWithCors, Opts);
-            _ ->
+            false ->
                 HeadersWithCors#{
                     <<"content-length">> => hb_util:bin(byte_size(EncodedBody))
                 }
@@ -1081,12 +1081,10 @@ reply(InitReq, TABMReq, Result, Opts) ->
     ReqBeforeStream = Req#{ resp_headers => EncodedHeaders },
     PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
     % Stream the body back to the caller if there is content, ending the
-    % stream with it. If we already signal a non-content reply, skip.
-    case Status of
-        NonContentStatus
-            when (NonContentStatus == 204)
-            orelse (NonContentStatus == 304) -> skip;
-        _ -> cowboy_req:stream_body(EncodedBody, fin, PostStreamReq)
+    % stream with it. If we already signal a bodyless reply, skip.
+    case Bodyless of
+        true -> skip;
+        false -> cowboy_req:stream_body(EncodedBody, fin, PostStreamReq)
     end,
     EndTime = os:system_time(millisecond),
     ReqDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
@@ -1115,6 +1113,14 @@ reply(InitReq, TABMReq, Result, Opts) ->
         }
     ),
     {ok, PostStreamReq, no_state}.
+
+%% @doc Whether a reply to this method and status carries no body. A `1xx'
+%% reply is informational and a `205' resets content, so both end at headers.
+is_bodyless_reply(<<"HEAD">>, _Status) -> true;
+is_bodyless_reply(_Method, Status) when Status >= 100, Status < 200 -> true;
+is_bodyless_reply(_Method, Status)
+        when Status == 204; Status == 205; Status == 304 -> true;
+is_bodyless_reply(_Method, _Status) -> false.
 
 %% @doc Commit the result that a reply sends in the given codec. A result
 %% without commitments that is sent in `httpsig@1.0' gets its unsigned
