@@ -1244,7 +1244,8 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
      WithAllowHeaders = case ReqHdr of
         <<>> -> CorHeaders;
         _ -> CorHeaders#{
-             <<"access-control-allow-headers">> => ReqHdr
+             <<"access-control-allow-headers">> =>
+                hb_escape:encode_header(ReqHdr)
         }
     end,
     % Keys in the given message will overwrite the defaults listed below if 
