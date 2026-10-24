@@ -301,6 +301,39 @@ gun_final_frame_limit_test() ->
         hb_mock_server:stop(Server)
     end.
 
+%% @doc A `307' to a host that `hb_hostname:is_blocked/2' blocks is not
+%% followed. A node that allows internal hosts follows it.
+redirect_blocked_host_test_() ->
+    {timeout, 30, fun() ->
+        application:ensure_all_started(hb),
+        Wallet = ar_wallet:new(),
+        Node = hb_http_server:start_node(#{ <<"priv-wallet">> => Wallet }),
+        Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+        Location = <<Node/binary, "~meta@1.0/info/address">>,
+        % The node replies `307' with a `location' on its own internal host.
+        Request =
+            #{
+                peer => Node,
+                path =>
+                    <<"/~message@1.0/set?status+integer=307&location=",
+                      (uri_string:quote(Location))/binary>>,
+                method => <<"GET">>,
+                headers => #{},
+                body => <<>>
+            },
+        ?assertEqual(
+            {error, blocked_host},
+            hb_http_client:request(Request, #{})
+        ),
+        ?assertMatch(
+            {ok, 200, _, Address},
+            hb_http_client:request(
+                Request,
+                #{ <<"hosts-block-internal">> => false }
+            )
+        )
+    end}.
+
 summarize({caught, C, R}) when is_tuple(R) ->
     {caught, C, element(1, R)};
 summarize({caught, C, R}) ->

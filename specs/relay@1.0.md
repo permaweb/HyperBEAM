@@ -117,7 +117,7 @@ the node's own key before dispatch, gated by node policy.
       `{M1, relay-commit-request}`, `{Req, commit-request}`, `{M1, commit-request}`.
   - The node options: `relay-allow-commit-request` (policy gate for re-signing,
     default `false`), `relay-http-client` (the outbound HTTP client),
-    `relay-allowed-hosts` and `relay-block-internal` (the host check, step 9).
+    `hosts-allowed` and `hosts-block-internal` (the host check, step 9).
 
 - **Behaviour:** Construct the **outbound message** from the base target, then
   dispatch it:
@@ -170,9 +170,9 @@ the node's own key before dispatch, gated by node policy.
      - **Host check** (no relay route): the host is the peer's, else that of a
        relay path that starts with `http://` or `https://`; a relative relay
        path gives none and is not checked. If the host cannot be determined,
-       matches no entry of the node option `relay-allowed-hosts` (default `any`;
+       matches no entry of the node option `hosts-allowed` (default `any`;
        an entry that starts with `.` matches a suffix), or is not public while
-       the node option `relay-block-internal` (default `true`) is `true`, return
+       the node option `hosts-block-internal` (default `true`) is `true`, return
        `{error, blocked_host}` and dispatch nothing.
      - If **no peer** was found: hand the outbound message to the node's HTTP
        request machinery (the single-argument request form), which selects the
@@ -238,7 +238,7 @@ the node's own key before dispatch, gated by node policy.
   `relay-route`, `relay-device`, `commit-request`, `relay-commit-request`,
   `relay-subject`, `device`, `cookie`, `set-cookie`, `multirequest-*`. The
   node option keys are `relay-allow-commit-request`, `relay-http-client`,
-  `relay-allowed-hosts` and `relay-block-internal`. (Implementations whose
+  `hosts-allowed` and `hosts-block-internal`. (Implementations whose
   option/key layer canonicalises case or underscore MUST resolve these to the
   same keys as their hyphenated binary forms.)
 - The `request` rewrite emits the literal binaries `relay@1.0` (device),

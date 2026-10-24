@@ -1,6 +1,7 @@
 %%% @doc Public DNS and local-network exclusion helpers.
 -module(hb_hostname).
 -export([is_public/2, public_ips/2, is_public_ip/1, uri_host/1, normalize/1]).
+-export([is_blocked/2]).
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_DNS_SERVERS, [{{1, 1, 1, 1}, 53}, {{8, 8, 8, 8}, 53}]).
@@ -8,6 +9,48 @@
 %% @doc True iff `Host' resolves publicly, and all answers are public IPs.
 is_public(Host, Opts) ->
     public_ips(Host, Opts) =/= [].
+
+%% @doc Returns `true` if the host that `URI` gives is blocked by the node's
+%% allowed hosts configuration, or if `URI' gives a host that cannot be
+%% determined. `undefined' gives no host to vet and is not blocked.
+%%
+%% The configuration supports:
+%% 1. Blocking internal hosts (e.g. `localhost`, `127.0.0.1`, etc.) if the
+%%    `hosts-block-internal` option is set to `true` (default: `true`).
+%% 2. Allowing access to a list of specific hosts by hostname or IP address,
+%%    provided by the `hosts-allowed` option.
+is_blocked(URI, Opts) ->
+    maybe
+        true ?= (URI =/= undefined) orelse skip,
+        {ok, Host} ?= uri_host(URI),
+        AllowedHosts = hb_opts:get(hosts_allowed, any, Opts),
+        true ?=
+            (AllowedHosts =:= any) orelse
+                lists:any(
+                    fun(Entry) -> host_matches(Host, Entry) end,
+                    AllowedHosts
+                ),
+        true ?= hb_opts:get(hosts_block_internal, true, Opts) orelse skip,
+        try not is_public(Host, Opts)
+        catch _:_ -> true
+        end
+    else
+        skip -> false;
+        _ -> true
+    end.
+
+%% @doc Ensure that a given hostname either fully matches, or matches a
+%% namespace-delimited suffix.
+host_matches(_Host, Entry) when not is_binary(Entry) ->
+    throw(relay_invalid_allowed_host);
+host_matches(Host, Entry) ->
+    case normalize(Entry) of
+        SuffixSeg = <<".", _/binary>> ->
+            binary:longest_common_suffix([Host, SuffixSeg])
+                =:= byte_size(SuffixSeg);
+        NormalEntry ->
+            Host =:= NormalEntry
+    end.
 
 %% @doc Return the normalized host from a URI, or `not_found' if absent.
 uri_host(URI) ->
@@ -206,3 +249,75 @@ public_ips_literal_test() ->
 uri_host_test() ->
     ?assertEqual({ok, <<"example.com">>}, uri_host(<<"https://Example.COM./x">>)),
     ?assertEqual({error, invalid_uri}, uri_host(<<"/x">>)).
+
+internal_host_block_test() ->
+    lists:foreach(
+        fun(URL) -> ?assert(is_blocked(URL, #{})) end,
+        [
+            <<"http://localhost/">>,
+            <<"http://localhost./">>,
+            <<"http://127.0.0.1/">>,
+            <<"http://127.1/">>,
+            <<"http://2130706433/">>,
+            <<"http://0x7f000001/">>,
+            <<"http://0177.0.0.1/">>,
+            <<"http://0/">>,
+            <<"http://0.0.0.0/">>,
+            <<"http://10.0.0.1/">>,
+            <<"http://172.16.0.1/">>,
+            <<"http://192.168.0.1/">>,
+            <<"http://169.254.169.254/">>,
+            <<"http://[::]/">>,
+            <<"http://[::1]/">>,
+            <<"http://[::ffff:127.0.0.1]/">>,
+            <<"http://[fd00:ec2::254]/">>,
+            <<"http://[fd20:ce::254]/">>,
+            <<"http://[fe80::1]/">>
+        ]
+    ),
+    ?assertEqual(false, is_blocked(<<"https://1.1.1.1/">>, #{})),
+    ?assertEqual(false, is_blocked(<<"https://[2606:4700:4700::1111]/">>, #{})),
+    % `undefined' gives no host to vet, so it is not blocked: a relative
+    % `relay-path' is routed by the node, not checked here. A value that gives
+    % no resolvable host fails closed.
+    ?assertEqual(false, is_blocked(undefined, #{})),
+    ?assert(is_blocked(<<"/arweave/info">>, #{})),
+    ?assertEqual(
+        false,
+        is_blocked(
+            <<"http://localhost/">>,
+            #{ <<"hosts-block-internal">> => false }
+        )
+    ).
+
+relay_host_allowlist_test() ->
+    ?assertNot(
+        is_blocked(
+            <<"https://example.com/">>,
+            #{ <<"hosts-allowed">> => [<<"example.com">>] }
+        )
+    ),
+    ?assertNot(
+        is_blocked(
+            <<"https://www.example.com/">>,
+            #{ <<"hosts-allowed">> => [<<".example.com">>] }
+        )
+    ),
+    ?assert(
+        is_blocked(
+            <<"https://example.com/">>,
+            #{ <<"hosts-allowed">> => [<<"arweave.net">>] }
+        )
+    ),
+    ?assert(
+        is_blocked(
+            <<"https://example.com/">>,
+            #{ <<"hosts-allowed">> => [<<"https://example.com">>] }
+        )
+    ),
+    ?assert(
+        is_blocked(
+            <<"http://127.0.0.1/">>,
+            #{ <<"hosts-allowed">> => [<<"127.0.0.1">>] }
+        )
+    ).

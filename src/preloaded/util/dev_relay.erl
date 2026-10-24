@@ -226,7 +226,7 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
                 end
         end,
     RequestOpts = RouteOpts#{ <<"http-redirects">> => 0 },
-    case is_blocked_host(Destination, Opts) of
+    case hb_hostname:is_blocked(Destination, Opts) of
         true -> {error, blocked_host};
         false ->
             Res =
@@ -260,7 +260,7 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
 %% @doc The host the relay will contact: the `peer' when the request gives one,
 %% otherwise an absolute `route-path', `relay-path' or `relay-route'. A relative
 %% path gives no host, so the node routes it through its own routes and there
-%% is nothing for `is_blocked_host/2' to vet: return `undefined'.
+%% is nothing for `hb_hostname:is_blocked/2' to vet: return `undefined'.
 relay_destination(not_found, <<"http://", _/binary>> = Path) -> Path;
 relay_destination(not_found, <<"https://", _/binary>> = Path) -> Path;
 relay_destination(not_found, _RelativePath) -> undefined;
@@ -288,48 +288,6 @@ strip_cookies(Msg, Opts) ->
         unset,
         Opts
     ).
-
-%% @doc Returns `true` if the host that `URI` gives is blocked by the relay's
-%% allowed hosts configuration, or if `URI' gives a host that cannot be
-%% determined. `undefined' gives no host to vet and is not blocked.
-%%
-%% The configuration supports:
-%% 1. Blocking internal hosts (e.g. `localhost`, `127.0.0.1`, etc.) if the
-%%    `relay-block-internal` option is set to `true` (default: `true`).
-%% 2. Allowing access to a list of specific hosts by hostname or IP address,
-%%    provided by the `relay-allowed-hosts` option.
-is_blocked_host(URI, Opts) ->
-    maybe
-        true ?= (URI =/= undefined) orelse skip,
-        {ok, Host} ?= hb_hostname:uri_host(URI),
-        AllowedHosts = hb_opts:get(relay_allowed_hosts, any, Opts),
-        true ?=
-            (AllowedHosts =:= any) orelse
-                lists:any(
-                    fun(Entry) -> host_matches(Host, Entry) end,
-                    AllowedHosts
-                ),
-        true ?= hb_opts:get(relay_block_internal, true, Opts) orelse skip,
-        try not hb_hostname:is_public(Host, Opts)
-        catch _:_ -> true
-        end
-    else
-        skip -> false;
-        _ -> true
-    end.
-
-%% @doc Ensure that a given hostname either fully matches, or matches a
-%% namespace-delimited suffix.
-host_matches(_Host, Entry) when not is_binary(Entry) ->
-    throw(relay_invalid_allowed_host);
-host_matches(Host, Entry) ->
-    case hb_hostname:normalize(Entry) of
-        SuffixSeg = <<".", _/binary>> ->
-            binary:longest_common_suffix([Host, SuffixSeg])
-                =:= byte_size(SuffixSeg);
-        NormalEntry ->
-            Host =:= NormalEntry
-    end.
 
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
@@ -359,78 +317,6 @@ request(_Base, Req, Opts) ->
 
 
 %%% Tests
-
-internal_host_block_test() ->
-    lists:foreach(
-        fun(URL) -> ?assert(is_blocked_host(URL, #{})) end,
-        [
-            <<"http://localhost/">>,
-            <<"http://localhost./">>,
-            <<"http://127.0.0.1/">>,
-            <<"http://127.1/">>,
-            <<"http://2130706433/">>,
-            <<"http://0x7f000001/">>,
-            <<"http://0177.0.0.1/">>,
-            <<"http://0/">>,
-            <<"http://0.0.0.0/">>,
-            <<"http://10.0.0.1/">>,
-            <<"http://172.16.0.1/">>,
-            <<"http://192.168.0.1/">>,
-            <<"http://169.254.169.254/">>,
-            <<"http://[::]/">>,
-            <<"http://[::1]/">>,
-            <<"http://[::ffff:127.0.0.1]/">>,
-            <<"http://[fd00:ec2::254]/">>,
-            <<"http://[fd20:ce::254]/">>,
-            <<"http://[fe80::1]/">>
-        ]
-    ),
-    ?assertEqual(false, is_blocked_host(<<"https://1.1.1.1/">>, #{})),
-    ?assertEqual(false, is_blocked_host(<<"https://[2606:4700:4700::1111]/">>, #{})),
-    % `undefined' gives no host to vet, so it is not blocked: a relative
-    % `relay-path' is routed by the node, not checked here. A value that gives
-    % no resolvable host fails closed.
-    ?assertEqual(false, is_blocked_host(undefined, #{})),
-    ?assert(is_blocked_host(<<"/arweave/info">>, #{})),
-    ?assertEqual(
-        false,
-        is_blocked_host(
-            <<"http://localhost/">>,
-            #{ <<"relay-block-internal">> => false }
-        )
-    ).
-
-relay_host_allowlist_test() ->
-    ?assertNot(
-        is_blocked_host(
-            <<"https://example.com/">>,
-            #{ <<"relay-allowed-hosts">> => [<<"example.com">>] }
-        )
-    ),
-    ?assertNot(
-        is_blocked_host(
-            <<"https://www.example.com/">>,
-            #{ <<"relay-allowed-hosts">> => [<<".example.com">>] }
-        )
-    ),
-    ?assert(
-        is_blocked_host(
-            <<"https://example.com/">>,
-            #{ <<"relay-allowed-hosts">> => [<<"arweave.net">>] }
-        )
-    ),
-    ?assert(
-        is_blocked_host(
-            <<"https://example.com/">>,
-            #{ <<"relay-allowed-hosts">> => [<<"https://example.com">>] }
-        )
-    ),
-    ?assert(
-        is_blocked_host(
-            <<"http://127.0.0.1/">>,
-            #{ <<"relay-allowed-hosts">> => [<<"127.0.0.1">>] }
-        )
-    ).
 
 call_get_test() ->
     application:ensure_all_started([hb]),
@@ -579,7 +465,7 @@ relay_peer_allowed_test() ->
                 <<"peer">> => Target,
                 <<"relay-path">> => <<"/~meta@1.0/info/address">>
             },
-            #{ <<"relay-block-internal">> => false }
+            #{ <<"hosts-block-internal">> => false }
         ),
     ?assertEqual(Address, hb_ao:get(<<"body">>, Res, #{})),
     % The result is the peer's message, without the `status' the client adds.
@@ -594,7 +480,7 @@ relay_peer_allowed_test() ->
                 <<"relay-path">> => <<"/~test-device@1.0/delay">>
             },
             #{
-                <<"relay-block-internal">> => false,
+                <<"hosts-block-internal">> => false,
                 <<"http-client-send-timeout">> => 100
             }
         )
@@ -610,7 +496,7 @@ relay_peer_allowed_test() ->
                     <<"/~message@1.0/set?status+integer=503&retry-after=3600">>
             },
             #{
-                <<"relay-block-internal">> => false,
+                <<"hosts-block-internal">> => false,
                 <<"http-client-send-timeout">> => 1000
             }
         )
@@ -623,7 +509,7 @@ relay_peer_allowed_test() ->
                 <<"peer">> => Target,
                 <<"relay-path">> => <<"/~message@1.0/peer">>
             },
-            #{ <<"relay-block-internal">> => false }
+            #{ <<"hosts-block-internal">> => false }
         )
     ).
 
@@ -688,7 +574,7 @@ relay_absolute_allowed_test() ->
     {ok, Res} =
         relay_call(
             #{ <<"relay-path">> => <<Target/binary, "~meta@1.0/info/address">> },
-            #{ <<"relay-block-internal">> => false }
+            #{ <<"hosts-block-internal">> => false }
         ),
     ?assertEqual(Address, hb_ao:get(<<"body">>, Res, #{})).
 
