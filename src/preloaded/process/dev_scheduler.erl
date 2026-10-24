@@ -641,7 +641,11 @@ find_process_message(ProcID, Base, ToSched, Opts) ->
                             end
                     end
             end;
-        P -> P
+        P ->
+            case hb_message:id(P, all, Opts) of
+                ProcID -> P;
+                _ -> throw({process_not_available, ProcID})
+            end
     end.
 
 %% @doc Determine if a scheduler is local. If so, return the PID and options.
@@ -1603,6 +1607,35 @@ register_new_process_test_parallel() ->
             hb_ao:get(<<"processes">>, hb_ao:get(status, Base))
         )
     ).
+
+%% @doc A base that carries process A must not provide the process definition
+%% for a schedule request addressed to an unrelated process B.
+schedule_does_not_borrow_another_process_test_parallel() ->
+    start(),
+    Opts = #{ <<"priv-wallet">> => hb:wallet() },
+    A = hb_message:commit(test_process(), Opts),
+    B =
+        hb_message:commit(
+            (test_process())#{ <<"test-random-seed">> => <<"target-b">> },
+            Opts
+        ),
+    BID = hb_util:human_id(hb_message:id(B, all, Opts)),
+    Base = #{ <<"device">> => <<"scheduler@1.0">>, <<"process">> => A },
+    Req = #{
+        <<"path">> => <<"schedule">>,
+        <<"method">> => <<"POST">>,
+        <<"target">> => BID,
+        <<"body">> =>
+            hb_message:commit(
+                #{ <<"type">> => <<"Message">>, <<"test-key">> => <<"x">> },
+                Opts
+            )
+    },
+    ?assertThrow(
+        {process_not_available, BID},
+        hb_ao:resolve(Base, Req, Opts)
+    ),
+    ?assertEqual(not_found, dev_scheduler_cache:read(BID, 0, Opts)).
 
 schedule_message_and_get_slot_test_parallel() ->
     start(),
