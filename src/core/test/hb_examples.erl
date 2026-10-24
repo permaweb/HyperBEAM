@@ -658,10 +658,12 @@ relay_schedule_ans104_test() ->
             }
         ),
     ?event(debug_test, {scheduler, Scheduler}),
+    % The compute node contacts the scheduler on `localhost' to push.
     Compute =
         hb_http_server:start_node(
             #{
                 <<"priv-wallet">> => ComputeWallet,
+                <<"hosts-block-internal">> => false,
                 <<"store">> =>
                     [
                         hb_test_utils:test_store(),

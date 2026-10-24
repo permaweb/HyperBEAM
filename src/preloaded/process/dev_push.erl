@@ -954,7 +954,13 @@ find_type(Req, Opts) ->
         Opts
     ).
 
+%% @doc Return the node and the path that a scheduler's `location' gives. If
+%% `hb_hostname:is_blocked/2' blocks its host, throw `blocked_host'.
 parse_redirect(Location, Opts) ->
+    case hb_hostname:is_blocked(Location, Opts) of
+        true -> throw(blocked_host);
+        false -> ok
+    end,
     Parsed = uri_string:parse(Location),
     Node =
         uri_string:recompose(
@@ -1524,13 +1530,16 @@ test_cron_depth_zero_push() ->
     Proc2ID = hb_message:id(Proc2, all, SharedOpts),
     Store1 = [hb_test_utils:test_store(hb_store_lmdb), ReadOnlyShared],
     Store2 = [hb_test_utils:test_store(hb_store_lmdb), ReadOnlyShared],
+    % Each node allows the internal host of the other's scheduler.
     Node1 = hb_http_server:start_node(#{
         <<"priv-wallet">> => Wallet1,
-        <<"store">> => Store1
+        <<"store">> => Store1,
+        <<"hosts-block-internal">> => false
     }),
     Node2 = hb_http_server:start_node(#{
         <<"priv-wallet">> => Wallet2,
-        <<"store">> => Store2
+        <<"store">> => Store2,
+        <<"hosts-block-internal">> => false
     }),
     share_location_record(Wallet1, Node1, Node2),
     share_location_record(Wallet2, Node2, Node1),

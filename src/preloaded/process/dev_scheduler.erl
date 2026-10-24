@@ -1201,15 +1201,19 @@ check_remote_schedule(ProcID, Proc, Schedule, Opts) ->
             )
     end.
 
-%% @doc Get the node URL from a redirect.
+%% @doc Get the node URL from a redirect. If `hb_hostname:is_blocked/2'
+%% blocks the host of its `location', throw `blocked_host'.
 node_from_redirect(Redirect, Opts) ->
+    Location = hb_ao:get(<<"location">>, Redirect, Opts),
+    case hb_hostname:is_blocked(Location, Opts) of
+        true -> throw(blocked_host);
+        false -> ok
+    end,
     uri_string:recompose(
         (
             hb_maps:remove(
                 query,
-                uri_string:parse(
-                    hb_ao:get(<<"location">>, Redirect, Opts)
-                ),
+                uri_string:parse(Location),
 				Opts
             )
         )#{path => <<"/">>}
@@ -1244,9 +1248,7 @@ filter_json_assignments(JSONRes, To, From, Opts) ->
 post_remote_schedule(RawProcID, Redirect, OnlyCommitted, Opts) ->
     RemoteOpts = Opts#{ <<"http-client">> => httpc },
     ProcID = without_hint(RawProcID),
-    Location = hb_ao:get(<<"location">>, Redirect, Opts),
-    Parsed = uri_string:parse(Location),
-    Node = uri_string:recompose((hb_maps:remove(query, Parsed, Opts))#{path => <<"/">>}),
+    Node = node_from_redirect(Redirect, Opts),
     Variant = hb_ao:get(<<"variant">>, Redirect, <<"ao.N.1">>, Opts),
     case Variant of
         <<"ao.N.1">> ->
@@ -2027,7 +2029,12 @@ http_cache_remote_schedule() ->
     {SchedNode, SchedOpts} = http_init(),
     {Node, Opts} = http_init(#{ <<"scheduler-async-remote-cache">> => false }),
     {Node2, Opts2} =
-        http_init(#{ <<"scheduler-async-remote-cache">> => false }),
+        http_init(
+            #{
+                <<"scheduler-async-remote-cache">> => false,
+                <<"hosts-block-internal">> => false
+            }
+        ),
     PMsg = hb_message:commit(test_process(SchedOpts), SchedOpts),
     ProcID = hb_util:human_id(hb_message:id(PMsg, all, SchedOpts)),
     % The scheduler assigns slot 0, and its store has a slot 1 that another
@@ -2064,7 +2071,10 @@ http_cache_remote_schedule() ->
         ),
     {ok, _} = hb_http:post(Node, <<"/~location@1.0/known">>, Location, #{}),
     {ok, _} = hb_http:post(Node2, <<"/~location@1.0/known">>, Location, #{}),
+    % A node that blocks internal hosts does not contact the scheduler.
+    ?assertThrow(blocked_host, hb_ao:resolve(PMsg, <<"slot">>, Opts)),
     % The read has the process in its base, and the node does not have it.
+    % The read allows internal hosts, as `Node2' does.
     {ok, _} =
         hb_ao:resolve(
             PMsg,
@@ -2074,7 +2084,7 @@ http_cache_remote_schedule() ->
                 <<"from">> => 0,
                 <<"to">> => 1
             },
-            Opts
+            Opts#{ <<"hosts-block-internal">> => false }
         ),
     ?assertMatch({ok, _}, dev_scheduler_cache:read(ProcID, 0, Opts)),
     ?assertEqual(not_found, dev_scheduler_cache:read(ProcID, 1, Opts)),
