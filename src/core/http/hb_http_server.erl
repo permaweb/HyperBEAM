@@ -805,7 +805,9 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
             <<"body">> => Body
         },
     ?event(hook, {resolve_hook, HookName, HookReq}),
-    case hb_hook:on(HookName, HookReq, NodeMsg) of
+    % Hooks resolve caller content. Code that signs for the node gets its keys
+    % back through `with_node_committer/1'.
+    case hb_hook:on(HookName, HookReq, maps:without(?NODE_KEY_OPTS, NodeMsg)) of
         {ok, HookRes = #{ <<"body">> := ResponseBody }} ->
             ?event(hook,
                 {resolve_hook_success,
