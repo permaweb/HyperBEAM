@@ -399,7 +399,17 @@ to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
                     % `priv` message, if present.
                     Merged =
                         hb_maps:merge(
-                            hb_private:reset(IndexTABM),
+                            % Index values become reply headers, so escape
+                            % them as every other header value is. Its body
+                            % stays a body.
+                            maps:map(
+                                fun(<<"body">>, Value) -> Value;
+                                   (_Key, Value) when is_binary(Value) ->
+                                        hb_escape:encode_header(Value);
+                                   (_Key, Value) -> Value
+                                end,
+                                hb_private:reset(IndexTABM)
+                            ),
                             hb_maps:without(
                                 [<<"body">>, <<"content-type">>],
                                 EncOriginal,
@@ -1349,6 +1359,28 @@ nested_content_disposition_roundtrip_test() ->
             Codec,
             #{}
         )
+    ).
+
+%% @doc Escape an index value that becomes a reply header, so it cannot split
+%% the response.
+index_header_value_escape_test() ->
+    Value = <<"ok\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n">>,
+    Opts = #{
+        <<"default-index">> => #{
+            <<"device">> => #{
+                <<"index">> => fun(_, _, _) -> {ok, #{ <<"zzz">> => Value }} end
+            }
+        }
+    },
+    {ok, Encoded} =
+        to(
+            #{ <<"foo">> => <<"bar">> },
+            #{ <<"index">> => true },
+            Opts
+        ),
+    ?assertEqual(
+        hb_escape:encode_header(Value),
+        hb_maps:get(<<"zzz">>, Encoded, not_found, #{})
     ).
 
 %% @doc A message's own keys with the names of reserved headers are served by
