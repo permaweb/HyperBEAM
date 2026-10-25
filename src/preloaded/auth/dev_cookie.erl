@@ -277,7 +277,21 @@ to_set_cookie_line(Key, RawCookie) ->
             [] -> <<>>;
             Flags -> << "; ", (join(Flags, <<"; ">>))/binary >>
         end,
-    << ValueBin/binary, AttributesBin/binary, FlagsBin/binary >>.
+    Line = << ValueBin/binary, AttributesBin/binary, FlagsBin/binary >>,
+    ensure_no_control_bytes(Line, Cookie),
+    Line.
+
+%% @doc Throw `cookie_to_error' when a cookie line contains a control byte, as a
+%% CR or LF adds a header or ends the response headers.
+ensure_no_control_bytes(Bin, Cookie) ->
+    case is_control_byte_free(Bin) of
+        true -> ok;
+        false -> error({cookie_to_error, {invalid_cookie, Cookie}})
+    end.
+
+is_control_byte_free(<<>>) -> true;
+is_control_byte_free(<<Byte, _/binary>>) when Byte < 32; Byte =:= 127 -> false;
+is_control_byte_free(<<_, Rest/binary>>) -> is_control_byte_free(Rest).
 
 %% @doc Convert a single cookie into a `cookie' header component. These
 %% components can be joined to form a `cookie' header line. This function
