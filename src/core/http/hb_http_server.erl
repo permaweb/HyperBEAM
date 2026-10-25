@@ -115,6 +115,8 @@
 -define(DEFAULT_FILTER_KEYS, [<<"content-length">>]).
 %% Define the max size we can return in 500 error details field.
 -define(DEFAULT_ERROR_DETAILS_MAX_SIZE, 32*1024).
+%% At most this many media ranges in `accept' are considered.
+-define(MAX_ACCEPT_RANGES, 100).
 
 %%% HTTP server start and management functions.
 
@@ -1393,16 +1395,14 @@ accept_to_codec(TABMReq, Msg, Opts) ->
             {Type, SubType}
         catch error:_ -> undefined
         end,
-    preferred_codec(
-        lists:sort(
-            fun({_, QualityA, _}, {_, QualityB, _}) ->
-                QualityA >= QualityB
-            end,
-            [Range || Range = {_, Quality, _} <- MediaRanges, Quality > 0]
-        ),
-        Own,
-        Opts
-    ).
+    Ranges = [Range || Range = {_, Quality, _} <- MediaRanges, Quality > 0],
+    Sorted = lists:sort(
+        fun({_, QualityA, _}, {_, QualityB, _}) ->
+            QualityA >= QualityB
+        end,
+        Ranges
+    ),
+    preferred_codec(lists:sublist(Sorted, ?MAX_ACCEPT_RANGES), Own, Opts).
 
 %% @doc Return the codec of the first media range that the node can serve, and
 %% the `content-type' of a reply in it, or `httpsig@1.0' if there is none.
