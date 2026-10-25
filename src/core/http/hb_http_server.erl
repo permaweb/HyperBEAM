@@ -1257,9 +1257,19 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
                 hb_escape:encode_header(ReqHdr)
         }
     end,
-    % Keys in the given message will overwrite the defaults listed below if 
-    % included, due to `hb_maps:merge''s precidence order.
-    hb_maps:merge(WithAllowHeaders, Msg, Opts).
+    % A reply's CORS headers come from the request and the defaults, not from
+    % the keys of its result message.
+    WithoutResultCors =
+        hb_maps:without(
+            [Key || Key <- maps:keys(Msg), is_cors_key(Key)],
+            Msg,
+            Opts
+        ),
+    hb_maps:merge(WithoutResultCors, WithAllowHeaders, Opts).
+
+%% @doc Whether a header key is part of the CORS policy.
+is_cors_key(<<"access-control-", _/binary>>) -> true;
+is_cors_key(_) -> false.
 
 %% @doc Generate the headers and body for a HTTP response message.
 encode_reply(Status, TABMReq, RawMessage, Opts) ->
