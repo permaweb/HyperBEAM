@@ -8,9 +8,14 @@
 
 %% @doc Return the calculated host information for the requester.
 -spec echo(#{ _ => _ }, #{ 'ao-peer' => binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, binary()}.
+    {ok, #{ _ => _ }}.
 echo(_, Req, Opts) ->
-    {ok, hb_maps:get(<<"ao-peer">>, Req, <<"unknown">>, Opts)}.
+    {ok, #{
+        <<"ao-result">> => <<"body">>,
+        <<"body">> => hb_maps:get(<<"ao-peer">>, Req, <<"unknown">>, Opts),
+        <<"content-type">> => <<"text/plain">>,
+        <<"x-content-type-options">> => <<"nosniff">>
+    }}.
 
 %% @doc Return the host information for the node. Sets the `host' key in the
 %% node message if it is not already set.
