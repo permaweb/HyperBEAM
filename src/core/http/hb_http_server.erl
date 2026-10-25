@@ -113,6 +113,11 @@
 -include("include/hb.hrl").
 
 -define(DEFAULT_FILTER_KEYS, [<<"content-length">>]).
+%% The HTTP methods that keep their own Prometheus label value.
+-define(METRIC_METHODS, [
+    <<"GET">>, <<"HEAD">>, <<"POST">>, <<"PUT">>,
+    <<"DELETE">>, <<"OPTIONS">>, <<"PATCH">>
+]).
 %% Define the max size we can return in 500 error details field.
 -define(DEFAULT_ERROR_DETAILS_MAX_SIZE, 32*1024).
 %% At most this many media ranges in `accept' are considered.
@@ -390,8 +395,7 @@ new_server(RawNodeMsg) ->
                     application:ensure_all_started([prometheus, prometheus_cowboy, prometheus_ranch]),
                     prometheus_registry:register_collectors([hb_metrics_collector]),
                     ProtoOpts#{
-                        metrics_callback =>
-                            fun prometheus_cowboy2_instrumenter:observe/1,
+                        metrics_callback => fun observe_request_metrics/1,
                         stream_handlers => [cowboy_metrics_h, cowboy_stream_h]
                     }
                 catch
@@ -1558,6 +1562,27 @@ signed_keys(Headers, Opts) ->
                 )
             );
         error -> []
+    end.
+
+%% @doc Observe a request without letting any method token become a permanent
+%% Prometheus label. Known methods keep their label; all other tokens share
+%% the `OTHER' label.
+observe_request_metrics(Metrics) ->
+    prometheus_cowboy2_instrumenter:observe(
+        case Metrics of
+            #{ req := Req } ->
+                Method = cowboy_req:method(Req),
+                Metrics#{
+                    req => Req#{ method => normalize_method(Method) }
+                };
+            _ -> Metrics
+        end
+    ).
+
+normalize_method(Method) ->
+    case lists:member(Method, ?METRIC_METHODS) of
+        true -> Method;
+        false -> <<"OTHER">>
     end.
 
 %% @doc Add the method and path to a message, if they are not already present.
