@@ -29,12 +29,15 @@ dot(_, Req, Opts) ->
     #{ _ => _ },
     #{ target => all | binary(), 'render-data' => boolean(), _ => _ },
     #{ _ => _ }
-) -> {ok, #{ 'content-type' := binary(), body := binary() }}.
+) -> {ok, #{ 'content-type' := binary(), body := binary() }} | {error, _}.
 svg(Base, Req, Opts) ->
     {ok, #{ <<"body">> := Dot }} = dot(Base, Req, Opts),
     ?event(cacheviz, {dot, Dot}),
-    Svg = hb_cache_render:dot_to_svg(Dot),
-    {ok, #{ <<"content-type">> => <<"image/svg+xml">>, <<"body">> => Svg }}.
+    case hb_cache_render:dot_to_svg(Dot) of
+        {error, _} = Error -> Error;
+        Svg ->
+            {ok, #{ <<"content-type">> => <<"image/svg+xml">>, <<"body">> => Svg }}
+    end.
 
 %% @doc Return a JSON representation of the cache graph, suitable for use with
 %% the `graph.js' library. If the request specifies a `target' key, we use that

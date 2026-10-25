@@ -196,7 +196,10 @@ graph_to_dot(Graph, Opts) ->
 %% @doc Convert a dot graph to SVG format
 dot_to_svg(DotInput) ->
     % Create a port to the dot command
-    Port = open_port({spawn, "dot -Tsvg"}, [binary, use_stdio, stderr_to_stdout]),
+    Port = open_port(
+        {spawn, "dot -Tsvg"},
+        [binary, use_stdio, stderr_to_stdout, exit_status]
+    ),
     % Send the dot content to the process
     true = port_command(Port, iolist_to_binary(DotInput)),
     % Get the SVG output
@@ -206,11 +209,26 @@ dot_to_svg(DotInput) ->
 collect_output(Port, Acc) ->
     receive
         {Port, {data, Data}} ->
-            case binary:part(Data, byte_size(Data) - 7, 7) of
-                <<"</svg>\n">> ->
+            Size = byte_size(Data),
+            case
+                Size >= 7 andalso
+                    binary:part(Data, Size - 7, 7) =:= <<"</svg>\n">>
+            of
+                true ->
                     port_close(Port),
                     iolist_to_binary(lists:reverse([Data | Acc]));
-                _ -> collect_output(Port, [Data | Acc])
+                false -> collect_output(Port, [Data | Acc])
+            end;
+        {Port, {exit_status, Status}} ->
+            case Status of
+                0 -> iolist_to_binary(lists:reverse(Acc));
+                _ ->
+                    {error, #{
+                        <<"status">> => 500,
+                        <<"body">> =>
+                            <<"`dot` exited with status ",
+                                (integer_to_binary(Status))/binary, ".">>
+                    }}
             end;
         {Port, eof} ->
             port_close(Port),
