@@ -113,7 +113,13 @@ uri(Value, _Opts) ->
     uri(Value).
 
 %% @doc Return whether a commitment's `committer', if present, is the given
-%% committer.
+%% committer. A commitment device, such as `httpsig@1.0', builds the signature
+%% base from the committed keys and gives the committer the commitment without
+%% its `commitment-device'. A commitment that still gives one came to the
+%% committer directly, with a `body' that nothing ties to the committed keys,
+%% so it does not match.
+matches_commitment(_Committer, #{ <<"commitment-device">> := _ }, _Opts) ->
+    false;
 matches_commitment(Committer, Commitment, Opts) ->
     case hb_maps:find(<<"committer">>, Commitment, Opts) of
         error -> true;

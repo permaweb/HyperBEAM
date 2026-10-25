@@ -136,10 +136,12 @@ committer_verifies(KeyID, SigBase, Req, Opts) ->
                         #{ <<"owner">> => hb_util:decode(Key) };
                     _ -> #{}
                 end,
+            % A committer refuses a commitment that keeps its device.
+            Commitment = maps:remove(<<"commitment-device">>, Req),
             {ok, Verified} =
                 hb_ao:raw(
                     hb_private:set_priv(Committer, hb_private:from_message(Req)),
-                    (maps:merge(Req, Raw))#{
+                    (maps:merge(Commitment, Raw))#{
                         <<"path">> => <<"verify">>,
                         <<"body">> => SigBase,
                         <<"signature">> =>
