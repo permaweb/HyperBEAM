@@ -269,16 +269,53 @@ matches(Key1, Key2) ->
     hb_util:to_lower(hb_ao:normalize_key(Key1)) ==
         hb_util:to_lower(hb_ao:normalize_key(Key2)).
 
-%% @doc Check if two keys match using regex.
+%% @doc Check if two keys match using regex. The path is normalized before
+%% matching: its query is removed and its dot segments are resolved, so a
+%% query or a dot segment does not select a different route. A path that
+%% keeps a dot segment matches no route.
 regex_matches(Path1, Path2) ->
-    NormP1 = normalize(hb_ao:normalize_key(Path1)),
-    NormP2 =
-        case hb_ao:normalize_key(Path2) of
-            Normalized = <<"^", _/binary>> -> Normalized;
-            Normalized -> normalize(Normalized)
+    case normalize_request_path(Path1) of
+        undefined -> false;
+        NormP1 ->
+            NormP2 =
+                case hb_ao:normalize_key(Path2) of
+                    Normalized = <<"^", _/binary>> -> Normalized;
+                    Normalized -> normalize(Normalized)
+                end,
+            try re:run(NormP1, NormP2, [{match_limit, ?REGEX_MATCH_LIMIT}]) =/= nomatch
+            catch _A:_B:_C -> false
+            end
+    end.
+
+%% @doc Return a request path without its query and with its dot segments
+%% resolved. A dot segment remains when `uri_string' cannot normalize the
+%% path, or when it is between marks that some upstreams split on and
+%% `uri_string' does not (`%2F', `\', `%5C', `;', `%3B'). An upstream may
+%% resolve such a segment, so the path returns `undefined'.
+normalize_request_path(Path) ->
+    [PathOnly | _] = binary:split(hb_ao:normalize_key(Path), <<"?">>),
+    Normalized =
+        try uri_string:normalize(PathOnly) of
+            Resolved when is_binary(Resolved) -> Resolved;
+            _ -> PathOnly
+        catch _:_ -> PathOnly
         end,
-    try re:run(NormP1, NormP2, [{match_limit, ?REGEX_MATCH_LIMIT}]) =/= nomatch
-    catch _A:_B:_C -> false
+    Parts =
+        binary:split(
+            hb_util:to_lower(Normalized),
+            [<<"/">>, <<"%2f">>, <<"\\">>, <<"%5c">>, <<";">>, <<"%3b">>],
+            [global]
+        ),
+    IsDotSegment =
+        fun(Part) ->
+            lists:member(
+                binary:replace(Part, <<"%2e">>, <<".">>, [global]),
+                [<<".">>, <<"..">>]
+            )
+        end,
+    case lists:any(IsDotSegment, Parts) of
+        true -> undefined;
+        false -> normalize(Normalized)
     end.
 
 %% @doc Normalize a path to a binary, removing the leading slash if present.
