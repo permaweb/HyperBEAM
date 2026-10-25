@@ -8,6 +8,7 @@
 %%% cannot verify itself.
 %%% See the [cookie codec](dev_cookie.html) documentation for more details.
 -module(dev_cookie_auth).
+-device_libraries([lib_secret]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 -export([commit/3, verify/3]).
@@ -111,13 +112,13 @@ commit(Base, Request, RawOpts) ->
 bind_secret(Secret, Base, Opts) ->
     store_secret(
         Secret,
-        Base#{ <<"committer">> => hb_util:secret_key_to_committer(Secret) },
+        Base#{ <<"committer">> => lib_secret:to_committer(Secret) },
         Opts
     ).
 
 %% @doc Update the nonces for a given secret.
 store_secret(Secret, Msg, Opts) ->
-    CookieAddr = hb_util:secret_key_to_committer(Secret),
+    CookieAddr = lib_secret:to_committer(Secret),
     % Create the cookie parameters, using the name as the key and the secret as
     % the value. The secret is a credential: page scripts may not read its
     % cookie, and browsers send it only over HTTPS, from this site's pages.
@@ -175,7 +176,7 @@ verify(Base, Request, RawOpts) ->
 
 %% @doc Check that a secret hashes to the given committer.
 verify_secret(Secret, Committer) ->
-    {ok, hb_util:secret_key_to_committer(Secret) =:= Committer}.
+    {ok, lib_secret:to_committer(Secret) =:= Committer}.
 
 %% @doc Generate a new secret key for the given request. The user may specify
 %% a generator function in the request, which will be executed to generate the

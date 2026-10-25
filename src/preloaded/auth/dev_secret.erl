@@ -175,7 +175,7 @@
 %%%     `keyid's of the imported secrets.
 %%% '''
 -module(dev_secret).
--device_libraries([lib_meta, lib_process]).
+-device_libraries([lib_meta, lib_process, lib_secret]).
 -export([generate/3, import/3, list/3, commit/3, export/3, sync/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -702,7 +702,7 @@ secrets_to_keyids(Secrets) when is_list(Secrets) ->
     [ hd(secrets_to_keyids(Secret)) || Secret <- Secrets ];
 secrets_to_keyids(Secret) when is_binary(Secret) ->
     ?event({secrets_to_keyids, {priv_secret, Secret}}),
-    KeyID = hb_util:secret_key_to_committer(Secret),
+    KeyID = lib_secret:to_committer(Secret),
     [ {secret, <<"secret:", KeyID/binary>>, Secret} ].
 
 %% @doc Parse the exportable setting for a wallet and return a list of the

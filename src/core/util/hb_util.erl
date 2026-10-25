@@ -5,7 +5,7 @@
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
 -export([is_human_id/1]).
--export([secret_key_to_committer/1, remove_scheme_prefix/1]).
+-export([remove_scheme_prefix/1]).
 -export([key_to_atom/1, key_to_atom/2, binary_to_strings/1]).
 -export([encode/1, decode/1, decode/2, safe_encode/1, safe_decode/1]).
 -export([is_printable_string/1]).
@@ -228,10 +228,6 @@ lowercase_key(Key) -> Key.
 %% @doc Lowercase an ASCII capital; keep any other byte.
 lowercase_byte(C) when C >= $A, C =< $Z -> C bor 32;
 lowercase_byte(C) -> C.
-
-%% @doc Build a committer address from a shared secret.
-secret_key_to_committer(Key) ->
-    human_id(hb_crypto:sha256(Key)).
 
 %% @doc Remove a `scheme:' prefix from a binary key.
 remove_scheme_prefix(KeyID) ->
