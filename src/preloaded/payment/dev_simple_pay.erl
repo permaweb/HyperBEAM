@@ -289,19 +289,23 @@ topup(_, Req, NodeMsg) ->
         {error, _} -> {error, <<"Unauthorized">>};
         {ok, Signed} ->
             Amount = hb_ao:get(<<"amount">>, Signed, 0, NodeMsg),
-            Recipient =
-                hb_committer:uri(
-                    hb_ao:get(<<"recipient">>, Signed, undefined, NodeMsg),
-                    NodeMsg
-                ),
-            NewBalance = debit(Recipient, -Amount, NodeMsg),
-            ?event(payment,
-                {topup,
-                    {amount, Amount},
-                    {recipient, Recipient},
-                    {balance, NewBalance}
-                }),
-            {ok, NewBalance}
+            case is_integer(Amount) andalso Amount > 0 of
+                false -> {error, <<"Top-up amount must be positive.">>};
+                true ->
+                    Recipient =
+                        hb_committer:uri(
+                            hb_ao:get(<<"recipient">>, Signed, undefined, NodeMsg),
+                            NodeMsg
+                        ),
+                    NewBalance = debit(Recipient, -Amount, NodeMsg),
+                    ?event(payment,
+                        {topup,
+                            {amount, Amount},
+                            {recipient, Recipient},
+                            {balance, NewBalance}
+                        }),
+                    {ok, NewBalance}
+            end
     end.
 
 %% @doc Check if the request is from the operator, as `meta@1.0' finds it.
