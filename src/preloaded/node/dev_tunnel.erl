@@ -112,10 +112,13 @@ request(Base, Hook, Opts) ->
     {Path, _Query} = split_path(Raw, Opts),
     Target =
         case hb_path:term_to_path_parts(Path, Opts) of
-            [<<"~tunnel@1.0">>, <<"call">>] -> none;
+            [<<"~tunnel@1.0">>, <<"call">>] -> call_here;
             _ -> target(Base, Raw, Opts)
         end,
     case Target of
+        % Reply to an explicit call from the hook, as to a forwarded call, so
+        % the HTTP path does not add the broker's signature to the origin's reply.
+        call_here -> {reply, call(Base, Raw, Opts)};
         none -> {ok, Hook};
         {error, _} = Error -> Error;
         {Mode, Address} ->
