@@ -498,7 +498,18 @@ uninitialized_node_test() ->
     Node = hb_http_server:start_node(#{ <<"initialized">> => false }),
     {error, Res} = hb_http:get(Node, <<"/key1?1.key1=value1">>, #{}),
     ?event({res, Res}),
-    ?assertEqual(<<"Node must be initialized before use.">>, Res).
+    ?assertEqual(<<"Node must be initialized before use.">>, Res),
+    % An uncommitted `path` header cannot select another request.
+    ?assertEqual(
+        {error, <<"Node must be initialized before use.">>},
+        hb_http:request(
+            <<"GET">>,
+            Node,
+            <<"/~meta@1.0/info">>,
+            #{ <<"path">> => <<"/~message@1.0/id?1.a=1">> },
+            #{}
+        )
+    ).
 
 %% @doc Test that a permanent node message cannot be changed.
 permanent_node_message_test() ->

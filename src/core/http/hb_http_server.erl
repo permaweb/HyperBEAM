@@ -769,10 +769,12 @@ handle_request(RawReq, Body, ServerID) ->
 %% that does not receive the request through Cowboy must decode and verify the
 %% singleton before it calls this function.
 resolve_request(Path, Singleton, NodeMsg) ->
+    [RequestPath | _] =
+        binary:split(hb_maps:get(<<"path">>, Singleton, Path, NodeMsg), <<"?">>),
     maybe
         true ?=
             hb_opts:get(initialized, false, NodeMsg) =/= false orelse
-                Path == <<"/~meta@1.0/info">> orelse
+                RequestPath == <<"/~meta@1.0/info">> orelse
                 {Singleton,
                     {error, <<"Node must be initialized before use.">>}},
         Msgs =
