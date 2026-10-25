@@ -160,7 +160,9 @@ verify(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
     ?event({verify_with_explicit_key, {priv_base, Base}, {priv_request, Req}}),
     verify_secret(
         hb_cache:ensure_loaded(Secret, Opts),
-        hb_maps:get(<<"committer">>, Base, undefined, Opts)
+        Req,
+        hb_maps:get(<<"committer">>, Base, undefined, Opts),
+        Opts
     );
 verify(Base, Request, RawOpts) ->
     Opts = dev_cookie:opts(RawOpts),
@@ -168,15 +170,23 @@ verify(Base, Request, RawOpts) ->
     maybe
         {ok, Committer} ?= hb_maps:find(<<"committer">>, Base, Opts),
         {ok, Secret} ?= find_secret(Committer, Request, Opts),
-        verify_secret(Secret, Committer)
+        verify_secret(
+            Secret,
+            hb_cache:ensure_loaded(Request, Opts),
+            Committer,
+            Opts
+        )
     else
         error -> {error, not_found};
         {error, Err} -> {error, Err}
     end.
 
-%% @doc Check that a secret hashes to the given committer.
-verify_secret(Secret, Committer) ->
-    {ok, lib_secret:to_committer(Secret) =:= Committer}.
+%% @doc Check that a secret hashes to the given committer and that the
+%% commitment's `committer', if present, is the same committer.
+verify_secret(Secret, Commitment, Committer, Opts) ->
+    {ok,
+        lib_secret:to_committer(Secret) =:= Committer andalso
+            hb_committer:matches_commitment(Committer, Commitment, Opts)}.
 
 %% @doc Generate a new secret key for the given request. The user may specify
 %% a generator function in the request, which will be executed to generate the

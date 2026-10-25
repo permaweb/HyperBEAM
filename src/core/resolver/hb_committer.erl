@@ -52,7 +52,7 @@
 %%% integer above 2^46 - 1 or a reserved type, or whose address or ID is not
 %%% in the form that `hb_util:human_id/1' gives.
 -module(hb_committer).
--export([uri/1, uri/2, address/1, encode/2, decode/1]).
+-export([uri/1, uri/2, matches_commitment/3, address/1, encode/2, decode/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -111,6 +111,14 @@ uri(Value, _Opts) when is_binary(Value) ->
     uri(Main);
 uri(Value, _Opts) ->
     uri(Value).
+
+%% @doc Return whether a commitment's `committer', if present, is the given
+%% committer.
+matches_commitment(Committer, Commitment, Opts) ->
+    case hb_maps:find(<<"committer">>, Commitment, Opts) of
+        error -> true;
+        {ok, Declared} -> uri(Declared, Opts) =:= uri(Committer, Opts)
+    end.
 
 %% @doc Return the address of an Arweave committer: an address, or a `did:ar:'
 %% URI of an address in either form. Returns `error' for any other value.
