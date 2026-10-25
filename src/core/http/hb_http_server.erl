@@ -802,7 +802,8 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
     HookReq =
         #{
             <<"request">> => InitiatingRequest,
-            <<"body">> => Body
+            <<"body">> => Body,
+            <<"priv">> => #{ <<"hook-caller">> => <<"kernel">> }
         },
     ?event(hook, {resolve_hook, HookName, HookReq}),
     % Hooks resolve caller content. Code that signs for the node gets its keys

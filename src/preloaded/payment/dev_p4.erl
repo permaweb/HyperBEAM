@@ -49,12 +49,19 @@
 %% @doc Estimate the cost of a transaction and decide whether to proceed with
 %% a request. The default behavior if `pricing-device' or `p4_balances' are
 %% not set is to proceed, so it is important that a user initialize them.
+%% Only the node's request hook may call this key; a direct call is refused.
 -spec request(
     #{ 'pricing-device' => binary(), 'ledger-device' => binary(), _ => _ },
     #{ request := #{ _ => _ }, body := [_], _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ body := [_], _ => _ }} | {error, _}.
 request(State, Raw, NodeMsg) ->
+    case is_hook_caller(Raw, NodeMsg) of
+        true -> admit_request(State, Raw, NodeMsg);
+        false -> refuse_caller()
+    end.
+
+admit_request(State, Raw, NodeMsg) ->
     PricingDevice = hb_ao:get(<<"pricing-device">>, State, false, NodeMsg),
     LedgerDevice = hb_ao:get(<<"ledger-device">>, State, false, NodeMsg),
     Messages = hb_ao:get(<<"body">>, Raw, NodeMsg#{ <<"hashpath">> => ignore }),
@@ -184,13 +191,20 @@ request(State, Raw, NodeMsg) ->
             end
     end.
 
-%% @doc Postprocess the request after it has been fulfilled.
+%% @doc Postprocess the request after it has been fulfilled. Only the node's
+%% response hook may call this key; a direct call is refused.
 -spec response(
     #{ 'pricing-device' => binary(), 'ledger-device' => binary(), _ => _ },
     #{ request := #{ _ => _ }, body := _, _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ body := _, _ => _ }} | {error, _}.
 response(State, RawResponse, NodeMsg) ->
+    case is_hook_caller(RawResponse, NodeMsg) of
+        true -> charge_response(State, RawResponse, NodeMsg);
+        false -> refuse_caller()
+    end.
+
+charge_response(State, RawResponse, NodeMsg) ->
     PricingDevice = hb_ao:get(<<"pricing-device">>, State, false, NodeMsg),
     LedgerDevice = hb_ao:get(<<"ledger-device">>, State, false, NodeMsg),
     Response =
@@ -315,6 +329,18 @@ balance(_, Req, NodeMsg) ->
                     {error, Error}
             end
     end.
+
+%% @doc A hook-only key runs only when the node's lifecycle hook calls it. The
+%% server marks the hook request in a private key. A request over HTTP cannot
+%% carry private keys.
+is_hook_caller(Raw, NodeMsg) ->
+    hb_private:get(<<"hook-caller">>, Raw, NodeMsg) =:= <<"kernel">>.
+
+refuse_caller() ->
+    {error, #{
+        <<"status">> => 401,
+        <<"body">> => <<"Unauthorized caller.">>
+    }}.
 
 %% @doc Prepare a request for the ledger. A `lua@5.3a' ledger reads an
 %% Arweave committer as its address, so we convert the accounts in the request
