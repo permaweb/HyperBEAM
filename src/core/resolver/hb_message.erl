@@ -603,11 +603,15 @@ deep_verify(Path, Msg, Opts) when is_map(Msg) ->
         true ?=
             maps:fold(
                 fun(Key, Value, true) ->
-                    deep_verify(Path ++ [Key], Value, Opts);
+                    deep_verify([Key | Path], Value, Opts);
                    (_, _, Failure) -> Failure
                 end,
                 true,
-                uncommitted(hb_private:reset(Msg), Opts)
+                % `verify/3' reads `Msg' with its private keys; the fold skips them.
+                maps:filter(
+                    fun(Key, _) -> not hb_private:is_private(Key) end,
+                    uncommitted(Msg, Opts)
+                )
             ),
         Verified =
             try verify(Msg, #{ <<"ids">> => <<"all">> }, Opts)
@@ -615,7 +619,7 @@ deep_verify(Path, Msg, Opts) when is_map(Msg) ->
             end,
         case Verified of
             true -> true;
-            false -> {false, hb_path:to_binary(Path), Msg}
+            false -> {false, hb_path:to_binary(lists:reverse(Path)), Msg}
         end
     end;
 deep_verify(_Path, _Msg, _Opts) ->
