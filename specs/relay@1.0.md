@@ -168,8 +168,11 @@ the node's own key before dispatch, gated by node policy.
        matches there is no peer. The request's **peer** is not used. Otherwise
        the peer is the resolved **peer**.
      - **Host check** (no relay route): the host is the peer's, else that of a
-       relay path that starts with `http://` or `https://`; a relative relay
-       path gives none and is not checked. If the host cannot be determined,
+       relay path with a scheme, or of a relative relay path that does not
+       begin with `/` and gives an authority (such as `@host:port/...`),
+       because joining it to a route prefix makes the prefix userinfo and the
+       path chooses the host; any other relative relay path gives none and is
+       not checked. If the host cannot be determined,
        matches no entry of the node option `hosts-allowed` (default `any`;
        an entry that starts with `.` matches a suffix), or is not public while
        the node option `hosts-block-internal` (default `true`) is `true`, return

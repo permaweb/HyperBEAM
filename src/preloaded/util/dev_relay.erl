@@ -257,12 +257,26 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
             end
     end.
 
-%% @doc The host the relay will contact: the `peer' when the request gives one,
-%% otherwise an absolute `route-path', `relay-path' or `relay-route'. A relative
-%% path gives no host, so the node routes it through its own routes and there
-%% is nothing for `hb_hostname:is_blocked/2' to vet: return `undefined'.
+%% @doc Returns the destination the relay will contact: the `peer' when the
+%% request gives one, otherwise an absolute `route-path', `relay-path' or
+%% `relay-route'. If a relative path gives an authority, joining it to a route
+%% prefix makes the prefix userinfo and the path chooses the host, so return the
+%% path with a scheme for `hb_hostname:is_blocked/2' to check that host. Any
+%% other relative path gives no host and returns `undefined'.
 relay_destination(not_found, <<"http://", _/binary>> = Path) -> Path;
 relay_destination(not_found, <<"https://", _/binary>> = Path) -> Path;
+relay_destination(not_found, <<"/", _/binary>>) -> undefined;
+relay_destination(not_found, Path) when is_binary(Path) ->
+    case uri_string:parse(Path) of
+        #{ scheme := _ } -> Path;
+        _ ->
+            URL = <<"http://localhost", Path/binary>>,
+            try uri_string:parse(URL) of
+                #{ userinfo := _ } -> URL;
+                _ -> undefined
+            catch _:_ -> URL
+            end
+    end;
 relay_destination(not_found, _RelativePath) -> undefined;
 relay_destination(Peer, _RelayPath) -> Peer.
 
