@@ -190,9 +190,15 @@
 generate(Base, Request, Opts) ->
     case request_to_wallets(Base, Request, Opts) of
         [] ->
-            % No wallets found, create a new one.
-            Wallet = ar_wallet:new(),
-            register_wallet(Wallet, Base, Request, Opts);
+            % No wallets found, create a new one from the pool. The pool
+            % bounds concurrent generation; a timed-out request must not
+            % generate a wallet in the request process.
+            case ar_wallet:request_pooled_wallet(?DEFAULT_KEY_TYPE) of
+                {ok, Wallet} ->
+                    register_wallet(Wallet, Base, Request, Opts);
+                timeout ->
+                    {error, <<"Wallet generation timed out.">>}
+            end;
         [WalletDetails] ->
             % The wallet is keyed by the `keyid' of its access secret.
             Committer =
