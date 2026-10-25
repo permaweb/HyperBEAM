@@ -608,15 +608,15 @@ list_replace(List, Key, Value) ->
 %% @doc Take a list and return a list of unique elements. The function is
 %% order-preserving.
 unique(List) ->
-    Unique =
+    {Unique, _} =
         lists:foldl(
-            fun(Item, Acc) ->
-                case lists:member(Item, Acc) of
-                    true -> Acc;
-                    false -> [Item | Acc]
+            fun(Item, {Acc, Seen}) ->
+                case maps:is_key(Item, Seen) of
+                    true -> {Acc, Seen};
+                    false -> {[Item | Acc], Seen#{ Item => true }}
                 end
             end,
-            [],
+            {[], #{}},
             List
         ),
     lists:reverse(Unique).
