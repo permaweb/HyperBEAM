@@ -186,10 +186,8 @@ mandate is out of scope (see §11).
   gzip stream MUST cause `unzip` to fail rather than silently returning the
   malformed bytes (§8). `zip` is failure-closed on a missing body (it errors
   rather than fabricating one).
-- The device imposes no size limit itself; a decompressed body can be much
-  larger than its compressed form. Decompression-bomb mitigation (input/output
-  size caps) is a node/substrate policy concern, out of scope for this device's
-  contract.
+- The device refuses a decompressed body larger than the node's
+  `gzip-max-size` option: 128 MiB by default, the default request-body limit.
 
 ## 8. Errors
 
