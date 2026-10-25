@@ -691,20 +691,44 @@ token_text({_, _, Chars}) -> Chars;
 token_text({Separator, _}) -> atom_to_list(Separator).
 
 %% @doc Parse a query string into a message of its unquoted values, with the
-%% keys in lowercase, or throw `invalid_query' with the query string.
+%% keys in lowercase, or throw `invalid_query' with the query string. A query
+%% is caller input, so its private keys are removed before they are merged
+%% into a message.
 parse_query(QStr) ->
     try
-        maps:map(
-            fun(_, Val) -> hb_util:unquote(Val) end,
-            hb_maps:from_list(
-                [
-                    {hb_util:lowercase_key(Key), Val}
-                ||
-                    {Key, Val} <- cowboy_req:parse_qs(#{ qs => QStr })
-                ]
+        filter_private_query_params(
+            maps:map(
+                fun(_, Val) -> hb_util:unquote(Val) end,
+                hb_maps:from_list(
+                    [
+                        {hb_util:lowercase_key(Key), Val}
+                    ||
+                        {Key, Val} <- cowboy_req:parse_qs(#{ qs => QStr })
+                    ]
+                )
             )
         )
     catch _:_ -> throw({invalid_singleton, invalid_query, QStr})
+    end.
+
+%% @doc Remove the private keys of a query. A key may be scoped to a step as
+%% `N.Key', and the scope is applied after parsing, so the check uses the key
+%% that will reach the message.
+filter_private_query_params(Query) ->
+    maps:filter(
+        fun(Key, _Val) -> not hb_private:is_private(unscope_key(Key)) end,
+        Query
+    ).
+
+%% @doc Return the key without its optional numeric step scope.
+unscope_key(Key) ->
+    case binary:split(Key, <<".">>) of
+        [Scope, Unscoped] ->
+            case catch binary_to_integer(Scope) of
+                N when is_integer(N), N >= 0 -> Unscoped;
+                _ -> Key
+            end;
+        _ -> Key
     end.
 
 %% @doc Normalize the base path. A first path part without a key is the
