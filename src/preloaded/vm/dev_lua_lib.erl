@@ -165,15 +165,15 @@ return(Result, ExecState, Opts) ->
 %% (using `hb_ao:resolve_many/2') variants.
 resolve([SingletonMsg], ExecState, ExecOpts) ->
     ?event({ao_core_resolver, {msg, SingletonMsg}}),
-    % The parsed messages are what the device executes; private keys in
-    % them are caller input from Lua.
-    ParsedMsgs = hb_private:reset(hb_singleton:from(SingletonMsg, ExecOpts)),
+    ParsedMsgs = hb_singleton:from(SingletonMsg, ExecOpts),
     ?event({parsed_msgs_to_resolve, ParsedMsgs}),
     resolve({many, ParsedMsgs}, ExecState, ExecOpts);
 resolve(Msgs, ExecState, ExecOpts) when is_list(Msgs) ->
     resolve({many, Msgs}, ExecState, ExecOpts);
 resolve({many, Msgs}, ExecState, ExecOpts) ->
-    MaybeAsMsgs = lists:map(fun convert_as/1, Msgs),
+    % The messages are what the device executes; private keys in them are
+    % caller input from Lua.
+    MaybeAsMsgs = lists:map(fun convert_as/1, hb_private:reset(Msgs)),
     try hb_ao:resolve_many(MaybeAsMsgs, ExecOpts) of
         {Status, Res} ->
             ?event({resolved_msgs, {status, Status}, {res, Res}, {exec_opts, ExecOpts}}),
