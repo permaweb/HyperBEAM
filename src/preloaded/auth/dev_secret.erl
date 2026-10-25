@@ -139,7 +139,9 @@
 %%% /export
 %%%     Parameters:
 %%%     - `keyids' (optional): A list of `keyid's to export, or `all' to
-%%%       export all secrets for which the request passes authentication.
+%%%       export all secrets for which the request passes authentication. A
+%%%       controller that authorizes the export must sign `keyids'. To export
+%%%       every secret that it controls, it signs `keyids => all'.
 %%% 
 %%%     Exports a given secret or set of secrets. If multiple secrets are
 %%%     requested, the result is a message with form `keyid => #{ `key` =>
@@ -150,8 +152,8 @@
 %%%     A secret will be exported if:
 %%%     - The given request passes each requested secret's `access-control'
 %%%       message; or
-%%%     - The request passes each requested secret's `controllers' parameter
-%%%       checks.
+%%%     - The secret's controllers signed the request's `keyids', and `keyids'
+%%%       contains the secret's `keyid' or is `all'.
 %%% 
 %%% /sync
 %%%     Parameters:
@@ -503,7 +505,7 @@ load_and_verify({secret, KeyID, _}, _Base, Request, Opts) ->
     case find_wallet(KeyID, Opts) of
         not_found -> {error, <<"Wallet not hosted on node.">>};
         WalletDetails ->
-            case verify_controllers(WalletDetails, Request, Opts) of
+            case verify_controllers(WalletDetails, KeyID, Request, Opts) of
                 true ->
                     % If the request is already signed by an exporter
                     % return the request as-is with the wallet.
@@ -521,8 +523,10 @@ load_and_verify({secret, KeyID, _}, _Base, Request, Opts) ->
     end.
 
 %% @doc Validate if a calling message has the required `controllers' for the
-%% given wallet.
-verify_controllers(WalletDetails, Request, Opts) ->
+%% given wallet. Count a controller only if it signed `keyids', and `keyids'
+%% contains the wallet's `keyid' or is `all'. A commitment over other keys,
+%% such as `hashpath', does not authorize an export.
+verify_controllers(WalletDetails, KeyID, Request, Opts) ->
     RequiredControllers =
         hb_util:int(hb_maps:get(<<"required-controllers">>, WalletDetails, 1, Opts)),
     Controllers =
@@ -535,14 +539,20 @@ verify_controllers(WalletDetails, Request, Opts) ->
                     Opts
                 )
         ],
-    PresentControllers =
-        lists:filter(
-            fun(Signer) ->
-                lists:member(Signer, Controllers)
-            end,
-            hb_message:signers(Request, Opts)
-        ),
-    length(PresentControllers) >= RequiredControllers.
+    SigningControllers =
+        [
+            Controller
+        ||
+            Controller <- lists:usort(Controllers),
+            {ok, Signed} <- [lib_meta:authorized([Controller], Request, Opts)],
+            is_listed_key(KeyID, hb_maps:get(<<"keyids">>, Signed, [], Opts))
+        ],
+    length(SigningControllers) >= RequiredControllers.
+
+%% @doc Whether a `keyids' value contains the given `keyid', or is `all'.
+is_listed_key(_KeyID, <<"all">>) -> true;
+is_listed_key(KeyID, KeyIDs) when is_list(KeyIDs) -> lists:member(KeyID, KeyIDs);
+is_listed_key(_KeyID, _KeyIDs) -> false.
 
 %% @doc Verify a wallet for a given request.
 verify_auth(WalletDetails, Req, Opts) ->
