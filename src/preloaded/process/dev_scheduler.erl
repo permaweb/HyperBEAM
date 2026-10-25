@@ -719,6 +719,16 @@ without_hint(Target) ->
         _ -> throw({invalid_operation_target, Target})
     end.
 
+%% @doc Check that the ID part of a target is a process ID and return the
+%% target, including any hint, for the server lookup.
+validate_target(Target) when ?IS_ID(Target) ->
+    hb_util:human_id(Target);
+validate_target(Target) ->
+    case binary:split(Target, <<"?">>) of
+        [ProcID, _Hint] when ?IS_ID(ProcID) -> Target;
+        _ -> throw({invalid_operation_target, Target})
+    end.
+
 %% @doc Use the SchedulerLocation to find the remote path and return a redirect.
 %% If there are multiple locations, try each one in turn until we find the first
 %% that matches.
@@ -1450,7 +1460,7 @@ find_target_id(Base, Req, ToSched, Opts) ->
         _ ->
             case hb_ao:get(<<"target">>, ToSched, not_found, Opts) of
                 not_found -> find_target_id(Base, Req, Opts);
-                Target -> hb_util:human_id(Target)
+                Target -> validate_target(Target)
             end
     end.
 find_target_id(Base, Req, Opts) ->
@@ -1458,7 +1468,7 @@ find_target_id(Base, Req, Opts) ->
     Res = case hb_ao:resolve(Req, <<"target">>, TempOpts) of
         {ok, Target} ->
             % ID found at Req/target
-            Target;
+            validate_target(Target);
         _ ->
             case hb_ao:resolve(Req, <<"type">>, TempOpts) of
                 {ok, <<"Process">>} ->
