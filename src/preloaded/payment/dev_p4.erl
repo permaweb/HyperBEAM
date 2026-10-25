@@ -46,6 +46,9 @@
     #{ <<"template">> => <<"^/~meta@1\\.0">> }
 ]).
 
+%% The private key that p4's hooks give on their pricing requests.
+-define(HOOK_PRIV, #{ <<"hook-caller">> => <<"kernel">> }).
+
 %% @doc Estimate the cost of a transaction and decide whether to proceed with
 %% a request. The default behavior if `pricing-device' or `p4_balances' are
 %% not set is to proceed, so it is important that a user initialize them.
@@ -88,7 +91,8 @@ admit_request(State, Raw, NodeMsg) ->
             PricingReq = #{
                 <<"path">> => <<"estimate">>,
                 <<"request">> => Request,
-                <<"body">> => Messages
+                <<"body">> => Messages,
+                <<"priv">> => ?HOOK_PRIV
             },
             ?event({p4_pricing_request, {devmsg, PricingMsg}, {req, PricingReq}}),
             case hb_ao:resolve(PricingMsg, PricingReq, NodeMsg) of
@@ -226,7 +230,8 @@ charge_response(State, RawResponse, NodeMsg) ->
             PricingReq = #{
                 <<"path">> => <<"price">>,
                 <<"request">> => Request,
-                <<"body">> => Response
+                <<"body">> => Response,
+                <<"priv">> => ?HOOK_PRIV
             },
             ?event({post_pricing_request, PricingReq}),
             PricingRes =
