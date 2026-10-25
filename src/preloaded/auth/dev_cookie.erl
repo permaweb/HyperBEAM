@@ -100,7 +100,7 @@ finalize(Base, Request, Opts) ->
 ) -> {ok, _} | {error, not_found}.
 get_cookie(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
-    {ok, Cookies} = extract(Base, Req, Opts),
+    {ok, Cookies} = extract(Base, Req, RawOpts),
     Key = hb_maps:get(<<"key">>, Req, undefined, Opts),
     case hb_maps:get(Key, Cookies, undefined, Opts) of
         undefined -> {error, not_found};
@@ -127,7 +127,7 @@ extract(Msg, Req, Opts) ->
 store(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     ?event({store, {priv_base, Base}, {priv_req, Req}}),
-    {ok, ExistingCookies} = extract(Base, Req, Opts),
+    {ok, ExistingCookies} = extract(Base, Req, RawOpts),
     ?event({store, {priv_existing_cookies, ExistingCookies}}),
     {ok, ResetBase} = reset(Base, Opts),
     ?event({store, {priv_reset_base, ResetBase}}),
@@ -144,8 +144,10 @@ store(Base, Req, RawOpts) ->
             hb_private:reset(Req),
             Opts
         ),
-    ?event({store, {priv_msg_to_set, MsgToSet}}),
-    NewCookies = hb_maps:merge(ExistingCookies, MsgToSet, Opts),
+    % Load the request's values from the node's stores, not the private store.
+    LoadedMsgToSet = hb_cache:ensure_all_loaded(MsgToSet, RawOpts),
+    ?event({store, {priv_msg_to_set, LoadedMsgToSet}}),
+    NewCookies = hb_maps:merge(ExistingCookies, LoadedMsgToSet, Opts),
     NewBase = hb_private:set(ResetBase, <<"cookie">>, NewCookies, Opts),
     {ok, NewBase}.
 
@@ -191,7 +193,7 @@ reset(Base, _Req, Opts) ->
 to(Msg, Req, Opts) ->
     ?event({to, {priv_msg, Msg}, {priv_req, Req}}),
     CookieOpts = opts(Opts),
-    LoadedMsg = ensure_cookie_loaded(Msg, CookieOpts),
+    LoadedMsg = ensure_cookie_loaded(Msg, Opts),
     ?event({to, {priv_loaded_msg, LoadedMsg}}),
     do_to(LoadedMsg, Req, CookieOpts).
 do_to(Msg, Req = #{ <<"format">> := <<"set-cookie">> }, Opts) when is_map(Msg) ->
@@ -309,7 +311,7 @@ to_cookie_line(Key, Cookie) ->
 ) -> {ok, #{ _ => _ }}.
 from(Msg, Req, Opts) ->
     CookieOpts = opts(Opts),
-    LoadedMsg = ensure_cookie_loaded(Msg, CookieOpts),
+    LoadedMsg = ensure_cookie_loaded(Msg, Opts),
     do_from(LoadedMsg, Req, CookieOpts).
 do_from(Msg, Req, Opts) when is_map(Msg) ->
     {ok, ResetBase} = reset(Msg, Opts),
@@ -440,13 +442,14 @@ from_set_cookie({[Key, Value], Rest}, _Req, Opts) ->
 %%% Internal helpers
 
 %% @doc Load only the parts of the message needed by the cookie codec.
-ensure_cookie_loaded(Msg, Opts) ->
+ensure_cookie_loaded(Msg, RawOpts) ->
+    Opts = opts(RawOpts),
     LoadedMsg = hb_cache:ensure_loaded(Msg, Opts),
     load_private_cookie(
         load_cookie_source(
             <<"set-cookie">>,
-            load_cookie_source(<<"cookie">>, LoadedMsg, Opts),
-            Opts
+            load_cookie_source(<<"cookie">>, LoadedMsg, RawOpts),
+            RawOpts
         ),
         Opts
     ).
