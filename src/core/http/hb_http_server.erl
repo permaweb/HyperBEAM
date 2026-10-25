@@ -1443,10 +1443,14 @@ encode_reply(Status, TABMReq, RawMessage, Opts) ->
         _ ->
             % A codec other than `httpsig@1.0' sends the message as the body,
             % with the type and subtype of the media range that asked for the
-            % codec as its `content-type'.
+            % codec as its `content-type', and its `cache-control' as a header.
+            Headers = #{ <<"content-type">> => ContentType },
             {
                 Status,
-                #{ <<"content-type">> => ContentType },
+                case cache_control_header(Message, Opts) of
+                    <<>> -> Headers;
+                    CacheControl -> Headers#{ <<"cache-control">> => CacheControl }
+                end,
                 hb_http:encode(
                     Codec,
                     Message,
@@ -1455,6 +1459,27 @@ encode_reply(Status, TABMReq, RawMessage, Opts) ->
                 )
             }
     end.
+
+%% @doc The `cache-control' of a result as a header value: its directives, as
+%% `hb_cache_control' reads them, or `<<>>' without any. A directive with a
+%% control byte, which would end the header, is left out.
+cache_control_header(Message, Opts) ->
+    Directives =
+        hb_cache_control:directives(
+            hb_maps:get(<<"cache-control">>, Message, [], Opts)
+        ),
+    iolist_to_binary(
+        lists:join(
+            <<", ">>,
+            [
+                Directive
+            ||
+                Directive <- Directives,
+                lists:all(fun(Byte) -> Byte >= 32 andalso Byte =/= 127 end,
+                    binary_to_list(Directive))
+            ]
+        )
+    ).
 
 %% @doc Find the codec of the reply to a request from its `accept', read as RFC
 %% 9110 gives, and the `content-type' of a reply in that codec. The media ranges
@@ -2473,6 +2498,16 @@ binary_codec_reply_headers_test() ->
     ?assertEqual(
         Message,
         hb_message:convert(Body, <<"structured@1.0">>, <<"json@1.0">>, Opts)
+    ),
+    % A result's `cache-control' is given as a header.
+    ?assertMatch(
+        {200, #{ <<"cache-control">> := <<"no-cache, no-store">> }, _},
+        encode_reply(
+            200,
+            #{ <<"accept">> => <<"application/json">> },
+            Message#{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
+            Opts
+        )
     ),
     % A reply in `flat@1.0' has the keys of the result, without its `priv'.
     ?assertMatch(

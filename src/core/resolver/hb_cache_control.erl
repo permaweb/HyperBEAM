@@ -4,7 +4,7 @@
 %%% response to a request.
 -module(hb_cache_control).
 -export([maybe_store/5, maybe_lookup/5]).
--export([derive_cache_settings/2]).
+-export([derive_cache_settings/2, directives/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -220,20 +220,8 @@ cache_source_to_cache_settings(Msg, Opts) ->
 %% bytes are not UTF-8) gives no directive.
 %% Only binaries and atoms are directives: any other value, such as a message,
 %% is ignored.
-specifiers_to_cache_settings(CCSpecifier) when is_binary(CCSpecifier) ->
-    specifiers_to_cache_settings(
-        try hb_util:binary_to_strings(CCSpecifier)
-        catch error:{cannot_parse_list, _} -> []
-        end
-    );
-specifiers_to_cache_settings(CCSpecifier) when not is_list(CCSpecifier) ->
-    specifiers_to_cache_settings([CCSpecifier]);
-specifiers_to_cache_settings(RawCCList) ->
-    CCList =
-        lists:map(
-            fun(CC) -> hb_util_string:lowercase(hb_ao:normalize_key(CC)) end,
-            [ CC || CC <- RawCCList, is_binary(CC) orelse is_atom(CC) ]
-        ),
+specifiers_to_cache_settings(CCSpecifier) ->
+    CCList = directives(CCSpecifier),
     #{
         <<"store">> =>
             case lists:member(<<"always">>, CCList) of
@@ -267,6 +255,22 @@ specifiers_to_cache_settings(RawCCList) ->
                 false -> undefined
             end
     }.
+
+%% @doc The directives of a cache control value, from a header or a list, as
+%% lowercase binaries.
+directives(CCSpecifier) when is_binary(CCSpecifier) ->
+    directives(
+        try hb_util:binary_to_strings(CCSpecifier)
+        catch error:{cannot_parse_list, _} -> []
+        end
+    );
+directives(CCSpecifier) when not is_list(CCSpecifier) ->
+    directives([CCSpecifier]);
+directives(RawCCList) ->
+    lists:map(
+        fun(CC) -> hb_util_string:lowercase(hb_ao:normalize_key(CC)) end,
+        [ CC || CC <- RawCCList, is_binary(CC) orelse is_atom(CC) ]
+    ).
 
 %%% Tests
 
