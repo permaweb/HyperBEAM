@@ -25,13 +25,18 @@
 %%% An account is a key of `balances', so the ledger holds and reads each
 %%% account lowercase, as keys are in `structured@1.0' form.
 -module(lib_volatile_ledger).
--export([debit/4, balance/3]).
+-export([debit/4, debit/5, balance/3]).
 -include("include/hb.hrl").
 
 %% @doc Debit `Amount' from `Account' and return its new balance. A negative
 %% amount credits the account.
 debit(Ledger, Account, Amount, Opts) when is_number(Amount) ->
     call(Ledger, {debit, hb_util:lowercase_key(Account), Amount}, Opts).
+
+%% @doc Debit `Amount' from `Account' once for each `Nonce', and return its new
+%% balance. A nonce that the ledger has seen gives `{error, already_applied}'.
+debit(Ledger, Account, Amount, Nonce, Opts) when is_number(Amount) ->
+    call(Ledger, {debit, hb_util:lowercase_key(Account), Amount, Nonce}, Opts).
 
 %% @doc Return the balance of `Account'.
 balance(Ledger, Account, Opts) ->
@@ -83,25 +88,40 @@ start_server(ServerID, Ledger, Opts) ->
             max => hb_maps:get(<<"max">>, Ledger, infinity, Opts),
             min => hb_maps:get(<<"min">>, Ledger, undefined, Opts),
             accounts => #{},
+            nonces => #{},
             opts => Opts
         }
     ).
 
-%% @doc The main loop of the ledger's process. Only responds to two messages:
+%% @doc The main loop of the ledger's process. Only responds to three messages:
 %% - `{{debit, Account, Amount}, PID, Ref}': Debit the account by the amount
 %%   and reply with its new balance.
+%% - `{{debit, Account, Amount, Nonce}, PID, Ref}': The same, once for each
+%%   nonce. A nonce that the ledger has seen gets `{error, already_applied}'.
 %% - `{{balance, Account}, PID, Ref}': Reply with the account's balance.
-server_loop(State) ->
+server_loop(State = #{ nonces := Nonces }) ->
     receive
         {{debit, Account, Amount}, PID, Ref} ->
-            Now = erlang:system_time(millisecond),
-            NewState = debit_account(Account, Amount, State, Now),
-            PID ! {Ref, account_balance(Account, NewState, Now)},
-            server_loop(NewState);
+            server_loop(debit_and_reply(Account, Amount, PID, Ref, State));
+        {{debit, _Account, _Amount, Nonce}, PID, Ref}
+                when is_map_key(Nonce, Nonces) ->
+            PID ! {Ref, {error, already_applied}},
+            server_loop(State);
+        {{debit, Account, Amount, Nonce}, PID, Ref} ->
+            NewState = debit_and_reply(Account, Amount, PID, Ref, State),
+            server_loop(NewState#{ nonces => Nonces#{ Nonce => true } });
         {{balance, Account}, PID, Ref} ->
             PID ! {Ref, account_balance(Account, State)},
             server_loop(State)
     end.
+
+%% @doc Debit the account, reply to the caller with its new balance, and
+%% return the new state.
+debit_and_reply(Account, Amount, PID, Ref, State) ->
+    Now = erlang:system_time(millisecond),
+    NewState = debit_account(Account, Amount, State, Now),
+    PID ! {Ref, account_balance(Account, NewState, Now)},
+    NewState.
 
 %% @doc Debit the account by the given amount, down to the ledger's `min'.
 debit_account(

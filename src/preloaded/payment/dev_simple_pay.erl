@@ -288,7 +288,7 @@ get_balance(Signer, NodeMsg) ->
     #{ _ => _ },
     #{ amount => integer(), recipient => binary(), _ => _ },
     #{ _ => _ }
-) -> {ok, integer()} | {error, binary()}.
+) -> {ok, integer()} | {error, binary() | map()}.
 topup(_, Req, NodeMsg) ->
     ?event({topup, {req, Req}, {node_msg, NodeMsg}}),
     case lib_meta:authorized(lib_meta:role(operator, NodeMsg), Req, NodeMsg) of
@@ -303,14 +303,31 @@ topup(_, Req, NodeMsg) ->
                             hb_ao:get(<<"recipient">>, Signed, undefined, NodeMsg),
                             NodeMsg
                         ),
-                    NewBalance = debit(Recipient, -Amount, NodeMsg),
-                    ?event(payment,
-                        {topup,
-                            {amount, Amount},
-                            {recipient, Recipient},
-                            {balance, NewBalance}
-                        }),
-                    {ok, NewBalance}
+                    % The top-up's unsigned ID is its nonce, so the ledger
+                    % applies each signed top-up once.
+                    case
+                        lib_volatile_ledger:debit(
+                            ledger(NodeMsg),
+                            Recipient,
+                            -Amount,
+                            hb_message:id(Signed, NodeMsg),
+                            NodeMsg
+                        )
+                    of
+                        {error, already_applied} ->
+                            {error, #{
+                                <<"status">> => 409,
+                                <<"body">> => <<"Top-up already applied.">>
+                            }};
+                        NewBalance ->
+                            ?event(payment,
+                                {topup,
+                                    {amount, Amount},
+                                    {recipient, Recipient},
+                                    {balance, NewBalance}
+                                }),
+                            {ok, NewBalance}
+                    end
             end
     end.
 

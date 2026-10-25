@@ -226,6 +226,7 @@ topup(Node, Amount, Recipient, Wallet) ->
     Message = hb_message:commit(
         #{
             <<"path">> => <<"/~simple-pay@1.0/topup">>,
+            <<"nonce">> => hb_util:human_id(crypto:strong_rand_bytes(32)),
             <<"amount">> => Amount,
             <<"recipient">> => Recipient
         },
