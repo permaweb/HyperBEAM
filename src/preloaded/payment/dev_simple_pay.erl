@@ -107,6 +107,13 @@ apply_price(Seq, _) ->
 price_from_routes(UserRequest, NodeMsg) ->
     RouterOpts = hb_opts:get(<<"router-opts">>, #{}, NodeMsg),
     Routes = hb_maps:get(<<"offered">>, RouterOpts, [], NodeMsg),
+    % Match the path without its query, as `dev_p4' matches its non-chargable
+    % routes.
+    RoutePath =
+        case hb_maps:get(<<"path">>, UserRequest, no_path, NodeMsg) of
+            no_path -> no_path;
+            Path -> hd(binary:split(hb_util:bin(Path), <<"?">>))
+        end,
     MatchRes =
         hb_ao:resolve(
             #{
@@ -115,8 +122,7 @@ price_from_routes(UserRequest, NodeMsg) ->
             },
             UserRequest#{
                 <<"path">> => <<"match">>,
-                <<"route-path">> =>
-                    hb_maps:get(<<"path">>, UserRequest, no_path, NodeMsg)
+                <<"route-path">> => RoutePath
             },
             NodeMsg
         ),
