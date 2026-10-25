@@ -1487,26 +1487,22 @@ req_to_tabm_singleton(Req, Body, Opts) ->
             <<"httpsig@1.0">> ->
                 % HTTPSig commitments share the transport headers. Retain only
                 % their committed fields before restoring request metadata.
-                {ok, Committed} =
-                    hb_message:with_only_committed(
-                        hb_message:convert(
-                            PrimitiveMsg#{ <<"body">> => Body },
-                            <<"structured@1.0">>,
-                            Codec,
-                            Opts
-                        ),
+                hb_message:with_only_committed_deep(
+                    hb_message:convert(
+                        PrimitiveMsg#{ <<"body">> => Body },
+                        <<"structured@1.0">>,
+                        Codec,
                         Opts
                     ),
-                Committed;
+                    Opts
+                );
             _ ->
                 % The body is the whole message, encoded by the codec. If it
                 % has commitments, we keep only the keys that they cover.
-                {ok, Committed} =
-                    hb_message:with_only_committed(
-                        hb_http:decode(Codec, Body, Opts),
-                        Opts
-                    ),
-                Committed
+                hb_message:with_only_committed_deep(
+                    hb_http:decode(Codec, Body, Opts),
+                    Opts
+                )
         end,
     % Reset the request's private keys, which a codec can restore from the
     % wire, before the node sets its own. Then remove the commitments of an
