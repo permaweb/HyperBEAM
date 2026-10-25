@@ -175,7 +175,7 @@
 %%%     `keyid's of the imported secrets.
 %%% '''
 -module(dev_secret).
--device_libraries([lib_meta]).
+-device_libraries([lib_meta, lib_process]).
 -export([generate/3, import/3, list/3, commit/3, export/3, sync/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").

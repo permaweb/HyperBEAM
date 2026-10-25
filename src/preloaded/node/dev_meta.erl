@@ -3,7 +3,7 @@
 %%% whether a request is signed by the node operator (`is-operator').
 -module(dev_meta).
 -specification("../../../specs/meta@1.0.md").
--device_libraries([lib_meta]).
+-device_libraries([lib_meta, lib_process]).
 -export([device_info/1, info/3, build/3, adopt_node_message/2]).
 -export([is_operator/3]).
 -export([is_operator/2]).
@@ -14,13 +14,15 @@
 device_info(_) -> #{ exports => [<<"info">>, <<"build">>, <<"is-operator">>] }.
 
 %% @doc Utility function for determining if a request is from the `operator' of
-%% the node.
+%% the node. A pushed result is signed by the node, but it is not a request
+%% from the operator.
 is_operator(Request, NodeMsg) ->
     Operators = lib_meta:role(operator, NodeMsg),
-    lists:any(
-        fun(Signer) -> lists:member(Signer, Operators) end,
-        hb_message:signers(Request, NodeMsg)
-    ).
+    not lib_process:is_pushed(Request, NodeMsg) andalso
+        lists:any(
+            fun(Signer) -> lists:member(Signer, Operators) end,
+            hb_message:signers(Request, NodeMsg)
+        ).
 
 %% @doc Return whether the request in the body is signed by the node operator.
 is_operator(_Base, Req, NodeMsg) ->

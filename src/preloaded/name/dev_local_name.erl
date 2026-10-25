@@ -3,7 +3,7 @@
 %%% non-volatile storage of the node message to store the names long-term.
 -module(dev_local_name).
 -specification("../../../specs/local-name@1.0.md").
--device_libraries([lib_meta]).
+-device_libraries([lib_meta, lib_process]).
 -export([device_info/1, lookup/3, register/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

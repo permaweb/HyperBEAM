@@ -22,7 +22,7 @@
 %%% This device acts as both a pricing device and a ledger device, by p4's
 %%% definition.
 -module(dev_simple_pay).
--device_libraries([lib_volatile_ledger, lib_meta]).
+-device_libraries([lib_volatile_ledger, lib_meta, lib_process]).
 -export([estimate/3, charge/3, balance/3, topup/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
