@@ -387,21 +387,31 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
                 Opts
             );
         PersistMode ->
-            % Store wallet and return auth response with wallet info.
-            store_wallet(
-                hb_util:key_to_atom(PersistMode, existing),
-                KeyID,
-                WalletDetails,
-                Opts
-            ),
-            ?event(
-                {stored_and_returning,
-                    {auth_response, Base},
-                    {priv_wallet_details, WalletDetails}
-                }
-            ),
-            % Return auth response with wallet info added.
-            {ok, Base}
+            case find_wallet(KeyID, Opts) of
+                not_found ->
+                    % Store wallet and return auth response with wallet info.
+                    store_wallet(
+                        hb_util:key_to_atom(PersistMode, existing),
+                        KeyID,
+                        WalletDetails,
+                        Opts
+                    ),
+                    ?event(
+                        {stored_and_returning,
+                            {auth_response, Base},
+                            {priv_wallet_details, WalletDetails}
+                        }
+                    ),
+                    % Return auth response with wallet info added.
+                    {ok, Base};
+                _ ->
+                    ?event(
+                        {register_wallet_error,
+                            {reason, wallet_keyid_already_hosted}
+                        }
+                    ),
+                    {error, <<"Wallet keyid already hosted on node.">>}
+            end
     end.
 
 %% @doc List all hosted wallets
