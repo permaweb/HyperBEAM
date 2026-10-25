@@ -541,9 +541,11 @@ start_timer(Timeout, Message) -> erlang:start_timer(Timeout, self(), Message).
 cancel_timer(undefined) -> ok;
 cancel_timer(Timer) -> erlang:cancel_timer(Timer).
 
-%% @doc Accept `infinity', or a number of milliseconds that is not negative.
+%% @doc Accept `infinity', or a number of milliseconds that is not negative
+%% and that the runtime's timers take: at most `16#FFFFFFFF', about 49 days.
 valid_timeout(infinity) -> true;
-valid_timeout(Timeout) -> is_integer(Timeout) andalso Timeout >= 0.
+valid_timeout(Timeout) ->
+    is_integer(Timeout) andalso Timeout >= 0 andalso Timeout =< 16#FFFFFFFF.
 
 %% @doc Release all callers and terminate only broker-owned workers.
 shutdown(State) ->
