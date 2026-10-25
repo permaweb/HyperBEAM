@@ -139,6 +139,8 @@
 -define(DEFAULT_ALL_PATHS,
     #{ <<"committer">> => <<"committers~message@1.0">> }
 ).
+%% The most rows that a `members' request decodes.
+-define(MAX_MEMBERS, 1000).
 
 %% @doc Default all keys other than `message@1.0' and device keys to match a
 %% single key in the index.
@@ -800,8 +802,28 @@ member(Base, Req, Opts) ->
         end
     end.
 
-%% @doc Decode a batch of packed rows, retaining its configured device.
+%% @doc Decode a batch of packed rows, retaining its configured device. A batch
+%% gives a non-zero `offset-size' and has at most `?MAX_MEMBERS' rows.
 members(Base, Req, Opts) ->
+    case {sizes(Req, Opts), hb_maps:get(<<"body">>, Base, [], Opts)} of
+        {{_, _, 0}, _} ->
+            {error,
+                #{
+                    <<"status">> => 400,
+                    <<"body">> => <<"Offset size is 0.">>
+                }
+            };
+        {_, Rows} when length(Rows) > ?MAX_MEMBERS ->
+            {error,
+                #{
+                    <<"status">> => 400,
+                    <<"body">> => <<"Too many rows.">>
+                }
+            };
+        _ -> decode_members(Base, Req, Opts)
+    end.
+
+decode_members(Base, Req, Opts) ->
     Device = hb_maps:get(<<"commitment-device">>, Req, <<>>, Opts),
     lists:foldr(
         fun(Row, Acc) ->
