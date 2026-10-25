@@ -62,14 +62,20 @@ commit(Committer, #{ <<"body">> := Base }, Opts) ->
     #{ body := binary(), signature := binary(), _ => _ },
     #{ _ => _ }
 ) -> {ok, boolean()}.
-verify(Committer, #{ <<"body">> := Base, <<"signature">> := Sig }, Opts) ->
+verify(Committer, Req = #{ <<"body">> := Base, <<"signature">> := Sig }, Opts) ->
     case key(Committer, Opts) of
         {ok, Key} ->
             HMac = crypto:mac(hmac, sha256, Key, Base),
+            Expected =
+                case hb_maps:get(<<"body">>, Committer, undefined, Opts) of
+                    <<"secret:", ID/binary>> -> <<"hmac:secret:", ID/binary>>;
+                    _ -> undefined
+                end,
             {
                 ok,
                 byte_size(Sig) == byte_size(HMac)
                     andalso crypto:hash_equals(HMac, Sig)
+                    andalso hb_committer:matches_commitment(Expected, Req, Opts)
             };
         {error, not_found} -> {ok, false}
     end.
