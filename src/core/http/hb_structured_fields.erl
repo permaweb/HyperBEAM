@@ -36,6 +36,9 @@
     | {string | token | binary, binary()}.
 -type sh_decimal() :: {decimal, {integer(), integer()}}.
 
+%% Refuse integers with more than this many digits; 100 covers 256-bit values.
+-define(MAX_INTEGER_DIGITS, 100).
+
 -define(IS_LC_ALPHA(C),
     (C =:= $a) or (C =:= $b) or (C =:= $c) or (C =:= $d) or (C =:= $e) or
         (C =:= $f) or (C =:= $g) or (C =:= $h) or (C =:= $i) or (C =:= $j) or
@@ -327,6 +330,9 @@ parse_bare_item(<<>>) ->
     {{binary, <<>>}, <<>>}.
 
 %% @doc Parse an integer or decimal binary.
+parse_number(<<C, _/bits>>, L, _Acc) when
+        ?IS_DIGIT(C), L >= ?MAX_INTEGER_DIGITS ->
+    throw(integer_too_long);
 parse_number(<<C, R/bits>>, L, Acc) when ?IS_DIGIT(C) ->
     parse_number(R, L + 1, <<Acc/binary, C>>);
 parse_number(<<$., R/bits>>, L, Acc) ->
@@ -584,11 +590,22 @@ bare_item({decimal, {Base, Exp}}) ->
         end
     ];
 bare_item(Integer) when is_integer(Integer) ->
-    integer_to_binary(Integer);
+    case is_integer_too_long(Integer) of
+        true -> throw(integer_too_long);
+        false -> integer_to_binary(Integer)
+    end;
 bare_item(true) ->
     <<"?1">>;
 bare_item(false) ->
     <<"?0">>.
+
+%% @doc Whether an integer has more than `?MAX_INTEGER_DIGITS' decimal digits.
+%% 10^100 lies between 2^332 and 2^333: compare against those first, so an
+%% enormous integer is refused without a decimal conversion.
+is_integer_too_long(Integer) when abs(Integer) < (1 bsl 332) -> false;
+is_integer_too_long(Integer) when abs(Integer) >= (1 bsl 333) -> true;
+is_integer_too_long(Integer) ->
+    byte_size(integer_to_binary(abs(Integer))) > ?MAX_INTEGER_DIGITS.
 
 exp_div(0) -> 1;
 exp_div(N) -> 10 * exp_div(N + 1).

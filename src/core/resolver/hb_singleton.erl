@@ -241,7 +241,7 @@ to(Messages) ->
                         case type(Value) of
                             integer ->
                                 K = <<Index/binary, ".", Key/binary, "+integer">>,
-                                V = integer_to_binary(Value),
+                                V = hb_structured_fields:bare_item(Value),
                                 {K, V};
                             _ -> {<<Index/binary, ".", Key/binary>>, Value}
                         end,
