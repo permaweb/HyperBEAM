@@ -2,7 +2,8 @@
 %%% replication. This engine works in _reverse_ chronological order by default.
 %%% If `to' is omitted, it keeps moving downward from `from' until it reaches a
 %%% block that is already indexed at the requested mode. If `to' is provided,
-%%% every block in the range is processed.
+%%% every block in the range is processed. A block-header request reads at most
+%%% `?MAX_LIST_BLOCKS' heights.
 %%% `reindex' defaults to true and bypasses cached block headers.
 %%% `mode=blocks' stores only block headers in `arweave-block-store' (or `store'),
 %%% irrespective of `arweave-index-blocks', and does not process pending TXs.
@@ -21,6 +22,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
+% The most heights one request may read.
+-define(MAX_LIST_BLOCKS, 1000).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -140,6 +143,9 @@ index_range(Request, _IncludePending, From, To, block_index, Opts) ->
     hb_ao:resolve(
         Request#{ <<"path">> => <<?ARWEAVE_DEVICE/binary, "/block-index">>,
             <<"from">> => From, <<"to">> => To }, Opts);
+index_range(_Request, _IncludePending, From, To, _IndexMode, _Opts)
+        when is_integer(To), From - To + 1 > ?MAX_LIST_BLOCKS ->
+    {error, <<"Copycat range exceeds the node limit.">>};
 index_range(Request, _IncludePending, From, To, blocks, Opts) ->
     fetch_blocks(Request, From, To, blocks,
         Opts#{ <<"arweave-index-blocks">> => true });
@@ -195,6 +201,9 @@ list_index(_Request, From, To, _Opts) when From < To ->
         <<"content-type">> => <<"application/json">>,
         <<"body">> => hb_json:encode(#{})
     }};
+list_index(_Request, From, To, _Opts)
+        when From - To + 1 > ?MAX_LIST_BLOCKS ->
+    {error, <<"`mode=list` range exceeds the node limit.">>};
 list_index(Request, From, To, Opts) ->
     % A list reports the index state, so it does not refetch cached headers.
     Result =
@@ -275,7 +284,8 @@ classify_txs(TXIDs, Opts) ->
 %% @doc Fetch blocks from an Arweave node while moving downward from `Current'.
 %% If `To' is provided, every block in [`To', `Current'] is processed (unless
 %% `reindex' is disabled, in which case already-indexed blocks are skipped). If
-%% `To' is omitted, stop at the first block indexed to the target mode.
+%% `To' is omitted, stop at the first block indexed to the target mode, or
+%% refuse after `?MAX_LIST_BLOCKS' heights.
 fetch_blocks(Req, Current, To, _IndexMode, _Opts) when is_integer(To), Current < To ->
     ?event(copycat_short,
         {arweave_block_indexing_completed,
@@ -284,12 +294,28 @@ fetch_blocks(Req, Current, To, _IndexMode, _Opts) when is_integer(To), Current <
         }
     ),
     {ok, To};
-fetch_blocks(_Req, Current, undefined, _IndexMode, _Opts) when Current < 0 ->
-    {ok, 0};
 fetch_blocks(Req, Current, undefined, IndexMode, Opts) ->
+    fetch_to_indexed_block(
+        Req, Current, IndexMode, Current - ?MAX_LIST_BLOCKS, Opts);
+fetch_blocks(Req, Current, To, IndexMode, Opts) ->
+    % Unless `reindex' is set (the default), skip blocks already indexed at
+    % this mode, so overlapping ranges from different callers are not re-fetched.
+    (reindex(Req, Opts) orelse not is_block_indexed(Current, IndexMode, Req, Opts))
+        andalso observe_event(<<"block_indexed">>, fun() ->
+            process_block(fetch_block_header(Current, Req, Opts), Current, To, IndexMode, Opts)
+        end),
+    fetch_blocks(Req, Current - 1, To, IndexMode, Opts).
+
+%% @doc Fetch down to the first indexed block, or refuse after the module limit.
+fetch_to_indexed_block(_Req, Current, _IndexMode, _Lowest, _Opts)
+        when Current < 0 ->
+    {ok, 0};
+fetch_to_indexed_block(Req, Current, IndexMode, Lowest, Opts) ->
     case is_block_indexed(Current, IndexMode, Req, Opts) of
         true ->
             stop_at_indexed_block(Req, Current);
+        false when Current =< Lowest ->
+            {error, <<"Copycat range exceeds the node limit.">>};
         false ->
             BlockRes = fetch_block_header(Current, Req, Opts),
             case IndexMode =:= shallow andalso is_already_indexed(BlockRes, Opts) of
@@ -299,17 +325,10 @@ fetch_blocks(Req, Current, undefined, IndexMode, Opts) ->
                     observe_event(<<"block_indexed">>, fun() ->
                         process_block(BlockRes, Current, undefined, IndexMode, Opts)
                     end),
-                    fetch_blocks(Req, Current - 1, undefined, IndexMode, Opts)
+                    fetch_to_indexed_block(
+                        Req, Current - 1, IndexMode, Lowest, Opts)
             end
-    end;
-fetch_blocks(Req, Current, To, IndexMode, Opts) ->
-    % Unless `reindex' is set (the default), skip blocks already indexed at
-    % this mode, so overlapping ranges from different callers are not re-fetched.
-    (reindex(Req, Opts) orelse not is_block_indexed(Current, IndexMode, Req, Opts))
-        andalso observe_event(<<"block_indexed">>, fun() ->
-            process_block(fetch_block_header(Current, Req, Opts), Current, To, IndexMode, Opts)
-        end),
-    fetch_blocks(Req, Current - 1, To, IndexMode, Opts).
+    end.
 
 %% @doc Whether a bounded index run should reprocess blocks that are already
 %% indexed. Defaults to `true' (`~copycat@1.0/arweave&reindex=false' opts out).
