@@ -225,28 +225,12 @@ trim_ascii_right(Bin, Len) ->
 
 %% @doc Collect all IDs found as elements of a given message.
 collect_ids(Msg, Opts) -> lists:usort(collect_ids(Msg, [], Opts)).
-collect_ids(Bin, Acc, _Opts) when ?IS_ID(Bin) -> [hb_util:human_id(Bin) | Acc];
-collect_ids(<<Scheme:2/binary, ":", Rest/binary>>, Acc, _Opts)
-        when Scheme =:= <<"ao">>; Scheme =:= <<"ni">> ->
-    % The binary is an `ao:' URI or a `ni:' name. We percent-decode it as
-    % `hb_singleton' decodes the path of an `ao:' URI, then collect every ID
-    % that it contains, wherever it appears. A URI that cannot be decoded
-    % cannot be read either, so we scan it as it is.
-    Decoded =
-        case catch uri_string:unquote(Rest) of
-            DecodedBin when is_binary(DecodedBin) -> DecodedBin;
-            _ -> Rest
-        end,
-    lists:foldl(
-        fun collect_path_id/2,
-        Acc,
-        re:split(Decoded, <<"[^A-Za-z0-9_-]+">>, [{return, binary}])
-    );
-collect_ids(Bin, Acc, _Opts) when is_binary(Bin) -> Acc;
+collect_ids(Bin, Acc, _Opts) when is_binary(Bin) ->
+    collect_tokens(Bin, Acc);
 collect_ids({as, _, Msg}, Acc, Opts) -> collect_ids(Msg, Acc, Opts);
 collect_ids({resolve, Msgs}, Acc, Opts) -> collect_ids(Msgs, Acc, Opts);
 collect_ids({link, Path, _}, Acc, Opts) ->
-    collect_path_id(Path, collect_ids(Path, Acc, Opts));
+    collect_ids(Path, Acc, Opts);
 collect_ids(Msg, Acc, Opts) when is_map(Msg) ->
     Acc1 = collect_ids(maps:get(<<"path">>, Msg, undefined), Acc, Opts),
     Acc2 = collect_commitment_ids(maps:get(<<"commitments">>, Msg, #{}), Acc1, Opts),
@@ -263,19 +247,35 @@ collect_ids(List, Acc, Opts) when is_list(List) ->
     );
 collect_ids(_Other, Acc, _Opts) -> Acc.
 
-collect_path_id(Path, Acc) when ?IS_ID(Path) ->
-    [hb_util:human_id(Path) | Acc];
-collect_path_id(Path, Acc) when is_binary(Path) ->
-    case binary:split(Path, <<"/">>) of
-        [ID | _] when ?IS_ID(ID) -> [hb_util:human_id(ID) | Acc];
+%% @doc Collect IDs from every token of a decoded value.
+collect_tokens(Value, Acc) ->
+    Decoded = try hb_escape:decode(Value) catch _:_ -> Value end,
+    lists:foldl(fun collect_binary_id/2, Acc,
+        re:split(Decoded, <<"[^A-Za-z0-9_-]+">>, [{return, binary}])).
+
+collect_binary_id(Bin, Acc) when ?IS_ID(Bin) ->
+    [hb_util:human_id(Bin) | Acc];
+% A URI in host form, `uri-<scheme>-<rest>', is read as the scheme's URI of its
+% rest, so the IDs of the rest are collected, after a `uri-did-ar' label.
+collect_binary_id(<<"uri-", Host/binary>> = Label, Acc) ->
+    case {hb_committer:decode(Label), binary:split(Host, <<"-">>)} of
+        {{ok, {id, _}, ID}, _} -> [ID | Acc];
+        {_, [_Scheme, Rest]} -> collect_binary_id(Rest, Acc);
         _ -> Acc
     end;
-collect_path_id(_Path, Acc) ->
-    Acc.
+collect_binary_id(Label, Acc) ->
+    case hb_committer:decode(Label) of
+        {ok, {id, _}, ID} -> [ID | Acc];
+        _ when byte_size(Label) =:= 52 ->
+            try [hb_util:human_id(base32:decode(Label)) | Acc]
+            catch _:_ -> Acc
+            end;
+        _ -> Acc
+    end.
 
-collect_commitment_ids(Commitments, Acc, _Opts) when is_map(Commitments) ->
+collect_commitment_ids(Commitments, Acc, Opts) when is_map(Commitments) ->
     lists:foldl(
-        fun(Key, AccIn) -> collect_path_id(Key, AccIn) end,
+        fun(Key, AccIn) -> collect_ids(Key, AccIn, Opts) end,
         Acc,
         maps:keys(Commitments)
     );
@@ -455,8 +455,9 @@ basic_test() ->
         {error, #{ <<"status">> := 451 }},
         hb_http:get(Node, <<"/(/", SignedID1/binary, ")/body">>, Opts1)
     ),
-    % A blocked ID inside an `ao:' URI or a `ni:' name is blocked too, whether
-    % it is given as a path part or as the value of a link.
+    % A blocked ID inside an `ao:' URI, its host form `uri-ao-', or a `ni:'
+    % name is blocked too, whether it is given as a path part or as the value
+    % of a link.
     lists:foreach(
         fun(Req) ->
             ?assertMatch(
@@ -466,6 +467,7 @@ basic_test() ->
         end,
         [
             <<"/ao:", SignedID1/binary, "/body">>,
+            <<"/uri-ao-", SignedID1/binary, "/body">>,
             <<"/ni:%2f%2f%2fsha-256;", SignedID1/binary>>,
             #{
                 <<"path">> => <<"/x/body">>,
