@@ -38,8 +38,8 @@ svg(Base, Req, Opts) ->
 
 %% @doc Return a JSON representation of the cache graph, suitable for use with
 %% the `graph.js' library. If the request specifies a `target' key, we use that
-%% target. Otherwise, we generate a new target by writing the message to the
-%% cache and using the ID of the written message.
+%% target. Otherwise, we use the ID of the base message, which the graph shows
+%% only if the cache already has it. The device does not write to the cache.
 -spec json(
     #{ _ => _ },
     #{ target => all | binary(), 'max-size' => integer(), _ => _ },
@@ -54,9 +54,6 @@ json(Base, Req, Opts) ->
                     0 ->
                         all;
                     _ ->
-                        ?event({writing_base_for_rendering, Base}),
-                        {ok, Path} = hb_cache:write(Base, Opts),
-                        ?event({wrote_message, Path}),
                         ID = hb_message:id(Base, all, Opts),
                         ?event({generated_id, ID}),
                         ID
