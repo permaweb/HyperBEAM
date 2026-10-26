@@ -92,7 +92,8 @@ finalize(Base, Request, Opts) ->
 %%   or flags.
 %% 
 %% The `format' may be specified in the request message as the `req:format' key.
-%% If no `format' is specified, the default is `default'.
+%% If no `format' is specified, the default is `default'. A request to the
+%% `get-cookie' key gets the value in `body', so that it is not stored.
 -spec get_cookie(
     #{ _ => _ },
     #{ key := binary(), format => binary(), _ => _ },
@@ -106,11 +107,13 @@ get_cookie(Base, Req, RawOpts) ->
         undefined -> {error, not_found};
         Cookie ->
             Format = hb_maps:get(<<"format">>, Req, <<"default">>, Opts),
-            case Format of
-                <<"default">> -> {ok, Cookie};
-                <<"set-cookie">> -> {ok, normalize_cookie_value(Cookie)};
-                <<"cookie">> -> {ok, value(Cookie)}
-            end
+            Value =
+                case Format of
+                    <<"default">> -> Cookie;
+                    <<"set-cookie">> -> normalize_cookie_value(Cookie);
+                    <<"cookie">> -> value(Cookie)
+                end,
+            {ok, no_store(Value, Req, Opts)}
     end.
 
 %% @doc Return the parsed and normalized cookies from a message. A request to
@@ -118,15 +121,24 @@ get_cookie(Base, Req, RawOpts) ->
 -spec extract(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
 extract(Msg, Req, Opts) ->
     {ok, Cookies} = cookies(Msg, Req, Opts),
-    case hb_maps:is_key(<<"path">>, Req, Opts) of
-        true -> {ok, Cookies#{ <<"cache-control">> => <<"no-store">> }};
-        false -> {ok, Cookies}
-    end.
+    {ok, no_store(Cookies, Req, Opts)}.
 
 %% @doc Return the parsed and normalized cookies from a message.
 cookies(Msg, Req, Opts) ->
     {ok, MsgWithCookie} = from(Msg, Req, Opts),
     {ok, hb_private:get(<<"cookie">>, MsgWithCookie, #{}, Opts)}.
+
+%% @doc Give a result with the caller's own cookies `cache-control: no-store',
+%% which the cache puts before the request's own setting. A value that is not
+%% a message goes in `body'. A call with no path, as the HTTP server, cookie
+%% auth and outbound requests make, gets the result as it is.
+no_store(Res, Req, Opts) ->
+    NoStore = #{ <<"cache-control">> => <<"no-store">> },
+    case hb_maps:is_key(<<"path">>, Req, Opts) of
+        false -> Res;
+        true when is_map(Res) -> maps:merge(Res, NoStore);
+        true -> NoStore#{ <<"body">> => Res }
+    end.
 
 %% @doc Set the keys in the request message in the cookies of the caller. Removes
 %% a set of base keys from the request message before setting the remainder as
@@ -192,7 +204,8 @@ reset(Base, _Req, Opts) ->
 %%   flags (e.g. `"key1=value1; key2=value2; ..."').
 %% 
 %% Note that the `format: cookie' form is information lossy: All provided
-%% attributes and flags are discarded.
+%% attributes and flags are discarded. A request to the `to' key gets
+%% `no-store' in its result.
 -spec to(
     #{ _ => _ },
     #{ format => binary(), _ => _ },
@@ -203,7 +216,8 @@ to(Msg, Req, Opts) ->
     CookieOpts = opts(Opts),
     LoadedMsg = ensure_cookie_loaded(Msg, Opts),
     ?event({to, {priv_loaded_msg, LoadedMsg}}),
-    do_to(LoadedMsg, Req, CookieOpts).
+    {ok, Res} = do_to(LoadedMsg, Req, CookieOpts),
+    {ok, no_store(Res, Req, Opts)}.
 do_to(Msg, Req = #{ <<"format">> := <<"set-cookie">> }, Opts) when is_map(Msg) ->
     ?event({to_set_cookie, {priv_msg, Msg}, {priv_req, Req}}),
     {ok, ExtractedParsedCookies} = cookies(Msg, Req, Opts),
