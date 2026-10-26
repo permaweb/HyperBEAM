@@ -290,7 +290,20 @@ modified_committed_value_test() ->
     ?assertNot(hb_message:verify(ModifiedTag, all, #{})),
     ModifiedField =
         Msg#{ <<"target">> => hb_util:encode(crypto:strong_rand_bytes(32)) },
-    ?assertNot(hb_message:verify(ModifiedField, all, #{})).
+    ?assertNot(hb_message:verify(ModifiedField, all, #{})),
+    % A `signature' given as a list does not verify.
+    [{ID, Commitment}] = maps:to_list(maps:get(<<"commitments">>, Msg)),
+    ListSignature = binary_to_list(maps:get(<<"signature">>, Commitment)),
+    ?assertNot(
+        hb_message:verify(
+            Msg#{
+                <<"commitments">> =>
+                    #{ ID => Commitment#{ <<"signature">> => ListSignature } }
+            },
+            all,
+            #{}
+        )
+    ).
 
 %% @doc Committing a message with 126 keys and a nested message throws
 %% `too_many_keys': its item would have 129 tags, and ANS-104 allows 128.

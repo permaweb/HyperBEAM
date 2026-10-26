@@ -480,7 +480,12 @@ indexed_l1_size(ID, Opts) ->
 %% results.
 connection(Ordered, Args, Opts) ->
     ResultsCount = length(Ordered),
-    Remaining = drop_to_cursor(Args, Ordered, Opts),
+    Remaining =
+        unblocked(
+            drop_to_cursor(Args, Ordered, Opts),
+            fun(Annotated) -> maps:get(<<"id">>, Annotated, undefined) end,
+            Opts
+        ),
     CountToReturn = page_size(Args, Opts),
     ResultsPagePlusOne = read_ids(Remaining, CountToReturn + 1, Opts),
     ResultsPage = block_edges(lists:sublist(ResultsPagePlusOne, CountToReturn), Opts),
@@ -1397,8 +1402,30 @@ match_edges(Matches, Opts) ->
                 ),
                 false
         end,
-        lists:zip(Matches, Read)
+        unblocked(
+            lists:zip(Matches, Read),
+            fun({Match, Result}) -> match_id(Match, Result, Opts) end,
+            Opts
+        )
     ), Opts).
+
+%% @doc Return the ID of a match: its own, or the ID of the message that the
+%% read at its offset gives.
+match_id(#{ <<"id">> := ID }, _Result, _Opts) when ID =/= <<>> -> ID;
+match_id(_Match, {ok, Msg}, Opts) -> hb_message:id(Msg, signed, Opts);
+match_id(_Match, _Error, _Opts) -> undefined.
+
+%% @doc Drop the items whose IDs the node's blacklist blocks, with one call to
+%% `blacklist@1.0' for all of them.
+unblocked(Items, ToID, Opts) ->
+    IDs = lists:map(ToID, Items),
+    Blocked = dev_query_graphql:is_blacklisted(IDs, Opts),
+    [
+        Item
+    ||
+        {Item, ID} <- lists:zip(Items, IDs),
+        not lists:member(ID, Blocked)
+    ].
 
 %% @doc Preserve block-page cursors, or encode a match index member.
 match_cursor(#{ <<"cursor">> := Cursor }) -> Cursor;
@@ -1410,8 +1437,29 @@ read_match(Match, Opts) ->
     case match_message(Match, Opts) of
         {error, not_found} -> {error, not_found};
         {error, _} = Error -> throw(Error);
+        {ok, Msg} when is_map(Msg) -> match_view(Match, Msg, Opts);
         Read -> Read
     end.
+
+%% @doc The part of a message that the ID of a match gives. A message with two
+%% or more signers has no one owner: a commitment's ID gives only that
+%% commitment and the keys that it commits, and another ID is not found.
+match_view(#{ <<"id">> := ID }, Msg, Opts) when ID =/= <<>> ->
+    case hb_message:signers(Msg, Opts) of
+        [_, _ | _] ->
+            Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+            case hb_maps:is_key(ID, Commitments, Opts) of
+                true ->
+                    hb_message:with_only_committed(
+                        hb_message:with_commitments(ID, Msg, Opts),
+                        Opts
+                    );
+                false -> {error, not_found}
+            end;
+        _ -> {ok, Msg}
+    end;
+match_view(_Match, Msg, _Opts) ->
+    {ok, Msg}.
 
 %% @doc L1 metadata needs only its native header, not an expanded bundle.
 %% Other messages read by ID, or decode their header at a weave offset.

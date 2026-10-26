@@ -14,6 +14,10 @@
 %%% confirmation of the assignment, but the scheduler still processes it.
 -define(DEFAULT_TIMEOUT, 10000).
 
+%% @doc How long a scheduler server waits for a message before it stops,
+%% unless the node's `max_idle' option gives another.
+-define(DEFAULT_MAX_IDLE, 300_000).
+
 %% @doc Start a scheduling server for a given computation. Once the server has
 %% started it attempts to register on the message ID for the process definition.
 %% If there is already a scheduler registered on the message ID, it will return
@@ -46,7 +50,8 @@ start(ProcID, Proc, Opts) ->
                             {existing_pid, ExistingPid}
                         }
                     ),
-                    Caller ! {ok, Ref, ExistingPid}
+                    Caller ! {ok, Ref, ExistingPid},
+                    exit(normal)
             end,
             % Write the process to the cache. We are the provider-of-last-resort
             % for this data.
@@ -89,6 +94,7 @@ start(ProcID, Proc, Opts) ->
             server(
                 #{
                     id => ProcID,
+                    max_idle => hb_opts:get(max_idle, ?DEFAULT_MAX_IDLE, Opts),
                     current => CurrentSlot,
                     base_state_hashpath => BaseStateHashpath,
                     hashpath_alg => HashpathAlg,
@@ -189,6 +195,16 @@ stop(ProcID) ->
     ?event({stopping_scheduling_server, {proc_id, ProcID}}),
     ProcID ! stop.
 
+%% @doc Stop the server and release its registry name.
+stop_server(#{id := ProcID, opts := Opts}) ->
+    Name = dev_scheduler_registry:name(ProcID, Opts),
+    case hb_name:lookup(Name) of
+        Pid when Pid =:= self() -> hb_name:unregister(Name);
+        _ -> ok
+    end,
+    ?event({stopping_scheduler_server, {proc_id, ProcID}}),
+    ok.
+
 %% @doc The main loop of the server. Simply waits for messages to assign and
 %% returns the current slot.
 server(State) ->
@@ -214,8 +230,9 @@ server(State) ->
             Reply ! {info, State},
             server(State);
         stop ->
-            ?event({stopping_scheduler_server, {proc_id, maps:get(id, State)}}),
-            ok
+            stop_server(State)
+    after maps:get(max_idle, State) ->
+        stop_server(State)
     end.
 
 %% @doc Assign a message to the next slot.

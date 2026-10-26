@@ -6,7 +6,7 @@
 %%% GraphQL Callbacks:
 -export([execute/4, input/2]).
 %%% Submodule helpers:
--export([keys_to_template/1, test_query/3, test_query/4]).
+-export([keys_to_template/1, is_blacklisted/2, test_query/3, test_query/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("graphql/include/graphql.hrl").
 -include_lib("graphql/src/graphql_internal.hrl").
@@ -16,6 +16,8 @@
 %%% Constants.
 -define(DEFAULT_QUERY_TIMEOUT, 10000).
 -define(START_TIMEOUT, 3000).
+%% The most fields a query may expand to.
+-define(DEFAULT_MAX_GRAPHQL_FIELDS, 10000).
 
 %%% `Message' query keys.
 -define(MESSAGE_QUERY_KEYS,
@@ -163,6 +165,13 @@ handle(_Base, RawReq, Opts) ->
                 ?event(graphql_type_checked_successfully),
                 ok = graphql:validate(AST2),
                 ?event(graphql_validated),
+                true =
+                    is_query_within_budget(AST2)
+                        orelse graphql_err:abort(
+                            [],
+                            uncategorized,
+                            query_too_complex
+                        ),
                 Coerced =
                     graphql:type_check_params(
                         FunEnv,
@@ -282,6 +291,63 @@ selects(Name, [#frag{ selection_set = Selection } | Rest]) ->
     selects(Name, Selection) orelse selects(Name, Rest);
 selects(Name, [_ | Rest]) -> selects(Name, Rest).
 
+%% @doc Return true if the document expands to no more than the field limit.
+is_query_within_budget(#document{ definitions = Definitions }) ->
+    Frags =
+        maps:from_list(
+            [
+                {graphql_ast:id(Definition), Definition}
+            ||
+                Definition = #frag{} <- Definitions
+            ]
+        ),
+    {Fields, _} =
+        lists:foldl(
+            fun
+                (#op{ selection_set = Selection }, {Total, Counts}) ->
+                    {Count, NewCounts} =
+                        count_expanded_fields(Selection, Frags, Counts),
+                    {Total + Count, NewCounts};
+                (_, Acc) -> Acc
+            end,
+            {0, #{}},
+            Definitions
+        ),
+    Fields =< ?DEFAULT_MAX_GRAPHQL_FIELDS.
+
+%% @doc Count the fields that a selection expands to, including every use of
+%% a fragment. Each fragment's count is computed once and reused at its other
+%% uses.
+count_expanded_fields(Selections, Frags, Counts) ->
+    lists:foldl(
+        fun
+            (#field{ selection_set = Selection }, {Total, Cs}) ->
+                {Count, NewCs} = count_expanded_fields(Selection, Frags, Cs),
+                {Total + Count + 1, NewCs};
+            (#frag_spread{ id = ID }, {Total, Cs}) ->
+                {Count, NewCs} =
+                    count_fragment_fields(graphql_ast:name(ID), Frags, Cs),
+                {Total + Count, NewCs};
+            (#frag{ selection_set = Selection }, {Total, Cs}) ->
+                {Count, NewCs} = count_expanded_fields(Selection, Frags, Cs),
+                {Total + Count, NewCs}
+        end,
+        {0, Counts},
+        Selections
+    ).
+
+%% @doc Return a fragment's field count and the memo table, adding the count
+%% to the memo table the first time.
+count_fragment_fields(ID, Frags, Counts) ->
+    case maps:find(ID, Counts) of
+        {ok, Count} -> {Count, Counts};
+        error ->
+            #frag{ selection_set = Selection } = maps:get(ID, Frags),
+            {Count, NewCounts} =
+                count_expanded_fields(Selection, Frags, Counts),
+            {Count, NewCounts#{ ID => Count }}
+    end.
+
 %% @doc The main entrypoint for resolving GraphQL elements, called by the
 %% GraphQL library. We split the resolution flows into two separated functions:
 %% `message_query/4' for the HyperBEAM native API, and `dev_query_arweave:query/4'
@@ -321,13 +387,18 @@ message_query(Obj, <<"message">>, #{<<"keys">> := Keys}, Opts) ->
             {template, Template}
         }
     ),
-    case hb_cache:match(Template, Opts) of
-        {ok, [ID | _IDs]} ->
+    Matches =
+        case hb_cache:match(Template, Opts) of
+            {ok, IDs} -> IDs -- is_blacklisted(IDs, Opts);
+            {error, not_found} -> []
+        end,
+    case Matches of
+        [ID | _] ->
             ?event({graphql_cache_match_found, ID}),
             {ok, Msg} = hb_cache:read(ID, Opts),
             ?event({graphql_cache_read, Msg}),
             {ok, Msg};
-        {error, not_found} ->
+        [] ->
             ?event(graphql_cache_match_not_found),
             {ok, null}
     end;
@@ -392,6 +463,19 @@ keys_to_template(Keys) ->
         [],
         Keys
     )).
+
+%% @doc Return the IDs of a list that the node's blacklist blocks. The request
+%% hook does not see the IDs that a query reads, so a query asks
+%% `blacklist@1.0' once for the IDs of each match or page.
+is_blacklisted(IDs, Opts) ->
+    {ok, Blocked} =
+        hb_ao:raw(
+            <<"blacklist@1.0">>,
+            #{},
+            #{ <<"path">> => <<"query">>, <<"query">> => IDs },
+            Opts
+        ),
+    Blocked.
 
 %%% Test helpers.
 

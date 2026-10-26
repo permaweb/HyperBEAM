@@ -76,6 +76,8 @@ verify(Base, Req, RawOpts) ->
     % Verify the commitment's ID as well as the presence of its committed keys.
     maybe
         [] ?= missing_keys(Base, Req, Opts),
+        % A `signature' is a binary: `hb_util:decode/1' takes a list too.
+        true ?= is_binary(maps:get(<<"signature">>, Req)),
         ID = dev_httpsig_siginfo:derived_commitment_id(
             hb_util:decode(maps:get(<<"signature">>, Req))),
         true ?= maps:is_key(ID, maps:get(<<"commitments">>, Base, #{})),
@@ -697,6 +699,19 @@ commitment_identity_test() ->
                         maps:get(<<"commitments">>, Signed)
                     )
             },
+            Opts
+        )
+    ),
+    % A `signature' given as a list does not verify.
+    [{SigID, SigCommitment}] = maps:to_list(maps:get(<<"commitments">>, Signed)),
+    ListSignature = binary_to_list(maps:get(<<"signature">>, SigCommitment)),
+    ?assertNot(
+        hb_message:verify(
+            Signed#{
+                <<"commitments">> =>
+                    #{ SigID => SigCommitment#{ <<"signature">> => ListSignature } }
+            },
+            all,
             Opts
         )
     ),

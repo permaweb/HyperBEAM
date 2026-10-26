@@ -289,9 +289,10 @@ gun_final_frame_limit_test() ->
             }, #{ <<"http-client">> => gun, <<"protocol">> => http1 })
         ),
         % The peer sends `101' with `upgrade: websocket', which the request
-        % does not ask for: the request returns an error.
+        % does not ask for: the request returns an error. Gun 2.7 rejects the
+        % unexpected upgrade as a protocol error instead of returning it.
         ?assertMatch(
-            {error, {upgrade, [<<"websocket">>], _}},
+            {error, {connection_error, {connection_error, protocol_error, _}}},
             hb_http_client:request(#{
                 peer => Peer, path => <<"/upgrade">>, method => <<"GET">>,
                 headers => #{}, body => <<>>

@@ -73,7 +73,25 @@ prep_call(RawM1, RawM2, Opts) ->
     MsgProps =
         Props#{
             <<"Module">> => Image,
-            <<"Block-Height">> => BlockHeight
+            <<"Block-Height">> => BlockHeight,
+            % A process reads the tags over the fields that the node gives, so
+            % the message gives no tag with the name of one.
+            <<"Tags">> =>
+                [
+                    Tag
+                ||
+                    Tag = #{ <<"name">> := Name } <- maps:get(<<"Tags">>, Props),
+                    not lists:member(
+                        hb_util:lowercase_key(Name),
+                        [
+                            <<"module">>,
+                            <<"block-height">>,
+                            <<"id">>,
+                            <<"signature">>,
+                            <<"publickey">>
+                        ]
+                    )
+                ]
         },
     MsgJson = struct_to_json(MsgProps, Opts),
     ProcessProps =
@@ -106,7 +124,7 @@ denormalize_message(Message, Opts) ->
         case hb_message:signers(Message, Opts) of
             [] -> Message;
             [PrimarySigner|_] ->
-                {ok, _, Commitment} = hb_message:commitment(PrimarySigner, Message, Opts),
+                Commitment = signer_commitment(PrimarySigner, Message, Opts),
                 Message#{
                     <<"owner">> => hb_util:committer_address(PrimarySigner),
                     <<"signature">> =>
@@ -117,12 +135,41 @@ denormalize_message(Message, Opts) ->
         <<"id">> => hb_message:id(Message, all, Opts)
     }.
 
+%% @doc The commitment of a signer that a process sees: of two or more, the one
+%% with the lowest ID, so that every node gives the same.
+signer_commitment(Signer, Msg, Opts) ->
+    Commitments = hb_message:commitments(Signer, Msg, Opts),
+    case lists:sort(hb_maps:keys(Commitments, Opts)) of
+        [] -> #{};
+        [ID | _] -> hb_maps:get(ID, Commitments, #{}, Opts)
+    end.
+
+%% @doc The part of a message that its owner signs: of two or more signers, the
+%% owner is the first, so only its commitments and the keys that they commit
+%% are given.
+owner_view(Msg, Opts) ->
+    case hb_message:signers(Msg, Opts) of
+        [Owner, _ | _] ->
+            hb_util:ok(
+                hb_message:with_only_committed(
+                    hb_message:with_commitments(
+                        #{ <<"committer">> => Owner },
+                        Msg,
+                        Opts
+                    ),
+                    Opts
+                )
+            );
+        _ -> Msg
+    end.
+
 message_to_json_struct(RawMsg, Opts) ->
     message_to_json_struct(RawMsg, [owner_as_address], Opts).
 message_to_json_struct(RawMsg, Features, Opts) ->
+    Msg = owner_view(RawMsg, Opts),
     TABM = 
         hb_message:convert(
-            hb_private:reset(RawMsg),
+            hb_private:reset(Msg),
             tabm,
             Opts
         ),
@@ -130,11 +177,10 @@ message_to_json_struct(RawMsg, Features, Opts) ->
     ID = hb_message:id(RawMsg, all),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),
 	{Owner, Signature, PublicKey} =
-        case hb_message:signers(RawMsg, Opts) of
+        case hb_message:signers(Msg, Opts) of
             [] -> {<<>>, <<>>, <<>>};
             [Signer|_] ->
-                {ok, _, Commitment} =
-                    hb_message:commitment(Signer, RawMsg, Opts),
+                Commitment = signer_commitment(Signer, Msg, Opts),
                 CommitmentSignature =
                     hb_maps:get(<<"signature">>, Commitment, <<>>, Opts),
                 CommitmentKey =
@@ -182,7 +228,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             Opts
         ),
     Data =
-        case hb_util:is_printable_string(DataBytes) of
+        case is_binary(DataBytes) andalso hb_util:is_printable_string(DataBytes) of
             true -> DataBytes;
             false -> null 
         end,
@@ -208,7 +254,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
         % NOTE: When sent to ao "Owner" is the wallet address
         <<"Owner">> => Owner,
         <<"From">> => case ?IS_ID(From) of true -> safe_to_id(From); false -> From end,
-        <<"Tags">> => prepare_tags(TABM, RawMsg, Opts),
+        <<"Tags">> => prepare_tags(TABM, Msg, Opts),
         <<"Target">> => safe_to_id(Target),
         <<"Data">> => Data,
         <<"Signature">> =>
@@ -664,7 +710,46 @@ basic_aos_call_test_() ->
 				},
 				#{}
 			),
-		?assertEqual(<<"2">>, hb_ao:get(<<"results/data">>, WithDevice, #{}))
+		?assertEqual(<<"2">>, hb_ao:get(<<"results/data">>, WithDevice, #{})),
+		% A message that its signer commits twice computes.
+		TwiceBody =
+			hb_message:commit(Body, normalize_test_opts(#{}), <<"ans104@1.0">>),
+		{ok, Twice} =
+			hb_ao:resolve(Msg, AOSMsg#{ <<"body">> => TwiceBody }, #{}),
+		?assertEqual(<<"2">>, hb_ao:get(<<"results/data">>, Twice, #{})),
+		% A `data' that is not a binary is given as `null', as one that is not
+		% printable is.
+		?assertMatch(
+			{ok, #{ <<"Data">> := null }},
+			to(#{}, #{ <<"message">> => #{ <<"data">> => 1 } }, #{})
+		),
+		% Of a message from two signers that commit different keys, only the
+		% owner's key is given.
+		Second = #{ <<"priv-wallet">> => ar_wallet:new() },
+		Both =
+			hb_message:commit(
+				hb_message:commit(
+					#{ <<"a">> => <<"1">>, <<"b">> => <<"2">> },
+					normalize_test_opts(#{}),
+					#{
+						<<"commitment-device">> => <<"httpsig@1.0">>,
+						<<"committed">> => [<<"a">>]
+					}
+				),
+				Second,
+				#{
+					<<"commitment-device">> => <<"httpsig@1.0">>,
+					<<"committed">> => [<<"b">>]
+				}
+			),
+		{ok, #{ <<"Owner">> := Owner, <<"Tags">> := Tags }} =
+			to(#{}, #{ <<"message">> => Both }, #{}),
+		OwnerKey =
+			case Owner =:= hb:address(maps:get(<<"priv-wallet">>, Second)) of
+				true -> <<"B">>;
+				false -> <<"A">>
+			end,
+		?assertEqual([OwnerKey], [Name || #{ <<"name">> := Name } <- Tags])
 	end}.
 
 aos_stack_benchmark_test_() ->

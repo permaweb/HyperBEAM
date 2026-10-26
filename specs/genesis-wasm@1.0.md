@@ -301,8 +301,10 @@ corresponding error (§8) and performs **no** store write:
    `untrusted` (`status 400`). (For an explicit `import = <id>` this is the only
    place the allow-list is enforced, since the id bypasses owner-filtered
    discovery.)
-3. **Verifiable.** The checkpoint message MUST `verify` (all commitments) under
-   `message@1.0`. Otherwise → `unverified` (`status 400`).
+3. **Verifiable.** The checkpoint message, with only the commitments of the
+   import authorities and the keys that they commit, MUST `verify` (all
+   commitments) under `message@1.0`. Otherwise → `unverified` (`status 400`).
+   The steps below use that checkpoint.
 4. **Process match.** The checkpoint's `process` field MUST equal the target
    process id. Otherwise → `process_mismatch` (`status 400`).
 
@@ -313,9 +315,9 @@ On success the device:
   raw map read**, never by resolving through the checkpoint (which may carry its
   own `device`). A checkpoint sourced from an Arweave gateway tx has lowercase
   keys (`nonce`, `process`): `structured@1.0` decode lowercases every key.
-- produces the adopted state = the target process message as
-  `lib_process:ensure_process_key/2` returns it + `at-slot = <slot>` +
-  `snapshot = <checkpoint message>`;
+- produces the adopted state = the committed keys of the target process (of
+  its `process` key, if it has one) as `lib_process:ensure_process_key/2`
+  returns them + `at-slot = <slot>` + `snapshot = <that checkpoint>`;
 - **writes** that state into the content-addressed store so subsequent resolution
   finds it, with `lib_process_cache:write/4`. The process id keying the paths is
   the **`signed`** id (`lib_process:process_id(Process, #{}, Opts)`). It writes

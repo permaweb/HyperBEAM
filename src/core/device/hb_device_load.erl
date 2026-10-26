@@ -294,11 +294,15 @@ resolve_spec(Ref, Opts) ->
         _ -> {error, <<"device-name-not-resolvable">>}
     end.
 
-%% @doc A low-trust implementation must be signed by a trusted signer,
-%% implement the requested specification, and be machine-compatible.
+%% @doc A low-trust implementation must be a `Device-Implementation', be signed
+%% by a trusted signer, implement the requested specification, and be
+%% machine-compatible.
 verify_and_load(Ref, SpecID, ID, Opts) ->
     maybe
         {ok, Msg} ?= hb_cache:read(ID, Opts),
+        true ?=
+            is_implementation(Msg, Opts)
+                orelse {error, <<"not-a-device-implementation">>},
         Signers = signers(Msg, Opts),
         true ?=
             hb_message:verify(Msg, Signers, Opts)
@@ -454,6 +458,13 @@ implements(SpecID, Msg, Opts) ->
         SpecID -> ok;
         Other -> {error, {<<"wrong-device-specification">>, Other}}
     end.
+
+%% @doc Return whether a message is a device implementation. `push@1.0' gives
+%% each message that it signs with the node's key `type: Message', so that
+%% signature never makes a message an implementation.
+is_implementation(Msg, Opts) ->
+    hb_maps:get(<<"type">>, Msg, undefined, Opts)
+        == <<"Device-Implementation">>.
 
 %% @doc The commitment signers, read inline rather than via
 %% `hb_message:signers/2' to avoid invoking `message@1.0'.

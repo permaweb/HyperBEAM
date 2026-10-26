@@ -333,15 +333,12 @@ topup(_, Req, NodeMsg) ->
             end
     end.
 
-%% @doc Check if the request is from the operator, as `meta@1.0' finds it.
+%% @doc Check if the request is from the operator, as `lib_meta' finds it.
 is_operator(Req, NodeMsg) ->
-    {ok, IsOperator} =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"meta@1.0">> },
-            #{ <<"path">> => <<"is-operator">>, <<"body">> => Req },
-            NodeMsg#{ <<"hashpath">> => ignore }
-        ),
-    IsOperator.
+    case lib_meta:authorized(lib_meta:role(operator, NodeMsg), Req, NodeMsg) of
+        {ok, _} -> true;
+        {error, _} -> false
+    end.
 
 %%% Tests
 

@@ -1257,9 +1257,19 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
                 hb_escape:encode_header(ReqHdr)
         }
     end,
-    % Keys in the given message will overwrite the defaults listed below if 
-    % included, due to `hb_maps:merge''s precidence order.
-    hb_maps:merge(WithAllowHeaders, Msg, Opts).
+    % A reply's CORS headers come from the request and the defaults, not from
+    % the keys of its result message.
+    WithoutResultCors =
+        hb_maps:without(
+            [Key || Key <- maps:keys(Msg), is_cors_key(Key)],
+            Msg,
+            Opts
+        ),
+    hb_maps:merge(WithoutResultCors, WithAllowHeaders, Opts).
+
+%% @doc Whether a header key is part of the CORS policy.
+is_cors_key(<<"access-control-", _/binary>>) -> true;
+is_cors_key(_) -> false.
 
 %% @doc Generate the headers and body for a HTTP response message.
 encode_reply(Status, TABMReq, RawMessage, Opts) ->
@@ -1653,11 +1663,26 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
                     Opts
                 )
         end,
+    % Move an unsigned `authorization' header to `priv', as we do with cookies,
+    % so that the request the node stores does not carry it.
+    WithPrivAuth =
+        case maps:get(<<"authorization">>, WithCookie, undefined) of
+            undefined -> WithCookie;
+            Authorization ->
+                hb_private:set(
+                    hb_message:without_unless_signed(
+                        <<"authorization">>, WithCookie, Opts
+                    ),
+                    <<"authorization">>,
+                    Authorization,
+                    Opts
+                )
+        end,
     % If the body is empty and unsigned, we remove it.
     NormalBody =
-        case hb_maps:get(<<"body">>, WithCookie, undefined, Opts) of
-            <<"">> -> hb_message:without_unless_signed(<<"body">>, WithCookie, Opts);
-            _ -> WithCookie
+        case hb_maps:get(<<"body">>, WithPrivAuth, undefined, Opts) of
+            <<"">> -> hb_message:without_unless_signed(<<"body">>, WithPrivAuth, Opts);
+            _ -> WithPrivAuth
         end,
     RealIP = real_ip(Req, Opts),
     WithPeer = case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of

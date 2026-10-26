@@ -1000,11 +1000,13 @@ field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
     end.
 
 %% @doc Return where a value is sent by default: in a header if it is a
-%% binary that fits in one, and does not start or end with whitespace.
-%% Any other value is sent in the body.
+%% binary that fits in one, does not start or end with whitespace, and has
+%% no NUL, which HTTP does not allow in a header value (RFC 9110, section
+%% 5.5). Any other value is sent in the body.
 default_where(Value)
         when is_binary(Value), byte_size(Value) =< ?MAX_HEADER_LENGTH ->
-    case edge_whitespace(Value) of
+    case edge_whitespace(Value) orelse
+            binary:match(Value, <<0>>) =/= nomatch of
         true -> body;
         false -> headers
     end;

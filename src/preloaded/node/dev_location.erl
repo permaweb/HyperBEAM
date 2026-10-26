@@ -17,7 +17,7 @@
 %%%                                 if the record is valid and newer than the
 %%%                                 known nonce for the signer.
 -module(dev_location).
--device_libraries([lib_process]).
+-device_libraries([lib_meta, lib_process]).
 -export([device_info/0, read/2, node/3, known/3, all/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -168,13 +168,18 @@ node(Base, RawReq, RawOpts) ->
     ),
     Signers = hb_message:signers(OnlyCommitted, Opts),
     Self = hb_opts:committer(hb:wallet(), Opts),
-    % A pushed result is signed by the node, but it is not a request from the
-    % operator.
-    IsOperator =
-        lists:member(Self, Signers) andalso
-            not lib_process:is_pushed(OnlyCommitted, Opts),
+    % Only the keys that the operator signed control the record. `authorized/3'
+    % reads them from the signed request, which a query does not change, and
+    % refuses a pushed result. It reads the private keys that `find_target/3'
+    % drops.
+    Signed = hb_private:merge(Req, RawReq, Opts),
+    {IsOperator, Controls} =
+        case lib_meta:authorized(lib_meta:role(operator, Opts), Signed, Opts) of
+            {ok, Authorized} -> {true, Authorized};
+            {error, _} -> {false, OnlyCommitted}
+        end,
     ExistingNonce = latest_known_nonce(Self, Opts),
-    RequestedNonce = hb_maps:get(<<"nonce">>, OnlyCommitted, not_found, Opts),
+    RequestedNonce = hb_maps:get(<<"nonce">>, Controls, not_found, Opts),
     case {IsOperator, RequestedNonce} of
         {false, not_found} ->
             % A non-operator has requested that we generate a new location record.
@@ -219,16 +224,11 @@ node(Base, RawReq, RawOpts) ->
         {true, not_found} ->
             % The operator has requested a new location record with an unknown
             % nonce. We will generate a new one.
-            generate_new_location(
-                erlang:system_time(millisecond),
-                Base,
-                OnlyCommitted,
-                Opts
-            );
+            generate_new_location(erlang:system_time(millisecond), Controls, Opts);
         {true, SpecificNonce} ->
             case SpecificNonce > ExistingNonce of
                 true ->
-                    generate_new_location(SpecificNonce, Base, OnlyCommitted, Opts);
+                    generate_new_location(SpecificNonce, Controls, Opts);
                 false ->
                     {error,
                         #{
@@ -266,34 +266,17 @@ default_url(Opts) ->
 %% asynchronously upload it to Arweave, and notify the peers specified in the
 %% `location_notify' option. Finally, we will return the signed location record
 %% to the caller.
-generate_new_location(Nonce, Base, OnlyCommitted, Opts) ->
+generate_new_location(Nonce, Controls, Opts) ->
     DefaultTTL = hb_opts:get(location_ttl, ?DEFAULT_TTL, Opts),
-    TimeToLive =
-        case hb_maps:get(<<"time-to-live">>, Base, not_found, Opts) of
-            not_found ->
-                hb_maps:get(<<"time-to-live">>, OnlyCommitted, DefaultTTL, Opts);
-            TTLValue ->
-                TTLValue
-        end,
+    TimeToLive = hb_maps:get(<<"time-to-live">>, Controls, DefaultTTL, Opts),
     URL =
-        case hb_maps:get(<<"url">>, OnlyCommitted, not_found, Opts) of
+        case hb_maps:get(<<"url">>, Controls, not_found, Opts) of
             not_found -> default_url(Opts);
             GivenURL -> GivenURL
         end,
     % Construct the new scheduler location message.
     DefaultCodec = hb_opts:get(location_codec, ?DEFAULT_CODEC, Opts),
-    Codec =
-        case hb_maps:get(<<"commitment-device">>, Base, not_found, Opts) of
-            not_found ->
-                hb_maps:get(
-                    <<"commitment-device">>,
-                    OnlyCommitted,
-                    DefaultCodec,
-                    Opts
-                );
-            CodecValue ->
-                CodecValue
-        end,
+    Codec = hb_maps:get(<<"commitment-device">>, Controls, DefaultCodec, Opts),
     case is_binary(Codec) of
         true ->
             generate_new_location(URL, Nonce, TimeToLive, Codec, Opts);

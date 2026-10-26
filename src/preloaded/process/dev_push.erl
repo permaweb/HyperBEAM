@@ -770,11 +770,15 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
     end.
 
 %% @doc Set the necessary keys in order for the recipient to know where the
-%% message came from.
+%% message came from. `message@1.0' sets them, whatever the device of the
+%% message, so that they are at its top level, where a check for a pushed
+%% result reads them.
 augment_message(Origin, ToSched, Opts) ->
     ?event(push, {adding_keys, {origin, Origin}, {to, ToSched}}, Opts),
-    hb_message:uncommitted(
-        hb_ao:set(
+    {ok, Augmented} =
+        hb_ao:raw(
+            <<"message@1.0">>,
+            <<"set">>,
             ToSched,
             #{
                 <<"data-protocol">> => <<"ao">>,
@@ -786,9 +790,9 @@ augment_message(Origin, ToSched, Opts) ->
                 <<"from-scheduler">> => maps:get(<<"from-scheduler">>, Origin),
                 <<"from-authority">> => maps:get(<<"from-authority">>, Origin)
             },
-            Opts#{ <<"hashpath">> => ignore }
-        )
-    ).
+            Opts
+        ),
+    hb_message:uncommitted(Augmented).
 
 %% @doc Apply the recipient's security policy to the message. Observes the 
 %% following parameters in order to calculate the appropriate security policy:

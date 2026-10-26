@@ -719,6 +719,16 @@ without_hint(Target) ->
         _ -> throw({invalid_operation_target, Target})
     end.
 
+%% @doc Check that the ID part of a target is a process ID and return the
+%% target, including any hint, for the server lookup.
+validate_target(Target) when ?IS_ID(Target) ->
+    hb_util:human_id(Target);
+validate_target(Target) ->
+    case binary:split(Target, <<"?">>) of
+        [ProcID, _Hint] when ?IS_ID(ProcID) -> Target;
+        _ -> throw({invalid_operation_target, Target})
+    end.
+
 %% @doc Use the SchedulerLocation to find the remote path and return a redirect.
 %% If there are multiple locations, try each one in turn until we find the first
 %% that matches.
@@ -1029,7 +1039,14 @@ do_get_remote_schedule(
                         case Variant of
                             <<"ao.N.1">> ->
                                 {ok, Checked} =
-                                    check_remote_schedule(ProcID, Proc, Res, Opts),
+                                    check_remote_schedule(
+                                        ProcID,
+                                        Proc,
+                                        From,
+                                        To,
+                                        Res,
+                                        Opts
+                                    ),
                                 cache_remote_schedule(Variant, ProcID, Checked, Opts),
                                 {ok, Checked};
                             <<"ao.TN.1">> ->
@@ -1042,14 +1059,25 @@ do_get_remote_schedule(
                                             Opts#{ <<"hashpath">> => ignore }
                                         )
                                     ),
-                                cache_remote_schedule(Variant, ProcID, JSONRes, Opts),
                                 ?event(debug_aos2, {json_res, {json, JSONRes}}),
-                                Filtered = filter_json_assignments(JSONRes, To, From, Opts),
-                                lib_scheduler_formats:aos2_to_assignments(
-                                    ProcID,
-                                    Filtered,
-                                    Opts
-                                )
+                                % Cache only the process's assignments in the
+                                % range asked for, once they convert.
+                                Filtered =
+                                    filter_json_assignments(
+                                        ProcID,
+                                        JSONRes,
+                                        To,
+                                        From,
+                                        Opts
+                                    ),
+                                Converted =
+                                    lib_scheduler_formats:aos2_to_assignments(
+                                        ProcID,
+                                        Filtered,
+                                        Opts
+                                    ),
+                                cache_remote_schedule(Variant, ProcID, Filtered, Opts),
+                                Converted
                         end,
                     % Add existing local assignments we read to the remote schedule.
                     % In order to do this, we need to first convert the remote
@@ -1147,10 +1175,12 @@ cache_remote_schedule(_, ProcID, Schedule, Opts) ->
     end.
 
 %% @doc Return a schedule from a remote scheduler with the assignments before
-%% the first that none of the process's schedulers signed. If we refuse an
-%% assignment, we log it, and set `continues' to `true' so that a client does
-%% not take the assignments returned as the whole schedule.
-check_remote_schedule(ProcID, Proc, Schedule, Opts) ->
+%% the first that none of the process's schedulers signed, or whose signed keys
+%% do not give the process and a slot in the range asked for. Each assignment
+%% keeps only its signed keys. If we refuse an assignment, we log it, and set
+%% `continues' to `true' so that a client does not take the assignments
+%% returned as the whole schedule.
+check_remote_schedule(ProcID, Proc, From, To, Schedule, Opts) ->
     Schedulers =
         parse_schedulers(
             hb_ao:get_first(
@@ -1181,12 +1211,18 @@ check_remote_schedule(ProcID, Proc, Schedule, Opts) ->
                         hb_message:verify(Assignment, [Scheduler], Opts)
                     end,
                     Schedulers
-                )
+                ) andalso is_slot(ProcID, From, To, Assignment, Opts)
             end,
             Assignments
         )
     of
-        {_, []} -> {ok, Schedule};
+        {Signed, []} ->
+            lib_scheduler_formats:assignments_to_bundle(
+                ProcID,
+                signed_keys(Signed, Opts),
+                hb_ao:get(<<"continues">>, Schedule, false, Opts),
+                Opts
+            );
         {Signed, [Refused | _]} ->
             ?event(warning,
                 {refusing_remote_assignment,
@@ -1197,11 +1233,25 @@ check_remote_schedule(ProcID, Proc, Schedule, Opts) ->
             ),
             lib_scheduler_formats:assignments_to_bundle(
                 ProcID,
-                Signed,
+                signed_keys(Signed, Opts),
                 true,
                 Opts
             )
     end.
+
+%% @doc Whether the signed keys of an assignment give the process, and a slot
+%% in the range asked for.
+is_slot(ProcID, From, To, Assignment, Opts) ->
+    case hb_message:with_only_committed(Assignment, Opts) of
+        {ok, #{ <<"process">> := ProcID, <<"slot">> := Slot }} ->
+            hb_util:int(Slot) >= From andalso
+                (To == undefined orelse hb_util:int(Slot) =< To);
+        _ -> false
+    end.
+
+%% @doc The signed keys of each assignment.
+signed_keys(Assignments, Opts) ->
+    [hb_util:ok(hb_message:with_only_committed(A, Opts)) || A <- Assignments].
 
 %% @doc Get the node URL from a redirect. If `hb_hostname:is_blocked/2'
 %% blocks the host of its `location', throw `blocked_host'.
@@ -1221,8 +1271,9 @@ node_from_redirect(Redirect, Opts) ->
         )#{path => <<"/">>}
     ).
 
-%% @doc Filter JSON assignment results from a remote legacy scheduler.
-filter_json_assignments(JSONRes, To, From, Opts) ->
+%% @doc Filter JSON assignment results from a remote legacy scheduler: keep the
+%% assignments of the process with a nonce in the range asked for.
+filter_json_assignments(ProcID, JSONRes, To, From, Opts) ->
     Edges = hb_maps:get(<<"edges">>, JSONRes, [], Opts),
     Filtered =
         lists:filter(
@@ -1240,7 +1291,9 @@ filter_json_assignments(JSONRes, To, From, Opts) ->
                 ),
                 Nonce = hd(Nonces),
                 ?event({filter, {nonce, Nonce}, {from, From}, {to, To}}),
-                Nonce >= From andalso Nonce =< To
+                [ProcID] ==
+                    [V || #{ <<"name">> := <<"Process">>, <<"value">> := V } <- Tags]
+                    andalso Nonce >= From andalso Nonce =< To
             end,
             Edges
         ),
@@ -1407,7 +1460,7 @@ find_target_id(Base, Req, ToSched, Opts) ->
         _ ->
             case hb_ao:get(<<"target">>, ToSched, not_found, Opts) of
                 not_found -> find_target_id(Base, Req, Opts);
-                Target -> hb_util:human_id(Target)
+                Target -> validate_target(Target)
             end
     end.
 find_target_id(Base, Req, Opts) ->
@@ -1415,7 +1468,7 @@ find_target_id(Base, Req, Opts) ->
     Res = case hb_ao:resolve(Req, <<"target">>, TempOpts) of
         {ok, Target} ->
             % ID found at Req/target
-            Target;
+            validate_target(Target);
         _ ->
             case hb_ao:resolve(Req, <<"type">>, TempOpts) of
                 {ok, <<"Process">>} ->

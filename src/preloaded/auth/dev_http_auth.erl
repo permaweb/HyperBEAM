@@ -136,7 +136,7 @@ generate(_Msg, ReqLink, Opts) when ?IS_LINK(ReqLink) ->
 generate(_Msg, #{ <<"secret">> := Secret }, _Opts) ->
     {ok, Secret};
 generate(_Msg, Req, Opts) ->
-    case hb_maps:get(<<"authorization">>, Req, undefined, Opts) of
+    case get_authorization(Req, Opts) of
         <<"Basic ", Auth/binary>> ->
             Decoded = base64:decode(Auth),
             ?event(key_gen, {generated_key, {priv_auth, Auth}, {priv_decoded, Decoded}}),
@@ -160,6 +160,14 @@ generate(_Msg, Req, Opts) ->
                         <<"Unrecognized authorization header: ", Unrecognized/binary>>
                 }
             }
+    end.
+
+%% @doc The request's `authorization' header: in `priv' for a request from the
+%% HTTP server, or in the request for a direct call.
+get_authorization(Req, Opts) ->
+    case hb_private:get(<<"authorization">>, Req, Opts) of
+        not_found -> hb_maps:get(<<"authorization">>, Req, undefined, Opts);
+        Authorization -> Authorization
     end.
 
 %% @doc Derive a key from the authentication information using the PBKDF2

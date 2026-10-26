@@ -508,8 +508,15 @@ import_authorities(Opts) ->
 %% authority and is for a `ao.TN.1' process or has `execution-device' set to
 %% `genesis-wasm@1.0', then normalize into a state snapshot.
 %% Save the state snapshot into the store.
-do_import(Proc, CheckpointMessage, Opts) ->
+do_import(Base, CheckpointMessage, Opts) ->
     maybe
+        % The imported state has only the committed keys of the process,
+        % whether the request gives the process itself or carries it.
+        {ok, Proc} =
+            hb_message:with_only_committed(
+                hb_maps:get(<<"process">>, Base, Base, Opts),
+                Opts
+            ),
         % Validate that the process is a valid target for importing a checkpoint.
         Variant = hb_maps:get(<<"variant">>, Proc, false, Opts),
         ExecutionDevice = hb_maps:get(<<"execution-device">>, Proc, false, Opts),
@@ -526,19 +533,31 @@ do_import(Proc, CheckpointMessage, Opts) ->
                 fun(Signer) -> lists:member(Signer, TrustedSigners) end,
                 CheckpointSigners
             ) orelse untrusted,
-        true ?= hb_message:verify(CheckpointMessage, all, Opts) orelse unverified,
-        CheckpointTargetProcID = hb_maps:get(<<"process">>, CheckpointMessage, Opts),
-        ProcID = lib_process:process_id(Proc, #{}, Opts),
+        % The checkpoint has only the keys that a trusted snapshot authority
+        % committed.
+        {ok, Checkpoint} =
+            hb_message:with_only_committed(
+                hb_message:with_only_committers(
+                    CheckpointMessage,
+                    TrustedSigners,
+                    Opts
+                ),
+                any,
+                Opts
+            ),
+        true ?= hb_message:verify(Checkpoint, all, Opts) orelse unverified,
+        CheckpointTargetProcID = hb_maps:get(<<"process">>, Checkpoint, Opts),
+        ProcID = lib_process:process_id(Base, #{}, Opts),
         true ?= CheckpointTargetProcID == ProcID orelse process_mismatch,
         % Normalize the checkpoint message into a process state message with 
         % a state snapshot.
-        {ok, SlotBin} ?= hb_maps:find(<<"nonce">>, CheckpointMessage, Opts),
+        {ok, SlotBin} ?= hb_maps:find(<<"nonce">>, Checkpoint, Opts),
         Slot = hb_util:int(SlotBin),
         InitializedProc = lib_process:ensure_process_key(Proc, Opts),
         WithSnapshot =
             InitializedProc#{
                 <<"at-slot">> => Slot,
-                <<"snapshot">> => CheckpointMessage
+                <<"snapshot">> => Checkpoint
             },
         % Save the state snapshot into the store.
         {ok, _} ?= lib_process_cache:write(ProcID, Slot, WithSnapshot, Opts),
