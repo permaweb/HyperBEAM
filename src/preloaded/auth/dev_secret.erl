@@ -649,7 +649,7 @@ do_export(Base, Request, Opts) ->
                 ok,
                 lists:map(
                     fun(Wallet) ->
-                        Loaded = hb_cache:ensure_all_loaded(Wallet, PrivOpts),
+                        Loaded = load_wallet(Wallet, PrivOpts),
                         ?event({exported, {priv_wallet, Loaded}}),
                         Loaded#{ <<"cache-control">> => <<"no-store">> }
                     end,
@@ -792,11 +792,36 @@ find_wallet(non_volatile, KeyID, Opts) ->
     PrivOpts = priv_store_opts(Opts),
     case hb_cache:read(<<"wallet@1.0/", KeyID/binary>>, PrivOpts) of
         {ok, Wallet} ->
-            WalletDetails = hb_maps:get(KeyID, Wallet, not_found, PrivOpts),
-            hb_cache:ensure_all_loaded(WalletDetails, PrivOpts);
+            load_wallet(
+                hb_maps:get(KeyID, Wallet, not_found, PrivOpts),
+                PrivOpts
+            );
         _ ->
             not_found
     end.
+
+%% @doc Load a wallet's record from the private store: its `wallet' key, and its
+%% `access-control' message one layer deep. The links in the `access-control'
+%% message stay links, without the private store, so a caller's link reads no
+%% private entry.
+load_wallet(not_found, _PrivOpts) -> not_found;
+load_wallet(Wallet, PrivOpts) ->
+    Loaded = hb_cache:ensure_loaded(Wallet, PrivOpts),
+    maps:map(
+        fun
+            (<<"wallet">>, Value) ->
+                hb_cache:ensure_loaded(Value, PrivOpts);
+            (<<"access-control">>, Value) ->
+                hb_link:normalize(
+                    hb_cache:ensure_loaded(Value, PrivOpts),
+                    keep,
+                    PrivOpts
+                );
+            (_Key, Value) ->
+                Value
+        end,
+        Loaded
+    ).
 
 %% @doc Generate a list of all hosted wallets.
 list_wallets(Opts) ->
