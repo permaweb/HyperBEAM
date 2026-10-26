@@ -772,7 +772,9 @@ group_scoped(Map, Msgs, Opts) ->
                     {OkN, RealKey} ->
                         Curr = hb_maps:get(OkN, Ns, #{}, Opts),
                         Ns2 = hb_maps:put(OkN,
-                            hb_maps:put(RealKey, Val, Curr, Opts), Ns, Opts
+                            put_unless_private(RealKey, Val, Curr, Opts),
+                            Ns,
+                            Opts
                         ),
                         {Ns2, Gs};
                     global -> {Ns, hb_maps:put(KeyBin, Val, Gs, Opts)}
@@ -868,7 +870,8 @@ step({key, Tokens}, _Opts) ->
 step({value, KeyTokens, ValueTokens, Items}, Opts) ->
     % The key of `Key=Value' or `Key+Type=Value' is the path.
     {Key, Val} = key_value(KeyTokens, ValueTokens, Opts),
-    items(Items, #{ <<"path">> => path_key(Key), Key => Val }, Opts);
+    Msg = put_unless_private(Key, Val, #{ <<"path">> => path_key(Key) }, Opts),
+    items(Items, Msg, Opts);
 step({device, KeyTokens = [{scheme, _, _} | _], DeviceTokens, []}, Opts) ->
     {as,
         decode_string(maybe_subpath(DeviceTokens, Opts)),
@@ -891,15 +894,24 @@ items(Items, Msg, Opts) ->
     lists:foldl(
         fun(empty, Acc) -> Acc;
             ({flag, KeyTokens}, Acc) ->
-                hb_maps:put(decode_string(text(KeyTokens)), true, Acc, Opts);
+                put_unless_private(
+                    decode_string(text(KeyTokens)), true, Acc, Opts
+                );
             ({value, KeyTokens, ValueTokens}, Acc) ->
                 {Key, Val} = key_value(KeyTokens, ValueTokens, Opts),
                 ?event_debug({inlined_key, {explicit, Key}, {explicit, Val}}),
-                hb_maps:put(Key, Val, Acc, Opts)
+                put_unless_private(Key, Val, Acc, Opts)
         end,
         Msg,
         Items
     ).
+
+%% @doc Add a key to a message, unless the key is private.
+put_unless_private(Key, Val, Msg, Opts) ->
+    case hb_private:is_private(Key) of
+        true -> Msg;
+        false -> hb_maps:put(Key, Val, Msg, Opts)
+    end.
 
 %% @doc Parse the key and the value of a `Key=Value' pair. The key may give a
 %% type for the value, as with typical keys.
