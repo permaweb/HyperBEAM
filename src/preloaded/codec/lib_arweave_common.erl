@@ -275,7 +275,9 @@ verify_identity(Item, TABM, Opts) ->
     case maps:get(<<"type">>, Commitment) of
         <<"unsigned-sha256">> -> not maps:is_key(<<"committer">>, Commitment);
         _ ->
-            hb_util:human_id(ID) =:= hb_util:human_id(Item#tx.id) andalso
+            % A `signature' is a binary: `hb_util:decode/1' takes a list too.
+            is_binary(maps:get(<<"signature">>, Commitment)) andalso
+                hb_util:human_id(ID) =:= hb_util:human_id(Item#tx.id) andalso
                 maps:get(<<"committer">>, Commitment, unset) =:=
                     committer(Item, Opts)
     end.
