@@ -480,7 +480,12 @@ indexed_l1_size(ID, Opts) ->
 %% results.
 connection(Ordered, Args, Opts) ->
     ResultsCount = length(Ordered),
-    Remaining = drop_to_cursor(Args, Ordered, Opts),
+    Remaining =
+        unblocked(
+            drop_to_cursor(Args, Ordered, Opts),
+            fun(Annotated) -> maps:get(<<"id">>, Annotated, undefined) end,
+            Opts
+        ),
     CountToReturn = page_size(Args, Opts),
     ResultsPagePlusOne = read_ids(Remaining, CountToReturn + 1, Opts),
     ResultsPage = block_edges(lists:sublist(ResultsPagePlusOne, CountToReturn), Opts),
@@ -1397,8 +1402,30 @@ match_edges(Matches, Opts) ->
                 ),
                 false
         end,
-        lists:zip(Matches, Read)
+        unblocked(
+            lists:zip(Matches, Read),
+            fun({Match, Result}) -> match_id(Match, Result, Opts) end,
+            Opts
+        )
     ), Opts).
+
+%% @doc Return the ID of a match: its own, or the ID of the message that the
+%% read at its offset gives.
+match_id(#{ <<"id">> := ID }, _Result, _Opts) when ID =/= <<>> -> ID;
+match_id(_Match, {ok, Msg}, Opts) -> hb_message:id(Msg, signed, Opts);
+match_id(_Match, _Error, _Opts) -> undefined.
+
+%% @doc Drop the items whose IDs the node's blacklist blocks, with one call to
+%% `blacklist@1.0' for all of them.
+unblocked(Items, ToID, Opts) ->
+    IDs = lists:map(ToID, Items),
+    Blocked = dev_query_graphql:is_blacklisted(IDs, Opts),
+    [
+        Item
+    ||
+        {Item, ID} <- lists:zip(Items, IDs),
+        not lists:member(ID, Blocked)
+    ].
 
 %% @doc Preserve block-page cursors, or encode a match index member.
 match_cursor(#{ <<"cursor">> := Cursor }) -> Cursor;

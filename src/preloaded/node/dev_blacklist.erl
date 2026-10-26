@@ -26,7 +26,7 @@
 %%%     loaded.
 %%% - blacklist-whitelist: List of endpoint path that are always whitelisted.
 -module(dev_blacklist).
--export([request/3]).
+-export([request/3, query/3]).
 
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -80,6 +80,19 @@ request(_Base, HookReq, Opts) ->
             end
     end.
 
+%% @doc Return the IDs of the request's `query' list that the blacklist
+%% gives. A device that reads messages by IDs that the request hook did not see,
+%% such as `query@1.0', asks for all of them at once. Before the blacklist
+%% loads, it gives none.
+query(_Base, Req, Opts) ->
+    Table = cache_table_name(Opts),
+    case is_initialized(Table) of
+        true ->
+            {ok, blocked(hb_maps:get(<<"query">>, Req, [], Opts), Table)};
+        false ->
+            {ok, []}
+    end.
+
 %% @doc Check if the message contains any blacklisted IDs.
 is_match(Msg, Opts) ->
     WhitelistRoutes = hb_opts:get(blacklist_whitelist, ?DEFAULT_WHITELIST, Opts),
@@ -90,8 +103,7 @@ is_match(Msg, Opts) ->
             case ensure_cache_table(Msg, Opts) of 
                 {ok, Msg1} ->
                     IDs = collect_ids(Msg1, Opts),
-                    MatchesFromIDs = fun(ID) -> ets:lookup(cache_table_name(Opts), ID) =/= [] end,
-                    case lists:filter(MatchesFromIDs, IDs) of
+                    case blocked(IDs, cache_table_name(Opts)) of
                         [] -> {ok, Msg1};
                         [ID|_] -> {blocked_txid, ID}
                     end;
@@ -339,6 +351,10 @@ is_initialized(TableName) ->
     ets:info(TableName) =/= undefined
         andalso ets:lookup(TableName, <<"meta/last-refresh">>) =/= [].
 
+%% @doc Return the IDs of a list that the cache table gives.
+blocked(IDs, Table) ->
+    [ID || ID <- IDs, ets:lookup(Table, ID) =/= []].
+
 %% @doc Loop that periodically refreshes the blacklist cache. Runs on the 
 %% singleton process that is responsible for the cache ets table.
 refresh_loop(Opts) ->
@@ -428,6 +444,11 @@ basic_test() ->
                 <<"reason">> := <<"content-policy">>
             }},
         hb_http:get(Node, SignedID1, Opts1)
+    ),
+    % `query' gives the blocked IDs of a list, at once.
+    ?assertEqual(
+        {ok, [SignedID1]},
+        query(#{}, #{ <<"query">> => [SignedID1, UnsignedID3] }, Opts1)
     ),
     % A blocked ID inside a parenthesized path part is blocked too.
     ?assertMatch(

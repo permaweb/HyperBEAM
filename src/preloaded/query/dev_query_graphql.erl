@@ -6,7 +6,7 @@
 %%% GraphQL Callbacks:
 -export([execute/4, input/2]).
 %%% Submodule helpers:
--export([keys_to_template/1, test_query/3, test_query/4]).
+-export([keys_to_template/1, is_blacklisted/2, test_query/3, test_query/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("graphql/include/graphql.hrl").
 -include_lib("graphql/src/graphql_internal.hrl").
@@ -321,13 +321,18 @@ message_query(Obj, <<"message">>, #{<<"keys">> := Keys}, Opts) ->
             {template, Template}
         }
     ),
-    case hb_cache:match(Template, Opts) of
-        {ok, [ID | _IDs]} ->
+    Matches =
+        case hb_cache:match(Template, Opts) of
+            {ok, IDs} -> IDs -- is_blacklisted(IDs, Opts);
+            {error, not_found} -> []
+        end,
+    case Matches of
+        [ID | _] ->
             ?event({graphql_cache_match_found, ID}),
             {ok, Msg} = hb_cache:read(ID, Opts),
             ?event({graphql_cache_read, Msg}),
             {ok, Msg};
-        {error, not_found} ->
+        [] ->
             ?event(graphql_cache_match_not_found),
             {ok, null}
     end;
@@ -392,6 +397,19 @@ keys_to_template(Keys) ->
         [],
         Keys
     )).
+
+%% @doc Return the IDs of a list that the node's blacklist blocks. The request
+%% hook does not see the IDs that a query reads, so a query asks
+%% `blacklist@1.0' once for the IDs of each match or page.
+is_blacklisted(IDs, Opts) ->
+    {ok, Blocked} =
+        hb_ao:raw(
+            <<"blacklist@1.0">>,
+            #{},
+            #{ <<"path">> => <<"query">>, <<"query">> => IDs },
+            Opts
+        ),
+    Blocked.
 
 %%% Test helpers.
 
