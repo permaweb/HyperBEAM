@@ -625,6 +625,14 @@ commit_message(Message, #{ <<"wallet">> := Key }, Opts) ->
     #{ _ => _ }
 ) -> {ok, [_]} | {error, binary()}.
 export(Base, Request, Opts) ->
+    % A reply that is not a bundle gives each wallet as a link, which writes
+    % the wallet, with its key, to the node's cache.
+    case hb_util:bool(hb_ao:get(<<"accept-bundle">>, Request, false, Opts)) of
+        true -> do_export(Base, Request, Opts);
+        false -> {error, <<"An export is sent only as a bundle.">>}
+    end.
+
+do_export(Base, Request, Opts) ->
     PrivOpts = priv_store_opts(Opts),
     ModReq =
         case hb_ao:get(<<"keyids">>, Request, not_found, Opts) of
@@ -681,7 +689,10 @@ sync(_Base, Request, Opts) ->
             (hb_message:commit(
                 #{ <<"keyids">> => Wallets },
                 SignAsOpts
-            ))#{ <<"path">> => <<"/~secret@1.0/export">> },
+            ))#{
+                <<"path">> => <<"/~secret@1.0/export">>,
+                <<"accept-bundle">> => <<"true">>
+            },
         ?event({sync, {export_req, ExportRequest}}),
         case hb_http:get(Node, ExportRequest, SignAsOpts) of
             {ok, ExportResponse} ->
@@ -1022,6 +1033,7 @@ export_wallet_test() ->
             Node,
             #{
                 <<"path">> => <<"/~secret@1.0/export/1">>,
+                <<"accept-bundle">> => <<"true">>,
                 <<"priv">> => Priv
             },
             #{}
@@ -1068,7 +1080,10 @@ export_requires_distinct_controllers_test() ->
         fun(Signed) ->
             hb_http:get(
                 Node,
-                Signed#{ <<"path">> => <<"/~secret@1.0/export">> },
+                Signed#{
+                    <<"path">> => <<"/~secret@1.0/export">>,
+                    <<"accept-bundle">> => <<"true">>
+                },
                 #{}
             )
         end,
@@ -1112,6 +1127,7 @@ export_non_volatile_wallet_test() ->
                 #{
                     <<"device">> => <<"secret@1.0">>,
                     <<"path">> => <<"//export/1">>,
+                    <<"accept-bundle">> => <<"true">>,
                     <<"priv">> => Priv
                 },
                 #{}
@@ -1157,7 +1173,10 @@ export_individual_batch_wallets_test() ->
                     <<"keyids">> => [WalletKeyID1, WalletKeyID2]
                 },
                 AdminOpts
-            ))#{ <<"path">> => <<"/~secret@1.0/export">> },
+            ))#{
+                <<"path">> => <<"/~secret@1.0/export">>,
+                <<"accept-bundle">> => <<"true">>
+            },
             #{}
         ),
 
@@ -1171,7 +1190,10 @@ export_individual_batch_wallets_test() ->
                 <<"keyids">> => [WalletKeyID1]
             },
             AdminOpts
-        ))#{ <<"path">> => <<"/~secret@1.0/export">> },
+        ))#{
+            <<"path">> => <<"/~secret@1.0/export">>,
+            <<"accept-bundle">> => <<"true">>
+        },
         #{}
     ),
     
@@ -1244,7 +1266,10 @@ export_batch_all_wallets_test() ->
                     <<"keyids">> => <<"all">>
                 },
                 AdminOpts
-            ))#{ <<"path">> => <<"/~secret@1.0/export">> },
+            ))#{
+                <<"path">> => <<"/~secret@1.0/export">>,
+                <<"accept-bundle">> => <<"true">>
+            },
             #{}
         ),
     ?event({export_batch_test, {export_response, ExportResponse}}),
@@ -1415,6 +1440,7 @@ stored_access_control_verifies_test() ->
             Node,
             #{
                 <<"path">> => <<"/~secret@1.0/export/1">>,
+                <<"accept-bundle">> => <<"true">>,
                 <<"priv">> => Priv
             },
             #{}
