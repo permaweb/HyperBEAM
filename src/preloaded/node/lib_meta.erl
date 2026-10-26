@@ -32,7 +32,10 @@ authorized(Committers, Msg, Opts) ->
             Signed =
                 hb_message:with_only_committers(Original, Identities, Opts),
             [_ | _] ?= hb_message:signers(Signed, Opts),
-            {ok, signed_keys(Signed, Opts)}
+            Keys = signed_keys(Signed, Opts),
+            % A signature that covers a `hashpath' attests a result.
+            false ?= hb_maps:is_key(<<"hashpath">>, Keys, Opts),
+            {ok, Keys}
         else
             _ -> {error, not_authorized}
         end
