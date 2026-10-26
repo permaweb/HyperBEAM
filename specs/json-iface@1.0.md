@@ -150,9 +150,11 @@ schemas, the resolved-key contracts, and the result-mapping rules are normative.
      an `id` field (its full message id), and — if it is signed — an `owner`
      field (the primary signer's human-readable address) and a `signature` field
      (the primary commitment's signature).
-  2. Build the **message structure** JSON from the denormalised message (§5.1)
-     and extend it with `Module => <process image>` and
-     `Block-Height => <block-height>`. Serialise to a JSON string.
+  2. Build the **message structure** JSON from the denormalised message (§5.1),
+     without a `module`, `block-height`, `id`, `signature` or `publickey` tag
+     in any case, and extend it with `Module => <process image>` and
+     `Block-Height => <block-height>`: an AOS process reads a tag over the
+     field with its name. Serialise to a JSON string.
   3. Build the **process structure** JSON: `{ "Process": <message-structure(process)> }`.
      Serialise to a JSON string.
   4. **Stage** both strings into the execution environment as the legacy call
@@ -523,8 +525,10 @@ a key against a constructed message (or by parsing a known JSON input):
 4. **Pass-1 staging.** After pass 1, the base message has `function => handle`
    and `parameters` is a 2-element list with the **message** argument first and
    the **process** argument second. With no write hook, those arguments are the
-   JSON strings; the message JSON is the message structure (§5.1) extended with
-   `Module` (= `process/image`) and `Block-Height` (= request `block-height`),
+   JSON strings; the message JSON is the message structure (§5.1), without a
+   `module`, `block-height`, `id`, `signature` or `publickey` tag, extended with
+   `Module` (= `process/image`) and
+   `Block-Height` (= request `block-height`),
    and the process JSON is `{ "Process": <message-structure(process)> }`.
 5. **Message-structure fields.** `to` (and the staging builder) emit a JSON
    object whose members are exactly `Id`, `Anchor`, `Owner`, `From`, `Tags`,

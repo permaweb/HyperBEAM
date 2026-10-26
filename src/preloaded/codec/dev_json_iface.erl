@@ -73,7 +73,25 @@ prep_call(RawM1, RawM2, Opts) ->
     MsgProps =
         Props#{
             <<"Module">> => Image,
-            <<"Block-Height">> => BlockHeight
+            <<"Block-Height">> => BlockHeight,
+            % A process reads the tags over the fields that the node gives, so
+            % the message gives no tag with the name of one.
+            <<"Tags">> =>
+                [
+                    Tag
+                ||
+                    Tag = #{ <<"name">> := Name } <- maps:get(<<"Tags">>, Props),
+                    not lists:member(
+                        hb_util:lowercase_key(Name),
+                        [
+                            <<"module">>,
+                            <<"block-height">>,
+                            <<"id">>,
+                            <<"signature">>,
+                            <<"publickey">>
+                        ]
+                    )
+                ]
         },
     MsgJson = struct_to_json(MsgProps, Opts),
     ProcessProps =
