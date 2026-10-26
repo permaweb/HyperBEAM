@@ -98,6 +98,12 @@ The request handler MUST implement the following pipeline. Inputs: the request
 target path `Path`, the request singleton `Req` and the node message
 `NodeMsg`.
 
+Before parsing, the server reads the request body up to the node's
+`http-max-body` option (default 128 MiB) and at most 1,048,576 body
+fragments. A request whose declared or accumulated body exceeds the byte
+bound, or that needs more fragments, MUST receive `413` before the body is
+buffered past it. A request cannot raise either bound.
+
 1. **Parse.** Convert `Req` into `Msgs` (an ordered list of messages) using
    the substrate's request-parsing (`hb_singleton:from/2`). (The substrate
    selects the response codec from the request's `accept` when it encodes

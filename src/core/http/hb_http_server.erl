@@ -119,6 +119,11 @@
     <<"GET">>, <<"HEAD">>, <<"POST">>, <<"PUT">>,
     <<"DELETE">>, <<"OPTIONS">>, <<"PATCH">>
 ]).
+%% A 128 MiB body bound leaves room for the bundler's default 100 MB items.
+-define(DEFAULT_MAX_BODY, 128 * 1024 * 1024).
+%% Read at most this many body fragments before any hook runs, so that a body
+%% sent as many tiny fragments has a bounded cost.
+-define(MAX_BODY_FRAGMENTS, 1_048_576).
 %% Define the max size we can return in 500 error details field.
 -define(DEFAULT_ERROR_DETAILS_MAX_SIZE, 32*1024).
 %% At most this many media ranges in `accept' are considered.
@@ -546,7 +551,12 @@ challenge_node(ACME, ServerID, NodeMsg) ->
     ).
 
 listener_protocol_options(ServerID, NodeMsg) ->
-    Dispatcher = cowboy_router:compile([{'_', [{'_', ?MODULE, ServerID}]}]),
+    MaxBody = hb_util:int(
+        hb_opts:get(http_max_body, ?DEFAULT_MAX_BODY, NodeMsg)
+    ),
+    Dispatcher = cowboy_router:compile(
+        [{'_', [{'_', ?MODULE, {ServerID, MaxBody}}]}]
+    ),
     #{
         env => #{ dispatch => Dispatcher, node_msg => NodeMsg },
         stream_handlers => [cowboy_stream_h],
@@ -672,25 +682,58 @@ start_http2(ServerID, ProtoOpts, NodeMsg, TLSOpts) ->
 
 %%% Request/response lifecycle.
 
-%% @doc Entrypoint for all HTTP requests. Receives the Cowboy request option and
-%% the server ID, which can be used to lookup the node message.
-init(Req, ServerID) ->
+%% @doc Entrypoint for all HTTP requests. Receives the Cowboy request option
+%% and the dispatch state: the server ID, which looks up the node message, and
+%% the body bound that the listener read when it started.
+init(Req, {ServerID, MaxBody}) ->
     case {cowboy_req:method(Req), ServerID} of
         {<<"OPTIONS">>, {tls_http_01, _}} ->
-            {ok, Body} = read_body(Req),
-            handle_request(Req, Body, ServerID);
+            request_body(Req, ServerID, MaxBody);
         {<<"OPTIONS">>, _} -> cors_reply(Req, ServerID);
         _ ->
-            {ok, Body} = read_body(Req),
-            handle_request(Req, Body, ServerID)
+            request_body(Req, ServerID, MaxBody)
     end.
 
-%% @doc Helper to grab the full body of a HTTP request, even if it's chunked.
-read_body(Req) -> read_body(Req, <<>>).
-read_body(Req0, Acc) ->
-    case cowboy_req:read_body(Req0) of
-        {ok, Data, _Req} -> {ok, << Acc/binary, Data/binary >>};
-        {more, Data, Req} -> read_body(Req, << Acc/binary, Data/binary >>)
+%% @doc Read and handle a request body within the node's limits.
+request_body(Req, ServerID, MaxBody) ->
+    case read_body(Req, MaxBody) of
+        {ok, Body} -> handle_request(Req, Body, ServerID);
+        {too_large, Req2} ->
+            {ok, cowboy_req:reply(
+                413, #{}, <<"Request body too large.">>, Req2
+            ), no_state};
+        {too_many_fragments, Req2} ->
+            {ok, cowboy_req:reply(
+                413, #{}, <<"Request body has too many fragments.">>, Req2
+            ), no_state}
+    end.
+
+%% @doc Helper to grab the full body of an HTTP request within the byte and
+%% fragment bounds, even if it is chunked.
+read_body(Req, Max) ->
+    case cowboy_req:body_length(Req) of
+        Length when is_integer(Length), Length > Max -> {too_large, Req};
+        _ -> read_body(Req, Max, 0, 0, [])
+    end.
+read_body(Req, _Max, _Size, Fragments, _Acc)
+        when Fragments >= ?MAX_BODY_FRAGMENTS ->
+    {too_many_fragments, Req};
+read_body(Req0, Max, Size, Fragments, Acc) ->
+    % Read one fragment at a time so Cowboy's buffer cannot hide the count.
+    case cowboy_req:read_body(Req0, #{ length => 1 }) of
+        {ok, Data, Req} ->
+            case Size + byte_size(Data) =< Max of
+                true -> {ok, iolist_to_binary(lists:reverse([Data | Acc]))};
+                false -> {too_large, Req}
+            end;
+        {more, Data, Req} ->
+            NewSize = Size + byte_size(Data),
+            case NewSize =< Max of
+                true -> read_body(
+                    Req, Max, NewSize, Fragments + 1, [Data | Acc]
+                );
+                false -> {too_large, Req}
+            end
     end.
 
 %% @doc Reply to CORS preflight requests.
