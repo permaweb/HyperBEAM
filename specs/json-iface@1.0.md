@@ -257,7 +257,9 @@ Field-derivation rules (MUST):
   message's signer (committer) list. If the message has no signers, `Owner`,
   `Signature`, and `PublicKey` are all `""`, and `From` defaults from the
   (empty) owner. Of two or more commitments by the primary signer, the
-  primary commitment is the one with the lowest ID.
+  primary commitment is the one with the lowest ID. Of a message with two or
+  more signers, every field but `Id` gives only the primary signer's
+  commitments and the keys that they commit.
 - **`Owner` encoding.** With the `owner-as-address` rule (used by both the
   compute staging path and the `to` key), `Owner` is
   `hb_util:committer_address/1` of the signer: the address of a `did-ar@1.0`

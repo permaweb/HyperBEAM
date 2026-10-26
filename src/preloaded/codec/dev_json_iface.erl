@@ -144,12 +144,32 @@ signer_commitment(Signer, Msg, Opts) ->
         [ID | _] -> hb_maps:get(ID, Commitments, #{}, Opts)
     end.
 
+%% @doc The part of a message that its owner signs: of two or more signers, the
+%% owner is the first, so only its commitments and the keys that they commit
+%% are given.
+owner_view(Msg, Opts) ->
+    case hb_message:signers(Msg, Opts) of
+        [Owner, _ | _] ->
+            hb_util:ok(
+                hb_message:with_only_committed(
+                    hb_message:with_commitments(
+                        #{ <<"committer">> => Owner },
+                        Msg,
+                        Opts
+                    ),
+                    Opts
+                )
+            );
+        _ -> Msg
+    end.
+
 message_to_json_struct(RawMsg, Opts) ->
     message_to_json_struct(RawMsg, [owner_as_address], Opts).
 message_to_json_struct(RawMsg, Features, Opts) ->
+    Msg = owner_view(RawMsg, Opts),
     TABM = 
         hb_message:convert(
-            hb_private:reset(RawMsg),
+            hb_private:reset(Msg),
             tabm,
             Opts
         ),
@@ -157,10 +177,10 @@ message_to_json_struct(RawMsg, Features, Opts) ->
     ID = hb_message:id(RawMsg, all),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),
 	{Owner, Signature, PublicKey} =
-        case hb_message:signers(RawMsg, Opts) of
+        case hb_message:signers(Msg, Opts) of
             [] -> {<<>>, <<>>, <<>>};
             [Signer|_] ->
-                Commitment = signer_commitment(Signer, RawMsg, Opts),
+                Commitment = signer_commitment(Signer, Msg, Opts),
                 CommitmentSignature =
                     hb_maps:get(<<"signature">>, Commitment, <<>>, Opts),
                 CommitmentKey =
@@ -234,7 +254,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
         % NOTE: When sent to ao "Owner" is the wallet address
         <<"Owner">> => Owner,
         <<"From">> => case ?IS_ID(From) of true -> safe_to_id(From); false -> From end,
-        <<"Tags">> => prepare_tags(TABM, RawMsg, Opts),
+        <<"Tags">> => prepare_tags(TABM, Msg, Opts),
         <<"Target">> => safe_to_id(Target),
         <<"Data">> => Data,
         <<"Signature">> =>
@@ -702,7 +722,34 @@ basic_aos_call_test_() ->
 		?assertMatch(
 			{ok, #{ <<"Data">> := null }},
 			to(#{}, #{ <<"message">> => #{ <<"data">> => 1 } }, #{})
-		)
+		),
+		% Of a message from two signers that commit different keys, only the
+		% owner's key is given.
+		Second = #{ <<"priv-wallet">> => ar_wallet:new() },
+		Both =
+			hb_message:commit(
+				hb_message:commit(
+					#{ <<"a">> => <<"1">>, <<"b">> => <<"2">> },
+					normalize_test_opts(#{}),
+					#{
+						<<"commitment-device">> => <<"httpsig@1.0">>,
+						<<"committed">> => [<<"a">>]
+					}
+				),
+				Second,
+				#{
+					<<"commitment-device">> => <<"httpsig@1.0">>,
+					<<"committed">> => [<<"b">>]
+				}
+			),
+		{ok, #{ <<"Owner">> := Owner, <<"Tags">> := Tags }} =
+			to(#{}, #{ <<"message">> => Both }, #{}),
+		OwnerKey =
+			case Owner =:= hb:address(maps:get(<<"priv-wallet">>, Second)) of
+				true -> <<"B">>;
+				false -> <<"A">>
+			end,
+		?assertEqual([OwnerKey], [Name || #{ <<"name">> := Name } <- Tags])
 	end}.
 
 aos_stack_benchmark_test_() ->

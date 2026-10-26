@@ -1577,7 +1577,45 @@ transactions_unsigned_owner_test_parallel() ->
         <<"key">> => hb_util:encode(ar_wallet:to_pubkey(Wallet))
     }, Owner),
     ?assertEqual(hb_maps:get(<<"signature">>,
-        hb_maps:get(SignedID, hb_maps:get(<<"commitments">>, Signed))), Signature).
+        hb_maps:get(SignedID, hb_maps:get(<<"commitments">>, Signed))), Signature),
+    % Of a message from two signers that commit different keys, the ID of one
+    % commitment gives only its signer and key, and the message's own ID gives
+    % no node.
+    Both =
+        hb_message:commit(
+            hb_message:commit(
+                #{ <<"a">> => <<"1">>, <<"b">> => <<"2">> },
+                Opts,
+                #{
+                    <<"commitment-device">> => <<"httpsig@1.0">>,
+                    <<"committed">> => [<<"a">>]
+                }
+            ),
+            #{ <<"priv-wallet">> => ar_wallet:new() },
+            #{
+                <<"commitment-device">> => <<"httpsig@1.0">>,
+                <<"committed">> => [<<"b">>]
+            }
+        ),
+    {ok, _} = hb_cache:write(Both, Opts),
+    Address = hb:address(Wallet),
+    [FirstID] = hb_maps:keys(hb_message:commitments(Address, Both, Opts)),
+    ?assertMatch(
+        #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := [
+            #{ <<"node">> := #{
+                <<"id">> := FirstID,
+                <<"owner">> := #{ <<"address">> := Address },
+                <<"tags">> := [#{ <<"name">> := <<"a">> }]
+            } }
+        ] } } },
+        post_graphql(Node,
+            <<"query($ids: [ID!]) { transactions(ids: $ids) {",
+                " edges { node { id owner { address } tags { name } } } } }">>,
+            #{ <<"ids">> => [FirstID, hb_message:id(Both, all, Opts)] },
+            #{},
+            Opts
+        )
+    ).
 
 %% @doc Preserve original tags, or exclude native fields from normalized keys.
 transaction_tags_exclude_fields_test_parallel() ->

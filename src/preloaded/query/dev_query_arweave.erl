@@ -1437,8 +1437,29 @@ read_match(Match, Opts) ->
     case match_message(Match, Opts) of
         {error, not_found} -> {error, not_found};
         {error, _} = Error -> throw(Error);
+        {ok, Msg} when is_map(Msg) -> match_view(Match, Msg, Opts);
         Read -> Read
     end.
+
+%% @doc The part of a message that the ID of a match gives. A message with two
+%% or more signers has no one owner: a commitment's ID gives only that
+%% commitment and the keys that it commits, and another ID is not found.
+match_view(#{ <<"id">> := ID }, Msg, Opts) when ID =/= <<>> ->
+    case hb_message:signers(Msg, Opts) of
+        [_, _ | _] ->
+            Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+            case hb_maps:is_key(ID, Commitments, Opts) of
+                true ->
+                    hb_message:with_only_committed(
+                        hb_message:with_commitments(ID, Msg, Opts),
+                        Opts
+                    );
+                false -> {error, not_found}
+            end;
+        _ -> {ok, Msg}
+    end;
+match_view(_Match, Msg, _Opts) ->
+    {ok, Msg}.
 
 %% @doc L1 metadata needs only its native header, not an expanded bundle.
 %% Other messages read by ID, or decode their header at a weave offset.
