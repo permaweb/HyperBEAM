@@ -21,6 +21,9 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%% The most backtracking steps a route regex may make against a path.
+-define(REGEX_MATCH_LIMIT, 10000).
+
 %% @doc Extract the first key from a `Request''s `Path' field.
 hd(Req, Opts) ->
     %?event_debug({key_from_path, Req, Opts}),
@@ -274,7 +277,7 @@ regex_matches(Path1, Path2) ->
             Normalized = <<"^", _/binary>> -> Normalized;
             Normalized -> normalize(Normalized)
         end,
-    try re:run(NormP1, NormP2) =/= nomatch
+    try re:run(NormP1, NormP2, [{match_limit, ?REGEX_MATCH_LIMIT}]) =/= nomatch
     catch _A:_B:_C -> false
     end.
 
