@@ -9,6 +9,14 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%% The keys with which a request, or the message that it relays, steers
+%% `relay@1.0'.
+-define(RELAY_KEYS, [
+    <<"peer">>, <<"relay-route">>, <<"route-path">>, <<"relay-path">>,
+    <<"relay-method">>, <<"relay-body">>, <<"relay-device">>,
+    <<"relay-commit-request">>, <<"commit-request">>
+]).
+
 %% @doc Initialize or normalize the compute-lite device. For now, we don't
 %% need to do anything special here.
 -spec init(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
@@ -153,7 +161,10 @@ do_dryrun(ProcID, Req, Opts) ->
     ),
     extract_json_res(Response, Opts).
 
-do_relay(Method, Path, Body, Headers, Opts) ->
+do_relay(Method, Path, Body, RawHeaders, Opts) ->
+    % The headers go to the compute server. They do not choose where the relay
+    % goes: a snapshot's keys come from a caller.
+    Headers = hb_maps:without(?RELAY_KEYS, RawHeaders, Opts),
     ContentType =
         hb_maps:get(
             <<"content-type">>,
