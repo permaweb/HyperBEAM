@@ -121,7 +121,7 @@ test_process(Opts) ->
     Wallet = hb:wallet(),
     hb_message:commit(
         hb_maps:merge(
-            base_process(Opts),
+            hb_message:uncommitted(base_process(Opts), Opts),
             #{
                 <<"execution-device">> => <<"stack@1.0">>,
                 <<"device-stack">> => [<<"test-device@1.0">>, <<"test-device@1.0">>]

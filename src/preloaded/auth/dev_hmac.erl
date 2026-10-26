@@ -4,7 +4,7 @@
 %%%     hmac:constant:VALUE   The key is VALUE, which is known to everyone.
 %%%     hmac:secret:ID        The key is derived from a secret. The ID of the
 %%%                           secret is given by
-%%%                           hb_util:secret_key_to_committer(Secret).
+%%%                           lib_secret:to_committer(Secret).
 %%% </pre>
 %%%
 %%% The key of a secret is the SHA-256 hash of `hmac:secret:' followed by the
@@ -18,6 +18,7 @@
 %%% against the `body'. The secret of an `hmac:secret:' committer is read from
 %%% its `priv' message.
 -module(dev_hmac).
+-device_libraries([lib_secret]).
 -export([from/3, to/3, commit/3, verify/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -61,14 +62,20 @@ commit(Committer, #{ <<"body">> := Base }, Opts) ->
     #{ body := binary(), signature := binary(), _ => _ },
     #{ _ => _ }
 ) -> {ok, boolean()}.
-verify(Committer, #{ <<"body">> := Base, <<"signature">> := Sig }, Opts) ->
+verify(Committer, Req = #{ <<"body">> := Base, <<"signature">> := Sig }, Opts) ->
     case key(Committer, Opts) of
         {ok, Key} ->
             HMac = crypto:mac(hmac, sha256, Key, Base),
+            Expected =
+                case hb_maps:get(<<"body">>, Committer, undefined, Opts) of
+                    <<"secret:", ID/binary>> -> <<"hmac:secret:", ID/binary>>;
+                    _ -> undefined
+                end,
             {
                 ok,
                 byte_size(Sig) == byte_size(HMac)
                     andalso crypto:hash_equals(HMac, Sig)
+                    andalso hb_committer:matches_commitment(Expected, Req, Opts)
             };
         {error, not_found} -> {ok, false}
     end.
@@ -79,7 +86,7 @@ key(#{ <<"body">> := <<"constant:", Value/binary>> }, _Opts) ->
     {ok, Value};
 key(Committer = #{ <<"body">> := <<"secret:", ID/binary>> }, Opts) ->
     Secret = hb_private:get(<<"secret">>, Committer, not_found, Opts),
-    case is_binary(Secret) andalso hb_util:secret_key_to_committer(Secret) of
+    case is_binary(Secret) andalso lib_secret:to_committer(Secret) of
         ID -> {ok, hb_crypto:sha256(<<"hmac:secret:", Secret/binary>>)};
         _ -> {error, not_found}
     end;
@@ -103,7 +110,7 @@ uri_test() ->
 secret_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     Secret = binary:copy(<<"s">>, 100),
-    ID = hb_util:secret_key_to_committer(Secret),
+    ID = lib_secret:to_committer(Secret),
     Body = <<"signature base">>,
     {ok, Committer} = hb_uri:from(<<"hmac:secret:", ID/binary>>, Opts),
     Call =

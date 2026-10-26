@@ -141,16 +141,23 @@ commitment_wallets(ProcMsg, Opts) ->
 %% @doc Returns the commitment specification which should be used to commit
 %% assignments for a process.
 commitment_spec(Proc, Opts) ->
-    hb_ao:get(
-        <<"scheduler-commitment-spec">>,
-        {as, <<"message@1.0">>, Proc},
+    Default =
         hb_opts:get(
             scheduler_default_commitment_spec,
             <<"ans104@1.0">>,
             Opts
         ),
-        Opts
-    ).
+    case
+        hb_ao:get(
+            <<"scheduler-commitment-spec">>,
+            {as, <<"message@1.0">>, Proc},
+            Default,
+            Opts
+        )
+    of
+        Spec when is_binary(Spec) -> Spec;
+        _ -> Default
+    end.
 
 %% @doc Call the appropriate scheduling server to assign a message.
 schedule(AOProcID, Message) when is_binary(AOProcID) ->

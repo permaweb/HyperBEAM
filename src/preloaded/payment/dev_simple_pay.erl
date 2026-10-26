@@ -22,7 +22,7 @@
 %%% This device acts as both a pricing device and a ledger device, by p4's
 %%% definition.
 -module(dev_simple_pay).
--device_libraries([lib_volatile_ledger, lib_meta]).
+-device_libraries([lib_volatile_ledger, lib_meta, lib_process]).
 -export([estimate/3, charge/3, balance/3, topup/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -107,6 +107,13 @@ apply_price(Seq, _) ->
 price_from_routes(UserRequest, NodeMsg) ->
     RouterOpts = hb_opts:get(<<"router-opts">>, #{}, NodeMsg),
     Routes = hb_maps:get(<<"offered">>, RouterOpts, [], NodeMsg),
+    % Match the path without its query, as `dev_p4' matches its non-chargable
+    % routes.
+    RoutePath =
+        case hb_maps:get(<<"path">>, UserRequest, no_path, NodeMsg) of
+            no_path -> no_path;
+            Path -> hd(binary:split(hb_util:bin(Path), <<"?">>))
+        end,
     MatchRes =
         hb_ao:resolve(
             #{
@@ -115,8 +122,7 @@ price_from_routes(UserRequest, NodeMsg) ->
             },
             UserRequest#{
                 <<"path">> => <<"match">>,
-                <<"route-path">> =>
-                    hb_maps:get(<<"path">>, UserRequest, no_path, NodeMsg)
+                <<"route-path">> => RoutePath
             },
             NodeMsg
         ),
@@ -150,14 +156,15 @@ price_from_count(Messages, NodeMsg) ->
     | {error, #{ status := integer(), body := binary(), _ => _ }}.
 charge(_, RawReq, NodeMsg) ->
     ?event(payment, {charge, RawReq}),
-    % Only the node may charge: p4 signs its charge with the node's key.
-    Signers = hb_message:signers(RawReq, NodeMsg),
-    case lists:member(hb_opts:committer(NodeMsg), Signers) of
-        true -> do_charge(RawReq, NodeMsg);
-        false ->
+    % Only the node may charge: p4 signs its charge with the node's key. The
+    % charge reads only the keys that the node signed, so the node's receipt
+    % over a `hashpath' or a result it pushed for a caller does not charge.
+    case lib_meta:authorized(hb_opts:committer(NodeMsg), RawReq, NodeMsg) of
+        {ok, Charge} -> do_charge(Charge, NodeMsg);
+        {error, not_authorized} ->
             {error, #{
                 <<"status">> => 403,
-                <<"body">> => <<"Charge not signed by the node.">>
+                <<"body">> => <<"Charge not made by the node.">>
             }}
     end.
 
@@ -167,6 +174,7 @@ do_charge(RawReq, NodeMsg) ->
         hb_ao:get(
             <<"request">>,
             RawReq,
+            #{},
             NodeMsg#{ <<"hashpath">> => ignore }
         ),
     case hb_message:signers(Req, NodeMsg) of
@@ -282,26 +290,47 @@ get_balance(Signer, NodeMsg) ->
     #{ _ => _ },
     #{ amount => integer(), recipient => binary(), _ => _ },
     #{ _ => _ }
-) -> {ok, integer()} | {error, binary()}.
+) -> {ok, integer()} | {error, binary() | map()}.
 topup(_, Req, NodeMsg) ->
     ?event({topup, {req, Req}, {node_msg, NodeMsg}}),
     case lib_meta:authorized(lib_meta:role(operator, NodeMsg), Req, NodeMsg) of
         {error, _} -> {error, <<"Unauthorized">>};
         {ok, Signed} ->
             Amount = hb_ao:get(<<"amount">>, Signed, 0, NodeMsg),
-            Recipient =
-                hb_committer:uri(
-                    hb_ao:get(<<"recipient">>, Signed, undefined, NodeMsg),
-                    NodeMsg
-                ),
-            NewBalance = debit(Recipient, -Amount, NodeMsg),
-            ?event(payment,
-                {topup,
-                    {amount, Amount},
-                    {recipient, Recipient},
-                    {balance, NewBalance}
-                }),
-            {ok, NewBalance}
+            case is_integer(Amount) andalso Amount > 0 of
+                false -> {error, <<"Top-up amount must be positive.">>};
+                true ->
+                    Recipient =
+                        hb_committer:uri(
+                            hb_ao:get(<<"recipient">>, Signed, undefined, NodeMsg),
+                            NodeMsg
+                        ),
+                    % The top-up's unsigned ID is its nonce, so the ledger
+                    % applies each signed top-up once.
+                    case
+                        lib_volatile_ledger:debit(
+                            ledger(NodeMsg),
+                            Recipient,
+                            -Amount,
+                            hb_message:id(Signed, NodeMsg),
+                            NodeMsg
+                        )
+                    of
+                        {error, already_applied} ->
+                            {error, #{
+                                <<"status">> => 409,
+                                <<"body">> => <<"Top-up already applied.">>
+                            }};
+                        NewBalance ->
+                            ?event(payment,
+                                {topup,
+                                    {amount, Amount},
+                                    {recipient, Recipient},
+                                    {balance, NewBalance}
+                                }),
+                            {ok, NewBalance}
+                    end
+            end
     end.
 
 %% @doc Check if the request is from the operator, as `meta@1.0' finds it.

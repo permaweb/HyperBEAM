@@ -67,6 +67,7 @@
 -export([is_signed_key/3]).
 -export([commitment/2, commitment/3, commitments/3]).
 -export([with_only_committed/2, with_only_committed/3]).
+-export([with_only_committed_deep/2]).
 -export([without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
 -export([diff/3, match/2, match/3, match/4, find_subject/4]).
@@ -401,6 +402,49 @@ with_only_committed(Msg, _, _) ->
     % If the message is not a map, it cannot be signed.
     {ok, Msg}.
 
+%% @doc Return a message with only the committed keys, as
+%% `with_only_committed/2' does, and the same for each message inside it. A
+%% commitment covers a child message by its ID, which the child's own
+%% commitments give, so the child keeps only the keys that they cover. A child
+%% that only bundled signed commitments cover is kept as it is.
+with_only_committed_deep(Msg, Opts) when is_map(Msg) ->
+    {ok, Committed} = with_only_committed(Msg, Opts),
+    Bundled = bundled_keys(Committed, Opts),
+    maps:map(
+        fun(Key, Value) ->
+            case lists:member(Key, [<<"commitments">> | Bundled]) of
+                true -> Value;
+                false -> with_only_committed_deep(Value, Opts)
+            end
+        end,
+        Committed
+    );
+with_only_committed_deep(Values, Opts) when is_list(Values) ->
+    [ with_only_committed_deep(Value, Opts) || Value <- Values ];
+with_only_committed_deep(Value, _Opts) ->
+    Value.
+
+%% @doc Return the keys whose whole values a message's signed commitments
+%% cover: the keys of its bundled signed commitments, except those that a
+%% signed commitment that is not bundled also covers, as it covers only an ID.
+bundled_keys(Msg, Opts) ->
+    Signed =
+        [
+            {
+                hb_util:bool(maps:get(<<"bundle">>, Commitment, false)),
+                committed(Msg, [ID], Opts)
+            }
+        ||
+            {ID, Commitment = #{ <<"committer">> := _ }} <-
+                maps:to_list(hb_maps:get(<<"commitments">>, Msg, #{}, Opts))
+        ],
+    Linked = lists:append([ Keys || {false, Keys} <- Signed ]),
+    [
+        Key
+    ||
+        {true, Keys} <- Signed, Key <- Keys, not lists:member(Key, Linked)
+    ].
+
 %% @doc Return the message with only the specified committers attached.
 with_only_committers(Msg, Committers) ->
     with_only_committers(Msg, Committers, #{}).
@@ -603,11 +647,15 @@ deep_verify(Path, Msg, Opts) when is_map(Msg) ->
         true ?=
             maps:fold(
                 fun(Key, Value, true) ->
-                    deep_verify(Path ++ [Key], Value, Opts);
+                    deep_verify([Key | Path], Value, Opts);
                    (_, _, Failure) -> Failure
                 end,
                 true,
-                uncommitted(hb_private:reset(Msg), Opts)
+                % `verify/3' reads `Msg' with its private keys; the fold skips them.
+                maps:filter(
+                    fun(Key, _) -> not hb_private:is_private(Key) end,
+                    uncommitted(Msg, Opts)
+                )
             ),
         Verified =
             try verify(Msg, #{ <<"ids">> => <<"all">> }, Opts)
@@ -615,7 +663,7 @@ deep_verify(Path, Msg, Opts) when is_map(Msg) ->
             end,
         case Verified of
             true -> true;
-            false -> {false, hb_path:to_binary(Path), Msg}
+            false -> {false, hb_path:to_binary(lists:reverse(Path)), Msg}
         end
     end;
 deep_verify(_Path, _Msg, _Opts) ->
@@ -973,9 +1021,13 @@ find_subject(SubjectKey, Self, Req, Opts) ->
     case hb_maps:get(SubjectKey, Req, <<"self">>, GetOpts) of
         <<"self">> -> {ok, Self};
         Key ->
-            case hb_maps:find(Key, Req, GetOpts) of
-                {ok, Target} -> {ok, Target};
-                error -> {error, not_found}
+            case hb_private:is_private(Key) of
+                true -> {error, not_found};
+                false ->
+                    case hb_maps:find(Key, Req, GetOpts) of
+                        {ok, Target} -> {ok, Target};
+                        error -> {error, not_found}
+                    end
             end
     end.
 

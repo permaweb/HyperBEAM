@@ -869,6 +869,7 @@ set(Base, NewValuesMsg, Opts) ->
 			fun(Key) ->
 				not lists:member(Key, ?DEVICE_KEYS ++ [<<"set-mode">>]) andalso
 					(hb_maps:get(Key, NewValuesMsg, undefined, Opts) =/= undefined)
+					andalso not hb_private:is_private_path(Key, Opts)
 			end,
 			NewValuesKeys
 		),

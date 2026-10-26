@@ -8,6 +8,7 @@
 %%% cannot verify itself.
 %%% See the [cookie codec](dev_cookie.html) documentation for more details.
 -module(dev_cookie_auth).
+-device_libraries([lib_secret]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 -export([commit/3, verify/3]).
@@ -111,13 +112,13 @@ commit(Base, Request, RawOpts) ->
 bind_secret(Secret, Base, Opts) ->
     store_secret(
         Secret,
-        Base#{ <<"committer">> => hb_util:secret_key_to_committer(Secret) },
+        Base#{ <<"committer">> => lib_secret:to_committer(Secret) },
         Opts
     ).
 
 %% @doc Update the nonces for a given secret.
 store_secret(Secret, Msg, Opts) ->
-    CookieAddr = hb_util:secret_key_to_committer(Secret),
+    CookieAddr = lib_secret:to_committer(Secret),
     % Create the cookie parameters, using the name as the key and the secret as
     % the value. The secret is a credential: page scripts may not read its
     % cookie, and browsers send it only over HTTPS, from this site's pages.
@@ -159,7 +160,9 @@ verify(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
     ?event({verify_with_explicit_key, {priv_base, Base}, {priv_request, Req}}),
     verify_secret(
         hb_cache:ensure_loaded(Secret, Opts),
-        hb_maps:get(<<"committer">>, Base, undefined, Opts)
+        Req,
+        hb_maps:get(<<"committer">>, Base, undefined, Opts),
+        Opts
     );
 verify(Base, Request, RawOpts) ->
     Opts = dev_cookie:opts(RawOpts),
@@ -167,15 +170,23 @@ verify(Base, Request, RawOpts) ->
     maybe
         {ok, Committer} ?= hb_maps:find(<<"committer">>, Base, Opts),
         {ok, Secret} ?= find_secret(Committer, Request, Opts),
-        verify_secret(Secret, Committer)
+        verify_secret(
+            Secret,
+            hb_cache:ensure_loaded(Request, Opts),
+            Committer,
+            Opts
+        )
     else
         error -> {error, not_found};
         {error, Err} -> {error, Err}
     end.
 
-%% @doc Check that a secret hashes to the given committer.
-verify_secret(Secret, Committer) ->
-    {ok, hb_util:secret_key_to_committer(Secret) =:= Committer}.
+%% @doc Check that a secret hashes to the given committer and that the
+%% commitment's `committer', if present, is the same committer.
+verify_secret(Secret, Commitment, Committer, Opts) ->
+    {ok,
+        lib_secret:to_committer(Secret) =:= Committer andalso
+            hb_committer:matches_commitment(Committer, Commitment, Opts)}.
 
 %% @doc Generate a new secret key for the given request. The user may specify
 %% a generator function in the request, which will be executed to generate the

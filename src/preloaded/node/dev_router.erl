@@ -25,7 +25,7 @@
 %%% </pre>
 -module(dev_router).
 -specification("../../../specs/router@1.0.md").
--device_libraries([lib_meta]).
+-device_libraries([lib_meta, lib_process]).
 -export([device_info/1, routes/3, route/2, route/3, preprocess/3]).
 -export([match/3, register/3]).
 -export([field_distance/2]).

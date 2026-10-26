@@ -2,6 +2,7 @@
 -export([sign/2, sign/3, hmac/1, hmac/2, verify/3, verify/4]).
 -export([to_pubkey/1, to_pubkey/2, to_address/1, to_address/2, new/0, new_ecdsa/0, new/1]).
 -export([new/3, committer_device/1]).
+-export([request_pooled_wallet/1]).
 -export([new_keyfile/2, load_keyfile/1, load_keyfile/2, load_key/1, load_key/2]).
 -export([to_json/1, from_json/1, from_json/2]).
 -export([recover_key/3]).
@@ -88,6 +89,7 @@ generate_wallet(KeyType = {KeyAlg, Curve}) when KeyType =:= {?EDDSA_SIGN_ALG, ed
     {Pub, Priv} = crypto:generate_key(KeyAlg, Curve),
     new(KeyType, Priv, Pub).
 
+%% @doc Request a wallet from the pool, waiting up to 30 seconds.
 request_pooled_wallet(KeyType) ->
     Pool = ensure_wallet_pool(KeyType),
     Ref = make_ref(),
@@ -132,8 +134,9 @@ wallet_pool_loop(KeyType, Wallets, Waiters, InFlight) ->
             end
     end.
 
-maybe_spawn_wallet_workers(KeyType, Wallets, Waiters, InFlight) ->
-    Desired = ?WALLET_POOL_TARGET + queue:len(Waiters),
+maybe_spawn_wallet_workers(KeyType, Wallets, _Waiters, InFlight) ->
+    % Waiters share the fixed pool target; they do not each add a worker.
+    Desired = ?WALLET_POOL_TARGET,
     Available = queue:len(Wallets) + InFlight,
     Needed = max(0, Desired - Available),
     Parent = self(),

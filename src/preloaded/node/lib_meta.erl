@@ -28,6 +28,7 @@ authorized(Committers, Msg, Opts) ->
                 hb_message:with_only_committers(Loaded, Identities, Opts), Opts
             ),
             Original = hb_private:get(<<"http-request">>, Loaded, Loaded, Opts),
+            false ?= lib_process:is_pushed(Original, Opts),
             Signed =
                 hb_message:with_only_committers(Original, Identities, Opts),
             [_ | _] ?= hb_message:signers(Signed, Opts),

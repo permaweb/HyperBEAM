@@ -286,8 +286,9 @@ when no other device contributes a resource.
   yields whatever that device returns for an absent key (an error / `not_found`).
   An implementation MUST NOT expose `consume` as a resolvable key.
 
-This device returns no other errors of its own. `estimate` and `price` always
-succeed (returning `{ok, integer}`).
+This device returns no other errors of its own. Only p4's hooks may call
+`estimate` and `price`; any other caller gets status 401. When they do, both
+always succeed (returning `{ok, integer}`).
 
 ## 9. Composition
 

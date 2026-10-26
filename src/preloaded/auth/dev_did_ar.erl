@@ -112,14 +112,26 @@ commit(Committer, Req, _Opts) ->
     },
     #{ _ => _ }
 ) -> {ok, boolean()}.
-verify(Committer, Req, _Opts) ->
+verify(Committer, Req, Opts) ->
     case address(Committer) of
         {ok, Address} ->
             KeyAddress =
                 fun(Owner, KeyType) ->
                     key_address(Owner, KeyType, Committer)
                 end,
-            lib_did:verify(Address, Req, KeyAddress);
+            case lib_did:verify(Address, Req, KeyAddress) of
+                {ok, true} ->
+                    {ok,
+                        hb_committer:matches_commitment(
+                            hb_committer:encode(
+                                {address, undefined},
+                                Address
+                            ),
+                            Req,
+                            Opts
+                        )};
+                Verified -> Verified
+            end;
         {error, _} -> {ok, false}
     end.
 

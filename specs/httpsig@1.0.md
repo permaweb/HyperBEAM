@@ -418,7 +418,7 @@ verify the commitment (§4.2). Its form follows the commitment `type`:
 - **`hmac:secret:`** (authenticated HMAC): the HMAC key is the SHA-256
   of `hmac:secret:` followed by a caller-supplied `secret`; the keyid is
   `hmac:secret:<ID>` where `ID = base64url(SHA-256(secret))`, as
-  `hb_util:secret_key_to_committer/1` gives it, and that keyid is the
+  `lib_secret:to_committer/1` gives it, and that keyid is the
   commitment's `committer`.
 
 A keyid that `hb_uri` cannot read, or that is not the URI of the committer it

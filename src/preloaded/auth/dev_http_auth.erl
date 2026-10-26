@@ -34,6 +34,7 @@
 %%% between nodes), and hashed in order to provide additional entropy, in 
 %%% alignment with RFC 8018, Section 4.1.
 -module(dev_http_auth).
+-device_libraries([lib_secret]).
 -export([commit/3, verify/3]).
 -export([generate/3]).
 -include("include/hb.hrl").
@@ -73,7 +74,7 @@ commit(Base, Req, Opts) ->
         {ok, Key} ->
             Bound =
                 Base#{
-                    <<"committer">> => hb_util:secret_key_to_committer(Key)
+                    <<"committer">> => lib_secret:to_committer(Key)
                 },
             ?event({commit_result, Bound}),
             {ok, Bound};
@@ -103,7 +104,10 @@ verify(Base, RawReq, Opts) ->
         {ok, Key} ->
             ?event({verify_found_key, {priv_key, Key}, {priv_base, Base}}),
             Committer = hb_maps:get(<<"committer">>, Base, undefined, Opts),
-            VerifyRes = hb_util:secret_key_to_committer(Key) =:= Committer,
+            Req = hb_cache:ensure_loaded(RawReq, Opts),
+            VerifyRes =
+                lib_secret:to_committer(Key) =:= Committer andalso
+                    hb_committer:matches_commitment(Committer, Req, Opts),
             ?event({verify_result, VerifyRes}),
             {ok, VerifyRes};
         {error, Err} ->

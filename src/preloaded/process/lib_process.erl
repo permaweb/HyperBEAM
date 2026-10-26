@@ -14,7 +14,8 @@
     scoped_opts/1,
     set_results/3,
     ensure_process_key/2,
-    default_device/3
+    default_device/3,
+    is_pushed/2
 ]).
 
 %% @doc Returns the process ID of the current process.
@@ -216,3 +217,19 @@ default_device(Base, Key, Opts) ->
 default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
 default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
 default_device_index(<<"push">>) -> <<"push@1.0">>.
+
+%% @doc Return whether a message is a pushed result. `push@1.0` sets these
+%% provenance keys before signing, so the signature attests the result's
+%% origin, not an explicit request from the signer.
+is_pushed(Msg, Opts) when is_map(Msg) ->
+    lists:any(
+        fun(Key) -> hb_maps:find(Key, Msg, Opts) =/= error end,
+        [
+            <<"from-process">>,
+            <<"from-uncommitted">>,
+            <<"from-base">>,
+            <<"from-scheduler">>,
+            <<"from-authority">>
+        ]
+    );
+is_pushed(_, _) -> false.

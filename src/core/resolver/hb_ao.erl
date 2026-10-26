@@ -593,7 +593,7 @@ resolve_stage(5, Resolver, Base, Req, Original, ExecName, Opts) ->
                         {func, Func},
                         {exec_class, ExecClass},
                         {exec_exception, ExecException},
-                        {exec_stacktrace, erlang:process_info(self(), backtrace)},
+                        {exec_stacktrace, ExecStacktrace},
                         {opts, Opts}
                     },
 					Opts

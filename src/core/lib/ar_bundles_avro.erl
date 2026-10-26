@@ -165,7 +165,9 @@ decode_avro_value(ValueSize, Name, Rest, Count) ->
     {DecodedTags, NonAvroRest} = decode_avro_tags(Rest2, Count - 1),
     {[{Name, Value} | DecodedTags], NonAvroRest}.
 
-%% @doc Decode a VInt encoded ZigZag integer from binary.
+%% @doc Decode a VInt encoded ZigZag integer from binary. An Avro long has at
+%% most ten bytes; a continuation run that shifts past bit 63 throws
+%% `{invalid_ans104_tags, invalid_avro_long}'.
 decode_zigzag(Binary) ->
     {ZigZag, Rest} = decode_vint(Binary, 0, 0),
     case ZigZag band 1 of
@@ -173,6 +175,8 @@ decode_zigzag(Binary) ->
         0 -> {ZigZag bsr 1, Rest}
     end.
 
+decode_vint(_Binary, _Result, Shift) when Shift > 63 ->
+    throw({invalid_ans104_tags, invalid_avro_long});
 decode_vint(<<>>, Result, _Shift) ->
     {Result, <<>>};
 decode_vint(<<Byte, Rest/binary>>, Result, Shift) ->

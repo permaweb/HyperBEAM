@@ -36,6 +36,9 @@
     | {string | token | binary, binary()}.
 -type sh_decimal() :: {decimal, {integer(), integer()}}.
 
+%% Refuse integers with more than this many digits; 100 covers 256-bit values.
+-define(MAX_INTEGER_DIGITS, 100).
+
 -define(IS_LC_ALPHA(C),
     (C =:= $a) or (C =:= $b) or (C =:= $c) or (C =:= $d) or (C =:= $e) or
         (C =:= $f) or (C =:= $g) or (C =:= $h) or (C =:= $i) or (C =:= $j) or
@@ -186,17 +189,21 @@ parse_dict_key(<<C, R/bits>>, Acc, K) when
         (C =:= $_) or (C =:= $-) or (C =:= $.) or (C =:= $*) or (C =:= $%) ->
     parse_dict_key(R, Acc, <<K/binary, C>>);
 parse_dict_key(<<$;, R0/bits>>, Acc, K) ->
-    {Params, R} = parse_before_param(R0, []),
+    {Params, R} = parse_before_param(R0, {[], #{}}),
     parse_dict_before_sep(R, dict_member(K, {item, true, Params}, Acc));
 parse_dict_key(R, Acc, K) ->
     parse_dict_before_sep(R, dict_member(K, {item, true, []}, Acc)).
 
-%% @doc Keep the first position and last value of each dictionary key.
+%% @doc Keep the first position and last value of each member.
 dict_member(K, Item, {Keys, Items}) ->
     case is_map_key(K, Items) of
         true -> {Keys, Items#{K => Item}};
         false -> {[K | Keys], Items#{K => Item}}
     end.
+
+%% @doc Return members in their first-seen order with their last value.
+order_members({Keys, Items}) ->
+    [{K, maps:get(K, Items)} || K <- lists:reverse(Keys)].
 
 %% @doc Parse a binary SF dictionary before a separator.
 parse_dict_before_sep(<<$\s, R/bits>>, Acc) ->
@@ -205,8 +212,8 @@ parse_dict_before_sep(<<$\t, R/bits>>, Acc) ->
     parse_dict_before_sep(R, Acc);
 parse_dict_before_sep(<<C, R/bits>>, Acc) when C =:= $, ->
     parse_dict_before_member(R, Acc);
-parse_dict_before_sep(<<>>, {Keys, Items}) ->
-    [{K, maps:get(K, Items)} || K <- lists:reverse(Keys)].
+parse_dict_before_sep(<<>>, Acc) ->
+    order_members(Acc).
 
 %% @doc Parse a binary SF dictionary before a member.
 parse_dict_before_member(<<$\s, R/bits>>, Acc) ->
@@ -227,7 +234,7 @@ parse_item(Bin) ->
 parse_item1(Bin) ->
     case parse_bare_item(Bin) of
         {Item, <<$;, R/bits>>} ->
-            {Params, Rest} = parse_before_param(R, []),
+            {Params, Rest} = parse_before_param(R, {[], #{}}),
             {{item, Item, Params}, Rest};
         {Item, Rest} ->
             {{item, Item, []}, Rest}
@@ -271,7 +278,7 @@ parse_list_before_member(R, Acc) ->
 parse_inner_list(<<$\s, R/bits>>, Acc) ->
     parse_inner_list(R, Acc);
 parse_inner_list(<<$), $;, R0/bits>>, Acc) ->
-    {Params, R} = parse_before_param(R0, []),
+    {Params, R} = parse_before_param(R0, {[], #{}}),
     {{list, lists:reverse(Acc), Params}, R};
 parse_inner_list(<<$), R/bits>>, Acc) ->
     {{list, lists:reverse(Acc), []}, R};
@@ -286,20 +293,20 @@ parse_before_param(<<C, R/bits>>, Acc) when ?IS_LC_ALPHA(C) or (C =:= $*) ->
     parse_param(R, Acc, <<C>>).
 
 parse_param(<<$;, R/bits>>, Acc, K) ->
-    parse_before_param(R, lists:keystore(K, 1, Acc, {K, true}));
+    parse_before_param(R, dict_member(K, true, Acc));
 parse_param(<<$=, R0/bits>>, Acc, K) ->
     case parse_bare_item(R0) of
         {Item, <<$;, R/bits>>} ->
-            parse_before_param(R, lists:keystore(K, 1, Acc, {K, Item}));
+            parse_before_param(R, dict_member(K, Item, Acc));
         {Item, R} ->
-            {lists:keystore(K, 1, Acc, {K, Item}), R}
+            {order_members(dict_member(K, Item, Acc)), R}
     end;
 parse_param(<<C, R/bits>>, Acc, K) when
     ?IS_LC_ALPHA(C) or ?IS_DIGIT(C) or
         (C =:= $_) or (C =:= $-) or (C =:= $.) or (C =:= $*) ->
     parse_param(R, Acc, <<K/binary, C>>);
 parse_param(R, Acc, K) ->
-    {lists:keystore(K, 1, Acc, {K, true}), R}.
+    {order_members(dict_member(K, true, Acc)), R}.
 
 %% @doc Parse an integer or decimal.
 parse_bare_item(<<$-, R/bits>>) -> parse_number(R, 0, <<$->>);
@@ -323,6 +330,9 @@ parse_bare_item(<<>>) ->
     {{binary, <<>>}, <<>>}.
 
 %% @doc Parse an integer or decimal binary.
+parse_number(<<C, _/bits>>, L, _Acc) when
+        ?IS_DIGIT(C), L >= ?MAX_INTEGER_DIGITS ->
+    throw(integer_too_long);
 parse_number(<<C, R/bits>>, L, Acc) when ?IS_DIGIT(C) ->
     parse_number(R, L + 1, <<Acc/binary, C>>);
 parse_number(<<$., R/bits>>, L, Acc) ->
@@ -580,11 +590,22 @@ bare_item({decimal, {Base, Exp}}) ->
         end
     ];
 bare_item(Integer) when is_integer(Integer) ->
-    integer_to_binary(Integer);
+    case is_integer_too_long(Integer) of
+        true -> throw(integer_too_long);
+        false -> integer_to_binary(Integer)
+    end;
 bare_item(true) ->
     <<"?1">>;
 bare_item(false) ->
     <<"?0">>.
+
+%% @doc Whether an integer has more than `?MAX_INTEGER_DIGITS' decimal digits.
+%% 10^100 lies between 2^332 and 2^333: compare against those first, so an
+%% enormous integer is refused without a decimal conversion.
+is_integer_too_long(Integer) when abs(Integer) < (1 bsl 332) -> false;
+is_integer_too_long(Integer) when abs(Integer) >= (1 bsl 333) -> true;
+is_integer_too_long(Integer) ->
+    byte_size(integer_to_binary(abs(Integer))) > ?MAX_INTEGER_DIGITS.
 
 exp_div(0) -> 1;
 exp_div(N) -> 10 * exp_div(N + 1).

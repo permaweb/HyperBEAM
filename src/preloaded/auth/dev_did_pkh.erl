@@ -84,7 +84,17 @@ commit(Committer, Req, _Opts) ->
 ) -> {ok, boolean()}.
 verify(Committer, Req, Opts) ->
     case account(Committer, Opts) of
-        {ok, Account} -> lib_did:verify(Account, Req, fun key_account/2);
+        {ok, Account} ->
+            case lib_did:verify(Account, Req, fun key_account/2) of
+                {ok, true} ->
+                    {ok,
+                        hb_committer:matches_commitment(
+                            <<"did:pkh:", Account/binary>>,
+                            Req,
+                            Opts
+                        )};
+                Verified -> Verified
+            end;
         {error, _} -> {ok, false}
     end.
 

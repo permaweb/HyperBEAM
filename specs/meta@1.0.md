@@ -213,7 +213,8 @@ the device itself, but it forms part of the device's operating contract:
    (content-negotiation) information when it encodes the reply
    (`hb_http_server:accept_to_codec/3`); it does not place the codec in the
    node message. The final response encoding uses this codec; the signature
-   of §4 step 6 is in `httpsig@1.0`.
+   of §4 step 6 is in `httpsig@1.0`. At most 100 media ranges are
+   considered, in preference order; later ranges are not served.
 3. The allowed request methods at the node boundary are `GET`, `POST`, `PUT`,
    `DELETE`, `OPTIONS`, `PATCH`; CORS-preflight (`OPTIONS`) is handled by the
    substrate and never reaches this device. This device distinguishes only

@@ -66,6 +66,12 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%% An image is WASM if it starts with the WASM magic. An AOT image is machine
+%% code for the host, so only the `aot' mode, which the node's options give,
+%% loads one.
+-define(IS_WASM(Bin),
+    (byte_size(Bin) >= 4 andalso binary_part(Bin, 0, 4) =:= <<0, "asm">>)).
+
 %% @doc Load the driver for the WASM executor.
 load_driver() ->
     case erl_ddll:load(code:priv_dir(hb), ?MODULE) of
@@ -79,6 +85,11 @@ load_driver() ->
 %% (wasm or aot) to indicate the type of WASM module being loaded.
 start(WasmBinary) when is_binary(WasmBinary) ->
     start(WasmBinary, wasm).
+start(WasmBinary, Mode)
+        when is_binary(WasmBinary)
+        andalso Mode =/= aot
+        andalso not ?IS_WASM(WasmBinary) ->
+    {error, <<"Failed to load module: image is not WASM.">>};
 start(WasmBinary, Mode) when is_binary(WasmBinary) ->
     ?event({loading_module, {bytes, byte_size(WasmBinary)}, Mode}),
     Self = self(),
@@ -295,6 +306,11 @@ deserialize(WASM, Bin) when is_pid(WASM) andalso is_binary(Bin) ->
 %% gives. The worker keeps its pid, so every holder of the instance
 %% continues with a live, freshly initialized instance, with its globals at
 %% their start values.
+reset(_WASM, WasmBinary, Mode, _Memory)
+        when is_binary(WasmBinary)
+        andalso Mode =/= aot
+        andalso not ?IS_WASM(WasmBinary) ->
+    {error, <<"Failed to load module: image is not WASM.">>};
 reset(WASM, WasmBinary, Mode, Memory)
         when is_pid(WASM)
         andalso is_binary(WasmBinary)
@@ -326,7 +342,9 @@ simple_wasm_test() ->
     % A module with an export whose signature is longer than 256 bytes
     % starts: its signature does not overflow the buffer and end the VM.
     {ok, WideFile} = file:read_file("test/test-wide.wasm"),
-    ?assertMatch({ok, _, _, _}, start(WideFile)).
+    ?assertMatch({ok, _, _, _}, start(WideFile)),
+    % An image that is not WASM does not start in the `wasm' mode.
+    ?assertMatch({error, _}, start(<<"not a wasm image">>, wasm)).
 
 %% @doc Test that imported functions can be called from the WASM module.
 imported_function_test() ->

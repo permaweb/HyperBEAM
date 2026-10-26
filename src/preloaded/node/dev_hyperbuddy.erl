@@ -72,10 +72,13 @@ metrics(_, Req, Opts) ->
             {ok, #{ <<"body">> => <<"Prometheus metrics disabled.">> }}
     end.
 
-%% @doc Return the current event counters as a message.
+%% @doc Return the current event counters in the reply's body.
 -spec events(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
 events(_, _Req, _Opts) ->
-    {ok, hb_event:counters()}.
+    {ok, #{
+        <<"ao-result">> => <<"body">>,
+        <<"body">> => hb_event:counters()
+    }}.
 
 %% @doc Employ HyperBEAM's internal pretty printer to format a message.
 %% 

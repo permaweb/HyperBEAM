@@ -125,6 +125,8 @@ move(Mode, Base, Req, Opts) ->
             ),
         ?event({patch_from, PatchFrom}),
         ?event({patch_to, PatchTo}),
+        true ?= not hb_private:is_private_path(PatchTo, Opts) orelse
+            {error, <<"Private patch path.">>},
         % Get the source of the patches from the message. Makes the `maybe'
         % statement return `{error, not_found}' if the source is not found.
         {ok, Source} ?= hb_ao:resolve(FromMsg, PatchFrom, Opts),

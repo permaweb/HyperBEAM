@@ -3,7 +3,7 @@
 %%% supports writing messages to the store when the node operator has signed
 %%% the corresponding cache operation type.
 -module(dev_cache).
--device_libraries([lib_meta]).
+-device_libraries([lib_meta, lib_process]).
 -export([read/3, write/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

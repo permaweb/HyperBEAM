@@ -879,12 +879,20 @@ ensure_loaded(Base, Req, Opts) ->
                             {slot, TargetSlot}
                         }
                     ),
-                    {ok, _} =
-                        hb_cache:write(
+                    % A process runs from its committed keys only, whether the
+                    % request gives the process itself or carries it.
+                    {ok, Process} =
+                        hb_message:with_only_committed(
                             hb_maps:get(<<"process">>, Base, Base, Opts),
-                            lib_process:cache_opts(Opts)
+                            Opts
                         ),
-                    init(Base, Req, Opts)
+                    {ok, _} =
+                        hb_cache:write(Process, lib_process:cache_opts(Opts)),
+                    init(
+                        lib_process:ensure_process_key(Process, Opts),
+                        Req,
+                        Opts
+                    )
             end
     end.
 

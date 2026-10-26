@@ -211,20 +211,7 @@ initialize(Base, Modules, Opts) ->
     % sandbox the functions whose results depend on the node, with or without
     % the minimum sandbox. The message may add further restrictions via
     % `sandbox', but cannot lift these.
-    DeterministicSpec =
-        case hb_util:bool(hb_maps:get(<<"requires-determinism">>, Base, false, Opts)) of
-            true -> ?DETERMINISTIC_SANDBOX;
-            false -> []
-        end,
-    State0 =
-        case hb_opts:get(<<"lua-minimum-sandbox">>, ?DEFAULT_MIN_SANDBOX, Opts) of
-            false -> sandbox(luerl:init(), DeterministicSpec, Opts);
-            MinSpec ->
-                dev_lua_require:install(
-                    sandbox(luerl:init(), MinSpec ++ DeterministicSpec, Opts),
-                    Opts
-                )
-        end,
+    State0 = create_state(Base, Opts),
     % Load each script into the Lua state.
     State1 =
         lists:foldl(
@@ -264,6 +251,23 @@ initialize(Base, Modules, Opts) ->
     {ok, State3} = dev_lua_lib:install(Base, State2, Opts),
     % Return the base message with the state added to it.
     {ok, hb_private:set(Base, <<"state">>, State3, Opts)}.
+
+%% @doc Create a Lua state with no modules, in the node's minimum sandbox and
+%% the sandbox that `requires-determinism' asks for.
+create_state(Base, Opts) ->
+    DeterministicSpec =
+        case hb_util:bool(hb_maps:get(<<"requires-determinism">>, Base, false, Opts)) of
+            true -> ?DETERMINISTIC_SANDBOX;
+            false -> []
+        end,
+    case hb_opts:get(<<"lua-minimum-sandbox">>, ?DEFAULT_MIN_SANDBOX, Opts) of
+        false -> sandbox(luerl:init(), DeterministicSpec, Opts);
+        MinSpec ->
+            dev_lua_require:install(
+                sandbox(luerl:init(), MinSpec ++ DeterministicSpec, Opts),
+                Opts
+            )
+    end.
 
 %%% @doc Return a list of all functions in the Lua environment.
 -spec functions(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
@@ -494,7 +498,7 @@ normalize(Base, _Req, RawOpts) ->
             case SerializedState of
                 not_found -> throw({error, no_lua_state_snapshot_found});
                 State ->
-                    ExternalizedState = binary_to_term(State),
+                    ExternalizedState = decode_snapshot(State, Base, Opts),
                     InternalizedState = luerl:internalize(ExternalizedState),
                     ?event(snapshot, loaded_state_from_snapshot),
                     {ok, LibState} =
@@ -505,6 +509,62 @@ normalize(Base, _Req, RawOpts) ->
             ?event(snapshot, state_already_initialized),
             {ok, Base}
     end.
+
+%% @doc Decode a snapshot, which may come from the caller, without creating
+%% atoms. Each Erlang function in it that a new state for the base does not
+%% contain becomes `nil'; restore sets the host library functions again.
+decode_snapshot(Serialized, Base, Opts) ->
+    % Collect the garbage of the new state first: sandboxing `package.searchers'
+    % leaves the disk searchers in its table store.
+    Allowed = sets:from_list(collect_mfas(luerl:gc(create_state(Base, Opts)))),
+    strip_host_functions(binary_to_term(Serialized, [safe]), Allowed).
+
+%% @doc Collect the Erlang functions in a term.
+collect_mfas(#erl_mfa{} = MFA) -> [MFA];
+collect_mfas([Head | Tail]) -> collect_mfas(Head) ++ collect_mfas(Tail);
+collect_mfas(Term) when is_tuple(Term) -> collect_mfas(tuple_to_list(Term));
+collect_mfas(Term) when is_map(Term) -> collect_mfas(maps:to_list(Term));
+collect_mfas(_Term) -> [].
+
+%% @doc Replace each Erlang function in a term that is not in `Allowed' with
+%% `nil'. Luerl's wrappers around Lua functions become the Lua functions they
+%% call.
+strip_host_functions(#erl_func{ code = Fun }, Allowed) ->
+    case unwrap_lua_function(Fun) of
+        {ok, LuaFunction} -> strip_host_functions(LuaFunction, Allowed);
+        error -> nil
+    end;
+strip_host_functions(#erl_mfa{} = MFA, Allowed) ->
+    case sets:is_element(MFA, Allowed) of
+        true -> MFA;
+        false -> nil
+    end;
+strip_host_functions(Fun, _Allowed) when is_function(Fun) ->
+    nil;
+strip_host_functions([Head | Tail], Allowed) ->
+    [strip_host_functions(Head, Allowed) | strip_host_functions(Tail, Allowed)];
+strip_host_functions(Term, Allowed) when is_tuple(Term) ->
+    list_to_tuple(strip_host_functions(tuple_to_list(Term), Allowed));
+strip_host_functions(Term, Allowed) when is_map(Term) ->
+    maps:from_list(strip_host_functions(maps:to_list(Term), Allowed));
+strip_host_functions(Term, _Allowed) ->
+    Term.
+
+%% @doc Find the Lua function in one of Luerl's wrappers, which call it with
+%% their arguments. Luerl makes them when it decodes a table that contains a Lua
+%% function and encodes it again, as `dev_lua_lib:install/3' does with `ao'.
+unwrap_lua_function(Fun) when is_function(Fun, 2) ->
+    case [erlang:fun_info(Fun, Item) || Item <- [module, name, env]] of
+        [{module, luerl}, {name, '-encode/2-fun-1-'}, {env, [Inner]}] ->
+            unwrap_lua_function(Inner);
+        [{module, luerl}, {name, '-decode_luafunc/3-fun-0-'}, {env, [Lua]}]
+                when is_record(Lua, funref) ->
+            {ok, Lua};
+        _ ->
+            error
+    end;
+unwrap_lua_function(_Term) ->
+    error.
 
 %% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message, removing
 %% the commitments that do not verify. No commitment is added, so a message

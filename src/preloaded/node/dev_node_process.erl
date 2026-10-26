@@ -37,8 +37,11 @@ lookup(Name, _Base, Req, Opts) ->
         {ok, ProcessID} ->
             hb_cache:read(ProcessID, Opts);
         {error, not_found} ->
-            case hb_ao:get(<<"spawn">>, Req, true, Opts) of
-                true ->
+            case {
+                hb_ao:get(<<"spawn">>, Req, true, Opts),
+                hb_opts:get(node_processes, #{}, Opts)
+            } of
+                {true, #{ Name := _ }} ->
                     % Spawn one process for lookups of the name at once.
                     hb_name:ok_or_atomic_apply(
                         {?MODULE, Name},
@@ -47,7 +50,8 @@ lookup(Name, _Base, Req, Opts) ->
                         end,
                         fun() -> spawn_register(Name, Opts) end
                     );
-                false ->
+                _ ->
+                    % A node process without a definition cannot be spawned.
                     {error, not_found}
             end
     end.

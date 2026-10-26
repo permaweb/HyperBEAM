@@ -223,14 +223,20 @@ increment_counter(_Base, Req, _Opts) ->
             end
     end.
 
-%% @doc Does nothing, just sleeps `Req/duration or 750' ms and returns the 
-%% appropriate form in order to be used as a hook.
+%% @doc Does nothing, just sleeps `Req/duration or 750' ms and returns the
+%% appropriate form in order to be used as a hook. Unavailable in `prod' mode.
 -spec delay(
     #{ _ => _ },
     #{ duration => integer(), result => _, body => _, _ => _ },
     #{ _ => _ }
-) -> {ok, _}.
+) -> {ok, _} | {error, binary()}.
 delay(Base, Req, Opts) ->
+    case hb_opts:get(mode, prod, Opts) of
+        prod -> {error, <<"`delay' unavailable in `prod` mode.">>};
+        debug -> sleep(Base, Req, Opts)
+    end.
+
+sleep(Base, Req, Opts) ->
     Duration =
         hb_ao:get_first(
             [

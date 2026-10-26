@@ -241,7 +241,7 @@ to(Messages) ->
                         case type(Value) of
                             integer ->
                                 K = <<Index/binary, ".", Key/binary, "+integer">>,
-                                V = integer_to_binary(Value),
+                                V = hb_structured_fields:bare_item(Value),
                                 {K, V};
                             _ -> {<<Index/binary, ".", Key/binary>>, Value}
                         end,
@@ -691,20 +691,44 @@ token_text({_, _, Chars}) -> Chars;
 token_text({Separator, _}) -> atom_to_list(Separator).
 
 %% @doc Parse a query string into a message of its unquoted values, with the
-%% keys in lowercase, or throw `invalid_query' with the query string.
+%% keys in lowercase, or throw `invalid_query' with the query string. A query
+%% is caller input, so its private keys are removed before they are merged
+%% into a message.
 parse_query(QStr) ->
     try
-        maps:map(
-            fun(_, Val) -> hb_util:unquote(Val) end,
-            hb_maps:from_list(
-                [
-                    {hb_util:lowercase_key(Key), Val}
-                ||
-                    {Key, Val} <- cowboy_req:parse_qs(#{ qs => QStr })
-                ]
+        filter_private_query_params(
+            maps:map(
+                fun(_, Val) -> hb_util:unquote(Val) end,
+                hb_maps:from_list(
+                    [
+                        {hb_util:lowercase_key(Key), Val}
+                    ||
+                        {Key, Val} <- cowboy_req:parse_qs(#{ qs => QStr })
+                    ]
+                )
             )
         )
     catch _:_ -> throw({invalid_singleton, invalid_query, QStr})
+    end.
+
+%% @doc Remove the private keys of a query. A key may be scoped to a step as
+%% `N.Key', and the scope is applied after parsing, so the check uses the key
+%% that will reach the message.
+filter_private_query_params(Query) ->
+    maps:filter(
+        fun(Key, _Val) -> not hb_private:is_private(unscope_key(Key)) end,
+        Query
+    ).
+
+%% @doc Return the key without its optional numeric step scope.
+unscope_key(Key) ->
+    case binary:split(Key, <<".">>) of
+        [Scope, Unscoped] ->
+            case catch binary_to_integer(Scope) of
+                N when is_integer(N), N >= 0 -> Unscoped;
+                _ -> Key
+            end;
+        _ -> Key
     end.
 
 %% @doc Normalize the base path. A first path part without a key is the
@@ -748,7 +772,9 @@ group_scoped(Map, Msgs, Opts) ->
                     {OkN, RealKey} ->
                         Curr = hb_maps:get(OkN, Ns, #{}, Opts),
                         Ns2 = hb_maps:put(OkN,
-                            hb_maps:put(RealKey, Val, Curr, Opts), Ns, Opts
+                            put_unless_private(RealKey, Val, Curr, Opts),
+                            Ns,
+                            Opts
                         ),
                         {Ns2, Gs};
                     global -> {Ns, hb_maps:put(KeyBin, Val, Gs, Opts)}
@@ -844,7 +870,8 @@ step({key, Tokens}, _Opts) ->
 step({value, KeyTokens, ValueTokens, Items}, Opts) ->
     % The key of `Key=Value' or `Key+Type=Value' is the path.
     {Key, Val} = key_value(KeyTokens, ValueTokens, Opts),
-    items(Items, #{ <<"path">> => path_key(Key), Key => Val }, Opts);
+    Msg = put_unless_private(Key, Val, #{ <<"path">> => path_key(Key) }, Opts),
+    items(Items, Msg, Opts);
 step({device, KeyTokens = [{scheme, _, _} | _], DeviceTokens, []}, Opts) ->
     {as,
         decode_string(maybe_subpath(DeviceTokens, Opts)),
@@ -867,15 +894,24 @@ items(Items, Msg, Opts) ->
     lists:foldl(
         fun(empty, Acc) -> Acc;
             ({flag, KeyTokens}, Acc) ->
-                hb_maps:put(decode_string(text(KeyTokens)), true, Acc, Opts);
+                put_unless_private(
+                    decode_string(text(KeyTokens)), true, Acc, Opts
+                );
             ({value, KeyTokens, ValueTokens}, Acc) ->
                 {Key, Val} = key_value(KeyTokens, ValueTokens, Opts),
                 ?event_debug({inlined_key, {explicit, Key}, {explicit, Val}}),
-                hb_maps:put(Key, Val, Acc, Opts)
+                put_unless_private(Key, Val, Acc, Opts)
         end,
         Msg,
         Items
     ).
+
+%% @doc Add a key to a message, unless the key is private.
+put_unless_private(Key, Val, Msg, Opts) ->
+    case hb_private:is_private(Key) of
+        true -> Msg;
+        false -> hb_maps:put(Key, Val, Msg, Opts)
+    end.
 
 %% @doc Parse the key and the value of a `Key=Value' pair. The key may give a
 %% type for the value, as with typical keys.

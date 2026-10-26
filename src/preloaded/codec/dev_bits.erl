@@ -204,7 +204,10 @@ enum_field(Name, Size, Members) ->
             sized_field(
                 Name,
                 Size,
-                {enum, binary:split(Names, <<",">>, [global])}
+                % A tuple makes each record's member lookup constant-time.
+                {enum, list_to_tuple(
+                    binary:split(Names, <<",">>, [global])
+                )}
             );
         _ ->
             {error, {'invalid-format-type', <<"enum(", Members/binary>>}}
@@ -249,9 +252,10 @@ typed({enum, Members}, Bits) ->
     {ok, Index} = typed(integer, Bits),
     maybe
         true ?=
-            Index < length(Members)
-                orelse {error, {'invalid-enum-value', Index, Members}},
-        {ok, lists:nth(Index + 1, Members)}
+            Index < tuple_size(Members)
+                orelse {error,
+                    {'invalid-enum-value', Index, tuple_to_list(Members)}},
+        {ok, element(Index + 1, Members)}
     end.
 
 %%% Tests

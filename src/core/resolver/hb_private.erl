@@ -15,7 +15,7 @@
 %%% and private elements of messages.
 -module(hb_private).
 -export([opts/1]).
--export([from_message/1, reset/1, is_private/1]).
+-export([from_message/1, reset/1, is_private/1, is_private_path/2]).
 -export([get/3, get/4, set/4, set/3, set_priv/2, merge/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -96,6 +96,14 @@ is_private(Key) ->
 		_ -> false
     catch _:_ -> false
 	end.
+
+%% @doc Check if a path reaches a private key: any of its parts is private. A
+%% device that sets `r//priv' sets `priv' in `r'.
+is_private_path(Path, Opts) ->
+    case hb_path:term_to_path_parts(Path, Opts) of
+        Parts when is_list(Parts) -> lists:any(fun is_private/1, Parts);
+        undefined -> false
+    end.
 
 %% @doc Remove the first key from the path if it is a private specifier.
 remove_private_specifier(InputPath, Opts) ->

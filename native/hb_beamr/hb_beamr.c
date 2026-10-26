@@ -184,7 +184,10 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         long ptr, size;
         int type;
         ei_decode_tuple_header(buff, &index, &arity);
-        ei_decode_long(buff, &index, &ptr);
+        if(ei_decode_long(buff, &index, &ptr) != 0) {
+            send_error(proc, "Write request out of bounds");
+            return;
+        }
         ei_get_type(buff, &index, &type, &size);
         long size_l = (long)size;
         char* wasm_binary;
@@ -193,7 +196,8 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         long size_bytes = size_l / 8;
         DRV_DEBUG("Write received. Ptr: %ld. Bytes: %ld", ptr, size_bytes);
         long memory_size = get_memory_size(proc);
-        if(ptr + size_bytes > memory_size) {
+        if(res != 0 || ptr < 0 || size_bytes < 0 ||
+                ptr > memory_size - size_bytes) {
             DRV_DEBUG("Write request out of bounds.");
             send_error(proc, "Write request out of bounds");
             return;
@@ -214,12 +218,15 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         DRV_DEBUG("Read received");
         long ptr, size;
         ei_decode_tuple_header(buff, &index, &arity);
-        ei_decode_long(buff, &index, &ptr);
-        ei_decode_long(buff, &index, &size);
+        if(ei_decode_long(buff, &index, &ptr) != 0 ||
+                ei_decode_long(buff, &index, &size) != 0) {
+            send_error(proc, "Read request out of bounds");
+            return;
+        }
         long size_l = (long)size;
         long memory_size = get_memory_size(proc);
         DRV_DEBUG("Read received. Ptr: %ld. Size: %ld. Memory size: %ld", ptr, size_l, memory_size);
-        if(ptr + size_l > memory_size) {
+        if(ptr < 0 || size_l < 0 || ptr > memory_size - size_l) {
             DRV_DEBUG("Read request out of bounds.");
             send_error(proc, "Read request out of bounds");
             return;

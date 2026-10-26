@@ -6,7 +6,7 @@
 %%% `dev_httpsig_conv' module.
 -module(dev_httpsig).
 -specification("../../../specs/httpsig@1.0.md").
--device_libraries([lib_arweave_common]).
+-device_libraries([lib_arweave_common, lib_secret]).
 %%% Codec API functions
 -export([to/3, to_hint/3, from/3]).
 %%% Uni-directional codec support (_to_ binary/header+body components), but not 
@@ -136,10 +136,12 @@ committer_verifies(KeyID, SigBase, Req, Opts) ->
                         #{ <<"owner">> => hb_util:decode(Key) };
                     _ -> #{}
                 end,
+            % A committer refuses a commitment that keeps its device.
+            Commitment = maps:remove(<<"commitment-device">>, Req),
             {ok, Verified} =
                 hb_ao:raw(
                     hb_private:set_priv(Committer, hb_private:from_message(Req)),
-                    (maps:merge(Req, Raw))#{
+                    (maps:merge(Commitment, Raw))#{
                         <<"path">> => <<"verify">>,
                         <<"body">> => SigBase,
                         <<"signature">> =>
@@ -842,7 +844,7 @@ commitment_identity_test() ->
 public_key_hmac_is_not_authority_test() ->
     #{ <<"owner">> := Pub } = ar_wallet:new(),
     Opts = #{ <<"priv-wallet">> => ar_wallet:new() },
-    ID = hb_util:secret_key_to_committer(Pub),
+    ID = lib_secret:to_committer(Pub),
     Committed = hb_message:commit(
         #{ <<"body">> => <<"public-key-hmac">> }, Opts,
         #{
@@ -966,7 +968,7 @@ committed_id_test() ->
 commit_secret_key_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
-    ID = hb_util:secret_key_to_committer(<<"test-secret">>),
+    ID = lib_secret:to_committer(<<"test-secret">>),
     CommittedMsg =
         hb_message:commit(
             Msg,

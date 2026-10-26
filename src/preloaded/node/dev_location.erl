@@ -17,6 +17,7 @@
 %%%                                 if the record is valid and newer than the
 %%%                                 known nonce for the signer.
 -module(dev_location).
+-device_libraries([lib_process]).
 -export([device_info/0, read/2, node/3, known/3, all/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -167,7 +168,11 @@ node(Base, RawReq, RawOpts) ->
     ),
     Signers = hb_message:signers(OnlyCommitted, Opts),
     Self = hb_opts:committer(hb:wallet(), Opts),
-    IsOperator = lists:member(Self, Signers),
+    % A pushed result is signed by the node, but it is not a request from the
+    % operator.
+    IsOperator =
+        lists:member(Self, Signers) andalso
+            not lib_process:is_pushed(OnlyCommitted, Opts),
     ExistingNonce = latest_known_nonce(Self, Opts),
     RequestedNonce = hb_maps:get(<<"nonce">>, OnlyCommitted, not_found, Opts),
     case {IsOperator, RequestedNonce} of
@@ -289,7 +294,16 @@ generate_new_location(Nonce, Base, OnlyCommitted, Opts) ->
             CodecValue ->
                 CodecValue
         end,
-    generate_new_location(URL, Nonce, TimeToLive, Codec, Opts).
+    case is_binary(Codec) of
+        true ->
+            generate_new_location(URL, Nonce, TimeToLive, Codec, Opts);
+        false ->
+            {error,
+                #{
+                    <<"status">> => 400,
+                    <<"body">> => <<"Commitment device must be a codec name.">>
+                }}
+    end.
 generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
     NewSchedulerLocation =
         #{

@@ -113,8 +113,15 @@
 -include("include/hb.hrl").
 
 -define(DEFAULT_FILTER_KEYS, [<<"content-length">>]).
+%% The HTTP methods that keep their own Prometheus label value.
+-define(METRIC_METHODS, [
+    <<"GET">>, <<"HEAD">>, <<"POST">>, <<"PUT">>,
+    <<"DELETE">>, <<"OPTIONS">>, <<"PATCH">>
+]).
 %% Define the max size we can return in 500 error details field.
 -define(DEFAULT_ERROR_DETAILS_MAX_SIZE, 32*1024).
+%% At most this many media ranges in `accept' are considered.
+-define(MAX_ACCEPT_RANGES, 100).
 
 %%% HTTP server start and management functions.
 
@@ -388,8 +395,7 @@ new_server(RawNodeMsg) ->
                     application:ensure_all_started([prometheus, prometheus_cowboy, prometheus_ranch]),
                     prometheus_registry:register_collectors([hb_metrics_collector]),
                     ProtoOpts#{
-                        metrics_callback =>
-                            fun prometheus_cowboy2_instrumenter:observe/1,
+                        metrics_callback => fun observe_request_metrics/1,
                         stream_handlers => [cowboy_metrics_h, cowboy_stream_h]
                     }
                 catch
@@ -516,6 +522,8 @@ listener_protocol_options(ServerID, NodeMsg) ->
         env => #{ dispatch => Dispatcher, node_msg => NodeMsg },
         stream_handlers => [cowboy_stream_h],
         max_connections => infinity,
+        max_concurrent_streams =>
+            hb_opts:get(max_concurrent_streams, 100, NodeMsg),
         idle_timeout => hb_opts:get(idle_timeout, 300000, NodeMsg),
         proxy_header => hb_opts:get(http_proxy_protocol, false, NodeMsg),
         % `httpsig@1.0' sends a header for each key of a message whose value
@@ -800,10 +808,13 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
     HookReq =
         #{
             <<"request">> => InitiatingRequest,
-            <<"body">> => Body
+            <<"body">> => Body,
+            <<"priv">> => #{ <<"hook-caller">> => <<"kernel">> }
         },
     ?event(hook, {resolve_hook, HookName, HookReq}),
-    case hb_hook:on(HookName, HookReq, NodeMsg) of
+    % Hooks resolve caller content. Code that signs for the node gets its keys
+    % back through `with_node_committer/1'.
+    case hb_hook:on(HookName, HookReq, maps:without(?NODE_KEY_OPTS, NodeMsg)) of
         {ok, HookRes = #{ <<"body">> := ResponseBody }} ->
             ?event(hook,
                 {resolve_hook_success,
@@ -1053,15 +1064,15 @@ reply(InitReq, TABMReq, Result, Opts) ->
     % Get the CORS request headers from the message, if they exist.
     ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
-    % A reply to a `HEAD' request, or with a 204 or 304 status, carries no
-    % body, so it carries no `content-digest' either. Every other reply carries
-    % the `content-length' of its body: without it, hackney reads a reply whose
-    % connection closes early as a whole reply.
+    % A bodyless reply carries no `content-digest' either. Every other reply
+    % carries the `content-length' of its body: without it, hackney reads a
+    % reply whose connection closes early as a whole reply.
+    Bodyless = is_bodyless_reply(cowboy_req:method(Req), Status),
     ReplyHeaders =
-        case cowboy_req:method(Req) of
-            Method when Method == <<"HEAD">>; Status == 204; Status == 304 ->
+        case Bodyless of
+            true ->
                 hb_maps:without([<<"content-digest">>], HeadersWithCors, Opts);
-            _ ->
+            false ->
                 HeadersWithCors#{
                     <<"content-length">> => hb_util:bin(byte_size(EncodedBody))
                 }
@@ -1079,12 +1090,10 @@ reply(InitReq, TABMReq, Result, Opts) ->
     ReqBeforeStream = Req#{ resp_headers => EncodedHeaders },
     PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
     % Stream the body back to the caller if there is content, ending the
-    % stream with it. If we already signal a non-content reply, skip.
-    case Status of
-        NonContentStatus
-            when (NonContentStatus == 204)
-            orelse (NonContentStatus == 304) -> skip;
-        _ -> cowboy_req:stream_body(EncodedBody, fin, PostStreamReq)
+    % stream with it. If we already signal a bodyless reply, skip.
+    case Bodyless of
+        true -> skip;
+        false -> cowboy_req:stream_body(EncodedBody, fin, PostStreamReq)
     end,
     EndTime = os:system_time(millisecond),
     ReqDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
@@ -1113,6 +1122,14 @@ reply(InitReq, TABMReq, Result, Opts) ->
         }
     ),
     {ok, PostStreamReq, no_state}.
+
+%% @doc Whether a reply to this method and status carries no body. A `1xx'
+%% reply is informational and a `205' resets content, so both end at headers.
+is_bodyless_reply(<<"HEAD">>, _Status) -> true;
+is_bodyless_reply(_Method, Status) when Status >= 100, Status < 200 -> true;
+is_bodyless_reply(_Method, Status)
+        when Status == 204; Status == 205; Status == 304 -> true;
+is_bodyless_reply(_Method, _Status) -> false.
 
 %% @doc Commit the result that a reply sends in the given codec. A result
 %% without commitments that is sent in `httpsig@1.0' gets its unsigned
@@ -1236,7 +1253,8 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
      WithAllowHeaders = case ReqHdr of
         <<>> -> CorHeaders;
         _ -> CorHeaders#{
-             <<"access-control-allow-headers">> => ReqHdr
+             <<"access-control-allow-headers">> =>
+                hb_escape:encode_header(ReqHdr)
         }
     end,
     % Keys in the given message will overwrite the defaults listed below if 
@@ -1381,16 +1399,14 @@ accept_to_codec(TABMReq, Msg, Opts) ->
             {Type, SubType}
         catch error:_ -> undefined
         end,
-    preferred_codec(
-        lists:sort(
-            fun({_, QualityA, _}, {_, QualityB, _}) ->
-                QualityA >= QualityB
-            end,
-            [Range || Range = {_, Quality, _} <- MediaRanges, Quality > 0]
-        ),
-        Own,
-        Opts
-    ).
+    Ranges = [Range || Range = {_, Quality, _} <- MediaRanges, Quality > 0],
+    Sorted = lists:sort(
+        fun({_, QualityA, _}, {_, QualityB, _}) ->
+            QualityA >= QualityB
+        end,
+        Ranges
+    ),
+    preferred_codec(lists:sublist(Sorted, ?MAX_ACCEPT_RANGES), Own, Opts).
 
 %% @doc Return the codec of the first media range that the node can serve, and
 %% the `content-type' of a reply in it, or `httpsig@1.0' if there is none.
@@ -1471,26 +1487,22 @@ req_to_tabm_singleton(Req, Body, Opts) ->
             <<"httpsig@1.0">> ->
                 % HTTPSig commitments share the transport headers. Retain only
                 % their committed fields before restoring request metadata.
-                {ok, Committed} =
-                    hb_message:with_only_committed(
-                        hb_message:convert(
-                            PrimitiveMsg#{ <<"body">> => Body },
-                            <<"structured@1.0">>,
-                            Codec,
-                            Opts
-                        ),
+                hb_message:with_only_committed_deep(
+                    hb_message:convert(
+                        PrimitiveMsg#{ <<"body">> => Body },
+                        <<"structured@1.0">>,
+                        Codec,
                         Opts
                     ),
-                Committed;
+                    Opts
+                );
             _ ->
                 % The body is the whole message, encoded by the codec. If it
                 % has commitments, we keep only the keys that they cover.
-                {ok, Committed} =
-                    hb_message:with_only_committed(
-                        hb_http:decode(Codec, Body, Opts),
-                        Opts
-                    ),
-                Committed
+                hb_message:with_only_committed_deep(
+                    hb_http:decode(Codec, Body, Opts),
+                    Opts
+                )
         end,
     % Reset the request's private keys, which a codec can restore from the
     % wire, before the node sets its own. Then remove the commitments of an
@@ -1546,6 +1558,27 @@ signed_keys(Headers, Opts) ->
                 )
             );
         error -> []
+    end.
+
+%% @doc Observe a request without letting any method token become a permanent
+%% Prometheus label. Known methods keep their label; all other tokens share
+%% the `OTHER' label.
+observe_request_metrics(Metrics) ->
+    prometheus_cowboy2_instrumenter:observe(
+        case Metrics of
+            #{ req := Req } ->
+                Method = cowboy_req:method(Req),
+                Metrics#{
+                    req => Req#{ method => normalize_method(Method) }
+                };
+            _ -> Metrics
+        end
+    ).
+
+normalize_method(Method) ->
+    case lists:member(Method, ?METRIC_METHODS) of
+        true -> Method;
+        false -> <<"OTHER">>
     end.
 
 %% @doc Add the method and path to a message, if they are not already present.
@@ -1835,6 +1868,19 @@ proxy_protocol_options_test() ->
     Challenge = challenge_node(#{}, test, Opts),
     ?assertEqual(false,
         maps:get(proxy_header, listener_protocol_options(test, Challenge))).
+
+%% @doc An HTTP/2 listener bounds the concurrent streams of one connection and
+%% lets the node lower or raise the bound.
+http2_max_concurrent_streams_test() ->
+    ?assertEqual(100,
+        maps:get(max_concurrent_streams, listener_protocol_options(test, #{}))),
+    ?assertEqual(25,
+        maps:get(
+            max_concurrent_streams,
+            listener_protocol_options(
+                test, #{ <<"max-concurrent-streams">> => 25 }
+            )
+        )).
 
 %% @doc Check that the caller's IP is the PROXY header's source address or the
 %% socket's peer address, never an `x-real-ip' header, and that `ao-peer'
