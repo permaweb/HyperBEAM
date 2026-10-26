@@ -1653,11 +1653,26 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
                     Opts
                 )
         end,
+    % Move an unsigned `authorization' header to `priv', as we do with cookies,
+    % so that the request the node stores does not carry it.
+    WithPrivAuth =
+        case maps:get(<<"authorization">>, WithCookie, undefined) of
+            undefined -> WithCookie;
+            Authorization ->
+                hb_private:set(
+                    hb_message:without_unless_signed(
+                        <<"authorization">>, WithCookie, Opts
+                    ),
+                    <<"authorization">>,
+                    Authorization,
+                    Opts
+                )
+        end,
     % If the body is empty and unsigned, we remove it.
     NormalBody =
-        case hb_maps:get(<<"body">>, WithCookie, undefined, Opts) of
-            <<"">> -> hb_message:without_unless_signed(<<"body">>, WithCookie, Opts);
-            _ -> WithCookie
+        case hb_maps:get(<<"body">>, WithPrivAuth, undefined, Opts) of
+            <<"">> -> hb_message:without_unless_signed(<<"body">>, WithPrivAuth, Opts);
+            _ -> WithPrivAuth
         end,
     RealIP = real_ip(Req, Opts),
     WithPeer = case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of

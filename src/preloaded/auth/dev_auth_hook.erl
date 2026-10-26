@@ -248,15 +248,15 @@ is_relevant_from_keys(Base, Request, Opts) ->
         <<"always">> -> true;
         RelevantKeys ->
             lists:any(
-                fun(Key) ->
-                    case hb_maps:find(Key, Request, Opts) of
-                        {ok, _} -> true;
-                        error -> false
-                    end
-                end,
+                fun(Key) -> is_relevant_key(Key, Request, Opts) end,
                 RelevantKeys
             )
     end.
+
+%% @doc Whether the request has the key, in public or in `priv'.
+is_relevant_key(Key, Request, Opts) ->
+    hb_maps:is_key(Key, Request, Opts) orelse
+        hb_maps:is_key(Key, hb_private:from_message(Request), Opts).
 
 %% @doc Normalize authentication credentials, generating new ones if needed.
 generate_secret(Provider, Request, Opts) ->
