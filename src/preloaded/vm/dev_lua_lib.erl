@@ -204,9 +204,10 @@ committers(<<"committers">>, Committers) when is_list(Committers) ->
 committers(_Key, Res) ->
     Res.
 
-%% @doc Converts any `as' terms from Lua to their HyperBEAM equivalents.
+%% @doc Converts any `as' terms from Lua to their HyperBEAM equivalents. The
+%% message is caller input from Lua, so its private keys are removed.
 convert_as([<<"as">>, Device, RawMsg]) ->
-    {as, Device, RawMsg};
+    {as, Device, hb_private:reset(RawMsg)};
 convert_as(Other) ->
     Other.
 
