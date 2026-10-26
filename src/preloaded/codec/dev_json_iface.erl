@@ -190,7 +190,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             Opts
         ),
     Data =
-        case hb_util:is_printable_string(DataBytes) of
+        case is_binary(DataBytes) andalso hb_util:is_printable_string(DataBytes) of
             true -> DataBytes;
             false -> null 
         end,
@@ -678,7 +678,13 @@ basic_aos_call_test_() ->
 			hb_message:commit(Body, normalize_test_opts(#{}), <<"ans104@1.0">>),
 		{ok, Twice} =
 			hb_ao:resolve(Msg, AOSMsg#{ <<"body">> => TwiceBody }, #{}),
-		?assertEqual(<<"2">>, hb_ao:get(<<"results/data">>, Twice, #{}))
+		?assertEqual(<<"2">>, hb_ao:get(<<"results/data">>, Twice, #{})),
+		% A `data' that is not a binary is given as `null', as one that is not
+		% printable is.
+		?assertMatch(
+			{ok, #{ <<"Data">> := null }},
+			to(#{}, #{ <<"message">> => #{ <<"data">> => 1 } }, #{})
+		)
 	end}.
 
 aos_stack_benchmark_test_() ->
