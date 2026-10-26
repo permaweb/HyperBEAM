@@ -100,7 +100,7 @@ finalize(Base, Request, Opts) ->
 ) -> {ok, _} | {error, not_found}.
 get_cookie(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
-    {ok, Cookies} = extract(Base, Req, RawOpts),
+    {ok, Cookies} = cookies(Base, Req, RawOpts),
     Key = hb_maps:get(<<"key">>, Req, undefined, Opts),
     case hb_maps:get(Key, Cookies, undefined, Opts) of
         undefined -> {error, not_found};
@@ -113,12 +113,20 @@ get_cookie(Base, Req, RawOpts) ->
             end
     end.
 
-%% @doc Return the parsed and normalized cookies from a message.
+%% @doc Return the parsed and normalized cookies from a message. A request to
+%% the `extract' key gets the caller's own cookies, so its result is not stored.
 -spec extract(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
 extract(Msg, Req, Opts) ->
+    {ok, Cookies} = cookies(Msg, Req, Opts),
+    case hb_maps:is_key(<<"path">>, Req, Opts) of
+        true -> {ok, Cookies#{ <<"cache-control">> => <<"no-store">> }};
+        false -> {ok, Cookies}
+    end.
+
+%% @doc Return the parsed and normalized cookies from a message.
+cookies(Msg, Req, Opts) ->
     {ok, MsgWithCookie} = from(Msg, Req, Opts),
-    Cookies = hb_private:get(<<"cookie">>, MsgWithCookie, #{}, Opts),
-    {ok, Cookies}.
+    {ok, hb_private:get(<<"cookie">>, MsgWithCookie, #{}, Opts)}.
 
 %% @doc Set the keys in the request message in the cookies of the caller. Removes
 %% a set of base keys from the request message before setting the remainder as
@@ -127,7 +135,7 @@ extract(Msg, Req, Opts) ->
 store(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     ?event({store, {priv_base, Base}, {priv_req, Req}}),
-    {ok, ExistingCookies} = extract(Base, Req, RawOpts),
+    {ok, ExistingCookies} = cookies(Base, Req, RawOpts),
     ?event({store, {priv_existing_cookies, ExistingCookies}}),
     {ok, ResetBase} = reset(Base, Opts),
     ?event({store, {priv_reset_base, ResetBase}}),
@@ -198,7 +206,7 @@ to(Msg, Req, Opts) ->
     do_to(LoadedMsg, Req, CookieOpts).
 do_to(Msg, Req = #{ <<"format">> := <<"set-cookie">> }, Opts) when is_map(Msg) ->
     ?event({to_set_cookie, {priv_msg, Msg}, {priv_req, Req}}),
-    {ok, ExtractedParsedCookies} = extract(Msg, Req, Opts),
+    {ok, ExtractedParsedCookies} = cookies(Msg, Req, Opts),
     {ok, ResetBase} = reset(Msg, Opts),
     SetCookieLines =
         maps:values(
@@ -214,7 +222,7 @@ do_to(Msg, Req = #{ <<"format">> := <<"set-cookie">> }, Opts) when is_map(Msg) -
     {ok, MsgWithSetCookie};
 do_to(Msg, Req = #{ <<"format">> := <<"cookie">> }, Opts) when is_map(Msg) ->
     ?event({to_cookie, {priv_msg, Msg}, {priv_req, Req}}),
-    {ok, ExtractedParsedCookies} = extract(Msg, Req, Opts),
+    {ok, ExtractedParsedCookies} = cookies(Msg, Req, Opts),
     {ok, ResetBase} = reset(Msg, Opts),
     CookieLines =
         hb_maps:values(
