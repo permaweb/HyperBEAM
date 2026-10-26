@@ -106,7 +106,7 @@ denormalize_message(Message, Opts) ->
         case hb_message:signers(Message, Opts) of
             [] -> Message;
             [PrimarySigner|_] ->
-                {ok, _, Commitment} = hb_message:commitment(PrimarySigner, Message, Opts),
+                Commitment = signer_commitment(PrimarySigner, Message, Opts),
                 Message#{
                     <<"owner">> => hb_util:committer_address(PrimarySigner),
                     <<"signature">> =>
@@ -116,6 +116,15 @@ denormalize_message(Message, Opts) ->
     NormOwnerMsg#{
         <<"id">> => hb_message:id(Message, all, Opts)
     }.
+
+%% @doc The commitment of a signer that a process sees: of two or more, the one
+%% with the lowest ID, so that every node gives the same.
+signer_commitment(Signer, Msg, Opts) ->
+    Commitments = hb_message:commitments(Signer, Msg, Opts),
+    case lists:sort(hb_maps:keys(Commitments, Opts)) of
+        [] -> #{};
+        [ID | _] -> hb_maps:get(ID, Commitments, #{}, Opts)
+    end.
 
 message_to_json_struct(RawMsg, Opts) ->
     message_to_json_struct(RawMsg, [owner_as_address], Opts).
@@ -133,8 +142,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
         case hb_message:signers(RawMsg, Opts) of
             [] -> {<<>>, <<>>, <<>>};
             [Signer|_] ->
-                {ok, _, Commitment} =
-                    hb_message:commitment(Signer, RawMsg, Opts),
+                Commitment = signer_commitment(Signer, RawMsg, Opts),
                 CommitmentSignature =
                     hb_maps:get(<<"signature">>, Commitment, <<>>, Opts),
                 CommitmentKey =
@@ -664,7 +672,13 @@ basic_aos_call_test_() ->
 				},
 				#{}
 			),
-		?assertEqual(<<"2">>, hb_ao:get(<<"results/data">>, WithDevice, #{}))
+		?assertEqual(<<"2">>, hb_ao:get(<<"results/data">>, WithDevice, #{})),
+		% A message that its signer commits twice computes.
+		TwiceBody =
+			hb_message:commit(Body, normalize_test_opts(#{}), <<"ans104@1.0">>),
+		{ok, Twice} =
+			hb_ao:resolve(Msg, AOSMsg#{ <<"body">> => TwiceBody }, #{}),
+		?assertEqual(<<"2">>, hb_ao:get(<<"results/data">>, Twice, #{}))
 	end}.
 
 aos_stack_benchmark_test_() ->

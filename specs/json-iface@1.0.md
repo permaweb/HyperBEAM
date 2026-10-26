@@ -254,7 +254,8 @@ Field-derivation rules (MUST):
 - **Primary signer.** The "primary" committer is the first element of the
   message's signer (committer) list. If the message has no signers, `Owner`,
   `Signature`, and `PublicKey` are all `""`, and `From` defaults from the
-  (empty) owner.
+  (empty) owner. Of two or more commitments by the primary signer, the
+  primary commitment is the one with the lowest ID.
 - **`Owner` encoding.** With the `owner-as-address` rule (used by both the
   compute staging path and the `to` key), `Owner` is
   `hb_util:committer_address/1` of the signer: the address of a `did-ar@1.0`
