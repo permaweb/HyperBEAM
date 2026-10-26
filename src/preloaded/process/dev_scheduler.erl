@@ -558,16 +558,14 @@ find_server(ProcID, Base, ToSched, Opts) ->
                     ?event({no_pid_in_local_registry, ProcID}),
                     Proc = find_process_message(ProcID, Base, ToSched, Opts),
                     ?event({found_process, {process, Proc}, {base, Base}}),
+                    % Only the process gives its scheduler. A process that
+                    % is itself scheduled is `Proc' here.
                     SchedLoc =
                         hb_ao:get_first(
                             [
                                 {Proc, <<"scheduler">>},
                                 {Proc, <<"scheduler-location">>}
-                            ] ++
-                            case ToSched of
-                                undefined -> [];
-                                _ -> [{ToSched, <<"scheduler-location">>}]
-                            end,
+                            ],
                             not_found,
                             Opts#{ <<"hashpath">> => ignore }
                         ),
