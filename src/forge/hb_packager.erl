@@ -787,6 +787,7 @@ impl_message(Pkg, SpecID, _Opts) ->
     Msg = #{
         <<"data-protocol">> => <<"ao">>,
         <<"variant">> => ?VARIANT,
+        <<"type">> => <<"Device-Implementation">>,
         <<"content-type">> => ?ARCHIVE_CONTENT_TYPE,
         <<"archive-format">> => <<"zip">>,
         <<"implements-device">> => SpecID,
