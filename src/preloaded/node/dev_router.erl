@@ -124,8 +124,18 @@ routes(M1, M2, Opts) ->
                         {ok, Signed} ->
                             Route =
                                 hb_maps:get(<<"route">>, Signed, Signed, Opts),
-                            ok = insert_route(Route, Opts),
-                            {ok, <<"Route added.">>};
+                            % A message that the owner signed for another
+                            % use, such as a receipt, gives no `node'.
+                            IsRoute =
+                                hb_maps:is_key(<<"node">>, Route, Opts) orelse
+                                    hb_maps:is_key(<<"nodes">>, Route, Opts),
+                            case IsRoute of
+                                true ->
+                                    ok = insert_route(Route, Opts),
+                                    {ok, <<"Route added.">>};
+                                false ->
+                                    {error, <<"The route gives no node.">>}
+                            end;
                         {error, _} -> {error, not_authorized}
                     end;
                 Registrar ->
@@ -1971,6 +1981,21 @@ add_route() ->
     ?assertEqual(
         {ok, <<"signed">>},
         hb_http:get(Node, <<"/~router@1.0/routes/4/node">>, #{})
+    ),
+    % A message that the owner signed with no `node' or `nodes' is no route.
+    ?assertMatch(
+        {error, _},
+        hb_http:post(
+            Node,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~router@1.0/routes">>,
+                    <<"template">> => <<"/no/node">>
+                },
+                #{ <<"priv-wallet">> => Owner }
+            ),
+            #{}
+        )
     ).
 
 %% @doc Test that the `preprocess/3' function re-routes a request to remote
