@@ -156,14 +156,15 @@ price_from_count(Messages, NodeMsg) ->
     | {error, #{ status := integer(), body := binary(), _ => _ }}.
 charge(_, RawReq, NodeMsg) ->
     ?event(payment, {charge, RawReq}),
-    % Only the node may charge: p4 signs its charge with the node's key.
-    Signers = hb_message:signers(RawReq, NodeMsg),
-    case lists:member(hb_opts:committer(NodeMsg), Signers) of
-        true -> do_charge(RawReq, NodeMsg);
-        false ->
+    % Only the node may charge: p4 signs its charge with the node's key. The
+    % charge reads only the keys that the node signed, so the node's receipt
+    % over a `hashpath' or a result it pushed for a caller does not charge.
+    case lib_meta:authorized(hb_opts:committer(NodeMsg), RawReq, NodeMsg) of
+        {ok, Charge} -> do_charge(Charge, NodeMsg);
+        {error, not_authorized} ->
             {error, #{
                 <<"status">> => 403,
-                <<"body">> => <<"Charge not signed by the node.">>
+                <<"body">> => <<"Charge not made by the node.">>
             }}
     end.
 
@@ -173,6 +174,7 @@ do_charge(RawReq, NodeMsg) ->
         hb_ao:get(
             <<"request">>,
             RawReq,
+            #{},
             NodeMsg#{ <<"hashpath">> => ignore }
         ),
     case hb_message:signers(Req, NodeMsg) of
