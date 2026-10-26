@@ -50,7 +50,8 @@ start(ProcID, Proc, Opts) ->
                             {existing_pid, ExistingPid}
                         }
                     ),
-                    Caller ! {ok, Ref, ExistingPid}
+                    Caller ! {ok, Ref, ExistingPid},
+                    exit(normal)
             end,
             % Write the process to the cache. We are the provider-of-last-resort
             % for this data.
