@@ -550,11 +550,11 @@ verify_ids(IDsToVerify, Commitments, CommitmentBase, Req, Opts) ->
     {ok, Res}.
 
 %% @doc Execute a function for a single commitment in the context of its
-%% parent message. A commitment device whose `verify' is this module's own
-%% `verify' has no commitment scheme of its own: the device of a commitment
-%% is read from the commitment itself, so dispatching would call this
-%% function with the same commitment again, without end. Such a commitment
-%% does not verify.
+%% parent message. Only a device that exports `verify' has a commitment
+%% scheme of its own. If the device's `verify' is a `default' or `handler'
+%% function, it answers with no signature; if it is this module's own,
+%% dispatching would call this function with the same commitment again,
+%% without end. Such a commitment does not verify.
 %% Note: Assumes that the `commitments' key has already been removed from the
 %% message if applicable.
 verify_commitment(Base, Commitment, Opts) ->
@@ -571,8 +571,9 @@ verify_commitment(Base, Commitment, Opts) ->
         <<"verify">>,
         Opts
     ) of
-        {_, ?MODULE, _} -> {ok, false};
-        _ -> hb_ao:raw(AttDev, <<"verify">>, Base, Commitment, Opts)
+        {ok, Dev, _} when Dev =/= ?MODULE ->
+            hb_ao:raw(AttDev, <<"verify">>, Base, Commitment, Opts);
+        _ -> {ok, false}
     end.
 
 %% @doc Attach to the message the commitments whose IDs are listed in the
@@ -1492,8 +1493,9 @@ test_verify(KeyType) ->
     ),
     % A commitment relabelled `json@1.0' is verified by the `httpsig@1.0'
     % codec its device names -- `true' for an `httpsig@1.0' signature. A
-    % commitment relabelled `message@1.0' or `meta@1.0' has a device
-    % with no commitment scheme of its own and does not verify.
+    % commitment relabelled `message@1.0', `meta@1.0', `apply@1.0' or
+    % `local-name@1.0' has a device with no commitment scheme of its own and
+    % does not verify.
     [{ID, Commitment}] = maps:to_list(maps:get(<<"commitments">>, Signed)),
     Relabelled =
         fun(Device) ->
@@ -1511,7 +1513,12 @@ test_verify(KeyType) ->
         fun(Device) ->
             ?assertNot(hb_message:verify(Relabelled(Device), all))
         end,
-        [<<"message@1.0">>, <<"meta@1.0">>]
+        [
+            <<"message@1.0">>,
+            <<"meta@1.0">>,
+            <<"apply@1.0">>,
+            <<"local-name@1.0">>
+        ]
     ).
 
 %% @doc A commitment of no keys verifies after a round trip through
