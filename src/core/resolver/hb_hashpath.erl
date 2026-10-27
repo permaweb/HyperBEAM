@@ -681,10 +681,12 @@ generate(RawBase, RawReq, Res, VariedBase, VariedReq, VariedRes, Overlay, Opts) 
     % such as a patch, gets the varied base and request and their dependencies.
     Completed =
         case Normalizer == replace andalso
-                hb_message:id(VariedBase, all, Opts) =:=
-                    hb_message:id(Base, all, Opts) andalso
-                hb_message:id(VariedReq, all, Opts) =:=
-                    hb_message:id(Req, all, Opts) of
+                (VariedBase =:= Base orelse
+                    hb_message:id(VariedBase, all, Opts) =:=
+                        hb_message:id(Base, all, Opts)) andalso
+                (VariedReq =:= Req orelse
+                    hb_message:id(VariedReq, all, Opts) =:=
+                        hb_message:id(Req, all, Opts)) of
             true -> Ctx;
             false ->
                 Witnessed =
@@ -1085,7 +1087,17 @@ replacement_receipt_test() ->
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
     Base = #{ <<"child">> => #{ <<"value">> => <<"replacement">> } },
     Req = #{ <<"path">> => <<"child">> },
+    % The resolution asks `hb_message:id/3' for four IDs: the child's, as it
+    % commits the base; the base's, for the receipt; and the result's, for the
+    % receipt and its `hashpath-result'. The function calls itself once for
+    % each.
+    erlang:trace_pattern({hb_message, id, 3}, true, [call_count]),
+    erlang:trace(self(), true, [call]),
     {ok, Result} = hb_ao:resolve(Base, Req, Opts),
+    erlang:trace(self(), false, [call]),
+    {call_count, IDs} = erlang:trace_info({hb_message, id, 3}, call_count),
+    erlang:trace_pattern({hb_message, id, 3}, false, [call_count]),
+    ?assertEqual(8, IDs),
     HP = hb_path:hashpath(Result, Opts),
     hb_cache:write(Result, Opts),
     ?assertEqual({error, not_found}, load(HP, Opts)),
