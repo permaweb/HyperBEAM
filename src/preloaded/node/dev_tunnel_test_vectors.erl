@@ -500,6 +500,20 @@ transport_codec(Ctx = #{broker := Broker, first := First, caller := Opts}) ->
         {<<"/~tunnel@1.0/register">>, <<"httpsig@1.0">>},
         {<<"/~tunnel@1.0/response">>, <<"httpsig@1.0">>}
     ], Envelopes),
+    % A reply costs three signatures: the broker's on its work message and on
+    % the hashpath of its reply, and the origin's on its response, with which
+    % it registers again.
+    erlang:trace_pattern({ar_wallet, sign, 3}, true, [call_count]),
+    lists:foreach(
+        fun(_) ->
+            success(get(Ctx, First, <<"/~meta@1.0/info/address">>), Opts)
+        end,
+        lists:seq(1, 10)
+    ),
+    {call_count, Signatures} =
+        erlang:trace_info({ar_wallet, sign, 3}, call_count),
+    erlang:trace_pattern({ar_wallet, sign, 3}, false, [call_count]),
+    ?assertEqual(30, Signatures),
     drained(Ctx).
 
 %% @doc Check that a `tunnel-host' routes only the hosts that are its direct

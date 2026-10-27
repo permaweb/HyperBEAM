@@ -135,7 +135,11 @@ may have executed the request; the tunnel never retries application work.
      is given the envelope's `status`. The caller of the request receives the
      response, and the address is marked present for 1000 ms. If the caller
      has ended, the response is discarded and the result is `404`.
-- **Returns:** `{ok, #{ <<"status">> => 202, <<"tunnel-request-id">> => ID }}`.
+  5. If the signed controls also have `address`, and it is the signer, the
+     response then registers the address: it waits, replies and is charged as
+     `register` (steps 2 to 5).
+- **Returns:** `{ok, #{ <<"status">> => 202, <<"tunnel-request-id">> => ID }}`,
+  or the reply of the registration of step 5.
 
 ### `call` — send an envelope's request to an origin
 
@@ -254,12 +258,15 @@ may have executed the request; the tunnel never retries application work.
      required keys `tunnel-request-id`, `tunnel-target` and `request`.
      `tunnel-target` MUST be the node's address.
   4. Execute `request` (§4.1) and post the envelope `codec-device:
-     httpsig@1.0`, `tunnel-request-id`, `status` and `response`, signed by the
-     node, to `<peer>/~tunnel@1.0/response`. A post that gets a 5xx reply, or
-     whose connection fails, is made again, up to 3 times, after
-     `tunnel-retry-time` ms, then twice and three times that. A post that gets
-     any other reply is not made again: a 404 after a failed post means that
-     the broker delivered the response.
+     httpsig@1.0`, `tunnel-request-id`, `status` and `response`, with the
+     `address` and `tunnel-timeout` of step 2 unless the worker is retired,
+     signed by the node, to `<peer>/~tunnel@1.0/response`. Its reply is the
+     reply to a registration (step 3); after a `202` or an error reply, post a
+     registration (step 2). A post that gets a 5xx reply, or whose connection
+     fails, is made again, up to 3 times, after `tunnel-retry-time` ms, then
+     twice and three times that. A post that gets any other reply is not made
+     again: a 404 after a failed post means that the broker delivered the
+     response.
   5. After any failure, wait `tunnel-retry-time` ms and continue.
 
   A worker that ends for any other reason than retirement is replaced after

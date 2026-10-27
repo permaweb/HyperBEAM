@@ -2,8 +2,9 @@
 %%%
 %%% A node signs a long-poll `register' request with its wallet. The broker
 %%% returns a request, which the node executes through its HTTP request hooks,
-%%% then posts to `response'. Each request is dispatched once. A timeout means
-%%% execution may have occurred; the tunnel never retries application work.
+%%% then posts to `response' with its next registration. Each request is
+%%% dispatched once. A timeout means execution may have occurred; the tunnel
+%%% never retries application work.
 %%%
 %%% Install `request' on `on/request' to route a wallet's DNS URI host or
 %%% an explicit `tunnel-target'. `call' accepts the target and a nested request.
@@ -45,24 +46,30 @@ register(_Base, Req, Opts) ->
         true ?=
             Address =:= hb_maps:get(<<"address">>, Control, none, Opts) orelse
                 denied(),
-        Start = erlang:monotonic_time(second),
-        Result =
-            dev_tunnel_server:register(
-                broker(Opts),
-                Address,
-                timeout(tunnel_register_timeout, 45_000, #{}, Control, Opts)
-            ),
-        meter(Start, Opts),
-        case Result of
-            {ok, #{ <<"status">> := 204 }} -> Result;
-            {ok, Work} -> {ok, sign(Work#{ <<"status">> => 200 }, Opts)};
-            Error -> Error
-        end
+        wait(Address, Control, Opts)
+    end.
+
+%% @doc Wait until a request for the address arrives, or until the
+%% registration expires, and charge the wait to `metering@1.0'.
+wait(Address, Control, Opts) ->
+    Start = erlang:monotonic_time(second),
+    Result =
+        dev_tunnel_server:register(
+            broker(Opts),
+            Address,
+            timeout(tunnel_register_timeout, 45_000, #{}, Control, Opts)
+        ),
+    meter(Start, Opts),
+    case Result of
+        {ok, #{ <<"status">> := 204 }} -> Result;
+        {ok, Work} -> {ok, sign(Work#{ <<"status">> => 200 }, Opts)};
+        Error -> Error
     end.
 
 %% @doc Accept a response only from the node to which the request was sent, and
 %% give the caller the origin's reply with its Erlang result tag
-%% (`result-status').
+%% (`result-status'). A response whose controls give the signer's `address'
+%% then waits as its registration.
 response(_Base, Req, Opts) ->
     maybe
         {ok, Address, Control} ?=
@@ -85,7 +92,10 @@ response(_Base, Req, Opts) ->
                     maybe_add_unsigned(Response, Opts)
                 }
             ),
-        {ok, #{ <<"status">> => 202, <<"tunnel-request-id">> => ID }}
+        case hb_maps:get(<<"address">>, Control, none, Opts) of
+            Address -> wait(Address, Control, Opts);
+            _ -> {ok, #{ <<"status">> => 202, <<"tunnel-request-id">> => ID }}
+        end
     end.
 
 %% @doc Queue an explicit request, including when its target is not connected.
@@ -447,12 +457,18 @@ meter(Start, Opts) ->
         Opts
     ).
 
-%% @doc Stop between requests. Reconnection never replays application work.
+%% @doc Stop between requests. Reconnection never replays application work. A
+%% worker posts each response with its next registration, and a worker that
+%% stops posts its last response alone.
 client(Peer, Address, Stop, Opts) ->
+    client(Peer, Address, Stop, none, Opts).
+client(_Peer, _Address, stopped, none, _Opts) -> ok;
+client(Peer, Address, Stop, Reply, Opts) ->
     receive
-        {tunnel_client_stop, Stop} -> ok
+        {tunnel_client_stop, Stop} ->
+            client(Peer, Address, stopped, Reply, Opts)
     after 0 ->
-        try
+        Next = try
             Current = node_opts(Opts),
             Timeout =
                 integer(hb_opts:get(tunnel_register_timeout, 45_000, Current)),
@@ -468,23 +484,24 @@ client(Peer, Address, Stop, Opts) ->
                     <<"http-client-hackney-recv-timeout">> => SendTimeout
                 },
             Registration =
-                sign(
-                    #{
-                        <<"codec-device">> => <<"httpsig@1.0">>,
-                        <<"address">> => Address,
-                        <<"tunnel-timeout">> => Timeout
-                    },
-                    Current
-                ),
-            case
-                hb_http:post(
-                    Peer,
-                    <<"/~tunnel@1.0/register">>,
-                    Registration,
-                    HTTPOpts
-                )
-            of
-                {ok, #{ <<"status">> := 204 }} -> ok;
+                case Stop of
+                    stopped -> #{ <<"codec-device">> => <<"httpsig@1.0">> };
+                    _ ->
+                        #{
+                            <<"codec-device">> => <<"httpsig@1.0">>,
+                            <<"address">> => Address,
+                            <<"tunnel-timeout">> => Timeout
+                        }
+                end,
+            case Reply of
+                none ->
+                    hb_http:post(
+                        Peer,
+                        <<"/~tunnel@1.0/register">>,
+                        sign(Registration, Current),
+                        HTTPOpts
+                    );
+                {ok, #{ <<"status">> := 204 }} -> none;
                 {ok, Work} ->
                     {ok, _, Control} =
                         authenticate(
@@ -517,8 +534,7 @@ client(Peer, Address, Stop, Opts) ->
                         ),
                     Envelope =
                         sign(
-                            #{
-                                <<"codec-device">> => <<"httpsig@1.0">>,
+                            Registration#{
                                 <<"tunnel-request-id">> => ID,
                                 <<"result-status">> => Status,
                                 <<"response">> => Response
@@ -544,21 +560,24 @@ client(Peer, Address, Stop, Opts) ->
                             ResponseOpts
                         )
                     of
-                        {ok, #{ <<"status">> := 202 }} -> ok;
+                        {ok, #{ <<"status">> := 202 }} -> none;
+                        {ok, _} = Registered -> Registered;
                         Error ->
                             ?event(
                                 tunnel,
                                 {response_rejected, ID, {explicit, Error}}
-                            )
+                            ),
+                            none
                     end;
                 Error -> error({'registration-failed', Error})
             end
         catch
             Class:Reason ->
                 ?event(tunnel, {client_failed, Class, Reason}),
-                timer:sleep(hb_opts:get(tunnel_retry_time, 1_000, Opts))
+                timer:sleep(hb_opts:get(tunnel_retry_time, 1_000, Opts)),
+                none
         end,
-        client(Peer, Address, Stop, Opts)
+        client(Peer, Address, Stop, Next, Opts)
     end.
 
 %% @doc Execute through the node's normal HTTP request and response hooks, and
