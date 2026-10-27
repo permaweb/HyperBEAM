@@ -993,11 +993,21 @@ vary_loaded(Base, Req, Opts) ->
     % Commit to the varied inputs for the receipt, the context, the lookup and
     % the store of the result. If the execution generates no receipts or
     % context, it stores nothing: only remove their unsigned commitments, and
-    % a lookup computes their IDs from their content.
+    % a lookup computes their IDs from their content. A direct key read that
+    % does not store does the same: its lookup reads the base, and a receipt
+    % computes the IDs of its inputs from their content.
     Mode =
         case {hb_opts:get(hashpath, update, Opts),
                 hb_opts:get(return_context, false, Opts)} of
             {ignore, false} -> strip;
+            {_, false} ->
+                Direct =
+                    hb_device:is_direct_key_access(VariedBase, VariedReq, UserOpts),
+                case Direct andalso
+                        hb_cache_control:derive_cache_settings([Req], Opts) of
+                    #{ <<"store">> := false } -> strip;
+                    _ -> root
+                end;
             _ -> root
         end,
     {Resolver,

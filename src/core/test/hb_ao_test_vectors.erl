@@ -527,10 +527,16 @@ direct_id_key_resolution_test() ->
         },
     hb_store:reset(Store),
     {ok, ID} = hb_cache:write(#{ <<"value">> => <<"kept">> }, Opts),
-    ?assertEqual(
-        {ok, <<"kept">>},
-        hb_ao:resolve(<<"ao:", ID/binary>>, <<"value">>, Opts)
-    ).
+    % A direct key read that stores nothing commits to neither of its inputs.
+    erlang:trace_pattern({hb_message, commit, 3}, true, [call_count]),
+    erlang:trace(self(), true, [call]),
+    Res = hb_ao:resolve(<<"ao:", ID/binary>>, <<"value">>, Opts),
+    erlang:trace(self(), false, [call]),
+    {call_count, Commits} =
+        erlang:trace_info({hb_message, commit, 3}, call_count),
+    erlang:trace_pattern({hb_message, commit, 3}, false, [call_count]),
+    ?assertEqual({ok, <<"kept">>}, Res),
+    ?assertEqual(0, Commits).
 
 resolve_id_test(Opts) ->
     ?assertMatch(
