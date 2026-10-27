@@ -1016,13 +1016,21 @@ write_req(Key, Value) ->
 %% @doc Ensure that keys with non-ASCII characters are listed and read as
 %% written.
 unicode_key_test(Store) ->
-    Keys = [<<"é"/utf8>>, <<"日本語"/utf8>>, <<"🚀"/utf8>>],
+    Keys = [First | Rest] = [<<"é"/utf8>>, <<"日本語"/utf8>>, <<"🚀"/utf8>>],
+    ok = write(Store, write_req([<<"test-dir1">>, First], First), #{}),
+    % Keys written to a directory that exists check no directories.
+    erlang:trace_pattern({filelib, ensure_dir, 1}, true, [call_count]),
+    erlang:trace(self(), true, [call]),
     lists:foreach(
         fun(Key) ->
             ok = write(Store, write_req([<<"test-dir1">>, Key], Key), #{})
         end,
-        Keys
+        Rest
     ),
+    {call_count, Dirs} =
+        erlang:trace_info({filelib, ensure_dir, 1}, call_count),
+    erlang:trace_pattern({filelib, ensure_dir, 1}, false, [call_count]),
+    ?assertEqual(0, Dirs),
     {ok, Listed} = list(Store, <<"test-dir1">>, #{}),
     ?assertEqual(lists:sort(Keys), lists:sort(Listed)),
     lists:foreach(

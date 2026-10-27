@@ -78,7 +78,6 @@ write(Opts, Req, _NodeOpts) when is_map(Req) ->
 write_path(Opts, PathComponents, Value) ->
     Path = add_prefix(Opts, hb_path:to_binary(PathComponents)),
     ?event({writing, Path, byte_size(Value)}),
-    filelib:ensure_dir(Path),
     % Keep a file that contains the value; replace any other entry.
     Make = fun(Temp) -> file:write_file(Temp, Value) end,
     case holds_value(Path, Value) of
@@ -127,15 +126,27 @@ name(File) ->
 replace(#{ <<"name">> := DataDir }, Path, Make) ->
     Unique = hb_util:encode(crypto:strong_rand_bytes(16)),
     Temp = <<DataDir/binary, "/~tmp/", Unique/binary>>,
-    filelib:ensure_dir(Temp),
     R =
         maybe
-            ok ?= Make(Temp),
-            file:rename(Temp, Path)
+            ok ?= in_dir(Temp, Make),
+            in_dir(Path, fun(P) -> file:rename(Temp, P) end)
         end,
     % Remove the temporary entry if the rename did not move it.
-    file:delete(Temp),
+    case R of
+        ok -> ok;
+        _ -> file:delete(Temp)
+    end,
     R.
+
+%% @doc Apply `Fun' to `Path', and again after creating the directories of
+%% `Path' if it finds one of them missing.
+in_dir(Path, Fun) ->
+    case Fun(Path) of
+        {error, enoent} ->
+            filelib:ensure_dir(Path),
+            Fun(Path);
+        Res -> Res
+    end.
 
 %% @doc Add the directory prefix to a path.
 add_prefix(#{ <<"name">> := Prefix }, Path) ->
