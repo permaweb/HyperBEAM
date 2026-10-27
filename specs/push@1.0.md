@@ -63,10 +63,11 @@ The device defines no content-addressed artefacts of its own beyond reusing
 
 ## 3. Device interface
 
-- **Dispatch shape:** **explicit-keys.** The device answers two resolved keys:
-  **`push`** and **`schedule`** (§4.5). It is not a default-handler device and
-  imposes no `excludes`; message-manipulation keys (`set`, `keys`, …) resolve
-  through the base `message@1.0` device as for any message.
+- **Dispatch shape:** **explicit-keys.** The device answers three resolved keys:
+  **`push`**, **`schedule`** (§4.5), and **`pending`** (§4.6). It is not a
+  default-handler device and imposes no `excludes`; message-manipulation keys
+  (`set`, `keys`, …) resolve through the base `message@1.0` device as for any
+  message.
 
 - **Base message.** `push` operates on a **process** as its base. The base is
   treated as a `process@1.0` message (its `device` is interpreted as
@@ -274,6 +275,24 @@ Given the loaded target process `T`, the message-to-schedule `Msg` (target id
    On a downstream failure it is an error placeholder
    `{ response = error, id, target = TARGET, slot = NEXTSLOT,
       reason = <error> }` (§8).
+
+#### 4.6 Discover pending deliveries
+
+`/~push@1.0/pending` lists this node's computed, addressed outbox entries
+without a cached `schedule` assignment. An optional `process` request key
+restricts the list to one source process. The response has `count`, a numbered
+`entries` map, and `cache-control: no-store`. Each entry contains
+`process`, `slot`, and `outbox-key`, ordered by process ID, numeric slot,
+then outbox order.
+
+Computation records empty markers at `~push@1.0/outbox/P/S/K` in the process
+store before publishing its cached slot. These discovery markers are separate
+from the existing resolver-cached assignments: re-indexing cannot undo a
+delivery. An entry stays pending until its assignment is available; failed
+scheduling does not clear it. The query performs no computation or delivery.
+Callers can drain an entry with `schedule`, or its entire slot with `push`.
+The index covers slot results written by this implementation. It does not
+backfill older computed slots or start a background delivery loop.
 
 ## 5. Data formats & encodings
 
