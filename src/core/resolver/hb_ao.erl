@@ -1459,7 +1459,7 @@ execution_opts(Opts) ->
     % Unless the user has explicitly requested recursive spawning, we
     % unset the spawn-worker option so that we do not spawn a new worker
     % for every resulting execution.
-    case hb_opts:get(spawn_worker, false, Opts) of
+    case hb_opts:get(<<"spawn-worker">>, false, Opts) of
         recursive -> Opts1#{ <<"spawn-worker">> => recursive };
         _ -> Opts1
     end.

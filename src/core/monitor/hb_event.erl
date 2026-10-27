@@ -96,8 +96,8 @@ should_print(Type, Topic, Opts) ->
             Result
     end.
 
-print_opt(print) -> debug_print;
-print_opt(log) -> debug_log.
+print_opt(print) -> <<"debug-print">>;
+print_opt(log) -> <<"debug-log">>.
 
 %% @doc Configure a rotating file logger for HyperBEAM events.
 setup_logger() ->

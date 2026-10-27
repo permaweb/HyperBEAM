@@ -120,13 +120,13 @@ remove_private_specifier(InputPath, Opts) ->
 %% generated from downstream AO-Core resolutions.
 opts(Opts) ->
     PrivStore =
-        case hb_opts:get(priv_store, undefined, Opts) of
+        case hb_opts:get(<<"priv-store">>, undefined, Opts) of
             undefined -> [];
             PrivateStores when is_list(PrivateStores) -> PrivateStores;
             PrivateStore -> [PrivateStore]
         end,
     BaseStore =
-        case hb_opts:get(store, [], Opts) of
+        case hb_opts:get(<<"store">>, [], Opts) of
             SingleStore when is_map(SingleStore) -> [SingleStore];
             Stores when is_list(Stores) -> Stores
         end,

@@ -126,7 +126,7 @@ put_resolved_device(Ref, Mod, Opts) ->
         Opts
     ).
 
-loaded_device_store(Opts) -> hb_opts:get(loaded_device_store, [], Opts).
+loaded_device_store(Opts) -> hb_opts:get(<<"loaded-device-store">>, [], Opts).
 
 store_key(Ref) -> <<"~meta@1.0/devices/", Ref/binary>>.
 
@@ -142,7 +142,7 @@ from_high_trust(Ref, Opts) ->
 
 %% @doc Forge-only map from seed device name to source module atom.
 from_forge_bootstrap(Ref, Opts) ->
-    case hb_opts:get(forge_bootstrap, #{}, Opts) of
+    case hb_opts:get(<<"forge-bootstrap">>, #{}, Opts) of
         #{ Ref := Mod } when is_atom(Mod) -> {ok, Mod};
         Seeds when is_map(Seeds), map_size(Seeds) > 0 ->
             {error, {forge_bootstrap_device_not_found, Ref}};

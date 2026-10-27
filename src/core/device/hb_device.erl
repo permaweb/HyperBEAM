@@ -140,7 +140,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 message_to_device(Msg, Opts) ->
     DevID = hb_maps:get(<<"device">>, Msg, ?DEFAULT_DEVICE, Opts),
     % Refuse a device in `exclude-devices' before `hb_device_load' resolves it.
-    case lists:member(DevID, hb_opts:get(exclude_devices, [], Opts)) of
+    case lists:member(DevID, hb_opts:get(<<"exclude-devices">>, [], Opts)) of
         true -> throw({device_not_loadable, DevID, <<"device-excluded">>});
         false -> ok
     end,
@@ -180,7 +180,15 @@ excluded_cached_device_test() ->
     Ref = <<"message@1.0">>,
     Msg = #{ <<"device">> => Ref },
     Mod = message_to_device(Msg, #{}),
+    % A lookup of a resolved device reads its options by their binary keys.
+    erlang:trace_pattern({hb_opts, canonical_key, 1}, true, [call_count]),
+    erlang:trace(self(), true, [call]),
     ?assertEqual(Mod, message_to_device(Msg, #{ <<"exclude-devices">> => [] })),
+    erlang:trace(self(), false, [call]),
+    {call_count, Conversions} =
+        erlang:trace_info({hb_opts, canonical_key, 1}, call_count),
+    erlang:trace_pattern({hb_opts, canonical_key, 1}, false, [call_count]),
+    ?assertEqual(0, Conversions),
     ?assertThrow(
         {device_not_loadable, Ref, <<"device-excluded">>},
         message_to_device(Msg, #{ <<"exclude-devices">> => [Ref] })
