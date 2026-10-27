@@ -167,7 +167,11 @@ node(Base, RawReq, RawOpts) ->
         Opts
     ),
     Signers = hb_message:signers(OnlyCommitted, Opts),
-    Self = hb_opts:committer(hb:wallet(), Opts),
+    Self =
+        case hb_opts:committer(Opts) of
+            undefined -> hb_opts:committer(hb:wallet(), Opts);
+            Committer -> Committer
+        end,
     % Only the keys that the operator signed control the record. `authorized/3'
     % reads them from the signed request, which a query does not change, and
     % refuses a pushed result. It reads the private keys that `find_target/3'
