@@ -66,7 +66,8 @@ pending_assignment(ProcessID, Slot, Key, Opts) ->
 %% @doc Push either a message or an assigned slot number. If a `Process' is
 %% provided in the `body' of the request, it will be scheduled (initializing
 %% it if it does not exist). Otherwise, the message specified by the given
-%% `slot' key will be pushed.
+%% `slot' key will be pushed. `all' drains the source's indexed pending slots
+%% in ascending order. `push' is an alias for `slot'.
 %%
 %% Optional parameters:
 %% `/result-depth':  The depth to which the full contents of the result
@@ -99,7 +100,7 @@ pending_assignment(ProcessID, Slot, Key, Opts) ->
 -spec push(
     #{ _ => _ },
     #{
-        slot => integer(),
+        slot => integer() | binary(),
         body => #{ _ => _ },
         async => boolean(),
         'max-depth' => integer() | infinity,
@@ -110,7 +111,16 @@ pending_assignment(ProcessID, Slot, Key, Opts) ->
 push(Base, Req, Opts) ->
     Process = lib_process:as_process(Base, Opts),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
-    case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Req}, no_slot, Opts) of
+    case
+        hb_ao:get_first(
+            [
+                {{as, <<"message@1.0">>, Req}, <<"slot">>},
+                {{as, <<"message@1.0">>, Req}, <<"push">>}
+            ],
+            no_slot,
+            Opts
+        )
+    of
         no_slot ->
             case schedule_initial_message(Process, Req, Opts) of
                 {ok, Assignment} ->
@@ -136,7 +146,7 @@ push(Base, Req, Opts) ->
                     end;
                 {error, Res} -> {error, Res}
             end;
-        _ -> push_with_mode(Process, Req, Opts)
+        Slot -> push_with_mode(Process, Req#{ <<"slot">> => Slot }, Opts)
     end.
 
 push_with_mode(Process, Req, Opts) ->
@@ -158,6 +168,37 @@ is_async(Process, Req, Opts) ->
     ) =:= <<"true">>.
 
 %% @doc Push a message or slot number, including its downstream results.
+do_push(Process, Req = #{ <<"slot">> := <<"all">> }, Opts) ->
+    ProcessID = lib_process:process_id(Process, #{}, Opts),
+    {ok, Pending} = pending(Process, #{ <<"process">> => ProcessID }, Opts),
+    Entries = hb_maps:values(hb_maps:get(<<"entries">>, Pending, Opts), Opts),
+    Slots =
+        lists:usort(
+            [
+                hb_maps:get(<<"slot">>, Entry, Opts)
+            || Entry <- Entries
+            ]
+        ),
+    Results =
+        maps:from_list(
+            [
+                {
+                    hb_util:bin(Slot),
+                    case do_push(Process, Req#{ <<"slot">> => Slot }, Opts) of
+                        {ok, Result} -> Result;
+                        {error, Error} ->
+                            #{ <<"response">> => <<"error">>, <<"reason">> => Error }
+                    end
+                }
+            || Slot <- Slots
+            ]
+        ),
+    {ok, #{
+        <<"process">> => ProcessID,
+        <<"count">> => length(Slots),
+        <<"slots">> => Results,
+        <<"cache-control">> => <<"no-store">>
+    }};
 do_push(PrimaryProcess, Assignment, Opts) ->
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
     ID = lib_process:process_id(PrimaryProcess, #{}, Opts),
@@ -1028,6 +1069,68 @@ parse_redirect(Location, Opts) ->
     {Node, hb_maps:get(path, Parsed, undefined, Opts)}.
 
 %%% Tests
+
+%% @doc A composed read drains cached and fresh slots without redelivery.
+push_all_pending_test_() ->
+    {timeout, 90, fun test_push_all_pending/0}.
+
+test_push_all_pending() ->
+    {Sender, Receiver, _Slot, Opts} = setup_two_process_message(),
+    ProcessID = lib_process:process_id(Sender, #{}, Opts),
+    ReceiverID = lib_process:process_id(Receiver, #{}, Opts),
+    {ok, _} = hb_ao:resolve(Sender, <<"now">>, Opts),
+    {ok, Before} = hb_ao:resolve(Receiver, <<"slot/current">>, Opts),
+    Script = <<"Send({ Target = \"", ReceiverID/binary, "\" })">>,
+    {ok, _} = hb_process_test_vectors:schedule_aos_call(Sender, Script, Opts),
+    Node = hb_http_server:start_node(Opts),
+    Path =
+        <<"/", ProcessID/binary,
+            "/now/push=all&max-depth=0&async=false&result-depth=0">>,
+    try
+        % The first slot was computed by a reader; the second is still queued.
+        {ok, Result} = hb_http:get(Node, Path, Opts),
+        ?assertEqual(3, hb_ao:get(<<"count">>, Result, Opts)),
+        ?assertEqual(
+            {ok, Before + 2},
+            hb_ao:resolve(Receiver, <<"slot/current">>, Opts)
+        ),
+        ?assertEqual(
+            Before + 1,
+            hb_ao:get(<<"slots/1/1/slot">>, Result, Opts)
+        ),
+        ?assertEqual(
+            Before + 2,
+            hb_ao:get(<<"slots/2/1/slot">>, Result, Opts)
+        ),
+        % The undeliverable boot notification stays pending across retries.
+        {ok, Retry} = hb_http:get(Node, Path, Opts),
+        ?assertEqual(1, hb_ao:get(<<"count">>, Retry, Opts)),
+        ?assertEqual(
+            {ok, Before + 2},
+            hb_ao:resolve(Receiver, <<"slot/current">>, Opts)
+        ),
+        % A bounded-stale compute can still drain previously computed output.
+        {ok, _} =
+            hb_process_test_vectors:schedule_aos_call(Sender, Script, Opts),
+        {ok, _} = hb_ao:resolve(Sender, <<"now">>, Opts),
+        {ok, Cached} =
+            hb_http:get(
+                Node,
+                <<"/", ProcessID/binary,
+                    "/compute&max-age=10/push&slot=all&max-depth=0",
+                    "&async=false&result-depth=0">>,
+                Opts
+            ),
+        ?assertEqual(2, hb_ao:get(<<"count">>, Cached, Opts)),
+        ?assertEqual(
+            {ok, Before + 3},
+            hb_ao:resolve(Receiver, <<"slot/current">>, Opts)
+        )
+    after
+        cowboy:stop_listener(
+            hb:address(hb_opts:get(priv_wallet, undefined, Opts))
+        )
+    end.
 
 %% @doc Computing a slot records pending work before anyone attempts delivery.
 pending_outbox_test_() ->
