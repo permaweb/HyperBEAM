@@ -502,8 +502,12 @@ transport_codec(Ctx = #{broker := Broker, first := First, caller := Opts}) ->
     ], Envelopes),
     % A reply costs three signatures: the broker's on its work message and on
     % the hashpath of its reply, and the origin's on its response, with which
-    % it registers again.
+    % it registers again. The broker verifies the request on arrival and once
+    % it removes the routing keys, and the response on arrival and with its
+    % controls. The origin verifies the work message and its reply, and the
+    % caller the reply.
     erlang:trace_pattern({ar_wallet, sign, 3}, true, [call_count]),
+    erlang:trace_pattern({hb_message, deep_verify, 2}, true, [call_count]),
     lists:foreach(
         fun(_) ->
             success(get(Ctx, First, <<"/~meta@1.0/info/address">>), Opts)
@@ -512,8 +516,12 @@ transport_codec(Ctx = #{broker := Broker, first := First, caller := Opts}) ->
     ),
     {call_count, Signatures} =
         erlang:trace_info({ar_wallet, sign, 3}, call_count),
+    {call_count, Verifications} =
+        erlang:trace_info({hb_message, deep_verify, 2}, call_count),
     erlang:trace_pattern({ar_wallet, sign, 3}, false, [call_count]),
+    erlang:trace_pattern({hb_message, deep_verify, 2}, false, [call_count]),
     ?assertEqual(30, Signatures),
+    ?assertEqual(70, Verifications),
     drained(Ctx).
 
 %% @doc Check that a `tunnel-host' routes only the hosts that are its direct

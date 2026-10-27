@@ -255,8 +255,9 @@ load(Message, Opts) ->
 
 %% @doc Sign a control message over all of its keys. It is signed as a bundle,
 %% so that the messages that it contains are not written to the node's store.
+%% The node verified those messages when it loaded them (`load/2').
 sign(Message, Opts) ->
-    Public = hb_private:reset(load(Message, Opts)),
+    Public = hb_private:reset(hb_cache:ensure_all_loaded(Message, Opts)),
     hb_message:commit(
         Public,
         Opts,
@@ -340,7 +341,8 @@ target(Base, Req, Opts) ->
 forward(Mode, Raw, Opts) ->
     try
         Keys = [<<"tunnel-target">>, <<"tunnel-timeout">>],
-        Loaded = load(Raw, Opts),
+        % The commitments are verified once, on the forwarded request.
+        Loaded = hb_cache:ensure_all_loaded(Raw, Opts),
         Committed =
             hb_message:committed(Loaded, #{ <<"ids">> => <<"any">> }, Opts),
         Removed =
