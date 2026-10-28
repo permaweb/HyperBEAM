@@ -2409,7 +2409,22 @@ binary_codec_reply_headers_test() ->
 %% @doc The first media range of the request's `accept', by q-value and then by
 %% order, that the node can serve gives the codec of the reply.
 accept_precedence_test() ->
-    Opts = test_opts(),
+    % The node resolves names through a JSON snapshot, as a production node
+    % does. A media range selects only a device that the node holds, so only
+    % the lookup of a name decodes the snapshot.
+    BaseOpts = test_opts(),
+    {ok, Names} =
+        hb_cache:write(
+            #{ <<"data">> => hb_json:encode(#{ <<"hello">> => <<"world">> }) },
+            BaseOpts
+        ),
+    Opts =
+        BaseOpts#{
+            <<"name-resolvers">> =>
+                [<<Names/binary, "~json@1.0/deserialize&target=data">>]
+        },
+    erlang:trace_pattern({json, decode, 1}, true, [call_time]),
+    erlang:trace(self(), true, [call]),
     Codec =
         fun(Accept, Msg) ->
             {Res, _} = accept_to_codec(#{ <<"accept">> => Accept }, Msg, Opts),
@@ -2446,7 +2461,18 @@ accept_precedence_test() ->
             <<"application/json, */*">>,
             #{ <<"content-type">> => <<"application/json">> }
         )
-    ).
+    ),
+    ?assertEqual(
+        {ok, <<"world">>},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"name@1.0">> },
+            #{ <<"path">> => <<"hello">>, <<"load">> => false },
+            Opts
+        )
+    ),
+    {call_time, Decodes} = erlang:trace_info({json, decode, 1}, call_time),
+    erlang:trace_pattern({json, decode, 1}, false, [call_time]),
+    ?assertEqual(1, lists:sum([Calls || {_, Calls, _, _} <- Decodes])).
 
 cors_get_test() ->
     % The node's request hook asks for the reply in `json@1.0'.

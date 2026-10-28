@@ -643,8 +643,9 @@ reply_codec(Fields, Path, Request, Opts) ->
     end.
 
 %% @doc Return the codec that a media type gives, by the forms in the module
-%% documentation. The device must be in the node's local stores, so that a
-%% media type never loads a device from a remote source, and it must export
+%% documentation. The device must be one that the node holds, found in its
+%% local stores without its name resolvers, so that a media type never loads a
+%% device from a remote source, and it must export
 %% `to', `from', `serialize' and `deserialize'. A device without these
 %% functions returns ``{error, 'not-codec'}'', and a media type that gives no
 %% device that the node has returns any other error. A media type is a binary,
@@ -653,7 +654,10 @@ codec(MediaType, Opts) ->
     maybe
         {ok, Name} ?= device_name(MediaType),
         {ok, Device} ?=
-            hb_device_load:reference(Name, hb_store:scope(Opts, local)),
+            hb_device_load:reference(
+                Name,
+                (hb_store:scope(Opts, local))#{ <<"name-resolvers">> => [] }
+            ),
         true ?=
             lists:all(
                 fun(Key) ->
