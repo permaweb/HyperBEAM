@@ -153,7 +153,8 @@ do_term({as, undefined, Msg}, Opts, Indent) ->
 do_term({as, DevID, Msg}, Opts, Indent) ->
     "\n" ++ indent("Subresolve as ~s => ", [DevID], Opts, Indent) ++
         maybe_multiline(Msg, Opts, Indent + 1);
-do_term({X, Y}, Opts, Indent) when is_atom(X) and is_atom(Y) ->
+do_term({X, Y}, Opts, Indent)
+        when is_atom(X) and (is_atom(Y) or is_integer(Y)) ->
     indent("~p: ~p", [X, Y], Opts, Indent);
 do_term({X, Y}, Opts, Indent) when is_record(Y, tx) ->
     indent("~p: [TX item]~n~s",
