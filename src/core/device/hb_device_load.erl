@@ -60,11 +60,12 @@ do_not_try_to_load_empty_device_test() ->
 %% `name@1.0' resolving its own name when it is absent from every
 %% high-trust source) can never succeed, only recurse. The references
 %% being resolved are carried in `Opts', scoping them to this resolution
-%% tree.
+%% tree. A reference that the process has resolved is returned from its
+%% process dictionary.
 resolve_cached(Ref, Opts) ->
     Resolving = maps:get(<<"resolving-devices">>, Opts, []),
-    case lists:member(Ref, Resolving) of
-        true ->
+    case {lists:member(Ref, Resolving), erlang:get({?MODULE, Ref})} of
+        {true, _} ->
             {error,
                 <<
                     "Circular device resolution detected for reference `",
@@ -72,7 +73,9 @@ resolve_cached(Ref, Opts) ->
                     "`. Check `preloaded-store` viability."
                 >>
             };
-        false ->
+        {false, Mod} when is_atom(Mod), Mod =/= undefined ->
+            {ok, Mod};
+        {false, _} ->
             ResOpts = Opts#{ <<"resolving-devices">> => [Ref | Resolving] },
             case resolve(Ref, ResOpts) of
                 {cached, Mod} -> {ok, Mod};
@@ -91,30 +94,43 @@ resolve(Ref, Opts) ->
         from_low_trust(Ref, Opts)
     end.
 
-%% @doc Look up an already-resolved module: the process dictionary
-%% first, then the node's `loaded-device-store'. The first process to
-%% resolve a device spares every other the index read and archive
-%% extraction. The store defaults to `[]', which `hb_store' treats as
-%% no viable store, so the shared tier disables itself with no branch.
+%% @doc Look up a resolved module in the node's `loaded-device-store'. The
+%% first process to resolve a device spares every other the index read and
+%% archive extraction. The store defaults to `[]', which `hb_store' treats
+%% as no viable store, so the shared tier disables itself with no branch.
 get_resolved_device(Ref, Opts) ->
-    case erlang:get({?MODULE, Ref}) of
-        Mod when is_atom(Mod), Mod =/= undefined ->
-            {cached, Mod};
-        _ ->
-            maybe
-                {ok, Bin} ?=
-                    hb_store:read(
-                        loaded_device_store(Opts),
-                        store_key(Ref),
-                        Opts
-                    ),
-                Mod = hb_util:atom(Bin),
-                % We always stash in the process dictionary, despite the fact
-                % the reference was already in the global store.
-                erlang:put({?MODULE, Ref}, Mod),
-                {cached, Mod}
-            end
+    maybe
+        {ok, Bin} ?=
+            hb_store:read(
+                loaded_device_store(Opts),
+                store_key(Ref),
+                Opts
+            ),
+        Mod = hb_util:atom(Bin),
+        % We always stash in the process dictionary, despite the fact
+        % the reference was already in the global store.
+        erlang:put({?MODULE, Ref}, Mod),
+        {cached, Mod}
     end.
+
+%% @doc A reference that the process has resolved is returned without a
+%% resolution, except within a resolution of itself.
+memoised_reference_test() ->
+    Ref = <<"message@1.0">>,
+    {ok, Mod} = reference(Ref, #{}),
+    erlang:trace_pattern({?MODULE, resolve, 2}, true, [call_count]),
+    erlang:trace(self(), true, [call]),
+    Res = reference(Ref, #{}),
+    erlang:trace(self(), false, [call]),
+    {call_count, Resolutions} =
+        erlang:trace_info({?MODULE, resolve, 2}, call_count),
+    erlang:trace_pattern({?MODULE, resolve, 2}, false, [call_count]),
+    ?assertEqual({ok, Mod}, Res),
+    ?assertEqual(0, Resolutions),
+    ?assertMatch(
+        {error, <<"Circular device resolution", _/binary>>},
+        reference(Ref, #{ <<"resolving-devices">> => [Ref] })
+    ).
 
 %% @doc Memoise a resolved device in the process dictionary and the
 %% shared `loaded-device-store'.
