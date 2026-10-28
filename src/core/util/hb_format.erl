@@ -390,7 +390,11 @@ removing_trailing_noise(BinList, Noise) when is_list(BinList) ->
 indent(Str, Indent) -> indent(Str, #{}, Indent).
 indent(Str, Opts, Indent) -> indent(Str, [], Opts, Indent).
 indent(FmtStr, Terms, Opts, Ind) ->
-    IndentSpaces = hb_opts:get(debug_print_indent, Opts),
+    IndentSpaces =
+        case Ind of
+            0 -> 0;
+            _ -> hb_opts:get(debug_print_indent, Opts)
+        end,
     EscapedFmt = escape_format(FmtStr),
     lists:droplast(
         lists:flatten(
