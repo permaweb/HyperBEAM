@@ -77,38 +77,26 @@ verify(Msg, Req, Opts) ->
 ) -> {ok, binary() | [_] | #{ _ => _ }}.
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 from(List, Req, Opts) when is_list(List) ->
-    % Encode the list as a map, then -- if our request indicates that we are
-    % encoding lists -- add the `.' key to the `ao-types' field, indicating
-    % that this message is a list and return. Otherwise, if the downstream
-    % encoding did not set its own `ao-types' field, we convert the message
-    % back to a list.
+    % Encode the list as a map that `from/4' marks as a list. If the encoding
+    % has no `ao-types' field, we return the message as a list.
     {ok, DecodedAsMap} =
         from(
             hb_util:list_to_numbered_message(List),
+            true,
             Req,
             Opts
         ),
-    EncodingLists = lists:member(<<"list">>, find_encode_types(Req, Opts)),
-    EncodingHasAOTypes = hb_maps:is_key(<<"ao-types">>, DecodedAsMap, Opts),
-    case EncodingLists orelse EncodingHasAOTypes of
-        true ->
-            AOTypes = decode_ao_types(DecodedAsMap, Opts),
-            {ok, DecodedAsMap#{
-                <<"ao-types">> =>
-                    encode_ao_types(
-                        AOTypes#{
-                            <<".">> => <<"list">>
-                        },
-                        Opts
-                    )
-                }
-            };
-        false ->
-            % If the downstream encoding did not set its own `ao-types' field
-            % we return the message as a list.
-            {ok, hb_util:numbered_keys_to_list(DecodedAsMap, Opts)}
+    case hb_maps:is_key(<<"ao-types">>, DecodedAsMap, Opts) of
+        true -> {ok, DecodedAsMap};
+        false -> {ok, hb_util:numbered_keys_to_list(DecodedAsMap, Opts)}
     end;
-from(Msg, Req, Opts) when is_map(Msg) ->
+from(Msg, Req, Opts) when is_map(Msg) -> from(Msg, false, Req, Opts);
+from(Other, _Req, _Opts) -> {ok, hb_path:to_binary(Other)}.
+
+%% @doc Convert a map into a TABM. The `ao-types' of a list (`IsList') give
+%% its `.' key the type `list', if the request encodes lists or the list has
+%% values with types.
+from(Msg, IsList, Req, Opts) ->
     HintedReq = apply_bundle_hint(Msg, Req, Opts),
     NormLinks =
         hb_link:normalize(
@@ -186,10 +174,18 @@ from(Msg, Req, Opts) when is_map(Msg) ->
             hb_util:to_sorted_keys(NormKeysMap, Opts)
         )
     ),
+    % A list's `.' key has the type `list', if the request encodes lists or
+    % the list has values with types.
+    ListTypes =
+        case IsList andalso
+                (Types =/= [] orelse lists:member(<<"list">>, EncodeTypes)) of
+            true -> [{<<".">>, <<"list">>} | Types];
+            false -> Types
+        end,
     % Encode the AoTypes as a structured dictionary
     % And include as a field on the produced TABM
     WithTypes =
-        hb_maps:from_list(case Types of
+        hb_maps:from_list(case ListTypes of
             [] -> Values;
             T ->
                 AoTypes = encode_ao_types(maps:from_list(T), Opts),
@@ -205,8 +201,7 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                     <<"commitments">> => Commitments
                 }
         end
-    };
-from(Other, _Req, _Opts) -> {ok, hb_path:to_binary(Other)}.
+    }.
 
 %% @doc Find the types that should be encoded from the request and options.
 find_encode_types(Req, Opts) ->
@@ -791,3 +786,23 @@ lowercase_keys_test() ->
             #{}, #{}
         )
     ).
+
+%% @doc A conversion of a list to TABM encodes its `ao-types', with the `.' key
+%% of type `list', and reads no `ao-types'.
+from_list_reads_no_types_test() ->
+    erlang:trace_pattern({?MODULE, decode_ao_types, 2}, true, [call_count]),
+    erlang:trace(self(), true, [call]),
+    ?assertEqual(
+        {ok,
+            #{
+                <<"ao-types">> => <<"integer=(\"1\" \"2\"), list=(\".\")">>,
+                <<"1">> => <<"1">>,
+                <<"2">> => <<"2">>
+            }
+        },
+        hb_ao:raw(<<"structured@1.0">>, <<"from">>, [1, 2], #{}, #{})
+    ),
+    {call_count, Reads} =
+        erlang:trace_info({?MODULE, decode_ao_types, 2}, call_count),
+    erlang:trace_pattern({?MODULE, decode_ao_types, 2}, false, [call_count]),
+    ?assertEqual(0, Reads).
