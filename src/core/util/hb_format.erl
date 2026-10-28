@@ -401,13 +401,19 @@ indent(FmtStr, Terms, Opts, Ind) ->
         )
     ).
 
-%% @doc Escape a string for use as an io_lib:format specifier.
+%% @doc Escape a string for use as an io_lib:format specifier. Only a string
+%% that contains `@' can name a device, so only such a string is matched.
 escape_format(Str) when is_list(Str) ->
-    re:replace(
-        Str,
-        "~([a-z\\-_]+@[0-9]+\\.[0-9]+)", "~~\\1",
-        [global, {return, list}]
-    );
+    Bin = iolist_to_binary(Str),
+    case binary:match(Bin, <<"@">>) of
+        nomatch -> binary_to_list(Bin);
+        _ ->
+            re:replace(
+                Bin,
+                "~([a-z\\-_]+@[0-9]+\\.[0-9]+)", "~~\\1",
+                [global, {return, list}]
+            )
+    end;
 escape_format(Else) -> Else.
 
 %% @doc Format an error message as a string.
@@ -1209,7 +1215,8 @@ bounded_format(Render) ->
     end.
 
 %% @doc A nested list is formatted once for each list element, not once per
-%% branch of the list formatter.
+%% branch of the list formatter, and without matching its format strings,
+%% which name no device, against the device-name pattern.
 nested_list_format_calls_test() ->
     Nested = fun(Depth) ->
         lists:foldl(fun(_, Acc) -> [Acc] end, 1, lists:seq(1, Depth))
@@ -1221,11 +1228,17 @@ nested_list_format_calls_test() ->
     ),
     try
         erlang:trace_pattern({?MODULE, list_item, 4}, true, [call_count]),
+        erlang:trace_pattern({re, replace, 4}, true, [call_time]),
+        erlang:trace(self(), true, [call]),
         _ = term(Nested(26), #{}, 0),
         {call_count, Calls} =
             erlang:trace_info({?MODULE, list_item, 4}, call_count),
-        ?assert(Calls < 1000)
+        ?assert(Calls < 1000),
+        {call_time, Regexes} = erlang:trace_info({re, replace, 4}, call_time),
+        ?assertEqual(0, lists:sum([N || {_, N, _, _} <- Regexes]))
     after
+        erlang:trace(self(), false, [call]),
+        erlang:trace_pattern({re, replace, 4}, false, [call_time]),
         erlang:trace_pattern({?MODULE, list_item, 4}, false, [call_count])
     end.
 
