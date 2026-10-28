@@ -67,7 +67,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
     Info = device_info(Dev, Msg, Opts),
     % Is the key exported by the device?
     Exported = is_exported(Info, Key, Opts),
-	?event(
+	?event_debug(
         ao_devices,
         {message_to_fun,
             {dev, Dev},

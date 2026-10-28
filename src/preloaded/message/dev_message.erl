@@ -789,7 +789,7 @@ commitment_ids_from_request(Base, Req, Opts) ->
                 );
             FinalCommitmentIDs -> FinalCommitmentIDs
         end,
-    ?event(
+    ?event_debug(
         debug_commitments,
         {commitment_ids_from_request, {base, Base}, {req, Req}, {res, Res}}
     ),

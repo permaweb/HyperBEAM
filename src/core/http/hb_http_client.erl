@@ -260,7 +260,7 @@ hackney_req(Args, Opts) ->
             Response = case hackney_request(Method, URL, HeaderList, Body, HackneyOpts, SendTimeout) of
                 {ok, Status, RespHeaders, RespBody} ->
                     download_metric(RespBody, Opts),
-                    ?event(debug_http_client, {hackney_resp, Status, RespHeaders, RespBody}),
+                    ?event_debug(debug_http_client, {hackney_resp, Status, RespHeaders, RespBody}),
                     {ok, Status, RespHeaders, RespBody};
                 {ok, Status, RespHeaders} ->
                     ?event(debug_http_client, {hackney_resp, Status, RespHeaders, no_body}),

@@ -1078,7 +1078,7 @@ reply(InitReq, TABMReq, Result, Opts) ->
                 }
         end,
     EncodedHeaders = hb_private:reset(ReplyHeaders),
-    ?event(debug_http,
+    ?event_debug(debug_http,
         {http_replying,
             {status, {explicit, Status}},
             {path, hb_maps:get(<<"path">>, Req, undefined_path, Opts)},
@@ -1103,7 +1103,7 @@ reply(InitReq, TABMReq, Result, Opts) ->
         ReplyDuration * 1000000,
         Status
     ),
-    ?event(debug_http, {reply_headers, {explicit, PostStreamReq}}),
+    ?event_debug(debug_http, {reply_headers, {explicit, PostStreamReq}}),
     ?event(http_server_short,
         {sent,
             {status, Status},
@@ -1190,7 +1190,7 @@ commit_reply(TABMReq, Msg, Opts) ->
 %% viable sources of cookies.
 reply_handle_cookies(Req, Message, Opts) ->
     {ok, Cookies} = hb_http:cookie(<<"extract">>, Message, #{}, Opts),
-    ?event(debug_cookie, {encoding_reply_cookies, {explicit, Cookies}}),
+    ?event_debug(debug_cookie, {encoding_reply_cookies, {explicit, Cookies}}),
     case Cookies of
         NoCookies when map_size(NoCookies) == 0 -> {ok, Req, Message};
         _ ->
@@ -1278,12 +1278,12 @@ encode_reply(Status, TABMReq, RawMessage, Opts) ->
     % Verify the result while it is still in `structured@1.0' form, before it is
     % converted to the target wire codec, if paranoid mode enables http_result.
     hb_message:paranoid_verify(http_result, Message, Opts),
-    ?event(debug_http, {encoding_reply, {codec, Codec}, {message, Message}}),
+    ?event_debug(debug_http, {encoding_reply, {codec, Codec}, {message, Message}}),
     AcceptBundle =
         hb_util:bool(
             hb_maps:get(<<"accept-bundle">>, TABMReq, false, Opts)
         ),
-    ?event(debug_http,
+    ?event_debug(debug_http,
         {encoding_reply,
             {status, Status},
             {codec, Codec},
@@ -1390,7 +1390,7 @@ encode_reply(Status, TABMReq, RawMessage, Opts) ->
 %% be served, or the `accept' is not a valid HTTP field, we use `httpsig@1.0'.
 accept_to_codec(TABMReq, Msg, Opts) ->
     Accept = hb_maps:get(<<"accept">>, TABMReq, <<"*/*">>, Opts),
-    ?event(debug_accept,
+    ?event_debug(debug_accept,
         {accept_to_codec,
             {original_req, TABMReq},
             {accept, Accept}
@@ -1483,7 +1483,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                 ContentType = maps:get(<<"content-type">>, Headers),
                 throw({'unsupported-media-type', ContentType})
         end,
-    ?event(debug_http,
+    ?event_debug(debug_http,
         {parsing_req,
             {path, FullPath},
             {query, QueryKeys},
@@ -1598,7 +1598,7 @@ normalize_method(Method) ->
 %% 1. The path in the message
 %% 2. The path and query of the request URI
 normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
-    ?event(debug_http, {adding_method_and_path_from_request, {explicit, Req}}),
+    ?event_debug(debug_http, {adding_method_and_path_from_request, {explicit, Req}}),
     Method = cowboy_req:method(Req),
     MsgPath =
         hb_maps:get(

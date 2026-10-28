@@ -142,7 +142,7 @@ request(Base, Req, Opts) ->
                 }
             };
         Error ->
-            ?event(debug_manifest, {request_ignored, {unexpected, Error}}),
+            ?event_debug(debug_manifest, {request_ignored, {unexpected, Error}}),
             % On other errors, we return the original request.
             {ok, Req}
     end.

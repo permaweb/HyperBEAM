@@ -215,7 +215,7 @@ request_response(Method, Peer, Path, Request, Response, Duration, Opts) ->
             false -> HeaderMap
         end,
     NormHeaderMap = hb_ao:normalize_keys(BodyHeaderMap, Opts),
-    ?event(debug_http_outbound,
+    ?event_debug(debug_http_outbound,
         {normalized_response_headers, {norm_header_map, NormHeaderMap}},
         Opts
     ),
@@ -269,7 +269,7 @@ only_result({ResponseStatus, Msg}, Opts) ->
         hb_maps:get(<<"ao-result">>, Msg, false, Opts),
     case ReturnAOResult of
         Key when is_binary(Key) ->
-            ?event(
+            ?event_debug(
                 debug_http_outbound,
                 {result_is_single_key, {key, Key}, {msg, Msg}},
                 Opts
@@ -549,7 +549,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
             Body = hb_maps:get(<<"body">>, FullEncoding, <<>>, Opts),
             Headers = hb_maps:without([<<"body">>], FullEncoding, Opts),
 			?event(debug_http, {request_headers, {explicit, {headers, Headers}}}),
-			?event(debug_http, {request_body, {explicit, {body, Body}}}),
+			?event_debug(debug_http, {request_body, {explicit, {body, Body}}}),
             hb_maps:merge(
                 ReqBase,
                 #{ headers => maps:merge(MaybeCookie, Headers), body => Body },

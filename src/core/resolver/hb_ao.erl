@@ -1327,7 +1327,7 @@ device_set(Msg, Key, Value, Mode, Opts) ->
             <<"deep">> -> ReqWithoutMode;
             <<"explicit">> -> ReqWithoutMode#{ <<"set-mode">> => Mode }
         end,
-    ?event(
+    ?event_debug(
         debug_set,
         {
             calling_device_set,
