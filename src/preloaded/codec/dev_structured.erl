@@ -171,7 +171,7 @@ from(Msg, IsList, Req, Opts) ->
                     not hb_private:is_private(Key) andalso
                     not (Key == <<"commitments">>)
             end,
-            hb_util:to_sorted_keys(NormKeysMap, Opts)
+            hb_maps:keys(NormKeysMap, Opts)
         )
     ),
     % A list's `.' key has the type `list', if the request encodes lists or
@@ -806,3 +806,25 @@ from_list_reads_no_types_test() ->
         erlang:trace_info({?MODULE, decode_ao_types, 2}, call_count),
     erlang:trace_pattern({?MODULE, decode_ao_types, 2}, false, [call_count]),
     ?assertEqual(0, Reads).
+
+%% @doc A conversion to TABM sorts only the keys that `ao-types' names, which
+%% its encoding orders: the keys of a message with no typed value are not
+%% sorted.
+from_sorts_typed_keys_alone_test() ->
+    Msg =
+        maps:from_list(
+            [
+                {<<"key-", (hb_util:bin(I))/binary>>, <<"value">>}
+            ||
+                I <- lists:seq(1, 100)
+            ]
+        ),
+    erlang:trace_pattern({lists, sort, 2}, true, [call_count]),
+    erlang:trace(self(), true, [call]),
+    ?assertEqual(
+        {ok, Msg},
+        hb_ao:raw(<<"structured@1.0">>, <<"from">>, Msg, #{}, #{})
+    ),
+    {call_count, Sorts} = erlang:trace_info({lists, sort, 2}, call_count),
+    erlang:trace_pattern({lists, sort, 2}, false, [call_count]),
+    ?assertEqual(0, Sorts).
