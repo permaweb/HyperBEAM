@@ -4,7 +4,7 @@
 %%% an AO process.
 -module(dev_delegated_compute).
 -specification("../../../specs/delegated-compute@1.0.md").
--device_libraries([lib_process, lib_scheduler_formats]).
+-device_libraries([lib_process, lib_process_cache, lib_scheduler_formats]).
 -export([init/3, compute/3, normalize/3, snapshot/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -38,10 +38,58 @@ normalize(Base, _Req, Opts) ->
                 false -> hb_ao:set(Base, #{ <<"snapshot">> => unset }, Opts);
                 true ->
                     maybe
-                        {ok, _} ?= load_state(Snapshot, Opts),
+                        {ok, Checkpoint} ?= importable_checkpoint(
+                            Base, Snapshot, Opts
+                        ),
+                        {ok, _} ?= load_state(Checkpoint, Opts),
                         hb_ao:set(Base, #{ <<"snapshot">> => unset }, Opts)
                     end
             end
+    end.
+
+%% @doc Return the checkpoint if an import authority signed it, it targets the
+%% process, and it is not older than the process's latest slot.
+importable_checkpoint(Base, Snapshot, Opts) ->
+    Authorities =
+        [
+            hb_committer:uri(Authority, Opts)
+        ||
+            Authority <- hb_opts:get(genesis_wasm_import_authorities, [], Opts)
+        ],
+    ProcID = lib_process:process_id(Base, #{}, Opts),
+    maybe
+        true ?=
+            lists:any(
+                fun(Signer) -> lists:member(Signer, Authorities) end,
+                hb_message:signers(Snapshot, Opts)
+            ),
+        {ok, Checkpoint} =
+            hb_message:with_only_committed(
+                hb_message:with_only_committers(Snapshot, Authorities, Opts),
+                any,
+                Opts
+            ),
+        true ?= hb_message:verify(Checkpoint, all, Opts),
+        ProcID ?= hb_maps:get(<<"process">>, Checkpoint, Opts),
+        {ok, Slot} ?=
+            hb_util:safe_int(
+                hb_maps:get(<<"nonce">>, Checkpoint, not_found, Opts)
+            ),
+        true ?=
+            case lib_process_cache:latest(ProcID, Opts) of
+                {ok, Latest, _} when Slot < Latest -> false;
+                _ -> true
+            end,
+        {ok, Checkpoint}
+    else
+        _ ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> =>
+                    <<"Checkpoint is not signed by an import authority, is not "
+                        "the process's checkpoint, or is older than its latest "
+                        "slot.">>
+            }}
     end.
 
 %% @doc Attempt to load a snapshot into the delegated compute server.

@@ -768,11 +768,21 @@ instance_routing() ->
                         #{ <<"data">> => <<"test">> }, Opts
                     )
                 }, Opts),
+                UncommittedCheckpoint =
+                    hb_message:uncommitted(Checkpoint, Opts),
+                UncommittedAssignment =
+                    hb_message:uncommitted(Assignment, Opts),
                 % Warm the real HTTP endpoint before Genesis's bounded probe.
                 {ok, _} = hb_http:get(Peer, <<"/status">>, Opts),
                 erase(genesis_wasm_pid),
                 lists:foreach(
-                    fun({State, Req, Path}) ->
+                    fun({State, Req, no_request}) ->
+                        ?assertNotMatch(
+                            {ok, _},
+                            hb_ao:resolve(State, Req, Opts)
+                        ),
+                        assert_no_request();
+                       ({State, Req, Path}) ->
                         {ok, _} = hb_ao:resolve(State, Req, Opts),
                         Received = receive
                             {routing_request, ActualPeer, #{
@@ -791,7 +801,12 @@ instance_routing() ->
                         {Base, #{ <<"path">> => <<"compute">> },
                             <<"/dry-run?process-id=", ProcID/binary>>},
                         {Base, Assignment#{ <<"path">> => <<"compute">> },
-                            <<"/result/0?process-id=", ProcID/binary>>}
+                            <<"/result/0?process-id=", ProcID/binary>>},
+                        {Base#{ <<"snapshot">> => UncommittedCheckpoint },
+                            #{ <<"path">> => <<"normalize">> }, no_request},
+                        {Base, UncommittedAssignment#{
+                            <<"path">> => <<"compute">>
+                        }, no_request}
                     ]
                 )
             end,
@@ -804,6 +819,18 @@ instance_routing() ->
     after
         erase(genesis_wasm_pid),
         lists:foreach(fun({_, ID}) -> cowboy:stop_listener(ID) end, Nodes)
+    end.
+
+%% @doc Refuse a checkpoint or assignment request that reaches the unit.
+assert_no_request() ->
+    receive
+        {routing_request, _, #{ <<"path">> := Path }} ->
+            case Path of
+                <<"/state">> -> error(caller_state_reached_unit);
+                <<"/result/", _/binary>> -> error(caller_state_reached_unit);
+                _ -> assert_no_request()
+            end
+    after 200 -> ok
     end.
 
 %% @doc Use isolated HyperBEAM HTTP nodes to observe the outgoing requests.
