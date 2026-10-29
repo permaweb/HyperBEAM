@@ -50,7 +50,7 @@
 -module(hb_http).
 -export([start/0]).
 -export([get/2, get/3, post/3, post/4, request/2, request/4, request/5]).
--export([message_to_request/2, status_code/2, cookie/4]).
+-export([message_to_request/2, status_code/2, is_own_origin/2, cookie/4]).
 -export([codec/2, message_codec/2, media_type/1, encode/4, decode/3]).
 -export([only_result/2]).
 -include("include/hb.hrl").
@@ -397,6 +397,30 @@ status_code(unauthorized, _Opts) -> 401;
 status_code(forbidden, _Opts) -> 403;
 status_code(not_authorized, _Opts) -> 403;
 status_code(_, _Opts) -> 200.
+
+%% @doc Whether a request comes from a page on the node's own origin, or from
+%% no page. A browser sends a saved credential with a request from any page,
+%% and it gives the page in `sec-fetch-site', or in `origin' if it is older.
+is_own_origin(Req, Opts) ->
+    case hb_maps:get(<<"sec-fetch-site">>, Req, not_found, Opts) of
+        not_found ->
+            is_origin_host(
+                hb_maps:get(<<"origin">>, Req, not_found, Opts),
+                hb_maps:get(<<"host">>, Req, not_found, Opts)
+            );
+        Site -> lists:member(Site, [<<"same-origin">>, <<"none">>])
+    end.
+
+%% A page on another host, including a host label of the node, is another
+%% origin.
+is_origin_host(not_found, _Host) -> true;
+is_origin_host(Origin, Host) when is_binary(Origin), is_binary(Host) ->
+    case uri_string:parse(Origin) of
+        #{ host := OriginHost } ->
+            hb_util:to_lower(OriginHost) =:= hb_util:to_lower(Host);
+        _ -> false
+    end;
+is_origin_host(_Origin, _Host) -> false.
 
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->

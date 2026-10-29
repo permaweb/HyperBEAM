@@ -427,10 +427,19 @@ list(_Base, _Request, Opts) ->
 
 %% @doc Sign a message with a wallet.
 -spec commit(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
-    {ok, #{ _ => _ }} | {error, binary()}.
+    {ok, #{ _ => _ }} | {error, _}.
 commit(Base, Request, Opts) ->
     ?event({commit_invoked, {priv_base, Base}, {priv_request, Request}}),
-    case request_to_wallets(Base, Request, Opts) of
+    case
+        hb_http:is_own_origin(Request, Opts)
+            andalso request_to_wallets(Base, Request, Opts)
+    of
+        false ->
+            {error,
+                #{
+                    <<"status">> => 403,
+                    <<"body">> => <<"Request is not from the node's origin.">>
+                }};
         [] -> {error, <<"No wallets found to sign with.">>};
         WalletDetailsList ->
             ?event(
@@ -1039,6 +1048,15 @@ commit_with_cookie_wallet_test() ->
         SignedMessage,
         hb_committer:uri(WalletName),
         <<"Test data">>
+    ),
+    % A page on another origin does not get the wallet's signature.
+    ?assertMatch(
+        {error, #{ <<"status">> := 403 }},
+        hb_http:post(
+            Node,
+            TestMessage#{ <<"origin">> => <<"http://other.example">> },
+            #{}
+        )
     ).
 
 export_wallet_test() ->
