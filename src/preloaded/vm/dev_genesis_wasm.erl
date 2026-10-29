@@ -548,6 +548,10 @@ do_import(Base, CheckpointMessage, Opts) ->
         true ?= hb_message:verify(Checkpoint, all, Opts) orelse unverified,
         CheckpointTargetProcID = hb_maps:get(<<"process">>, Checkpoint, Opts),
         ProcID = lib_process:process_id(Base, #{}, Opts),
+        % Keep the state and the ID on the same process message, so a base
+        % whose device gives another process cannot store this message under
+        % that process.
+        true ?= hb_message:id(Proc, signed, Opts) == ProcID orelse process_mismatch,
         true ?= CheckpointTargetProcID == ProcID orelse process_mismatch,
         % Normalize the checkpoint message into a process state message with 
         % a state snapshot.
