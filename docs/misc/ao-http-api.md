@@ -89,7 +89,7 @@ unsigned request are removed.
 - A device that authorizes a request by its signer must only read the keys that
 the signer committed, after verifying them.
 - The HTTP status of a reply is the result's `status`, if that is an integer
-from 100 to 599. Otherwise, it is the code of the result's Erlang status. The
+from 200 to 599. Otherwise, it is the code of the result's Erlang status. The
 node does not add a `status` key to the reply.
 - The codec of a reply is given by the request's `accept` (RFC 9110): its media
 ranges in order of preference, by q-value and then by their order, of which the

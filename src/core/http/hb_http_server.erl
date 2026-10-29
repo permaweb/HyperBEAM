@@ -52,9 +52,10 @@
 %%% We reply to the client with the result as follows:
 %%%
 %%% 1. The HTTP status of the reply is the result's `status' key, if it is an
-%%%    integer from 100 to 599, or the binary encoding of one. Otherwise, it is
-%%%    the code that `hb_http:status_code/2' gives for the result's Erlang
-%%%    status. We do not add a `status' key to the reply.
+%%%    integer from 200 to 599, or the binary encoding of one. A reply is never
+%%%    informational. Otherwise, it is the code that `hb_http:status_code/2'
+%%%    gives for the result's Erlang status. We do not add a `status' key to the
+%%%    reply.
 %%% 2. If the result is a literal or a list, we send it as the `body' of a
 %%%    message, with `ao-result' set to `body'.
 %%% 3. We find the codec of the reply from the request's `accept', read as RFC
@@ -1202,10 +1203,9 @@ reply(InitReq, TABMReq, Result, Opts) ->
     ),
     {ok, PostStreamReq, no_state}.
 
-%% @doc Whether a reply to this method and status carries no body. A `1xx'
-%% reply is informational and a `205' resets content, so both end at headers.
+%% @doc Whether a reply to this method and status carries no body. A `HEAD'
+%% request and the `204', `205' and `304' statuses all end at their headers.
 is_bodyless_reply(<<"HEAD">>, _Status) -> true;
-is_bodyless_reply(_Method, Status) when Status >= 100, Status < 200 -> true;
 is_bodyless_reply(_Method, Status)
         when Status == 204; Status == 205; Status == 304 -> true;
 is_bodyless_reply(_Method, _Status) -> false.

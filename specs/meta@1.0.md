@@ -526,7 +526,7 @@ via the node's request boundary:
 15. Status mapping follows §8: `ok`→200, `created`→201, `not_found`→404,
     `unauthorized`→401, `forbidden`/`not_authorized`→403, `failure`→500,
     `unavailable`→503, `error`/`client_error`/`no_viable_responses`→400,
-    otherwise→200; an explicit message `status` from 100 to 599 overrides
+    otherwise→200; an explicit message `status` from 200 to 599 overrides
     the default.
 16. When `force-signed` is configured, the node signs the `hashpath` of each
     message it sends that is the result of its hashpath and has no `hashpath`
