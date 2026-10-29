@@ -200,6 +200,16 @@ function recalculate(state, _, opts)
     return "ok", state
 end
 
+-- Whether the node pushed the message for a process. `push@1.0' sets these
+-- keys before it signs, so the signature covers them.
+local function is_pushed(req)
+    return req["from-process"] ~= nil
+        or req["from-uncommitted"] ~= nil
+        or req["from-base"] ~= nil
+        or req["from-scheduler"] ~= nil
+        or req["from-authority"] ~= nil
+end
+
 -- Register a new host to a route.
 function register(state, assignment, opts)
     state = ensure_defaults(state)
@@ -207,8 +217,10 @@ function register(state, assignment, opts)
     local req = assignment.body
 
     -- If the message is signed by an explicitly trusted peer, we can skip the
-    -- is-admissible check.
-    if state["trusted-peer"] then
+    -- is-admissible check. A message that the node pushed for a process is
+    -- that process's computed result, not a request from the peer, so the
+    -- is-admissible check decides on it.
+    if state["trusted-peer"] and not is_pushed(req) then
         local committers = ao.signers(req)
         for _, committer in ipairs(committers) do
             if committer == state["trusted-peer"] then
