@@ -34,12 +34,13 @@ generate(Base, Request, Opts) ->
                 {Request, FoundSecrets}
         end,
     ?event({normalized_cookies_found, {priv_secrets, Secrets}}),
-    {
-        ok,
-        WithCookie#{
-            <<"secret">> => Secrets
-        }
-    }.
+    % The reply contains the caller's secrets, so a shared cache may not keep it.
+    {ok,
+        dev_cookie:no_store(
+            WithCookie#{ <<"secret">> => Secrets },
+            Request,
+            Opts
+        )}.
 
 %% @doc Finalize an `on-request' hook by adding the cookie to the chain of 
 %% messages. The inbound request has the same structure as a normal request

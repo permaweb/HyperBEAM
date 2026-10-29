@@ -44,7 +44,7 @@
 %%% Generator API.
 -export([generate/3, finalize/3]).
 %%% Public utility functions.
--export([opts/1]).
+-export([no_store/3, opts/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
