@@ -371,12 +371,20 @@ register_wallet(Wallet, Base, Request, Opts) ->
 persist_registered_wallet(WalletDetails, Opts) ->
     persist_registered_wallet(WalletDetails, #{}, Opts).
 persist_registered_wallet(WalletDetails, RespBase, Opts) ->
-    % Add the wallet address as the body of the response.
-    Address = hb_maps:get(<<"address">>, WalletDetails, undefined, Opts),
-    ?event({resp_base, {auth_resp, RespBase}, {priv_wallet_details, WalletDetails}}),
     % The wallet is keyed by the `keyid' of its access secret.
     Committer = hb_maps:get(<<"committer">>, WalletDetails, undefined, Opts),
     KeyID = <<"secret:", Committer/binary>>,
+    case is_keyid(KeyID) of
+        true ->
+            persist_registered_wallet(WalletDetails, RespBase, KeyID, Opts);
+        false ->
+            {error, <<"Wallet keyid must be one path part.">>}
+    end.
+
+persist_registered_wallet(WalletDetails, RespBase, KeyID, Opts) ->
+    % Add the wallet address as the body of the response.
+    Address = hb_maps:get(<<"address">>, WalletDetails, undefined, Opts),
+    ?event({resp_base, {auth_resp, RespBase}, {priv_wallet_details, WalletDetails}}),
     Base = RespBase#{
         <<"body">> => KeyID, <<"cache-control">> => <<"no-store">>
     },
@@ -812,11 +820,19 @@ store_wallet(non_volatile, KeyID, Details, Opts) ->
     % Link the wallet to the store.
     ok = hb_cache:link(Msg, <<"wallet@1.0/", KeyID/binary>>, PrivOpts).
 
+is_keyid(KeyID) ->
+    % A keyid is one path part of the private store.
+    binary:match(KeyID, <<"/">>) =:= nomatch.
+
 %% @doc Find the wallet by name or address in the node's options.
 find_wallet(KeyID, Opts) ->
-    case find_wallet(in_memory, KeyID, Opts) of
-        not_found -> find_wallet(non_volatile, KeyID, Opts);
-        Wallet -> Wallet
+    case is_keyid(KeyID) of
+        true ->
+            case find_wallet(in_memory, KeyID, Opts) of
+                not_found -> find_wallet(non_volatile, KeyID, Opts);
+                Wallet -> Wallet
+            end;
+        false -> not_found
     end.
 
 %% @doc Loop over the wallets and find the reference to the wallet.
@@ -1000,6 +1016,38 @@ non_volatile_persist_generate_and_verify_test() ->
             #{ <<"store">> => [Public], <<"priv-store">> => [Private] }
         ),
     ?assertEqual([Private], hb_opts:get(store, [], Opts)).
+
+%% @doc A committer with a `/` cannot make a keyid that is more than one path
+%% part of the private store, when the node stores a wallet or reads one.
+keyid_with_slash_refused_test() ->
+    Node = hb_http_server:start_node(#{ <<"priv-wallet">> => ar_wallet:new() }),
+    Generate =
+        fun(C) ->
+            hb_http:post(
+                Node,
+                #{
+                    <<"path">> => <<"/~secret@1.0/generate?persist=non-volatile">>,
+                    <<"type">> => <<"unsigned">>,
+                    <<"access-control">> =>
+                        #{ <<"device">> => <<"message@1.0">>, <<"committer">> => C },
+                    <<"controllers">> => [],
+                    <<"required-controllers">> => 0
+                },
+                #{}
+            )
+        end,
+    ?assertMatch({error, _}, Generate(<<"slashmarker/">>)),
+    {ok, #{ <<"body">> := KeyID }} = Generate(<<"slashmarker">>),
+    ?assertNotMatch(
+        {ok, _},
+        hb_http:get(
+            Node,
+            #{ <<"path">> => <<"/~secret@1.0/export/1">>,
+               <<"accept-bundle">> => <<"true">>,
+               <<"keyids">> => [<<KeyID/binary, "/">>] },
+            #{}
+        )
+    ).
 
 import_wallet_with_key_test() ->
     Node = hb_http_server:start_node(#{
