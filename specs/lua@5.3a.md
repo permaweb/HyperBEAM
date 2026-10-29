@@ -225,9 +225,9 @@ reserved key and not an existing field of the base message (§3).
      - `Req`'s `body/parameters`,
      - `Req`'s `parameters`,
      - `Base`'s `parameters`,
-     - **default:** the 3-element list `[ Base-without-private, Req, {} ]` — i.e.
-       the base message (with its private area removed), the request message, and
-       an empty message — in that order.
+     - **default:** the 3-element list `[ Base-without-private, Req-without-private,
+       {} ]` — i.e. the base and request messages (each with its private area
+       removed), and an empty message — in that order.
 
      **Read these selection fields (`function`, `parameters`) of `Base` as
      `message@1.0`** — **never resolved *through* this device**; read those of
@@ -696,8 +696,8 @@ unreachable/offline path).
 4. **Function/parameter selection.** The called function name is the first present
    of request `body/function`, request `function`, base `function`, else the
    resolved key. The arguments are the first present of request `body/parameters`,
-   request `parameters`, base `parameters`, else `[ base-without-private, request,
-   {} ]`.
+   request `parameters`, base `parameters`, else `[ base-without-private,
+   request-without-private, {} ]`.
 5. **Single vs multi return.** A single Lua return value maps to status `ok` with
    that value as result; a two-value return maps the first to the **status** and
    the second to the **result**; `("error", V)` yields an `error` outcome carrying

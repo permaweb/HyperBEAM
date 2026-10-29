@@ -353,6 +353,7 @@ compute(Key, RawBase, RawReq, Opts) ->
 %% @doc Call a function of the Lua state with the parameters that the request
 %% or the base gives, or else with the base and the request.
 call_function(Function, Base, Req, OldPriv, State, Opts) ->
+    % The default arguments carry no private keys from the base or the request.
     Params =
         hb_ao:get_first(
             [
@@ -362,7 +363,7 @@ call_function(Function, Base, Req, OldPriv, State, Opts) ->
             ],
             [
                 hb_private:reset(Base),
-                Req,
+                hb_private:reset(Req),
                 #{}
             ],
             Opts#{ <<"hashpath">> => ignore }
@@ -1126,6 +1127,26 @@ invoke_non_compute_key_test() ->
         {error, not_found},
         hb_ao:resolve(Base, <<"no_function">>, #{})
     ).
+
+%% @doc A Lua function reads the request without its private keys.
+request_private_keys_test() ->
+    Script = <<
+        "function has_priv(base, req)\n"
+        "  return tostring(req.priv ~= nil)\n"
+        "end\n"
+    >>,
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"module">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Script
+        }
+    },
+    Req = #{
+        <<"path">> => <<"has_priv">>,
+        <<"priv">> => #{ <<"cookie">> => <<"marker">> }
+    },
+    ?assertEqual({ok, <<"false">>}, hb_ao:resolve(Base, Req, #{})).
 
 %% @doc Use a Lua module as a hook on the HTTP server via `~meta@1.0'.
 lua_http_hook_test() ->
