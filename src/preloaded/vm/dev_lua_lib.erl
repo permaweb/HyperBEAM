@@ -219,9 +219,12 @@ signers([Base], ExecState, ExecOpts) ->
     {[committers(<<"committers">>, Signers)], ExecState}.
 
 %% @doc Converts any `as' terms from Lua to their HyperBEAM equivalents. The
-%% message is caller input from Lua, so its private keys are removed.
+%% message in an `as' term and each map in a path are caller input from Lua, so
+%% their private keys are removed.
 convert_as([<<"as">>, Device, RawMsg]) ->
     {as, Device, hb_private:reset(RawMsg)};
+convert_as(List) when is_list(List) ->
+    hb_private:reset(lists:map(fun convert_as/1, List));
 convert_as(Other) ->
     Other.
 
@@ -231,7 +234,7 @@ set([Base, Key, nil], ExecState, ExecOpts) ->
     set([Base, Key, unset], ExecState, ExecOpts);
 set([Base, Key, Value], ExecState, ExecOpts) ->
     ?event({ao_core_set, {base, Base}, {key, Key}, {value, Value}}),
-    NewRes = hb_ao:set(Base, Key, Value, ExecOpts),
+    NewRes = hb_ao:set(Base, convert_as(Key), Value, ExecOpts),
     ?event({ao_core_set_result, {result, NewRes}}),
     {[NewRes], ExecState};
 set([Base, NewValues], ExecState, ExecOpts) ->
