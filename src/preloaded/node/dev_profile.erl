@@ -190,11 +190,7 @@ eflame_profile(Fun, Req, Opts) ->
             undefined ->
                 hb_escape:encode(hb_util:bin(io_lib:format("~p", [Fun])));
             Path ->
-                hb_escape:encode_ampersand(
-                    hb_escape:encode_quotes(
-                        hb_maps:get(Path, Req, Path, Opts)
-                    )
-                )
+                hb_escape:encode_ampersand(hb_maps:get(Path, Req, Path, Opts))
         end,
     StackToFlameScript = hb_util:bin(filename:join(EflameDir, "flamegraph.pl")),
     FlameArg =
@@ -202,13 +198,16 @@ eflame_profile(Fun, Req, Opts) ->
             <<"merge">> -> <<"">>;
             <<"time">> -> <<"--flamechart">>
         end,
+    % The title is the caller's, so the shell gets it as one single-quoted
+    % word, in which it expands nothing.
+    Title = binary:replace(Name, <<"'">>, <<"'\\''">>, [global]),
     PreparedCommand = 
         hb_util:list(
             <<
                 "cat ", (hb_util:bin(File))/binary,
                 " | uniq -c | awk '{print $2, \" \", $1}' | ",
                 StackToFlameScript/binary, " ", FlameArg/binary,
-                " --title=\"", Name/binary, "\" 2>/dev/null"
+                " --title='", Title/binary, "' 2>/dev/null"
             >>
         ),
     Flame = hb_util:bin(os:cmd(PreparedCommand)),
