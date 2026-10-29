@@ -97,11 +97,32 @@ handle(Key, M1, M2, Opts) ->
         {true, _} ->
             % If this is the first pass, we need to check if the subject has
             % already been seen.
-            SubjectID = hb_message:id(Subject, signed, Opts),
+            SubjectIDs =
+                hb_util:unique(
+                    [
+                        hb_message:id(Subject, signed, Opts)
+                    |
+                        hb_maps:keys(
+                            hb_message:commitments(
+                                #{ <<"committer">> => '_' },
+                                Subject,
+                                Opts
+                            ),
+                            Opts
+                        )
+                    ]
+                ),
             ?event({dedup_checking, DedupTrie}),
-            case hb_ao:get(SubjectID, DedupTrie, Opts) of
-                not_found ->
-                    ?event({not_seen, SubjectID}),
+            Seen =
+                [
+                    ID
+                ||
+                    ID <- SubjectIDs,
+                    hb_ao:get(ID, DedupTrie, Opts) =/= not_found
+                ],
+            case Seen of
+                [] ->
+                    ?event({not_seen, SubjectIDs}),
                     Slot =
                         hb_maps:get(
                             <<"slot">>,
@@ -112,7 +133,9 @@ handle(Key, M1, M2, Opts) ->
                     {ok, NewDedupTrie} =
                         hb_ao:resolve(
                             DedupTrie,
-                            #{ <<"path">> => <<"set">>, SubjectID => Slot },
+                            (maps:from_list(
+                                [{ID, Slot} || ID <- SubjectIDs]
+                            ))#{ <<"path">> => <<"set">> },
                             Opts
                         ),
                     ?event({dedup_updated, NewDedupTrie}),
@@ -125,13 +148,8 @@ handle(Key, M1, M2, Opts) ->
                         },
                         Opts
                     );
-                Value ->
-                    ?event(
-                        {already_seen,
-                            {subject, SubjectID},
-                            {dedup_value, Value}
-                        }
-                    ),
+                [SubjectID | _] ->
+                    ?event({already_seen, {subject, SubjectID}}),
                     {skip, M1}
             end
     end.
@@ -173,6 +191,31 @@ dedup_test() ->
         {ok, ID} when ?IS_ID(ID),
         hb_ao:resolve(#{ <<"device">> => <<"dedup@1.0">> }, <<"id">>, #{})
     ).
+
+dedup_added_commitment_test() ->
+    hb:init(),
+    Signed =
+        hb_message:commit(
+            #{ <<"action">> => <<"transfer">> },
+            #{ <<"priv-wallet">> => ar_wallet:new() }
+        ),
+    TwoSigners =
+        hb_message:commit(Signed, #{ <<"priv-wallet">> => ar_wallet:new() }),
+    ?assert(hb_message:verify(TwoSigners, all, #{})),
+    Compute =
+        fun(Base, Body) ->
+            hb_ao:resolve(
+                Base,
+                #{ <<"path">> => <<"compute">>, <<"body">> => Body },
+                #{}
+            )
+        end,
+    Dedup = #{ <<"device">> => <<"dedup@1.0">> },
+    {ok, SeenSigned} = Compute(Dedup, Signed),
+    ?assertMatch({skip, _}, Compute(SeenSigned, Signed)),
+    ?assertMatch({skip, _}, Compute(SeenSigned, TwoSigners)),
+    {ok, SeenTwo} = Compute(Dedup, TwoSigners),
+    ?assertMatch({skip, _}, Compute(SeenTwo, Signed)).
 
 dedup_with_multipass_test() ->
     % Create a stack with a dedup device and 2 devices that will append to a
