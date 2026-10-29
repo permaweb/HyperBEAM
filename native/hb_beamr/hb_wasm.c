@@ -319,7 +319,8 @@ void wasm_initialize_runtime(void* raw) {
         char* kind_str = (char*) wasm_externtype_to_kind_string(type);
 
         // Check if the export is the indirect function table
-        if (strcmp(name->data, "__indirect_function_table") == 0) {
+        if (strcmp(name->data, "__indirect_function_table") == 0 &&
+                wasm_externtype_kind(type) == WASM_EXTERN_TABLE) {
             DRV_DEBUG("Found indirect function table: %s. Index: %d", name->data, i);
             proc->indirect_func_table_ix = i;
             const wasm_tabletype_t* table_type = wasm_externtype_as_tabletype_const(type);

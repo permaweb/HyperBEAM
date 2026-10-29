@@ -438,3 +438,19 @@ void_import_test() ->
     {ok, WASM, _Imports, _Exports} = start(Module),
     ?assertEqual({ok, []}, call(WASM, "run", [])),
     stop(WASM).
+
+indirect_table_kind_test() ->
+    Module =
+        <<
+            0, "asm", 1, 0, 0, 0,
+            1, 8, 2, 16#60, 1, 16#7F, 0, 16#60, 0, 0,
+            2, 16, 1, 3, "env", 8, "invoke_v", 16#00, 0,
+            3, 2, 1, 1,
+            5, 3, 1, 0, 1,
+            7, 35, 2, 3, "run", 16#00, 1,
+                25, "__indirect_function_table", 16#02, 0,
+            16#0A, 8, 1, 6, 0, 16#41, 0, 16#10, 0, 16#0B
+        >>,
+    {ok, WASM, _Imports, _Exports} = start(Module),
+    ?assertMatch({error, _, _}, call(WASM, "run", [], fun stub/3, #{})),
+    stop(WASM).
