@@ -370,24 +370,32 @@ resolve_spec(Ref, Opts) ->
         _ -> {error, <<"device-name-not-resolvable">>}
     end.
 
-%% @doc A low-trust implementation must be a `Device-Implementation', be signed
-%% by a trusted signer, implement the requested specification, and be
+%% @doc A low-trust implementation is what a trusted signer signed: a
+%% `Device-Implementation' that implements the requested specification and is
 %% machine-compatible.
 verify_and_load(Ref, SpecID, ID, Opts) ->
     maybe
-        {ok, Msg} ?= hb_cache:read(ID, Opts),
+        {ok, Read} ?= hb_cache:read(ID, Opts),
+        Trusted =
+            [
+                Signer
+            ||
+                Signer <- signers(Read, Opts),
+                lists:member(Signer, trusted_signers(Ref, SpecID, Opts))
+            ],
+        true ?= Trusted =/= [] orelse {error, <<"device-signer-untrusted">>},
+        true ?=
+            hb_message:verify(Read, Trusted, Opts)
+                orelse {error, <<"implementation-signature-invalid">>},
+        % Only the keys that a trusted signer signed make the implementation.
+        {ok, Msg} ?=
+            hb_message:with_only_committed(
+                hb_message:with_only_committers(Read, Trusted, Opts),
+                Opts
+            ),
         true ?=
             is_implementation(Msg, Opts)
                 orelse {error, <<"not-a-device-implementation">>},
-        Signers = signers(Msg, Opts),
-        true ?=
-            hb_message:verify(Msg, Signers, Opts)
-                orelse {error, <<"implementation-signature-invalid">>},
-        true ?=
-            lists:any(
-                fun(S) -> lists:member(S, trusted_signers(Ref, SpecID, Opts)) end,
-                Signers
-            ) orelse {error, <<"device-signer-untrusted">>},
         ok ?= implements(SpecID, Msg, Opts),
         ok ?= compatible(Msg, Opts),
         load_archive_message(Msg, Opts)
