@@ -247,7 +247,7 @@ local function satisfies_constraints(message, assess, all, required, match)
     -- If the assessment message is not present, check the signatures against
     -- the requirements list and specifiers.
     local satisfies_auth = satisfies_list_constraints(
-        ao.get("committers", message),
+        ao.signers(message),
         all,
         required,
         match
@@ -534,7 +534,7 @@ function validate_request(incoming_base, assignment)
     else
         -- If the request is not proxied, we set the `from' field to the address
         -- that signed the request.
-        local committers = ao.get("committers", assignment.body)
+        local committers = ao.signers(assignment.body)
         if #committers == 0 then
             return "error", log_result(base, "error", {
                 message = "No request signers found."

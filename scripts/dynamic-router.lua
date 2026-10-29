@@ -209,7 +209,7 @@ function register(state, assignment, opts)
     -- If the message is signed by an explicitly trusted peer, we can skip the
     -- is-admissible check.
     if state["trusted-peer"] then
-        local committers = ao.get("committers", req)
+        local committers = ao.signers(req)
         for _, committer in ipairs(committers) do
             if committer == state["trusted-peer"] then
                 state = add_node(state, req)
