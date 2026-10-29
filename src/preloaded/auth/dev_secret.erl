@@ -177,10 +177,24 @@
 -module(dev_secret).
 -device_libraries([lib_meta, lib_process, lib_secret]).
 -export([generate/3, import/3, list/3, commit/3, export/3, sync/3]).
+-export([device_info/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 -define(DEFAULT_AUTH_DEVICE, <<"cookie@1.0">>).
+
+%% @doc Return the options of the device. Only `generate` makes a new wallet,
+%% so only it needs an execution of its own.
+device_info(_Base) ->
+    #{ grouper => fun group/3 }.
+
+%% @doc Keep each `generate` request out of the in-flight groups, so that two
+%% callers never share one new wallet. Group every other request by its inputs.
+group(Base, Req, Opts) ->
+    case hb_path:matches(<<"generate">>, hb_path:hd(Req, Opts)) of
+        true -> ungrouped_exec;
+        false -> hb_persistent:default_grouper(Base, Req, Opts)
+    end.
 
 %% @doc Generate a new wallet for a user and register it on the node. If the
 %% request references a wallet that it may access, we return the wallet's
@@ -890,6 +904,18 @@ binary_to_addresses(Addresses) when is_list(Addresses) ->
 
 
 %%% Tests
+
+%% @doc Only a `generate` request gets an execution of its own, so a second
+%% caller does not share the wallet that it makes.
+generate_is_ungrouped_test() ->
+    Opts = #{ <<"await-inprogress">> => true },
+    Base = #{ <<"device">> => <<"secret@1.0">> },
+    Generate = #{ <<"path">> => <<"generate">> },
+    ?assertEqual(ungrouped_exec, hb_persistent:group(Base, Generate, Opts)),
+    ?assertNotEqual(
+        ungrouped_exec,
+        hb_persistent:group(Base, Generate#{ <<"path">> => <<"list">> }, Opts)
+    ).
 
 %% @doc Helper function to test wallet generation and verification flow.
 test_wallet_generate_and_verify(GeneratePath, ExpectedName, CommitParams) ->
