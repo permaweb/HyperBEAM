@@ -107,13 +107,17 @@ call(Base, Req, Opts) ->
         true ?=
             Request =/= none orelse
                 bad_request(<<"A tunnel request is required.">>),
-        dev_tunnel_server:call(
-            broker(Opts),
-            Address,
-            load(Request, Opts),
-            response_timeout(Base, Req, Opts),
-            explicit
-        )
+        {ok, Reply} ?=
+            dev_tunnel_server:call(
+                broker(Opts),
+                Address,
+                load(Request, Opts),
+                response_timeout(Base, Req, Opts),
+                explicit
+            ),
+        % The tunneled node's reply goes back as it is, without this node's
+        % signature.
+        {reply, Reply}
     end.
 
 %% @doc Route a raw singleton, leaving unrelated hooks and payloads untouched.

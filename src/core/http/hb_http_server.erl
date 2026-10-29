@@ -1072,7 +1072,9 @@ scheme(NodeMsg) ->
 %% HTTP status comes from the result and is not added to the message, which is
 %% sent with the node's signature on its hashpath (`maybe_sign/3'). A list is
 %% the `body' of the reply, which its `ao-result' key selects. If a request hook
-%% gives the reply (`{reply, Result}'), send `Result'.
+%% or a device gives the reply (`{reply, ...}'), send it as it is.
+reply(InitReq, TABMReq, {reply, Msg}, Opts) when is_map(Msg) ->
+    reply(InitReq, TABMReq, {ok, Msg}, Opts);
 reply(InitReq, TABMReq, {reply, Result}, Opts) ->
     reply(InitReq, TABMReq, Result, Opts);
 reply(InitReq, TABMReq, {ErlStatus, List}, Opts) when is_list(List) ->
