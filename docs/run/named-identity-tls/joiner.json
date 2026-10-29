@@ -1,0 +1,5 @@
+{
+  "public-url": "http://node-2.example.net:8734",
+  "zone-allow": {"gateway": "http://node-1.example.net:8734"},
+  "zone-init-allow": false
+}

@@ -1,0 +1,28 @@
+{
+  "protocol": "http2",
+  "port": 8734,
+  "tls": {
+    "identity": "zone/gateway",
+    "port": 443,
+    "domains": ["example.net", "*.example.net"],
+    "state-path": "/var/lib/lapee/nonvolatile/store/tls-state.etf",
+    "peers": [
+      "http://node-1.example.net:8734",
+      "http://node-2.example.net:8734",
+      "http://node-3.example.net:8734",
+      "http://node-4.example.net:8734",
+      "http://node-5.example.net:8734"
+    ],
+    "acme": {
+      "directory-url": "https://acme-v02.api.letsencrypt.org/directory",
+      "terms-of-service-agreed": true,
+      "challenge-type": "dns-01",
+      "dns-nameserver": "ns1.example.net",
+      "dns-nameservers": ["ns1.example.net", "ns2.example.net"],
+      "dns-peers": [
+        "http://node-1.example.net:8734",
+        "http://node-2.example.net:8734"
+      ]
+    }
+  }
+}

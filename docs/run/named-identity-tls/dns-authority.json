@@ -1,0 +1,24 @@
+{
+  "dns": {"address": "0.0.0.0", "port": 53},
+  "on": {
+    "dns-resolve": {"device": "tls@1.0"},
+    "start": [
+      {
+        "device": "measurement@1.0",
+        "path": "boot",
+        "method": "POST",
+        "target": "body",
+        "measurement-body-source": "hook-body",
+        "hook": {"result": "ignore"}
+      },
+      {
+        "device": "zone@1.0",
+        "path": "start",
+        "method": "POST",
+        "target": "body",
+        "hook": {"result": "ignore"}
+      },
+      {"device": "dns@1.0"}
+    ]
+  }
+}

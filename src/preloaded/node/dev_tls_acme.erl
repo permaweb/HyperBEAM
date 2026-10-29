@@ -165,8 +165,8 @@ authorize([URL | Rest], Challenge, State) ->
                 (maps:get(thumbprint, State1))/binary>>,
             {Key, Value} = challenge_record(Type, Authorization, Token,
                 KeyAuthorization),
-            ok = Challenge({put, Key, Value}),
             try
+                ok = Challenge({put, Key, Value}),
                 {_H, _B, State2} = expect(jws_post(
                     maps:get(<<"url">>, Selected), #{}, State1
                 ), [200, 202]),
@@ -320,7 +320,13 @@ get_json(URL, State) ->
 expect({ok, Status, Headers, Body}, Statuses) ->
     case lists:member(Status, Statuses) of
         true -> {Headers, Body};
-        false -> throw({acme, {'unexpected-acme-status', Status, problem(Body)}})
+        false ->
+            Reason = {'unexpected-acme-status', Status, problem(Body)},
+            case retry_after(Headers, 0) of
+                Delay when Delay > 0 -> throw({acme, {'acme-retry-after',
+                    erlang:system_time(millisecond) + Delay, Reason}});
+                _ -> throw({acme, Reason})
+            end
     end;
 expect({ok, Status, Headers, Body, State}, Statuses) ->
     case expect({ok, Status, Headers, Body}, Statuses) of
@@ -397,10 +403,17 @@ is_bad_nonce(_, _) -> false.
 problem(Body) ->
     case decode_json(Body) of {ok, Problem} -> Problem; error -> Body end.
 
-%% @doc Convert a numeric Retry-After value to milliseconds, or use the default.
+%% @doc Honor both delta-seconds and HTTP-date forms of Retry-After.
 retry_after(Headers, Default) ->
-    try binary_to_integer(header(<<"retry-after">>, Headers)) * 1000
-    catch _:_ -> Default
+    Value = header(<<"retry-after">>, Headers),
+    try max(0, binary_to_integer(Value) * 1000)
+    catch _:_ ->
+        try
+            Time = httpd_util:convert_request_date(binary_to_list(Value)),
+            max(0, (calendar:datetime_to_gregorian_seconds(Time)
+                - 62167219200) * 1000 - erlang:system_time(millisecond))
+        catch _:_ -> Default
+        end
     end.
 
 %% @doc Wait only when the requested polling delay fits before the deadline.
@@ -444,6 +457,19 @@ validate_token(Token) when is_binary(Token), byte_size(Token) > 0 ->
 validate_token(_) -> throw({acme, 'invalid-acme-token'}).
 
 %%% Tests
+
+%% @doc Preserve issuer retry deadlines instead of looping on rejected orders.
+retry_after_test() ->
+    ?assertEqual(7000, retry_after([{<<"retry-after">>, <<"7">>}], 1)),
+    ?assertEqual(1000, retry_after([], 1000)),
+    ?assertEqual(1000, retry_after([{<<"retry-after">>, <<"bad">>}], 1000)),
+    Future = erlang:system_time(second) + 120,
+    Date = httpd_util:rfc1123_date(
+        calendar:system_time_to_local_time(Future, second)),
+    Delay = retry_after([{<<"retry-after">>, list_to_binary(Date)}], 0),
+    ?assert(Delay > 118000 andalso Delay =< 120000),
+    ?assertThrow({acme, {'acme-retry-after', _, _}}, expect(
+        {ok, 429, [{<<"retry-after">>, <<"7">>}], <<"rate limited">>}, [200])).
 
 %% @doc Reject plaintext issuer URLs and recognize nonce-rejection responses.
 protocol_validation_test() ->

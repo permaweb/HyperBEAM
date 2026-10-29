@@ -2,6 +2,7 @@
 -module(hb_tls).
 -export([config/1, certificate_expiry/1, install/3, socket_options/2]).
 -export([csr/2, certificate_chain/1]).
+-export([wallet/1, validate/3, certificate_lifetime/1, notify/1]).
 -include("include/ar.hrl").
 -include_lib("public_key/include/public_key.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -17,6 +18,79 @@ config(NodeMsg) ->
                 Invalid -> error({'invalid-tls-config', Invalid})
             end
     end.
+
+%% @doc Select only the configured identity, without changing the node identity.
+wallet(Opts) ->
+    NodeOpts = hb_http_server:with_node_committer(Opts),
+    case hb_ao:get(<<"tls/identity">>, NodeOpts, not_found, NodeOpts) of
+        not_found -> {ok, hb_opts:get(priv_wallet, no_viable_wallet, NodeOpts)};
+        Identity ->
+            case hb_opts:as(Identity, NodeOpts) of
+                {ok, Scoped} ->
+                    {ok, hb_opts:get(priv_wallet, no_viable_wallet, Scoped)};
+                {error, _} -> {error, 'tls-identity-unavailable'}
+            end
+    end.
+
+%% @doc Wake an existing TLS lifecycle after a node-options update.
+notify(ServerID) ->
+    case hb_name:lookup({<<"tls@1.0">>, ServerID}) of
+        undefined -> ok;
+        PID -> PID ! options_changed, ok
+    end.
+
+%% @doc Validate an imported chain independently of the peer that supplied it.
+%% The configured SAN set must match exactly; trust is local, never peer-supplied.
+validate(Wallet, [Leaf | _] = Chain, TLS) ->
+    try
+        {ok, _} = socket_options(Wallet, Chain),
+        Certificate = public_key:pkix_decode_cert(Leaf, otp),
+        TBS = Certificate#'OTPCertificate'.tbsCertificate,
+        Extensions = TBS#'OTPTBSCertificate'.extensions,
+        #'Extension'{extnValue = SANs} =
+            lists:keyfind(?'id-ce-subjectAltName', 2, Extensions),
+        Names = lists:usort([hb_util:to_lower(hb_util:bin(Name))
+            || {dNSName, Name} <- SANs]),
+        true = Names =/= [] andalso Names =:= lists:usort([
+            hb_util:to_lower(Domain) || Domain <- maps:get(<<"domains">>, TLS)
+        ]),
+        true = server_usage(Extensions),
+        true = certificate_expiry(Chain) > erlang:system_time(millisecond),
+        Roots = case maps:get(<<"ca-certificates">>, TLS, undefined) of
+            undefined -> public_key:cacerts_get();
+            PEM -> {ok, CAs} = certificate_chain(PEM), CAs
+        end,
+        true = lists:any(fun(Root) ->
+            Path = lists:reverse(lists:delete(Root, Chain)),
+            case public_key:pkix_path_validation(Root, Path, []) of
+                {ok, _} -> true;
+                _ -> false
+            end
+        end, Roots),
+        ok
+    catch _:_ -> {error, 'invalid-tls-certificate'}
+    end;
+validate(_, _, _) -> {error, 'invalid-tls-certificate'}.
+
+%% @doc Restrict any declared key usage to a key usable for TLS server signing.
+server_usage(Extensions) ->
+    lists:all(fun({OID, Required}) ->
+        case lists:keyfind(OID, 2, Extensions) of
+            false -> true;
+            #'Extension'{extnValue = Values} -> lists:member(Required, Values)
+        end
+    end, [
+        {?'id-ce-keyUsage', digitalSignature},
+        {?'id-ce-extKeyUsage', ?'id-kp-serverAuth'}
+    ]).
+
+%% @doc Return the signed lifetime, not a lifetime asserted by a peer.
+certificate_lifetime([Leaf | _] = Chain) ->
+    Certificate = public_key:pkix_decode_cert(Leaf, otp),
+    TBS = Certificate#'OTPCertificate'.tbsCertificate,
+    certificate_expiry(Chain) - certificate_time(
+        TBS#'OTPTBSCertificate'.validity#'Validity'.notBefore
+    ).
 
 %% @doc Decode a PEM certificate chain, with the leaf certificate first.
 certificate_chain(PEM) ->

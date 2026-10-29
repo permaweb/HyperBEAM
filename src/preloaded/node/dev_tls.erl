@@ -1,7 +1,6 @@
 %%% @doc TLS certificates and domain validation for the node's RSA wallet.
-%%% This device supplies certificates to `hb_http_server', which terminates TLS
-%%% using the node's `priv-wallet'. The listener accepts a certificate only when
-%%% its public key matches that wallet.
+%%% This device supplies certificates to `hb_http_server', using the node wallet
+%%% or the named `tls/identity'. Certificates must match that wallet.
 %%%
 %%% The interface is as follows:
 %%%
@@ -17,10 +16,16 @@
 %%% - `obtain': Supply a leaf-first DER certificate chain during listener startup.
 %%%   This key requires the listener's private lifecycle capability; it is not a
 %%%   public certificate-issuance endpoint.
+%%% - `certificate': Return the public chain from the peer-renewal lifecycle.
+%%% - `challenge': Accept a signed, scoped DNS publication from the TLS identity.
+%%%
+%%% Setting `tls/port' adds HTTPS after the ordinary AO-Core listener starts.
+%%% This mode requires DNS-01 and a private `tls/state-path'. It adopts valid
+%%% peer certificates before attempting issuance and retains retry deadlines.
 %%%
 %%% Certificate configuration is read from the node's `tls' message. Setting
-%%% `tls/certificate-path' loads a leaf-first PEM chain from disk and bypasses
-%%% ACME and automatic renewal. The file is read at listener startup.
+%%% `tls/certificate-path' without `tls/port' loads a leaf-first PEM chain from
+%%% disk and bypasses ACME and automatic renewal.
 %%%
 %%% Without a certificate file, `tls/domains' and the `tls/acme' message configure
 %%% automated issuance. ACME requires a `directory-url' and explicit agreement
@@ -33,8 +38,10 @@
 %%% answered while the client waits for the issuer. Renewal replaces the live
 %%% certificate without closing established connections.
 -module(dev_tls).
+-device_libraries([lib_meta, lib_process]).
 -export([device_info/1]).
 -export([request/3, well_known/3, dns_resolve/3, csr/3, obtain/3]).
+-export([certificate/3, challenge/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -46,11 +53,12 @@
 %% @doc Expose the device keys while keeping certificate lifecycle helpers private.
 device_info(_) ->
     #{ exports => [
-        <<"request">>, <<"well-known">>, <<"dns-resolve">>, <<"csr">>, <<"obtain">>
+        <<"request">>, <<"well-known">>, <<"dns-resolve">>, <<"csr">>,
+        <<"obtain">>, <<"certificate">>, <<"challenge">>
     ] }.
 
 %% @doc Return a PEM CSR for request domains, defaulting to `tls/domains'.
-%% Only the node wallet signs the request; no private key material is returned.
+%% The selected TLS wallet signs the request; no key material is returned.
 csr(_Base, Request, Opts) ->
     try
         RawDomains = hb_ao:get_first(
@@ -63,8 +71,8 @@ csr(_Base, Request, Opts) ->
             fun(Domain) -> is_binary(Domain) andalso byte_size(Domain) > 0 end,
             Domains
         ),
-        NodeOpts = hb_http_server:with_node_committer(Opts),
-        DER = hb_tls:csr(hb_opts:get(priv_wallet, no_viable_wallet, NodeOpts), Domains),
+        {ok, Wallet} = hb_tls:wallet(Opts),
+        DER = hb_tls:csr(Wallet, Domains),
         {ok, #{
             <<"status">> => 200,
             <<"content-type">> => <<"text/plain">>,
@@ -79,6 +87,60 @@ csr(_Base, Request, Opts) ->
             <<"body">> => <<"CSR requires domain names and an RSA node wallet.">>
         }}
     end.
+
+%% @doc Serve only the public certificate chain; this never starts issuance.
+certificate(_Base, _Request, Opts) ->
+    case call(hb_name:lookup(runtime_name(hb_opts:address(Opts))),
+            certificate, ?CALL_TIMEOUT) of
+        {ok, Chain} -> {ok, #{
+            <<"status">> => 200,
+            <<"content-type">> => <<"application/pem-certificate-chain">>,
+            <<"cache-control">> => <<"no-store">>,
+            <<"body">> => public_key:pem_encode([
+                {'Certificate', DER, not_encrypted} || DER <- Chain
+            ])
+        }};
+        _ -> not_found()
+    end.
+
+%% @doc Accept only a signed, scoped, short-lived DNS challenge from our identity.
+%% Authorization projects committed fields before any record is interpreted.
+challenge(_Base, Request, Opts) ->
+    try
+        {ok, Wallet} = hb_tls:wallet(Opts),
+        {ok, Verified} = lib_meta:authorized(
+            hb_opts:committer(#{ <<"priv-wallet">> => Wallet }), Request, Opts
+        ),
+        #{ <<"type">> := <<"TLS-DNS-Challenge">>,
+            <<"method">> := <<"POST">>,
+            <<"name">> := Name, <<"token">> := Token,
+            <<"expires">> := Expires, <<"action">> := Action } = Verified,
+        TLS = hb_tls:config(Opts),
+        true = lists:member(Name, [dev_tls_acme:dns_name(Domain)
+            || Domain <- maps:get(<<"domains">>, TLS)]),
+        true = valid_token(Token, 256),
+        Now = erlang:system_time(second),
+        true = is_integer(Expires) andalso Expires > Now
+            andalso Expires =< Now + 300,
+        Operation = case Action of
+            <<"put">> ->
+                Value = hb_maps:get(<<"value">>, Verified, undefined, Opts),
+                true = valid_token(Value, 43) andalso byte_size(Value) =:= 43,
+                {publish, {Name, Token}, Value, Expires};
+            <<"delete">> -> {delete, {Name, Token}}
+        end,
+        ok = call(hb_name:lookup(runtime_name(hb_opts:address(Opts))),
+            Operation, ?CALL_TIMEOUT),
+        {ok, #{ <<"status">> => 200, <<"body">> => <<"OK">> }}
+    catch _:_ ->
+        {error, #{ <<"status">> => 403,
+            <<"body">> => <<"Invalid TLS challenge publication.">> }}
+    end.
+
+valid_token(Value, Max) when is_binary(Value), byte_size(Value) > 0,
+        byte_size(Value) =< Max ->
+    re:run(Value, <<"^[A-Za-z0-9_-]+$">>, [{capture, none}]) =:= match;
+valid_token(_, _) -> false.
 
 %% @doc Rewrite an exact HTTP-01 challenge path to a `well-known' resolution.
 %% The inbound HTTP request is nested under `request' in the hook message;
@@ -177,9 +239,11 @@ dns_reply(Name, Type, #{tls := TLS, challenges := Challenges}) ->
             Answers = case Type of
                 <<"txt">> ->
                     [dns_record(Name, <<"txt">>, [Value])
-                        || {{Zone, _Token}, Value} <- maps:to_list(Challenges),
-                            Zone =:= Name];
-                <<"ns">> -> [dns_record(Name, <<"ns">>, Nameserver)];
+                        || {{Zone, _Token}, Record} <- maps:to_list(Challenges),
+                            Zone =:= Name,
+                            Value <- challenge_value(Record)];
+                <<"ns">> -> [dns_record(Name, <<"ns">>, NS) || NS <-
+                    maps:get(<<"dns-nameservers">>, ACME, [Nameserver])];
                 <<"soa">> -> [SOA];
                 _ -> []
             end,
@@ -190,6 +254,14 @@ dns_reply(Name, Type, #{tls := TLS, challenges := Challenges}) ->
                 <<"cache-control">> => <<"no-store">>
             }}
     end.
+
+%% @doc Expired publications are absent even if their cleanup timer is delayed.
+challenge_value({Value, Expires}) ->
+    case Expires > erlang:system_time(second) of
+        true -> [Value];
+        false -> []
+    end;
+challenge_value(Value) -> [Value].
 
 %% @doc Build an IN-class record with zero TTL to avoid caching challenge data.
 dns_record(Name, Type, Data) ->
@@ -215,7 +287,12 @@ obtain(_Base, Request, Opts) ->
             andalso RequestCapability =:= OptsCapability of
         false -> not_found();
         true ->
-            case certificate(Opts) of
+            case hb_tls:config(Opts) of
+                #{ <<"port">> := _ } ->
+                    PID = ensure_started(Opts),
+                    PID ! options_changed,
+                    {ok, #{ <<"status">> => 202 }};
+                _ -> case certificate(Opts) of
                 {ok, Chain} -> {ok, #{
                     <<"status">> => 200,
                     <<"certificate-chain">> => Chain
@@ -224,6 +301,7 @@ obtain(_Base, Request, Opts) ->
                     <<"status">> => 500,
                     <<"body">> => hb_util:bin(io_lib:format("~p", [Reason]))
                 }}
+                end
             end
     end.
 
@@ -245,20 +323,85 @@ ensure_started(Opts) ->
     TLS = hb_tls:config(Opts),
     true = is_map(TLS),
     ServerID = server_id(Opts),
-    hb_name:singleton(runtime_name(ServerID), fun() -> loop(#{
-        server_id => ServerID,
-        tls => TLS,
-        wallet => hb_opts:get(priv_wallet, no_viable_wallet, Opts),
-        account_wallet => ar_wallet:new(),
-        challenges => #{},
-        operation => idle
-    }) end).
+    hb_name:singleton(runtime_name(ServerID), fun() ->
+        try
+            case maps:is_key(<<"port">>, TLS) of
+                true -> erlang:monitor(process,
+                    ranch_server:get_listener_sup(ServerID));
+                false -> ok
+            end,
+            loop(#{
+                server_id => ServerID,
+                tls => TLS,
+                wallet => case hb_tls:wallet(Opts) of
+                    {ok, Wallet} -> Wallet;
+                    {error, _} -> undefined
+                end,
+                opts => Opts,
+                account_wallet => ar_wallet:new(),
+                challenges => #{},
+                operation => idle
+            })
+        after cowboy:stop_listener({tls, ServerID})
+        end
+    end).
 
 %% @doc Serialize issuance and renewal while serving active challenge records.
 %% Only one issuance operation runs at a time. Stopping the singleton also
 %% terminates its linked issuance worker.
 loop(State) ->
     receive
+        options_changed when map_get(operation, State) =:= idle ->
+            case maps:is_key(<<"port">>, maps:get(tls, State)) of
+                true -> loop(check(State));
+                false -> loop(State)
+            end;
+        options_changed ->
+            case hb_tls:wallet(live_opts(State)) of
+                {ok, Wallet} when Wallet =:= map_get(wallet, State) -> ok;
+                _ -> cowboy:stop_listener({tls, maps:get(server_id, State)})
+            end,
+            loop(State);
+        {certificate, From, Ref} ->
+            From ! {Ref, case maps:get(chain, State, []) of
+                [] -> {error, not_found};
+                Chain -> {ok, Chain}
+            end},
+            loop(State);
+        {{publish, Token, Value, Expires}, From, Ref} ->
+            Challenges = maps:get(challenges, State),
+            case maps:get(Token, Challenges, undefined) of
+                {Value, Expires} ->
+                    From ! {Ref, ok},
+                    loop(State);
+                _ -> case map_size(Challenges) < 64
+                        orelse maps:is_key(Token, Challenges) of
+                true ->
+                    erlang:send_after(max(1, Expires
+                        - erlang:system_time(second)) * 1000,
+                        self(), {expire, Token, Expires}),
+                    From ! {Ref, ok},
+                    loop(State#{challenges => Challenges#{
+                        Token => {Value, Expires}
+                    }});
+                false ->
+                    From ! {Ref, {error, 'tls-challenge-capacity'}},
+                    loop(State)
+                end
+            end;
+        {expire, Token, Expires} ->
+            Challenges = maps:get(challenges, State),
+            case maps:find(Token, Challenges) of
+                {ok, {_, Expires}} ->
+                    loop(State#{challenges => maps:remove(Token, Challenges)});
+                _ -> loop(State)
+            end;
+        {fleet_result, Result} -> loop(fleet_complete(Result, State));
+        {begin_issue, Generation} when map_get(operation, State) =:= idle ->
+            case maps:get(generation, State, undefined) of
+                Generation -> loop(check(State#{ready_to_issue => true}));
+                _ -> loop(State)
+            end;
         {obtain, From, Ref} when map_get(operation, State) =:= idle ->
             loop(issue({obtain, From, Ref}, State));
         {obtain, From, Ref} ->
@@ -282,14 +425,209 @@ loop(State) ->
         {acme_result, Result} when map_get(operation, State) =/= idle ->
             loop(complete(Result, State));
         renew when map_get(operation, State) =:= idle ->
-            loop(issue(renew, State));
+            case maps:is_key(<<"port">>, maps:get(tls, State)) of
+                true -> loop(check(State));
+                false -> loop(issue(renew, State))
+            end;
         renew -> loop(State);
         {renew_after, Delay} -> loop(schedule(Delay, State));
+        {'DOWN', _, process, _, _} ->
+            exit(shutdown);
         {stop, From} ->
             hb_name:unregister(runtime_name(maps:get(server_id, State))),
             From ! {stopped, self()},
             exit(shutdown);
         _ -> loop(State)
+    end.
+
+%% @doc A listener disappearing during a worker reply ends its TLS lifecycle.
+live_opts(#{server_id := ServerID}) ->
+    try hb_http_server:get_opts(#{ <<"http-server">> => ServerID })
+    catch error:badarg -> exit(shutdown)
+    end.
+
+%% @doc Check peers in a worker while DNS and certificate reads remain available.
+check(State) ->
+    Opts = live_opts(State),
+    case hb_tls:wallet(Opts) of
+        {error, _} ->
+            cowboy:stop_listener({tls, maps:get(server_id, State)}),
+            schedule(30000, State);
+        {ok, Wallet} ->
+            Parent = self(),
+            spawn_link(fun() ->
+                Result = try
+                    Loaded = load_state(State#{opts => Opts, wallet => Wallet}),
+                    TLS = maps:get(tls, Loaded),
+                    Existing = maps:get(chain, Loaded, []),
+                    Current = case hb_tls:validate(Wallet, Existing, TLS) of
+                        ok -> Existing;
+                        _ -> []
+                    end,
+                    Chain = dev_tls_peer:best(Current, TLS, Wallet, Opts),
+                    {ok, Loaded#{chain => Chain}}
+                catch _:_ -> {error, 'tls-state-or-peer-check-failed'}
+                end,
+                Parent ! {fleet_result, Result}
+            end),
+            State#{operation => checking}
+    end.
+
+%% @doc Install a validated candidate, then decide whether issuance is due.
+fleet_complete({ok, Candidate0}, State) ->
+    Candidate = maps:merge(Candidate0,
+        maps:with([challenges, timer, generation], State)),
+    Chain = maps:get(chain, Candidate),
+    Idle = Candidate#{operation => idle},
+    try
+        {ok, Wallet} = hb_tls:wallet(live_opts(Idle)),
+        Wallet = maps:get(wallet, Idle),
+        case Chain of
+            [] -> ok;
+            _ ->
+                ok = save_state(Idle),
+                case maps:get(installed, State, []) =:= Chain andalso
+                        is_integer(catch ranch:get_port({tls,
+                            maps:get(server_id, State)})) of
+                    true -> ok;
+                    false -> ok = hb_http_server:install_tls(
+                        maps:get(opts, Idle), Chain)
+                end
+        end,
+        Installed = Idle#{installed => Chain},
+        case renewal_due(Installed) andalso erlang:system_time(millisecond)
+                >= maps:get(next_attempt, Idle, 0) of
+            true ->
+                case maps:get(ready_to_issue, Idle, false) of
+                    true -> fleet_issue(Installed#{ready_to_issue => false});
+                    false ->
+                        Generation = make_ref(),
+                        Jitter = maps:get(<<"renewal-jitter">>,
+                            maps:get(tls, Idle), 300) * 1000,
+                        erlang:send_after(rand:uniform(max(1, Jitter)),
+                            self(), {begin_issue, Generation}),
+                        Installed#{generation => Generation}
+                end;
+            false -> schedule(check_delay(Idle), Installed#{ready_to_issue => false})
+        end
+    catch _:_ ->
+        case hb_tls:wallet(live_opts(State)) of
+            {ok, CurrentWallet} when CurrentWallet =:= map_get(wallet, Candidate) -> ok;
+            _ -> cowboy:stop_listener({tls, maps:get(server_id, State)})
+        end,
+        retry('tls-certificate-install-failed', State#{operation => idle})
+    end;
+fleet_complete({issued, {ok, Chain}, Issuing}, State) ->
+    case hb_tls:validate(maps:get(wallet, Issuing), Chain,
+            maps:get(tls, Issuing)) of
+        ok -> fleet_complete({ok, Issuing#{chain => Chain,
+            next_attempt => erlang:system_time(millisecond)
+                + min(?RENEW_RETRY_MS, hb_tls:certificate_lifetime(Chain) div 3)
+        }}, State);
+        {error, Reason} ->
+            fleet_complete({issued, {error, Reason}, Issuing}, State)
+    end;
+fleet_complete({issued, {error, Reason}, Issuing}, State) ->
+    Delay = case Reason of
+        {'acme-retry-after', Until, _} -> max(?RENEW_RETRY_MS,
+            Until - erlang:system_time(millisecond));
+        _ -> ?RENEW_RETRY_MS
+    end,
+    Idle = (maps:merge(Issuing, maps:with([challenges], State)))#{operation => idle,
+        next_attempt => erlang:system_time(millisecond) + Delay},
+    case catch save_state(Idle) of
+        ok -> retry(Reason, Idle);
+        _ -> retry('tls-state-write-failed', Idle)
+    end;
+fleet_complete({error, Reason}, State) ->
+    retry(Reason, State#{operation => idle}).
+
+%% @doc Persist the retry gate before any account or order request is sent.
+fleet_issue(State) ->
+    Parent = self(),
+    Issuing = State#{next_attempt =>
+        erlang:system_time(millisecond) + ?RENEW_RETRY_MS},
+    ok = save_state(Issuing),
+    spawn_link(fun() ->
+        Challenge = fun(Action) -> publish(Action, Parent, Issuing) end,
+        Result = dev_tls_acme:obtain(
+            maps:get(tls, Issuing), maps:get(wallet, Issuing),
+            maps:get(account_wallet, Issuing), Challenge, maps:get(opts, Issuing)
+        ),
+        Parent ! {fleet_result, {issued, Result, Issuing}}
+    end),
+    Issuing#{operation => issuing}.
+
+%% @doc Publish locally and to all DNS authorities before requesting validation.
+publish({put, {Name, Token} = Key, Value}, Parent, State) ->
+    % Leave clock-skew margin inside the authority's five-minute limit.
+    Expires = erlang:system_time(second) + 240,
+    Record = #{ <<"name">> => Name, <<"token">> => Token,
+        <<"value">> => Value, <<"expires">> => Expires,
+        <<"action">> => <<"put">> },
+    ok = call(Parent, {publish, Key, Value, Expires}, ?CALL_TIMEOUT),
+    dev_tls_peer:publish(Record, maps:get(tls, State),
+        maps:get(wallet, State), maps:get(opts, State));
+publish({delete, {Name, Token} = Key}, Parent, State) ->
+    call(Parent, {delete, Key}, ?CALL_TIMEOUT),
+    dev_tls_peer:publish(#{ <<"name">> => Name, <<"token">> => Token,
+        <<"expires">> => erlang:system_time(second) + 240,
+        <<"action">> => <<"delete">> }, maps:get(tls, State),
+        maps:get(wallet, State), maps:get(opts, State)).
+
+%% @doc Renew in the final third of the signed lifetime, at most 30 days early.
+renewal_due(#{chain := []}) -> true;
+renewal_due(#{chain := Chain}) ->
+    hb_tls:certificate_expiry(Chain) - erlang:system_time(millisecond)
+        =< min(?RENEW_BEFORE_MS, hb_tls:certificate_lifetime(Chain) div 3).
+
+%% @doc Check at least twice before expiry, with a six-hour maximum interval.
+check_delay(State) ->
+    case maps:get(chain, State, []) of
+        [] -> 30000;
+        Chain -> max(1000, min(6 * 60 * 60 * 1000,
+            (hb_tls:certificate_expiry(Chain)
+                - erlang:system_time(millisecond)) div 2))
+    end.
+
+%% @doc Load private lifecycle state only after the named identity is installed.
+%% The explicit parent directory must already exist on the protected volume.
+load_state(State = #{loaded := true, wallet := Wallet,
+        context := {Address, _}}) ->
+    Address = hb:address(Wallet),
+    State;
+load_state(State = #{tls := TLS, wallet := Wallet}) ->
+    Path = maps:get(<<"state-path">>, TLS),
+    true = filelib:is_dir(filename:dirname(Path)),
+    true = maps:get(<<"challenge-type">>, maps:get(<<"acme">>, TLS))
+        =:= <<"dns-01">>,
+    Context = {hb:address(Wallet), maps:get(<<"domains">>, TLS)},
+    Saved = case file:read_file(Path) of
+        {error, enoent} -> #{context => Context};
+        {ok, Binary} when byte_size(Binary) =< 262144 ->
+            #{context := Context} = binary_to_term(Binary, [safe]);
+        _ -> error('tls-state-unreadable')
+    end,
+    Loaded = maps:merge(State,
+        maps:with([account_wallet, chain, next_attempt], Saved)),
+    Loaded#{loaded => true, context => Context}.
+
+%% @doc Atomically retain the account, chain and retry deadline outside AO stores.
+save_state(#{tls := TLS} = State) ->
+    Path = maps:get(<<"state-path">>, TLS),
+    Temp = <<(hb_util:bin(Path))/binary, ".",
+        (hb_util:bin(erlang:unique_integer([positive])))/binary>>,
+    Saved = maps:with([context, account_wallet, chain, next_attempt], State),
+    try
+        {ok, File} = file:open(Temp, [write, binary, exclusive, raw]),
+        try
+            ok = file:change_mode(Temp, 8#600),
+            ok = file:write(File, term_to_binary(Saved)),
+            ok = file:sync(File)
+        after file:close(File)
+        end,
+        file:rename(Temp, Path)
+    after file:delete(Temp)
     end.
 
 %% @doc Run ACME in a linked worker, leaving the singleton free to answer queries.
@@ -339,17 +677,26 @@ schedule_certificate(Chain, State) ->
 
 %% @doc Schedule renewal, splitting delays that exceed the timer's maximum range.
 schedule(Delay, State) when Delay > ?MAX_TIMER_MS ->
-    erlang:send_after(?MAX_TIMER_MS, self(),
-        {renew_after, Delay - ?MAX_TIMER_MS}),
-    State;
+    schedule_message(?MAX_TIMER_MS, {renew_after, Delay - ?MAX_TIMER_MS}, State);
 schedule(Delay, State) ->
-    erlang:send_after(Delay, self(), renew),
-    State.
+    schedule_message(Delay, renew, State).
 
-%% @doc Report a renewal failure and retry in one hour.
+%% @doc Keep one scheduled lifecycle check per node.
+schedule_message(Delay, Message, State) ->
+    case maps:get(timer, State, undefined) of
+        undefined -> ok;
+        Timer -> erlang:cancel_timer(Timer)
+    end,
+    State#{timer => erlang:send_after(Delay, self(), Message)}.
+
+%% @doc Report a failure; peer checks need not wait for the next allowed order.
 retry(Reason, State) ->
     ?event(tls, {acme_renewal_failed, {reason, Reason}}),
-    schedule(?RENEW_RETRY_MS, State).
+    Delay = case maps:is_key(<<"port">>, maps:get(tls, State)) of
+        true -> min(?RENEW_RETRY_MS, check_delay(State));
+        false -> ?RENEW_RETRY_MS
+    end,
+    schedule(Delay, State).
 
 %% @doc Call the singleton with a reply reference and the caller's timeout.
 %% A missing process or unanswered request returns a TLS runtime error.

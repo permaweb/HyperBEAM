@@ -108,6 +108,7 @@
 -export([update_opts/2, set_default_opts/1, set_proc_server_id/1]).
 -export([static/3, static/4]).
 -export([start_node/0, start_node/1]).
+-export([install_tls/2]).
 -export([resolve_request/3, error_reply/4, commit_reply/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -414,7 +415,10 @@ new_server(RawNodeMsg) ->
                 ),
                 ProtoOpts
         end,
-    TLSOpts = prepare_tls(TLS, Wallet, ServerID, NodeMsg),
+    TLSOpts = case TLS of
+        #{ <<"port">> := _ } -> stop_tls(ServerID), [];
+        _ -> prepare_tls(TLS, Wallet, ServerID, NodeMsg)
+    end,
     {Port, Listener} = try
         case case {Protocol, TLSOpts} of
                 {http3, []} -> start_http3(ServerID, PrometheusOpts, NodeMsg);
@@ -435,6 +439,11 @@ new_server(RawNodeMsg) ->
     % that the OS assigned a different port. This happens, for example, when we
     % use port 0.
     set_opts(NodeMsg#{ <<"port">> => Port }),
+    case TLS of
+        #{ <<"port">> := _ } ->
+            tls_request(NodeMsgWithID, ServerID);
+        _ -> ok
+    end,
     ?event(http,
         {http_server_started,
             {listener, Listener},
@@ -450,7 +459,7 @@ new_server(RawNodeMsg) ->
 prepare_tls(false, _Wallet, ServerID, _NodeMsg) ->
     stop_tls(ServerID),
     [];
-prepare_tls(TLS, Wallet, ServerID, NodeMsg) ->
+prepare_tls(TLS, _Wallet, ServerID, NodeMsg) ->
     ACME = hb_maps:get(<<"acme">>, TLS, #{}, NodeMsg),
     stop_tls(ServerID),
     try
@@ -471,33 +480,53 @@ prepare_tls(TLS, Wallet, ServerID, NodeMsg) ->
             {false, <<"dns-01">>} -> ok;
             _ -> error('invalid-acme-challenge-type')
         end,
-        PrivateTLS = #{
-            <<"server-id">> => ServerID,
-            <<"lifecycle-capability">> => make_ref()
-        },
-        Private = #{ <<"tls">> => PrivateTLS },
-        Request = hb_private:set(
-            #{ <<"path">> => <<"obtain">> }, Private, NodeMsg
-        ),
-        ResolveOpts = hb_private:set(NodeMsg, Private, NodeMsg),
-        {ok, BootstrapResult} = hb_ao:resolve(
-            #{ <<"device">> => <<"tls@1.0">> },
-            Request,
-            ResolveOpts#{
-                <<"only">> => local,
-                <<"hashpath">> => ignore,
-                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
-            }
-        ),
+        {ok, BootstrapResult} = tls_request(NodeMsg, ServerID),
         Chain = hb_maps:get(
             <<"certificate-chain">>, BootstrapResult, not_found, NodeMsg
         ),
-        {ok, TLSOpts} = hb_tls:socket_options(Wallet, Chain),
+        {ok, TLSWallet} = hb_tls:wallet(NodeMsg),
+        {ok, TLSOpts} = hb_tls:socket_options(TLSWallet, Chain),
         TLSOpts
     catch
         Class:Reason:Stack ->
             stop_tls(ServerID),
             erlang:raise(Class, Reason, Stack)
+    end.
+
+%% @doc Give the TLS device a private, one-call listener lifecycle capability.
+tls_request(NodeMsg, ServerID) ->
+    Private = #{ <<"tls">> => #{
+        <<"server-id">> => ServerID,
+        <<"lifecycle-capability">> => make_ref()
+    } },
+    hb_ao:resolve(
+        #{ <<"device">> => <<"tls@1.0">> },
+        hb_private:set(#{ <<"path">> => <<"obtain">> }, Private, NodeMsg),
+        (hb_private:set(NodeMsg, Private, NodeMsg))#{
+            <<"only">> => local,
+            <<"hashpath">> => ignore,
+            <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+        }
+    ).
+
+%% @doc Add or update HTTPS against the existing node's request pipeline.
+%% The admission listener and its live node options remain authoritative.
+install_tls(Opts, Chain) ->
+    ServerID = hb_opts:get(http_server, no_server, Opts),
+    Ref = {tls, ServerID},
+    TLS = hb_tls:config(Opts),
+    {ok, Wallet} = hb_tls:wallet(Opts),
+    case catch ranch:get_port(Ref) of
+        Port when is_integer(Port) -> hb_tls:install(Ref, Wallet, Chain);
+        _ ->
+            {ok, TLSOpts} = hb_tls:socket_options(Wallet, Chain),
+            case start_http2(Ref,
+                    ranch:get_protocol_options(ServerID),
+                    Opts#{ <<"port">> => maps:get(<<"port">>, TLS) },
+                    TLSOpts) of
+                {ok, _, _} -> ok;
+                {error, _} = Error -> Error
+            end
     end.
 
 challenge_node(ACME, ServerID, NodeMsg) ->
@@ -543,6 +572,7 @@ stop_tls(ServerID) ->
         undefined -> ok
     end,
     cowboy:stop_listener({tls_http_01, ServerID}),
+    cowboy:stop_listener({tls, ServerID}),
     ok.
 
 start_http3(ServerID, ProtoOpts, NodeMsg) ->
@@ -915,7 +945,8 @@ set_opts(Opts) ->
             ok;
         ServerRef ->
             % `Opts' from a request contain no key material: keep the node's.
-            ok = cowboy:set_env(ServerRef, node_msg, with_node_committer(Opts))
+            ok = cowboy:set_env(ServerRef, node_msg, with_node_committer(Opts)),
+            hb_tls:notify(ServerRef)
     end.
 set_opts(Request, Opts) ->
     PreparedRequest = hb_message:uncommitted(Request),
@@ -1030,6 +1061,7 @@ start_node(Opts) ->
 
 scheme(NodeMsg) ->
     case hb_tls:config(NodeMsg) of
+        #{ <<"port">> := _ } -> <<"http">>;
         TLS when is_map(TLS) -> <<"https">>;
         false -> <<"http">>
     end.
