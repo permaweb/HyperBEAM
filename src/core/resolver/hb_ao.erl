@@ -1233,7 +1233,7 @@ set(RawBase, RawReq, Opts) when is_map(RawReq) ->
         end,
         Base,
         lists:filter(
-            fun(Key) -> not hb_private:is_private(Key) end,
+            fun(Key) -> not hb_private:is_private_path(Key, Opts) end,
             hb_maps:keys(hb_message:uncommitted(Req, Opts), Opts)
         )
     ).

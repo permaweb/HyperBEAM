@@ -906,9 +906,9 @@ items(Items, Msg, Opts) ->
         Items
     ).
 
-%% @doc Add a key to a message, unless the key is private.
+%% @doc Add a key to a message, unless a part of the key's path is private.
 put_unless_private(Key, Val, Msg, Opts) ->
-    case hb_private:is_private(Key) of
+    case hb_private:is_private_path(Key, Opts) of
         true -> Msg;
         false -> hb_maps:put(Key, Val, Msg, Opts)
     end.
@@ -1104,6 +1104,19 @@ parse_explicit_message_test() ->
     ?assertEqual(
         [<<"uri-did-ar-x">>, #{ <<"path">> => <<"a">> }],
         from(<<"/uri-did-ar-x/a">>, #{})
+    ).
+
+%% @doc A key whose path contains a private part is not added to a request.
+private_path_item_dropped_test() ->
+    ?assertEqual(
+        [
+            {as, <<"metering@1.0">>, #{}},
+            #{ <<"path">> => <<"estimate">> }
+        ],
+        from(
+            <<"/~metering@1.0/estimate&%2fpriv%2fhook-caller=kernel">>,
+            #{}
+        )
     ).
 
 %% @doc Device fields are data while parsing, including on device-only steps.
