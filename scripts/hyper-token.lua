@@ -185,7 +185,11 @@ end
 local function satisfies_list_constraints(subject, all, required, match)
     -- Normalize the fields to tables, aside from the match count.
     subject = normalize_table(subject)
-    all = normalize_table(all)
+    all = normalize_table(all or {})
+    -- An empty list admits no signer.
+    if #all == 0 then
+        return false
+    end
     required = normalize_table(required or {})
     -- Normalize the match count.
     match = match or #all
