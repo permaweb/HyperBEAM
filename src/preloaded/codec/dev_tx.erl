@@ -1384,6 +1384,25 @@ modified_committed_value_test() ->
     ?assertNot(hb_message:verify(ModifiedTag, all, #{})),
     ModifiedField = Structured#{ <<"quantity">> => <<"1">> },
     ?assertNot(hb_message:verify(ModifiedField, all, #{})),
+    % A `public-key' that is not the item's `owner' does not verify.
+    #{ <<"owner">> := OtherOwner } = ar_wallet:new(),
+    [{ID, Commitment}] = maps:to_list(
+        maps:get(<<"commitments">>, Structured)),
+    ?assertMatch(
+        {ok, false},
+        ?MODULE:verify(
+            Structured#{
+                <<"commitments">> =>
+                    #{
+                        ID => Commitment#{
+                            <<"public-key">> => hb_util:encode(OtherOwner)
+                        }
+                    }
+            },
+            #{},
+            #{}
+        )
+    ),
     % Commit refuses a request `field-quantity' that differs from the key.
     ?assertThrow(
         {request_field_differs, <<"quantity">>},

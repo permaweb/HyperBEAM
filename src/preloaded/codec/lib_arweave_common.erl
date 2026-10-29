@@ -276,7 +276,12 @@ verify_identity(Item, TABM, Opts) ->
         <<"unsigned-sha256">> -> not maps:is_key(<<"committer">>, Commitment);
         _ ->
             % A `signature' is a binary: `hb_util:decode/1' takes a list too.
+            % The `public-key' of a commitment is its `owner', the key that
+            % verifies its signature.
             is_binary(maps:get(<<"signature">>, Commitment)) andalso
+                maps:get(<<"public-key">>, Commitment,
+                    hb_util:encode(Item#tx.owner)) =:=
+                    hb_util:encode(Item#tx.owner) andalso
                 hb_util:human_id(ID) =:= hb_util:human_id(Item#tx.id) andalso
                 maps:get(<<"committer">>, Commitment, unset) =:=
                     committer(Item, Opts)

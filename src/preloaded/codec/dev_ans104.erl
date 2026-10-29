@@ -303,6 +303,23 @@ modified_committed_value_test() ->
             all,
             #{}
         )
+    ),
+    % A `public-key' that is not the item's `owner' does not verify.
+    #{ <<"owner">> := OtherOwner } = ar_wallet:new(),
+    ?assertMatch(
+        {ok, false},
+        ?MODULE:verify(
+            Msg#{
+                <<"commitments">> =>
+                    #{
+                        ID => Commitment#{
+                            <<"public-key">> => hb_util:encode(OtherOwner)
+                        }
+                    }
+            },
+            #{},
+            #{}
+        )
     ).
 
 %% @doc Committing a message with 126 keys and a nested message throws
