@@ -398,6 +398,15 @@ to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
                     % Merge the index message with the original, favoring the 
                     % keys of the original in the event of conflict. Remove the
                     % `priv` message, if present.
+                    % An index key becomes a reply header, so encode it as
+                    % every other key is and leave out the reserved headers
+                    % and `set-cookie`.
+                    Index =
+                        hb_maps:without(
+                            ?RESERVED_HEADERS ++ [<<"set-cookie">>],
+                            encode_keys(hb_private:reset(IndexTABM)),
+                            Opts
+                        ),
                     Merged =
                         hb_maps:merge(
                             % Index values become reply headers, so escape
@@ -409,7 +418,7 @@ to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
                                         hb_escape:encode_header(Value);
                                    (_Key, Value) -> Value
                                 end,
-                                hb_private:reset(IndexTABM)
+                                Index
                             ),
                             hb_maps:without(
                                 [<<"body">>, <<"content-type">>],
@@ -1385,6 +1394,43 @@ index_header_value_escape_test() ->
         hb_escape:encode_header(Value),
         hb_maps:get(<<"zzz">>, Encoded, not_found, #{})
     ).
+
+%% @doc Encode an index key that becomes a reply header, and leave out the
+%% reserved headers and `set-cookie`.
+index_header_key_encoding_test() ->
+    Opts = #{
+        <<"default-index">> => #{
+            <<"device">> => #{
+                <<"index">> =>
+                    fun(_, _, _) ->
+                        {ok, #{
+                            <<"set-cookie: marker=1\r\nx">> => <<"value">>,
+                            <<"set-cookie">> => <<"marker=1">>,
+                            <<"transfer-encoding">> => <<"chunked">>,
+                            <<"signature">> => <<"value">>
+                        }}
+                    end
+            }
+        }
+    },
+    {ok, Encoded} =
+        to(
+            #{ <<"foo">> => <<"bar">> },
+            #{ <<"index">> => true },
+            Opts
+        ),
+    ?assertEqual(
+        <<"value">>,
+        hb_maps:get(
+            <<"set-cookie%3a%20marker%3d1%0d%0ax">>,
+            Encoded,
+            not_found,
+            #{}
+        )
+    ),
+    ?assertEqual(false, maps:is_key(<<"set-cookie">>, Encoded)),
+    ?assertEqual(false, maps:is_key(<<"transfer-encoding">>, Encoded)),
+    ?assertEqual(false, maps:is_key(<<"signature">>, Encoded)).
 
 %% @doc A message's own keys with the names of reserved headers are served by
 %% ID and posted as they were written, over HTTP/1.1 and HTTP/2.
