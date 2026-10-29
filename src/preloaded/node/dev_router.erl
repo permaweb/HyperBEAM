@@ -371,12 +371,31 @@ do_apply_route(
     Path = hb_cache:ensure_loaded(RawPath, Opts),
     Match = hb_cache:ensure_loaded(RawMatch, Opts),
     With = hb_cache:ensure_loaded(RawWith, Opts),
-    % Apply the regex to the path and replace the first occurrence.
+    % Apply the regex to the path and replace the first occurrence. The route
+    % gives the host: the rest of the caller's path may not change it.
     case re:replace(Path, Match, With, [global, {return, binary}]) of
         NewPath when is_binary(NewPath) ->
-            {ok, NewPath};
+            case url_host(NewPath) =:= url_host(routed(Path, Match, With)) of
+                true -> {ok, NewPath};
+                false -> {error, <<"The path changes the host of its route.">>}
+            end;
         _ ->
             {error, invalid_replace_args}
+    end.
+
+%% @doc Return the URL that a route gives for the part of a path that its
+%% `match' matches.
+routed(Path, Match, With) ->
+    case re:run(Path, Match, [{capture, first, binary}]) of
+        {match, [Matched]} -> re:replace(Matched, Match, With, [{return, binary}]);
+        nomatch -> Path
+    end.
+
+%% @doc Return the host and port of a URL, or `undefined' for a path.
+url_host(URL) ->
+    case uri_string:parse(URL) of
+        #{ host := Host } = Parsed -> {Host, maps:get(port, Parsed, undefined)};
+        _ -> undefined
     end.
 
 %% @doc Join a route's prefix to a path. A prefix that ends in `/' adds no
