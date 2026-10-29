@@ -172,9 +172,9 @@ snapshot(RawBase, _Req, Opts) ->
 
 %% @doc Before computation begins, a boot phase is required. This phase
 %% allows devices on the execution stack to initialize themselves. We set the
-%% private `initialized' key to `true' to indicate that the state contains the
-%% live state of its execution devices. The key is never stored, so a state
-%% read from the cache is not initialized.
+%% private `initialized' key to the ID of the state that the process device
+%% returns, so a state that a later step changed is not taken as live. The key
+%% is never stored, so a state read from the cache is not initialized.
 init(Base, Req, Opts) ->
     ?event({init_called, {base, Base}, {req, Req}}),
     % If the process does not set `requires-determinism', set it to `true',
@@ -188,10 +188,8 @@ init(Base, Req, Opts) ->
         ),
     {
         ok,
-        hb_private:set(
+        set_initialized(
             hb_ao:set(Initialized, #{ <<"at-slot">> => -1 }, Opts),
-            <<"initialized">>,
-            <<"true">>,
             Opts
         )
     }.
@@ -292,7 +290,11 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                 },
                 Opts
             ),
-            {ok, without_snapshot(lib_process:as_process(Base, Opts), Opts)};
+            {ok,
+                set_initialized(
+                    without_snapshot(lib_process:as_process(Base, Opts), Opts),
+                    Opts
+                )};
         CurrentSlot when CurrentSlot < TargetSlot ->
             % Compute the next state transition.
             NextSlot = CurrentSlot + 1,
@@ -798,6 +800,25 @@ push(Base, Req, Opts) ->
         Opts
     ).
 
+%% @doc Set the private `initialized' key of a state that the process device
+%% returns.
+set_initialized(State, Opts) ->
+    hb_private:set(
+        State,
+        <<"initialized">>,
+        hb_message:id(State, uncommitted, Opts),
+        Opts
+    ).
+
+%% @doc Return whether the state is the one that the process device returned.
+is_initialized(State, Opts) ->
+    case hb_private:get(<<"initialized">>, State, Opts) of
+        StateID when is_binary(StateID) ->
+            StateID =:= hb_message:id(State, uncommitted, Opts);
+        _ ->
+            false
+    end.
+
 %% @doc Ensure that the process message we have in memory is live and
 %% up-to-date.
 ensure_loaded(Base, Req, Opts) ->
@@ -805,11 +826,13 @@ ensure_loaded(Base, Req, Opts) ->
     TargetSlot = hb_ao:get(<<"slot">>, Req, undefined, Opts),
     ProcID = lib_process:process_id(Base, #{}, Opts),
     ?event({ensure_loaded, {base, Base}, {req, Req}}),
-    case hb_private:get(<<"initialized">>, Base, Opts) of
-        <<"true">> ->
+    % A state is live only while it is the state that the process device
+    % returned; a step that changes the state changes its ID.
+    case is_initialized(Base, Opts) of
+        true ->
             ?event(already_initialized),
             {ok, Base};
-        _ ->
+        false ->
             ?event(not_initialized),
             % Try to load the latest complete state from disk.
             LoadRes =
@@ -867,7 +890,7 @@ ensure_loaded(Base, Req, Opts) ->
                             {after_normalization, NormalizedWithoutSnapshot}
                         }
                     ),
-                    {ok, NormalizedWithoutSnapshot};
+                    {ok, set_initialized(NormalizedWithoutSnapshot, Opts)};
                 {error, not_found} ->
                     % If we do not have a checkpoint, initialize the
                     % process from scratch.
