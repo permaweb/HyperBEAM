@@ -174,7 +174,14 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
             true ->
                 case hb_opts:get(relay_allow_commit_request, false, Opts) of
                     true ->
-                        Committed = hb_message:commit(TargetMod4, Opts),
+                        % The node signs keys that the caller gives, so it gives
+                        % them its own `type': a relayed request is never the
+                        % operator's message or a device implementation.
+                        Committed =
+                            hb_message:commit(
+                                TargetMod4#{ <<"type">> => <<"Relay-Request">> },
+                                Opts
+                            ),
                         ?event(debug_relay, {relay_recommitted, Committed}, Opts),
                         true = hb_message:verify(Committed, all),
                         Committed;

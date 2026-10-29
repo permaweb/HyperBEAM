@@ -35,6 +35,10 @@ authorized(Committers, Msg, Opts) ->
             Keys = signed_keys(Signed, Opts),
             % A signature that covers a `hashpath' attests a result.
             false ?= hb_maps:is_key(<<"hashpath">>, Keys, Opts),
+            % A signature on a `Relay-Request' attests a relayed request.
+            false ?=
+                hb_maps:get(<<"type">>, Keys, undefined, Opts)
+                    == <<"Relay-Request">>,
             {ok, Keys}
         else
             _ -> {error, not_authorized}
