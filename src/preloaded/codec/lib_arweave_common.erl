@@ -146,10 +146,14 @@ anchor_field(Item, Prefix, _Opts) ->
 %% @doc Return a TABM of the raw tags of the item, including all metadata
 %% (e.g. `ao-type', `ao-data-key', etc.)
 tags(Item, Opts) ->
-    hb_ao:normalize_keys(
+    Tags = hb_ao:normalize_keys(
         deduplicating_from_list(Item#tx.tags, Opts),
         Opts
-    ).
+    ),
+    % The codec's commitment replaces a tag with the same key.
+    maps:is_key(<<"commitments">>, Tags) andalso
+        throw({invalid_field, tag_name, <<"commitments">>}),
+    Tags.
 
 %% @doc Normalize a tag name as `structured@1.0' normalizes a key.
 normalize_key(Key) -> hb_util:lowercase_key(hb_ao:normalize_key(Key)).
@@ -162,6 +166,7 @@ data(Item, Req, Tags, FromFun, Opts) ->
     % the raw data value. This handles unbundling nested messages, as well as
     % applying the `ao-data-key' tag if given.
     DataKey = maps:get(<<"ao-data-key">>, Tags, <<"data">>),
+    refuse_reserved_data_key(DataKey, Item#tx.data),
     case {DataKey, Item#tx.data} of
         {_, ?DEFAULT_DATA} -> #{};
         {DataKey, Empty} when Empty =:= #{}, Item#tx.manifest =:= undefined ->
@@ -184,6 +189,37 @@ data(Item, Req, Tags, FromFun, Opts) ->
             );
         {DataKey, Data} -> #{ DataKey => Data }
     end.
+
+%% @doc Throw if an item puts its data under a key that the codec keeps for
+%% itself. A data map gives its own keys, so only a commitment or a private
+%% key is refused there.
+refuse_reserved_data_key(_DataKey, Data) when is_map(Data) ->
+    lists:foreach(
+        fun(Key) ->
+            is_codec_key(Key) andalso throw({invalid_field, data_key, Key})
+        end,
+        maps:keys(Data)
+    );
+refuse_reserved_data_key(DataKey, _Data) ->
+    (is_codec_key(DataKey) orelse is_field_key(DataKey)) andalso
+        throw({invalid_field, data_key, DataKey}).
+
+%% @doc Whether a key is one that the codec adds to the message: its
+%% commitment or a private key.
+is_codec_key(Key) ->
+    Key =:= <<"commitments">> orelse hb_private:is_private(Key).
+
+%% @doc Whether a key is a field of an ANS-104 item or a TX, or a key that the
+%% codec reads its data with.
+is_field_key(Key) ->
+    lists:member(
+        Key,
+        [
+            <<"ao-data-key">>, <<"ao-types">>, <<"target">>, <<"anchor">>,
+            <<"owner">>, <<"signature">>, <<"id">>, <<"format">>,
+            <<"quantity">>, <<"reward">>, <<"data-root">>, <<"data-size">>
+        ]
+    ).
 
 %% @doc Calculate the list of committed keys for an item, based on its
 %% components (fields, tags, and data).
