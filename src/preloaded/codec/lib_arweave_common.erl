@@ -775,14 +775,20 @@ holds_signed_values(Commitment, OriginalTags, TABM, Data, FieldsFun, Opts) ->
         end,
     TagsCarried =
         holds_tags(OriginalTags, maps:keys(MessageFields), TABM, Opts),
-    case TagsCarried of
-        false when OriginalTags =/= [] ->
-            % `original-tags' are the tags of the signed item: a message that
-            % does not carry them is not the item that the commitment signed.
-            throw({missing_committed_key,
-                hd(tag_keys(#tx{ tags = OriginalTags }, Opts))});
-        _ ->
-            holds(MessageFields, TABM, Opts) andalso TagsCarried
+    % `original-tags' are the tags of the signed item: a message without one of
+    % their keys is not the item that the commitment signed. A message whose
+    % key has another value is a changed message, which encodes from its own
+    % values.
+    Missing =
+        [
+            Key
+        ||
+            Key <- tag_keys(#tx{ tags = OriginalTags }, Opts),
+            not hb_maps:is_key(Key, TABM, Opts)
+        ],
+    case {TagsCarried, Missing} of
+        {false, [Key | _]} -> throw({missing_committed_key, Key});
+        _ -> holds(MessageFields, TABM, Opts) andalso TagsCarried
     end.
 
 %% @doc Check that a message contains the values of its commitment's tags. A tag
