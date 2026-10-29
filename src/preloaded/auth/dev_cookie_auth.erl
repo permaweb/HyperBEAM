@@ -82,25 +82,24 @@ finalize(Base, Request, Opts) ->
     map()
 ) -> term().
 commit(Base, Request, RawOpts) when ?IS_LINK(Request) ->
-    Opts = dev_cookie:opts(RawOpts),
-    commit(Base, hb_cache:ensure_loaded(Request, Opts), Opts);
+    commit(Base, hb_cache:ensure_loaded(Request, RawOpts), RawOpts);
 commit(Base, #{ <<"secret">> := Secret }, RawOpts) ->
-    Opts = dev_cookie:opts(RawOpts),
-    bind_secret(hb_cache:ensure_loaded(Secret, Opts), Base, Opts);
+    bind_secret(hb_cache:ensure_loaded(Secret, RawOpts), Base, RawOpts);
 commit(Base, Request, RawOpts) ->
-    Opts = dev_cookie:opts(RawOpts),
+    % Read the values the caller gives with the request's own options; the
+    % private options stay only for the cookies that the node sets.
     % Find or generate the secret to bind.
     SecretRes =
-        case find_secret(Request, Opts) of
+        case find_secret(Request, RawOpts) of
             {ok, RawSecret} ->
                 {ok, RawSecret};
             {error, no_secret} ->
-                generate_secret(Base, Request, Opts);
+                generate_secret(Base, Request, RawOpts);
             {error, not_found} ->
                 throw({error, <<"Necessary cookie not found in request.">>})
         end,
     case SecretRes of
-        {ok, Secret} -> bind_secret(Secret, Base, Opts);
+        {ok, Secret} -> bind_secret(Secret, Base, RawOpts);
         {error, Err} -> {error, Err}
     end.
 
@@ -302,6 +301,29 @@ http_set_get_cookies_test() ->
     {ok, Res} = hb_http:get(Node, Req, #{}),
     ?assertMatch(#{ <<"k1">> := <<"v1">>, <<"k2">> := <<"v2">> }, Res),
     ok.
+
+%% @doc A generator that only the private store contains is refused: the values
+%% a caller gives are read with the request's own options.
+private_generator_refused_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-store">> => hb_test_utils:test_store(hb_store_volatile, <<"priv">>)
+    },
+    {ok, ID} =
+        hb_cache:write(
+            #{ <<"test-key">> => <<"test-value">> },
+            hb_private:opts(Opts)
+        ),
+    ?event({priv_generator, {priv_id, ID}}),
+    Base = #{ <<"device">> => <<"cookie@1.0">> },
+    Req = #{
+        <<"path">> => <<"commit">>,
+        <<"generator">> => {link, <<"ao:", ID/binary>>, #{}}
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 404 }},
+        hb_ao:resolve(Base, Req, Opts)
+    ).
 
 %%% Test Helpers
 
