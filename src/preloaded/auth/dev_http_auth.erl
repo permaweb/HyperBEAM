@@ -12,9 +12,9 @@
 %%% return a `401 Unauthorized` response, which triggers a recipient's browser
 %%% to prompt the user for authentication details and resend the request.
 %%% 
-%%% The `generate' key derives secrets for it's users by calling PBKDF2 with
-%%% the user's authentication information. The parameters for the PBKDF2
-%%% algorithm are configurable, and can be specified in the request message:
+%%% The `generate' key derives secrets for its users by calling PBKDF2 with
+%%% the user's authentication information. The node sets the PBKDF2
+%%% parameters, whatever a request gives:
 %%% 
 %%% <pre>
 %%%   salt:       The salt to use for the PBKDF2 algorithm. Defaults to
@@ -40,10 +40,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc The default salt to use for the PBKDF2 algorithm. This value must be
-%% global across all nodes that intend to have a shared keyspace, although in
-%% instances where this is not possible, users may specify non-standard salts
-%% to the `/generate' path with the `salt' request key.
+%% @doc The salt to use for the PBKDF2 algorithm. This value must be global
+%% across all nodes that intend to have a shared keyspace.
 -define(DEFAULT_SALT, <<"constant:ao">>).
 
 %% @doc The largest PBKDF2 iteration count and key length a request may demand,
@@ -114,9 +112,8 @@ verify(Base, RawReq, Opts) ->
             {error, Err}
     end.
 
-%% @doc Collect authentication information from the client. If the `raw' flag
-%% is set to `true', return the raw authentication information. Otherwise,
-%% derive a key from the authentication information and return it.
+%% @doc Collect authentication information from the client, and derive a key
+%% from it and return it.
 -spec generate(
     #{ _ => _ },
     #{
@@ -140,10 +137,7 @@ generate(_Msg, Req, Opts) ->
         <<"Basic ", Auth/binary>> ->
             Decoded = base64:decode(Auth),
             ?event(key_gen, {generated_key, {priv_auth, Auth}, {priv_decoded, Decoded}}),
-            case hb_maps:get(<<"raw">>, Req, false, Opts) of
-                true -> {ok, Decoded};
-                false -> derive_key(Decoded, Req, Opts)
-            end;
+            derive_key(Decoded, Opts);
         undefined ->
             {error,
                 #{
@@ -171,18 +165,12 @@ get_authorization(Req, Opts) ->
     end.
 
 %% @doc Derive a key from the authentication information using the PBKDF2
-%% algorithm and user specified parameters.
-derive_key(Decoded, Req, Opts) ->
-    Alg = hb_util:atom(hb_maps:get(<<"alg">>, Req, <<"sha256">>, Opts)),
-    Salt =
-        hb_maps:get(
-            <<"salt">>,
-            Req,
-            hb_crypto:sha256(?DEFAULT_SALT),
-            Opts
-        ),
-    Iterations = hb_maps:get(<<"iterations">>, Req, 2 * 600_000, Opts),
-    KeyLength = hb_maps:get(<<"key-length">>, Req, 64, Opts),
+%% algorithm and the node's parameters.
+derive_key(Decoded, Opts) ->
+    Alg = sha256,
+    Salt = hb_crypto:sha256(?DEFAULT_SALT),
+    Iterations = 2 * 600_000,
+    KeyLength = 64,
     MaxIterations = hb_opts:get(http_auth_max_iterations, ?MAX_ITERATIONS, Opts),
     MaxKeyLength = hb_opts:get(http_auth_max_key_length, ?MAX_KEY_LENGTH, Opts),
     case Iterations =< MaxIterations andalso KeyLength =< MaxKeyLength of
@@ -250,6 +238,22 @@ excessive_pbkdf2_parameters_rejected_test() ->
             Req,
             #{ <<"http-auth-max-iterations">> => 1000 }
         )
+    ).
+
+%% @doc A request that gives `raw' or a PBKDF2 parameter gets the key of the
+%% node's parameters: the node sets the cost of the derivation.
+request_pbkdf2_parameters_ignored_test() ->
+    Auth = <<"Basic ", (base64:encode(<<"user:pass">>))/binary>>,
+    Req = #{ <<"path">> => <<"generate">>, <<"authorization">> => Auth },
+    Dev = #{ <<"device">> => <<"http-auth@1.0">> },
+    {ok, Key} = hb_ao:resolve(Dev, Req, #{}),
+    ?assertEqual(
+        {ok, Key},
+        hb_ao:resolve(Dev, Req#{ <<"raw">> => true }, #{})
+    ),
+    ?assertEqual(
+        {ok, Key},
+        hb_ao:resolve(Dev, Req#{ <<"iterations">> => 1 }, #{})
     ).
 
 benchmark_pbkdf2_test() ->
