@@ -1,7 +1,7 @@
 %%% @doc The module with utilities for transaction creation, signing, and verification.
 -module(ar_tx).
 
--export([sign/2, verify/1, verify_tx_id/2]).
+-export([sign/2, verify/1, verify_tx_id/2, verify_v2_data/1]).
 -export([id/1, id/2, get_owner_address/1, data_root/1, data_root/2]).
 -export([is_signed/1, type/1, tagfind/3]).
 -export([reset_ids/1, generate_id/2, normalize/1, serialize_data/1]).

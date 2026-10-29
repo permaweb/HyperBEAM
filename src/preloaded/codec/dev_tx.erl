@@ -100,10 +100,12 @@ do_verify(OnlyWithCommitment, Req, Opts) ->
     {ok, Res}.
 
 %% @doc An unsigned commitment verifies when the transaction's unsigned ID is
-%% the ID of the commitment; a signed one when its signature verifies.
+%% the ID of the commitment and its data matches its `data-root' and
+%% `data-size'; a signed one when its signature verifies.
 tx_verifies(TX, #{ <<"type">> := <<"unsigned-sha256">> }, Msg) ->
     [ID] = maps:keys(maps:get(<<"commitments">>, Msg, #{})),
-    hb_util:human_id(ar_tx:id(TX, unsigned)) =:= hb_util:human_id(ID);
+    hb_util:human_id(ar_tx:id(TX, unsigned)) =:= hb_util:human_id(ID) andalso
+        ar_tx:verify_v2_data(TX);
 tx_verifies(TX, _Req, _Msg) ->
     ar_tx:verify(TX).
 
@@ -488,6 +490,54 @@ data_tag_with_data_test() ->
         <<"bundle">> => <<"false">>
     },
     do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
+
+%% @doc An unsigned transaction verifies only when its data matches its
+%% `data-root' and `data-size', and its commitment carries no committer, owner
+%% or signature.
+unsigned_commitment_test() ->
+    Data = <<"myrealdata">>,
+    Other = <<"your-data!">>,
+    Root = ar_tx:data_root(arweavejs, Data),
+    Size = byte_size(Data),
+    TX = #tx{
+        format = 2,
+        tags = [{<<"data">>, <<"tagdata">>}],
+        data = Data,
+        data_size = Size,
+        data_root = Root
+    },
+    ID = ar_tx:generate_id(TX, unsigned),
+    Commitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"committed">> => [<<"data">>],
+        <<"type">> => <<"unsigned-sha256">>,
+        <<"bundle">> => <<"false">>,
+        <<"field-data-root">> => hb_util:encode(Root),
+        <<"original-tags">> =>
+            #{
+                <<"1">> =>
+                    #{ <<"name">> => <<"data">>, <<"value">> => <<"tagdata">> }
+            }
+    },
+    Msg = #{
+        <<"data">> => Data,
+        <<"commitments">> => #{hb_util:encode(ID) => Commitment}
+    },
+    ?assert(hb_message:verify(Msg)),
+    ?assertNot(hb_message:verify(Msg#{ <<"data">> => Other })),
+    ?assertNot(
+        hb_message:verify(
+            Msg#{
+                <<"commitments">> =>
+                    #{
+                        hb_util:encode(ID) => Commitment#{
+                            <<"owner">> => <<"caller-owner">>,
+                            <<"signature">> => <<"caller-signature">>
+                        }
+                    }
+            }
+        )
+    ).
 
 data_tag_no_data_test() ->
     Data = <<"myrealdata">>,

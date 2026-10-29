@@ -273,7 +273,11 @@ base(CommittedKeys, Fields, Tags, Data, Opts) ->
 verify_identity(Item, TABM, Opts) ->
     [{ID, Commitment}] = maps:to_list(maps:get(<<"commitments">>, TABM)),
     case maps:get(<<"type">>, Commitment) of
-        <<"unsigned-sha256">> -> not maps:is_key(<<"committer">>, Commitment);
+        <<"unsigned-sha256">> ->
+            % An unsigned commitment carries no committer, owner or signature.
+            not maps:is_key(<<"committer">>, Commitment) andalso
+                not maps:is_key(<<"owner">>, Commitment) andalso
+                not maps:is_key(<<"signature">>, Commitment);
         _ ->
             % A `signature' is a binary: `hb_util:decode/1' takes a list too.
             % The `public-key' of a commitment is its `owner', the key that
