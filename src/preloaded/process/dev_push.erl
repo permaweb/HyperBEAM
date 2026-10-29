@@ -646,7 +646,9 @@ split_target(RawTarget) ->
 
 %% @doc Calculate the base ID for a process. The base ID is not just the 
 %% uncommitted process ID. It also excludes the `authority' and `scheduler'
-%% keys.
+%% keys. A push signs the base ID as the origin of what it sends, so the ID is
+%% read from the base message itself, never from the answer of its device: a
+%% key that a message may carry is not a key that its device may choose.
 calculate_base_id(GivenProcess, Opts) ->
     Process =
         case
@@ -665,12 +667,7 @@ calculate_base_id(GivenProcess, Opts) ->
             #{ <<"authority">> => unset, <<"scheduler">> => unset },
             Opts#{ <<"hashpath">> => ignore }
         ),
-    {ok, BaseID} =
-        hb_ao:resolve(
-            BaseProcess,
-            #{ <<"path">> => <<"id">>, <<"committers">> => <<"none">> },
-            Opts
-        ),
+    BaseID = hb_message:id(BaseProcess, none, Opts),
     ?event(debug_base, {push_generated_base, {id, BaseID}, {base, BaseProcess}}),
     BaseID.
 
