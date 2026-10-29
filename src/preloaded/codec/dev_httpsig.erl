@@ -172,6 +172,7 @@ committer(#{ <<"committer">> := ?UNSIGNED_COMMITTER }, _Opts) ->
 committer(#{ <<"committer">> := URI }, Opts) when is_binary(URI) ->
     maybe
         {ok, Committer} ?= hb_uri:from(URI, Opts),
+        true ?= is_committer(Committer, Opts),
         committer(#{ <<"committer">> => Committer }, Opts)
     end;
 committer(#{ <<"committer">> := Committer }, Opts) ->
@@ -181,6 +182,16 @@ committer(#{ <<"committer">> := Committer }, Opts) ->
     end;
 committer(_Req, _Opts) ->
     {error, not_found}.
+
+%% @doc Returns whether a message is a committer. Only a device that exports
+%% `verify' checks a signature. If `verify' is a key, or the default handler,
+%% the message checks nothing.
+is_committer(Committer, Opts) ->
+    DefaultDevice = hb_device:message_to_device(#{}, Opts),
+    case hb_device:message_to_fun(Committer, <<"verify">>, Opts) of
+        {ok, Dev, _} when Dev =/= DefaultDevice -> true;
+        _ -> false
+    end.
 
 %% @doc Commit to a message using the HTTP-Signature format. We use the `type'
 %% parameter to determine the type of commitment to use. If the `type' parameter
