@@ -769,12 +769,10 @@ load_bin(Device, Bin, Opts) ->
     end.
 
 %% @doc Decode a config file to a message, with its private keys. A JSON file
-%% is decoded from the TABM that `json@1.0''s `deserialize' gives, as
-%% `hb_http:decode/3' decodes a JSON request body: `json@1.0''s `from' gives
-%% the TABM without the private keys.
+%% is decoded with `hb_json:decode/1': a codec removes the private keys that a
+%% message over the wire gives.
 decode(<<"json@1.0">>, Bin, Opts) ->
-    {ok, TABM} = hb_ao:raw(<<"json@1.0">>, <<"deserialize">>, Bin, #{}, Opts),
-    decode_tabm(TABM, Opts);
+    decode_tabm(hb_json:decode(Bin), Opts);
 decode(Device, Bin, Opts) ->
     hb_message:convert(
         Bin,

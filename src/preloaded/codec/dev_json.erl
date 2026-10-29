@@ -75,7 +75,8 @@ to(Msg, Req, Opts) ->
     #{ _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
-from(Map, _Req, _Opts) when is_map(Map) -> {ok, Map};
+from(Map, _Req, _Opts) when is_map(Map) ->
+    {ok, hb_private:reset(Map)};
 from(JSON, Req, Opts) ->
     ConvOpts = Opts#{ <<"hashpath">> => ignore },
     % The JSON string will be a partially-TABM encoded message: Rich number
@@ -101,7 +102,8 @@ from(JSON, Req, Opts) ->
             ConvOpts
         ),
     ?event(debug_json, {tabm, TABM}, Opts),
-    {ok, TABM}.
+    % Remove the private keys that the JSON gives, as ingress removes them.
+    {ok, hb_private:reset(TABM)}.
 
 %% @doc Route commitments through `httpsig@1.0'.
 -spec commit(#{ _ => _ }, #{ _ => _ }, map()) -> term().
@@ -139,7 +141,8 @@ committed(Msg, _Req, Opts) ->
     {ok, #{ _ => _ }}
     | {error, #{ status := integer(), body := binary(), _ => _ }}.
 deserialize(JSON, _Req, _Opts) when is_binary(JSON) ->
-    {ok, json:decode(JSON)};
+    % Remove the private keys that the JSON gives, as ingress removes them.
+    {ok, hb_private:reset(json:decode(JSON))};
 deserialize(Base, Req, Opts) ->
     Payload = 
         hb_ao:get(
@@ -321,3 +324,20 @@ deeply_nested_typed_keys_test() ->
             Opts
         ),
     ?assertEqual(SingleListMsg, hb_cache:ensure_all_loaded(SingleListDecoded, Opts)).
+
+%% @doc A JSON message that a device decodes gives no private keys.
+deserialize_private_keys_test() ->
+    JSON = <<"{\"priv\":{\"hook-caller\":\"kernel\"},\"x\":1}">>,
+    {ok, From} = hb_ao:raw(<<"json@1.0">>, <<"from">>, JSON, #{}, #{}),
+    ?assertNotMatch(#{ <<"priv">> := _ }, From),
+    Base = #{ <<"device">> => <<"apply@1.0">> },
+    Req = #{
+        <<"path">> => <<"estimate">>,
+        <<"base">> => <<"~metering@1.0">>,
+        <<"request">> => <<"~json@1.0/deserialize">>,
+        <<"body">> => JSON
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 401 }},
+        hb_ao:resolve(Base, Req, #{})
+    ).

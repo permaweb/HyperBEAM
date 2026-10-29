@@ -130,7 +130,8 @@ from(HTTP, _Req, Opts) ->
             Opts
         ),
     ?event_debug({message_without_commitments, Res, Removed}),
-    {ok, Res}.
+    % Remove the private keys that the encoded message gives, as ingress does.
+    {ok, hb_private:reset(Res)}.
 
 %% @doc Generate the body TABM from the `body' key of the encoded message.
 body_to_tabm(HTTP, Opts) ->
@@ -1447,3 +1448,20 @@ reserved_header_keys_test_() ->
                 {<<"ao-body-key">>, <<"note">>}
             ]
     ].
+
+%% @doc A multipart part with a `priv' key gives no private key.
+from_private_part_test() ->
+    Base = #{ <<"device">> => <<"apply@1.0">> },
+    Req = #{
+        <<"path">> => <<"estimate">>,
+        <<"base">> => <<"~metering@1.0">>,
+        <<"request">> => <<"~httpsig@1.0/from">>,
+        <<"content-type">> => <<"multipart/form-data; boundary=b">>,
+        <<"body">> =>
+            <<"--b\r\nContent-Disposition: form-data; name=\"priv\"\r\n"
+              "hook-caller: kernel\r\n\r\n\r\n--b--">>
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 401 }},
+        hb_ao:resolve(Base, Req, #{})
+    ).
