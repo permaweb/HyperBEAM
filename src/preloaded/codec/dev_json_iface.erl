@@ -144,12 +144,12 @@ signer_commitment(Signer, Msg, Opts) ->
         [ID | _] -> hb_maps:get(ID, Commitments, #{}, Opts)
     end.
 
-%% @doc The part of a message that its owner signs: of two or more signers, the
-%% owner is the first, so only its commitments and the keys that they commit
-%% are given.
+%% @doc The part of a message that its owner signs: the owner is the first
+%% signer, so only its commitments and the keys that they commit are given. A
+%% message with no signer is given as it is.
 owner_view(Msg, Opts) ->
     case hb_message:signers(Msg, Opts) of
-        [Owner, _ | _] ->
+        [Owner | _] ->
             hb_util:ok(
                 hb_message:with_only_committed(
                     hb_message:with_commitments(
@@ -753,16 +753,18 @@ basic_aos_call_test_() ->
 		% Of a message from two signers that commit different keys, only the
 		% owner's key is given.
 		Second = #{ <<"priv-wallet">> => ar_wallet:new() },
+		Signed =
+			hb_message:commit(
+				#{ <<"a">> => <<"1">>, <<"b">> => <<"2">> },
+				normalize_test_opts(#{}),
+				#{
+					<<"commitment-device">> => <<"httpsig@1.0">>,
+					<<"committed">> => [<<"a">>]
+				}
+			),
 		Both =
 			hb_message:commit(
-				hb_message:commit(
-					#{ <<"a">> => <<"1">>, <<"b">> => <<"2">> },
-					normalize_test_opts(#{}),
-					#{
-						<<"commitment-device">> => <<"httpsig@1.0">>,
-						<<"committed">> => [<<"a">>]
-					}
-				),
+				Signed,
 				Second,
 				#{
 					<<"commitment-device">> => <<"httpsig@1.0">>,
@@ -776,7 +778,18 @@ basic_aos_call_test_() ->
 				true -> <<"B">>;
 				false -> <<"A">>
 			end,
-		?assertEqual([OwnerKey], [Name || #{ <<"name">> := Name } <- Tags])
+		?assertEqual([OwnerKey], [Name || #{ <<"name">> := Name } <- Tags]),
+		% Of a message with one signer and an unsigned commitment over another
+		% key, only the signer's key is given.
+		OneSigner =
+			hb_message:commit(
+				Signed,
+				normalize_test_opts(#{}),
+				#{ <<"type">> => <<"unsigned">>, <<"committed">> => [<<"b">>] }
+			),
+		{ok, #{ <<"Tags">> := OneTags }} =
+			to(#{}, #{ <<"message">> => OneSigner }, #{}),
+		?assertEqual([<<"A">>], [Name || #{ <<"name">> := Name } <- OneTags])
 	end}.
 
 aos_stack_benchmark_test_() ->

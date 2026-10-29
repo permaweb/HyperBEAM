@@ -1441,12 +1441,12 @@ read_match(Match, Opts) ->
         Read -> Read
     end.
 
-%% @doc The part of a message that the ID of a match gives. A message with two
-%% or more signers has no one owner: a commitment's ID gives only that
-%% commitment and the keys that it commits, and another ID is not found.
+%% @doc The part of a message that the ID of a match gives. Of a signed message,
+%% a commitment's ID gives only that commitment and the keys that it commits,
+%% and another ID is not found.
 match_view(#{ <<"id">> := ID }, Msg, Opts) when ID =/= <<>> ->
     case hb_message:signers(Msg, Opts) of
-        [_, _ | _] ->
+        [_ | _] ->
             Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
             case hb_maps:is_key(ID, Commitments, Opts) of
                 true ->
