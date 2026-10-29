@@ -113,6 +113,8 @@ do_verify(OnlyWithCommitment, Req, Opts) ->
     Res =
         item_verifies(TX, Req, OnlyWithCommitment) andalso
             lib_arweave_common:verify_identity(TX, OnlyWithCommitment, Opts) andalso
+            lib_arweave_common:verify_original_tags(
+                TX, OnlyWithCommitment, Opts) andalso
             lib_arweave_common:verify_committed_keys(
                 ?BASE_FIELDS, TX, fun lib_arweave_common:fields/3,
                 OnlyWithCommitment, Opts),

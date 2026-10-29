@@ -3,7 +3,7 @@
 -export([from/3]).
 -export([fields/3, tags/2, data/5, committed/6, base/5, verify_identity/3]).
 -export([sign/4, order_tags/3]).
--export([verify_committed_keys/5]).
+-export([verify_committed_keys/5, verify_original_tags/3]).
 -export([add_commitment/4]).
 -export([with_commitments/8]).
 -export([bundle_hint/4, data/4, tags/5, excluded_tags/3]).
@@ -385,6 +385,17 @@ verify_committed_keys(FieldKeys, Item, FieldsFun, TABM, Opts) ->
             hb_maps:without([<<"commitments">>], TABM, Opts),
             Opts
         ) =:= CommittedKeys.
+
+%% @doc Check that the item's tags are the commitment's `original-tags'. A
+%% reader of `original-tags' then reads only tags that the item's ID or
+%% signature covers.
+verify_original_tags(Item, TABM, Opts) ->
+    [{_ID, Commitment}] = maps:to_list(maps:get(<<"commitments">>, TABM)),
+    case hb_maps:find(<<"original-tags">>, Commitment, Opts) of
+        {ok, OriginalTags} ->
+            Item#tx.tags =:= original_tags_to_tags(OriginalTags);
+        error -> true
+    end.
 
 %% @doc Return a message with the appropriate commitments added to it.
 with_commitments(

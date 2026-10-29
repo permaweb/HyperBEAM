@@ -107,6 +107,48 @@ private_tags_test_() ->
         Typed <- [false, true]
     ].
 
+%% @doc A commitment's `original-tags' with another value than the item's tags
+%% does not verify, even when the message carries the tag's key.
+forged_original_tags_test_() ->
+    [
+        {binary_to_list(Codec) ++ ": forged public tag", fun() ->
+            Opts = test_opts(),
+            Raw = #tx{
+                format = Format,
+                tags = [
+                    {<<"action">>, <<"Transfer">>},
+                    {<<"b">>, <<"2">>}
+                ]
+            },
+            Signed = case Codec of
+                <<"ans104@1.0">> -> ar_bundles:sign_item(Raw, hb:wallet());
+                <<"tx@1.0">> -> ar_tx:sign(Raw, hb:wallet())
+            end,
+            Msg = hb_message:convert(
+                Signed, <<"structured@1.0">>, Codec, Opts
+            ),
+            [{ID, Commitment}] = maps:to_list(
+                maps:get(<<"commitments">>, Msg)
+            ),
+            Forged = Commitment#{
+                <<"original-tags">> => #{
+                    <<"1">> => #{
+                        <<"name">> => <<"action">>,
+                        <<"value">> => <<"Forged">>
+                    }
+                }
+            },
+            ?assertNot(
+                hb_message:verify(
+                    Msg#{ <<"commitments">> => #{ ID => Forged } },
+                    all,
+                    Opts
+                )
+            )
+        end}
+    || {Codec, Format} <- [{<<"tx@1.0">>, 2}, {<<"ans104@1.0">>, ans104}]
+    ].
+
 %% @doc A private link is not a committed key either, whatever `ao-types'
 %% declares. Removing or changing its signed tag fails verification.
 private_link_binding_test_() ->
