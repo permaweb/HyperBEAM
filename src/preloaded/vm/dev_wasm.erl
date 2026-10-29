@@ -20,8 +20,8 @@
 %%%             M1/priv/[Prefix]/import-resolver
 %%%             M1/process
 %%%             M2/message
-%%%             M2/message/function OR M1/function
-%%%             M2/message/parameters OR M1/parameters
+%%%             M1/function OR M2/message/function
+%%%             M1/parameters OR M2/message/parameters
 %%%         Generates:
 %%%             /results/[Prefix]/type
 %%%             /results/[Prefix]/output
@@ -217,21 +217,23 @@ compute(RawM1, M2, Opts) ->
         X when X == 1 orelse X == not_found ->
             % Extract the WASM Instance, func, params, and standard library
             % invokation from the message and apply them with the WASM executor.
+            % The base's call comes first: in a process, a device of its stack,
+            % such as `json-iface@1.0', sets it, and a message does not replace it.
             WASMFunction =
                 hb_ao:get_first(
                     [
+                        {M1, <<"function">>},
                         {M2, <<"body/function">>},
-                        {M2, <<"function">>},
-                        {M1, <<"function">>}
+                        {M2, <<"function">>}
                     ],
                     Opts
                 ),
             WASMParams =
                 hb_ao:get_first(
                     [
+                        {M1, <<"parameters">>},
                         {M2, <<"body/parameters">>},
-                        {M2, <<"parameters">>},
-                        {M1, <<"parameters">>}
+                        {M2, <<"parameters">>}
                     ],
                     Opts
                 ),

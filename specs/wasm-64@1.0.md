@@ -156,10 +156,12 @@ implementations.
     the device is a **no-op** (returns the message unchanged). This lets the same
     device sit in a multi-pass stack and run exactly once.
   - The **function name**, taken as the first present of, in order:
-    `Req` `body/function`, then `Req` `function`, then `M` `function`.
+    `M` `function`, then `Req` `body/function`, then `Req` `function`.
   - The **parameters**, taken as the first present of, in order:
-    `Req` `body/parameters`, then `Req` `parameters`, then `M` `parameters`.
-    Absent parameters default to the empty list.
+    `M` `parameters`, then `Req` `body/parameters`, then `Req` `parameters`.
+    Absent parameters default to the empty list. The base's call comes first:
+    in a process, a device of its stack sets it, and a message does not
+    replace it.
 - **Behaviour:**
   1. If no function name is found anywhere, **skip execution** and return the
      normalised message unchanged (`{ok, M}`). This is NOT an error: a pass with
@@ -520,10 +522,10 @@ An implementation MUST exhibit all of the following observable behaviours:
    `results/<OUT>/type` and `results/<OUT>/output`, where `output` is the list
    of the function's return values. (E.g. a factorial-style export called with
    `5` yields `output = [120]` in some numeric form.)
-10. **Call-target precedence.** `compute` selects the function from request
-    `body/function`, else request `function`, else base `function`; and the
-    parameters from request `body/parameters`, else request `parameters`, else
-    base `parameters`. Absent parameters default to `[]`.
+10. **Call-target precedence.** `compute` selects the function from base
+    `function`, else request `body/function`, else request `function`; and the
+    parameters from base `parameters`, else request `body/parameters`, else
+    request `parameters`. Absent parameters default to `[]`.
 11. **No-function no-op.** `compute` with no function found anywhere returns the
     (normalised) message unchanged and writes **no** results (not an error).
 12. **Pass gating.** `compute` executes only when `pass` is `1` or absent; for
