@@ -548,9 +548,10 @@ load_and_verify({secret, KeyID, _}, _Base, Request, Opts) ->
     end.
 
 %% @doc Validate if a calling message has the required `controllers' for the
-%% given wallet. Count a controller only if it signed `keyids', and `keyids'
-%% contains the wallet's `keyid' or is `all'. A commitment over other keys,
-%% such as `hashpath', does not authorize an export.
+%% given wallet. Count a controller only if it signed `keyids', `keyids'
+%% contains the wallet's `keyid' or is `all', and its signature has not
+%% expired. A commitment over other keys, such as `hashpath', does not
+%% authorize an export.
 verify_controllers(WalletDetails, KeyID, Request, Opts) ->
     RequiredControllers =
         hb_util:int(hb_maps:get(<<"required-controllers">>, WalletDetails, 1, Opts)),
@@ -570,7 +571,8 @@ verify_controllers(WalletDetails, KeyID, Request, Opts) ->
         ||
             Controller <- lists:usort(Controllers),
             {ok, Signed} <- [lib_meta:authorized([Controller], Request, Opts)],
-            is_listed_key(KeyID, hb_maps:get(<<"keyids">>, Signed, [], Opts))
+            is_listed_key(KeyID, hb_maps:get(<<"keyids">>, Signed, [], Opts)),
+            not is_expired(Signed, Opts)
         ],
     length(SigningControllers) >= RequiredControllers.
 
@@ -578,6 +580,20 @@ verify_controllers(WalletDetails, KeyID, Request, Opts) ->
 is_listed_key(_KeyID, <<"all">>) -> true;
 is_listed_key(KeyID, KeyIDs) when is_list(KeyIDs) -> lists:member(KeyID, KeyIDs);
 is_listed_key(_KeyID, _KeyIDs) -> false.
+
+%% @doc Whether a commitment on the message gives an `expires' that has passed.
+%% A commitment without one does not expire.
+is_expired(Msg, Opts) ->
+    Now = os:system_time(second),
+    lists:any(
+        fun(Commitment) ->
+            case hb_maps:get(<<"expires">>, Commitment, undefined, Opts) of
+                undefined -> false;
+                Expires -> hb_util:int(Expires) < Now
+            end
+        end,
+        hb_maps:values(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts)
+    ).
 
 %% @doc Verify a wallet for a given request.
 verify_auth(WalletDetails, Req, Opts) ->
