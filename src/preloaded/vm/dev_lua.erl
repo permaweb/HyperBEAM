@@ -354,10 +354,11 @@ compute(Key, RawBase, RawReq, Opts) ->
 %% or the base gives, or else with the base and the request.
 call_function(Function, Base, Req, OldPriv, State, Opts) ->
     % The default arguments carry no private keys from the base or the request.
+    % A message in the request's `body', as a process's assignment carries,
+    % gives no arguments: they would replace the base, the process's state.
     Params =
         hb_ao:get_first(
             [
-                {Req, <<"body/parameters">>},
                 {Req, <<"parameters">>},
                 {{as, <<"message@1.0">>, Base}, <<"parameters">>}
             ],
