@@ -742,22 +742,28 @@ commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts) ->
         tags = Tags,
         avro_form = AvroForm
     },
-    case holds_signed_values(Commitment, Tags, Message, Data, Opts) of
+    case holds_signed_values(
+            Commitment, Tags, Message, Data, FieldsFun, Opts) of
         true -> FieldsFun(TX, ?FIELD_PREFIX, Commitment, Opts);
         false ->
             FieldsFun(TX#tx{ tags = [], avro_form = <<>> }, <<>>, Message, Opts)
     end.
 
 %% @doc Check that a message still contains the values of the fields and tags
-%% that its commitment restores. Keys added after signing are not compared.
-holds_signed_values(Commitment, OriginalTags, TABM, Data, Opts) ->
+%% that its commitment restores. Keys added after signing are not compared. A
+%% field key that does not give a base field its own value is not a field.
+holds_signed_values(Commitment, OriginalTags, TABM, Data, FieldsFun, Opts) ->
+    Default = FieldsFun(#tx{}, ?FIELD_PREFIX, #{}, Opts),
     Fields =
         maps:from_list(
             [
                 {Key, Value}
             ||
-                {<<"field-", Key/binary>>, Value}
-                    <- hb_maps:to_list(Commitment, Opts)
+                {<<"field-", Key/binary>> = FieldKey, Value}
+                    <- hb_maps:to_list(Commitment, Opts),
+                FieldsFun(
+                    #tx{}, ?FIELD_PREFIX, #{ FieldKey => Value }, Opts
+                ) =/= Default
             ]
         ),
     % The data root of a TX with data is not a key of its message: only its
