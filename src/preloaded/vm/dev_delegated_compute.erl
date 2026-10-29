@@ -95,14 +95,52 @@ compute(Base, Req, Opts) ->
     {Slot, Res} =
         case Type of
             <<"Assignment">> ->
+                AssignmentSlot = hb_ao:get(<<"slot">>, Req, Opts),
                 {
-                    hb_ao:get(<<"slot">>, Req, Opts),
-                    do_compute(ProcessID, Req, Opts)
+                    AssignmentSlot,
+                    case is_assignment(
+                        Base, Req, ProcessID, AssignmentSlot, Opts
+                    ) of
+                        true -> do_compute(ProcessID, Req, Opts);
+                        false ->
+                            {failure, #{
+                                <<"status">> => 403,
+                                <<"reason">> =>
+                                    <<"Assignment is not signed by the "
+                                        "process's scheduler.">>
+                            }}
+                    end
                 };
             _ ->
                 {dryrun, do_dryrun(ProcessID, Req, Opts)}
         end,
     handle_relay_response(Base, Req, Opts, Res, OutputPrefix, ProcessID, Slot).
+
+%% @doc Return whether the signed keys of the assignment give the process and
+%% slot, and the process's scheduler signed it.
+is_assignment(Base, Req, ProcessID, Slot, Opts) ->
+    Proc = hb_maps:get(<<"process">>, Base, Base, Opts),
+    SchedulerDevice =
+        hb_util:ok(hb_device_load:reference(<<"scheduler@1.0">>, Opts)),
+    Schedulers =
+        apply(SchedulerDevice, parse_schedulers, [
+            hb_ao:get_first(
+                [{Proc, <<"scheduler">>}, {Proc, <<"scheduler-location">>}],
+                [],
+                Opts
+            )
+        ]),
+    case hb_message:with_only_committed(Req, Opts) of
+        {ok, #{ <<"process">> := ProcessID, <<"slot">> := SignedSlot }} ->
+            hb_util:safe_int(SignedSlot) == hb_util:safe_int(Slot) andalso
+                lists:any(
+                    fun(Scheduler) ->
+                        hb_message:verify(Req, [Scheduler], Opts)
+                    end,
+                    Schedulers
+                );
+        _ -> false
+    end.
 
 %% @doc Execute computation on a remote machine via relay and the JSON-Iface.
 do_compute(ProcID, Req, Opts) ->

@@ -733,19 +733,41 @@ instance_routing() ->
         lists:foreach(
             fun({Device, Peer, RoutedPeer}) ->
                 #{port := Port} = uri_string:parse(Peer),
+                Wallet = ar_wallet:new(),
                 Opts = #{
                     <<"store">> => [hb_test_utils:test_store()],
-                    <<"priv-wallet">> => ar_wallet:new(),
+                    <<"priv-wallet">> => Wallet,
                     <<"genesis-wasm-port">> => Port,
+                    <<"genesis-wasm-import-authorities">> =>
+                        [hb_test_utils:committer(Wallet)],
                     <<"cache-control">> => [<<"no-store">>, <<"no-cache">>],
                     <<"routes">> => [#{
                         <<"template">> => <<"/.*">>,
                         <<"node">> => #{ <<"prefix">> => RoutedPeer }
                     }]
                 },
-                Process = hb_message:commit(#{ <<"type">> => <<"Process">> }, Opts),
+                Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+                Process = hb_message:commit(#{
+                    <<"type">> => <<"Process">>,
+                    <<"scheduler">> => Address
+                }, Opts),
                 ProcID = hb_message:id(Process, signed, Opts),
                 Base = #{ <<"device">> => Device, <<"process">> => Process },
+                Checkpoint = hb_message:commit(#{
+                    <<"type">> => <<"Checkpoint">>,
+                    <<"process">> => ProcID,
+                    <<"nonce">> => <<"1">>,
+                    <<"content-type">> => <<"application/octet-stream">>,
+                    <<"data">> => <<"checkpoint">>
+                }, Opts),
+                Assignment = hb_message:commit(#{
+                    <<"type">> => <<"Assignment">>,
+                    <<"process">> => ProcID,
+                    <<"slot">> => 0,
+                    <<"body">> => hb_message:commit(
+                        #{ <<"data">> => <<"test">> }, Opts
+                    )
+                }, Opts),
                 % Warm the real HTTP endpoint before Genesis's bounded probe.
                 {ok, _} = hb_http:get(Peer, <<"/status">>, Opts),
                 erase(genesis_wasm_pid),
@@ -764,21 +786,12 @@ instance_routing() ->
                     [
                         {Base, #{ <<"path">> => <<"snapshot">> },
                             <<"/snapshot/", ProcID/binary>>},
-                        {Base#{ <<"snapshot">> => #{
-                            <<"type">> => <<"Checkpoint">>,
-                            <<"content-type">> => <<"application/octet-stream">>,
-                            <<"data">> => <<"checkpoint">>
-                        }}, #{ <<"path">> => <<"normalize">> }, <<"/state">>},
+                        {Base#{ <<"snapshot">> => Checkpoint },
+                            #{ <<"path">> => <<"normalize">> }, <<"/state">>},
                         {Base, #{ <<"path">> => <<"compute">> },
                             <<"/dry-run?process-id=", ProcID/binary>>},
-                        {Base, #{
-                            <<"path">> => <<"compute">>,
-                            <<"type">> => <<"Assignment">>,
-                            <<"slot">> => 0,
-                            <<"body">> => hb_message:commit(
-                                #{ <<"data">> => <<"test">> }, Opts
-                            )
-                        }, <<"/result/0?process-id=", ProcID/binary>>}
+                        {Base, Assignment#{ <<"path">> => <<"compute">> },
+                            <<"/result/0?process-id=", ProcID/binary>>}
                     ]
                 )
             end,
