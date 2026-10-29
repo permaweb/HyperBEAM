@@ -148,7 +148,7 @@ message_to_device(Msg, Opts) ->
     case hb_device_load:reference(DevID, Opts) of
         {error, Reason} -> throw({device_not_loadable, DevID, Reason});
         {ok, DevMod} ->
-            case hb_device_load:excluded(DevMod, Excluded, Opts) of
+            case hb_device_load:is_excluded(DevMod, Excluded, Opts) of
                 true ->
                     throw({device_not_loadable, DevID, <<"device-excluded">>});
                 false ->

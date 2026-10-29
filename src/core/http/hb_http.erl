@@ -645,8 +645,9 @@ reply_codec(Fields, Path, Request, Opts) ->
 %% @doc Return the codec that a media type gives, by the forms in the module
 %% documentation. The device must be one that the node holds, found in its
 %% local stores without its name resolvers, so that a media type never loads a
-%% device from a remote source, and it must export
-%% `to', `from', `serialize' and `deserialize'. A device without these
+%% device from a remote source, it must export `to', `from', `serialize' and
+%% `deserialize', and it must not be one that `exclude-devices' gives. A device
+%% without these
 %% functions returns ``{error, 'not-codec'}'', and a media type that gives no
 %% device that the node has returns any other error. A media type is a binary,
 %% or the `{Type, SubType, Params}' that `cow_http_hd' parses.
@@ -658,6 +659,12 @@ codec(MediaType, Opts) ->
                 Name,
                 (hb_store:scope(Opts, local))#{ <<"name-resolvers">> => [] }
             ),
+        true ?=
+            not hb_device_load:is_excluded(
+                Device,
+                hb_opts:get(<<"exclude-devices">>, [], Opts),
+                Opts
+            ) orelse {error, 'device-excluded'},
         true ?=
             lists:all(
                 fun(Key) ->

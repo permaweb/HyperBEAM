@@ -27,7 +27,7 @@
 %%% specification of a preloaded device (`spec/2'), and every implementation
 %%% of a specification in its sources (`implementations/2').
 -module(hb_device_load).
--export([reference/2, excluded/3, schema/2, store/1, spec/2, implementations/2]).
+-export([reference/2, is_excluded/3, schema/2, store/1, spec/2, implementations/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -46,44 +46,26 @@ reference(Ref, Opts) when is_binary(Ref) ->
         {error, Err} -> {error, Err}
     end.
 
-excluded(_Mod, [], _Opts) ->
+%% @doc Return whether a device is one that `exclude-devices' gives, by any
+%% reference to it: its name, its specification ID or its module. An excluded
+%% reference resolves only from the node's own and high-trust sources, so the
+%% check loads no device from a low-trust source.
+is_excluded(_Dev, [], _Opts) ->
     false;
-excluded(Mod, Excluded, Opts) when is_atom(Mod), is_list(Excluded) ->
+is_excluded(Dev, Excluded, Opts) when is_list(Excluded) ->
     lists:any(
-        fun(Ref) -> excluded_module(Ref, Opts) =:= {ok, Mod} end,
+        fun(Ref) -> excluded_device(Ref, Opts) =:= {ok, Dev} end,
         Excluded
-    );
-excluded(_Mod, _Excluded, _Opts) ->
-    false.
+    ).
 
-excluded_module(Ref, Opts) when is_binary(Ref), Ref =/= <<>> ->
+excluded_device(Ref, Opts) when is_binary(Ref), Ref =/= <<>> ->
     NormRef = hb_ao:normalize_key(Ref),
     case from_forge_bootstrap(NormRef, Opts) of
-        {ok, Mod} -> {ok, Mod};
-        _ -> local_module(NormRef, Opts)
+        {ok, Dev} -> {ok, Dev};
+        _ -> resolve_cached(NormRef, fun resolve_trusted/2, Opts)
     end;
-excluded_module(_Ref, _Opts) ->
+excluded_device(_Ref, _Opts) ->
     {error, not_found}.
-
-local_module(Ref, Opts) ->
-    Resolving = maps:get(<<"resolving-devices">>, Opts, []),
-    case {lists:member(Ref, Resolving), erlang:get({?MODULE, Ref})} of
-        {true, _} ->
-            {error, circular};
-        {false, Mod} when is_atom(Mod), Mod =/= undefined ->
-            {ok, Mod};
-        {false, _} ->
-            ResOpts = Opts#{ <<"resolving-devices">> => [Ref | Resolving] },
-            maybe
-                {error, not_found} ?= get_resolved_device(Ref, ResOpts),
-                {ok, Mod} ?= from_high_trust(Ref, ResOpts),
-                put_resolved_device(Ref, Mod, Opts),
-                {ok, Mod}
-            else
-                {cached, Cached} -> {ok, Cached};
-                Error -> Error
-            end
-    end.
 
 do_not_try_to_load_empty_device_test() ->
     ?assertEqual({error, not_found}, reference(<<>>, #{})),
@@ -132,6 +114,8 @@ excluded_by_any_reference_test() ->
 %% tree. A reference that the process has resolved is returned from its
 %% process dictionary.
 resolve_cached(Ref, Opts) ->
+    resolve_cached(Ref, fun resolve/2, Opts).
+resolve_cached(Ref, Resolve, Opts) ->
     Resolving = maps:get(<<"resolving-devices">>, Opts, []),
     case {lists:member(Ref, Resolving), erlang:get({?MODULE, Ref})} of
         {true, _} ->
@@ -146,7 +130,7 @@ resolve_cached(Ref, Opts) ->
             {ok, Mod};
         {false, _} ->
             ResOpts = Opts#{ <<"resolving-devices">> => [Ref | Resolving] },
-            case resolve(Ref, ResOpts) of
+            case Resolve(Ref, ResOpts) of
                 {cached, Mod} -> {ok, Mod};
                 {ok, Mod} = Ok -> put_resolved_device(Ref, Mod, Opts), Ok;
                 {error, Err} -> {error, Err}
@@ -161,6 +145,13 @@ resolve(Ref, Opts) ->
         {error, not_found} ?= get_resolved_device(Ref, Opts),
         {error, not_found} ?= from_high_trust(Ref, Opts),
         from_low_trust(Ref, Opts)
+    end.
+
+%% @doc The resolved-device store, then the high-trust sources.
+resolve_trusted(Ref, Opts) ->
+    maybe
+        {error, not_found} ?= get_resolved_device(Ref, Opts),
+        from_high_trust(Ref, Opts)
     end.
 
 %% @doc Look up a resolved module in the node's `loaded-device-store'. The
