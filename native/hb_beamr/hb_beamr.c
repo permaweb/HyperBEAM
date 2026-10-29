@@ -31,6 +31,7 @@ static ErlDrvData wasm_driver_start(ErlDrvPort port, char *buff) {
     DRV_DEBUG("info.erts_version: %s", info.erts_version);
     DRV_DEBUG("info.otp_release: %s", info.otp_release);
     Proc* proc = driver_alloc(sizeof(Proc));
+    memset(proc, 0, sizeof(Proc));
     proc->port = port;
     DRV_DEBUG("Port: %p", proc->port);
     proc->port_term = driver_mk_port(proc->port);
@@ -167,6 +168,9 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         DRV_DEBUG("Import response received. Providing...");
         if (proc->current_import) {
             DRV_DEBUG("Decoding import response from Erlang...");
+            int result_type, result_count;
+            ei_get_type(buff, &index, &result_type, &result_count);
+            proc->current_import->result_count = result_count;
             proc->current_import->result_terms = decode_list(buff, &index);
             proc->current_import->error_message = NULL;
 

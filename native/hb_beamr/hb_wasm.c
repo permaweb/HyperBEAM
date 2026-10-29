@@ -7,6 +7,21 @@ extern ErlDrvTermData atom_ok;
 extern ErlDrvTermData atom_import;
 extern ErlDrvTermData atom_execution_result;
 
+static wasm_trap_t* wasm_trap_from_str(Proc* proc, const char* message) {
+    wasm_name_t name;
+    wasm_name_new_from_string_nt(&name, message);
+    wasm_trap_t* trap = wasm_trap_new(proc->store, &name);
+    wasm_name_delete(&name);
+    return trap;
+}
+
+static void free_import_response(Proc* proc) {
+    erl_drv_cond_destroy(proc->current_import->cond);
+    erl_drv_mutex_destroy(proc->current_import->response_ready);
+    driver_free(proc->current_import);
+    proc->current_import = NULL;
+}
+
 wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_vec_t* results) {
     DRV_DEBUG("generic_import_handler called");
     ImportHook* import_hook = (ImportHook*)env;
@@ -14,7 +29,10 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
 
     // Check if the field name is "invoke"; if not, exit early
     if (strncmp(import_hook->field_name, "invoke", 6) == 0) {
-        wasm_execute_indirect_function(proc, import_hook->field_name, args, results); 
+        if (wasm_execute_indirect_function(
+                proc, import_hook->field_name, args, results) == -1) {
+            return wasm_trap_from_str(proc, "Indirect function call failed.");
+        }
         return NULL;
     }
 
@@ -78,20 +96,26 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
     // Handle error in the response
     if (proc->current_import->error_message) {
         DRV_DEBUG("Import execution failed. Error message: %s", proc->current_import->error_message);
-        wasm_name_t message;
-        wasm_name_new_from_string_nt(&message, proc->current_import->error_message);
-        wasm_trap_t* trap = wasm_trap_new(proc->store, &message);
-        wasm_name_delete(&message);
-        erl_drv_cond_destroy(proc->current_import->cond);
-        erl_drv_mutex_destroy(proc->current_import->response_ready);
-        driver_free(proc->current_import);
-        proc->current_import = NULL;
+        wasm_trap_t* trap = wasm_trap_from_str(proc, proc->current_import->error_message);
+        free_import_response(proc);
         return trap;
     }
 
     // Convert the response back to WASM values
     wasm_functype_t* func_type = wasm_func_type(import_hook->stub_func);
     const wasm_valtype_vec_t* result_types = wasm_functype_results(func_type);
+    // A response must contain at least one term per result of the import.
+    // Reading more terms than the response has reads past the decoded list.
+    if (proc->current_import->result_count < result_types->size ||
+            (result_types->size > 0 &&
+             proc->current_import->result_terms == NULL)) {
+        DRV_DEBUG("Import response has the wrong number of results");
+        wasm_trap_t* trap = wasm_trap_from_str(
+            proc, "Import response has the wrong number of results.");
+        wasm_functype_delete(func_type);
+        free_import_response(proc);
+        return trap;
+    }
     for(int i = 0; i < results->size; i++) {
         results->data[i].kind = wasm_valtype_kind(result_types->data[i]);
     }
@@ -99,8 +123,11 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
     driver_free(proc->current_import->result_terms);
     if(res == -1) {
         DRV_DEBUG("Failed to convert terms to wasm vals");
+        wasm_trap_t* trap = wasm_trap_from_str(
+            proc, "Failed to convert terms to wasm vals");
         wasm_functype_delete(func_type);
-        return NULL;
+        free_import_response(proc);
+        return trap;
     }
 
     results->num_elems = result_types->num_elems;
@@ -108,11 +135,7 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
 
     // Clean up
     DRV_DEBUG("Cleaning up import response");
-    erl_drv_cond_destroy(proc->current_import->cond);
-    erl_drv_mutex_destroy(proc->current_import->response_ready);
-    driver_free(proc->current_import);
-
-    proc->current_import = NULL;
+    free_import_response(proc);
     return NULL;
 }
 
@@ -181,6 +204,21 @@ void wasm_initialize_runtime(void* raw) {
     wasm_exporttype_vec_t exports;
     wasm_module_exports(proc->module, &exports);
 
+    // An import that is not a function has no stub, so the instance cannot
+    // be created with it.
+    for (int i = 0; i < imports.size; ++i) {
+        if (wasm_externtype_kind(
+                wasm_importtype_type(imports.data[i])) != WASM_EXTERN_FUNC) {
+            send_error(proc, "Unsupported import kind.");
+            wasm_importtype_vec_delete(&imports);
+            wasm_exporttype_vec_delete(&exports);
+            wasm_store_delete(proc->store);
+            wasm_engine_delete(proc->engine);
+            drv_unlock(proc->is_running);
+            return;
+        }
+    }
+
     // Create Erlang lists for imports
     int init_msg_size = sizeof(ErlDrvTermData) * (2 + 3 + 5 + (13 * imports.size) + (11 * exports.size));
     ErlDrvTermData* init_msg = driver_alloc(init_msg_size);
@@ -201,11 +239,7 @@ void wasm_initialize_runtime(void* raw) {
         //DRV_DEBUG("Import: %s.%s", module_name->data, name->data);
 
         char* type_str = driver_alloc(function_sig_size(type));
-        // TODO: What happpens here?
-        if(!get_function_sig(type, type_str)) {
-            // TODO: Handle other types of imports?
-            continue;
-        }
+        get_function_sig(type, type_str);
         // 13 items in the each import message
         init_msg[msg_i++] = ERL_DRV_ATOM;
         init_msg[msg_i++] = driver_mk_atom((char*)wasm_externtype_to_kind_string(type));
@@ -483,6 +517,15 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     int result = 0;
     DRV_DEBUG("Function name: %s", field_name);
 
+    if (!indirect_function_table || !proc->exec_env) {
+        DRV_DEBUG("Indirect function table or execution environment is not set");
+        return -1;
+    }
+    if (input_args->size < 1) {
+        DRV_DEBUG("Indirect call has no function index");
+        return -1;
+    }
+
 // Extract the function index from the input arguments
     int function_index = input_args->data[0].of.i32;  
     DRV_DEBUG("Function index retrieved from input_args: %d", function_index);
@@ -491,11 +534,21 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     wasm_ref_t* function_ref = wasm_table_get(indirect_function_table, function_index);
     wasm_func_t* func = wasm_ref_as_func(function_ref);
     DRV_DEBUG("Function pointer: %p", func);
+    if (!func) {
+        DRV_DEBUG("No function at index %d", function_index);
+        if (function_ref) {
+            wasm_ref_delete(function_ref);
+        }
+        return -1;
+    }
 
     // Retrieve the function type and log its parameters and results
     wasm_functype_t* function_type = wasm_func_type(func);
     if (!function_type) {
         DRV_DEBUG("Failed to retrieve function type for function at index %d", function_index);
+        wasm_func_delete(func);
+        wasm_ref_delete(function_ref);
+        return -1;
     }
 
     // Log the function's parameter types
@@ -516,6 +569,18 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
         wasm_valkind_t result_kind = wasm_valtype_kind(result_type);
         DRV_DEBUG("Result %zu: %s", k, get_wasm_type_name(result_kind));
     }
+    // The called function gives the results the import declares.
+    if (result_types->size != output_results->size) {
+        DRV_DEBUG("Function at index %d does not match the import", function_index);
+        wasm_functype_delete(function_type);
+        wasm_func_delete(func);
+        wasm_ref_delete(function_ref);
+        return -1;
+    }
+    // The called function returns its results in `argv', so `argv' must
+    // have room for the larger of the arguments and two 64-bit words per
+    // result.
+    uint64_t result_words = result_types->size * 2;
     wasm_functype_delete(function_type);
     wasm_func_delete(func);
     wasm_ref_delete(function_ref);
@@ -542,7 +607,8 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     DRV_DEBUG("Prepared %zu arguments for function call", prepared_args.size);
 
     uint64_t argc = prepared_args.size;
-    uint64_t* argv = malloc(sizeof(uint64_t) * argc);
+    uint64_t argv_words = result_words > argc ? result_words : argc;
+    uint64_t* argv = malloc(sizeof(uint64_t) * (argv_words > 0 ? argv_words : 1));
     
     // Convert prepared arguments to an array of 64-bit integers
     for (uint64_t i = 0; i < argc; ++i) {
