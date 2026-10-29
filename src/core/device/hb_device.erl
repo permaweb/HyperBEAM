@@ -139,14 +139,21 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 %% internal module-loading path.
 message_to_device(Msg, Opts) ->
     DevID = hb_maps:get(<<"device">>, Msg, ?DEFAULT_DEVICE, Opts),
+    Excluded = hb_opts:get(<<"exclude-devices">>, [], Opts),
     % Refuse a device in `exclude-devices' before `hb_device_load' resolves it.
-    case lists:member(DevID, hb_opts:get(<<"exclude-devices">>, [], Opts)) of
+    case lists:member(DevID, Excluded) of
         true -> throw({device_not_loadable, DevID, <<"device-excluded">>});
         false -> ok
     end,
     case hb_device_load:reference(DevID, Opts) of
         {error, Reason} -> throw({device_not_loadable, DevID, Reason});
-        {ok, DevMod} -> DevMod
+        {ok, DevMod} ->
+            case hb_device_load:excluded(DevMod, Excluded, Opts) of
+                true ->
+                    throw({device_not_loadable, DevID, <<"device-excluded">>});
+                false ->
+                    DevMod
+            end
     end.
 
 %% @doc A device in `exclude-devices' is refused, with or without an

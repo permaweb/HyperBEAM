@@ -27,7 +27,7 @@
 %%% specification of a preloaded device (`spec/2'), and every implementation
 %%% of a specification in its sources (`implementations/2').
 -module(hb_device_load).
--export([reference/2, schema/2, store/1, spec/2, implementations/2]).
+-export([reference/2, excluded/3, schema/2, store/1, spec/2, implementations/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -46,6 +46,45 @@ reference(Ref, Opts) when is_binary(Ref) ->
         {error, Err} -> {error, Err}
     end.
 
+excluded(_Mod, [], _Opts) ->
+    false;
+excluded(Mod, Excluded, Opts) when is_atom(Mod), is_list(Excluded) ->
+    lists:any(
+        fun(Ref) -> excluded_module(Ref, Opts) =:= {ok, Mod} end,
+        Excluded
+    );
+excluded(_Mod, _Excluded, _Opts) ->
+    false.
+
+excluded_module(Ref, Opts) when is_binary(Ref), Ref =/= <<>> ->
+    NormRef = hb_ao:normalize_key(Ref),
+    case from_forge_bootstrap(NormRef, Opts) of
+        {ok, Mod} -> {ok, Mod};
+        _ -> local_module(NormRef, Opts)
+    end;
+excluded_module(_Ref, _Opts) ->
+    {error, not_found}.
+
+local_module(Ref, Opts) ->
+    Resolving = maps:get(<<"resolving-devices">>, Opts, []),
+    case {lists:member(Ref, Resolving), erlang:get({?MODULE, Ref})} of
+        {true, _} ->
+            {error, circular};
+        {false, Mod} when is_atom(Mod), Mod =/= undefined ->
+            {ok, Mod};
+        {false, _} ->
+            ResOpts = Opts#{ <<"resolving-devices">> => [Ref | Resolving] },
+            maybe
+                {error, not_found} ?= get_resolved_device(Ref, ResOpts),
+                {ok, Mod} ?= from_high_trust(Ref, ResOpts),
+                put_resolved_device(Ref, Mod, Opts),
+                {ok, Mod}
+            else
+                {cached, Cached} -> {ok, Cached};
+                Error -> Error
+            end
+    end.
+
 do_not_try_to_load_empty_device_test() ->
     ?assertEqual({error, not_found}, reference(<<>>, #{})),
     % `false' is not a device, and `name@1.0' gets the name `%zz' as it is.
@@ -53,6 +92,36 @@ do_not_try_to_load_empty_device_test() ->
     ?assertEqual(
         {error, <<"device-name-not-resolvable">>},
         reference(<<"%zz">>, #{})
+    ).
+
+excluded_by_any_reference_test() ->
+    Name = <<"meta@1.0">>,
+    Store = store(#{}),
+    PreOpts = #{ <<"store">> => Store, <<"cache-read-mode">> => raw },
+    {ok, SpecID} = preloaded_spec(Name, Store, PreOpts),
+    Mod = hb_device:message_to_device(#{ <<"device">> => Name }, #{}),
+    ?assertEqual(
+        Mod,
+        hb_device:message_to_device(#{ <<"device">> => SpecID }, #{})
+    ),
+    lists:foreach(
+        fun({Excluded, Requested}) ->
+            ?assertThrow(
+                {device_not_loadable, Requested, <<"device-excluded">>},
+                hb_device:message_to_device(
+                    #{ <<"device">> => Requested },
+                    #{ <<"exclude-devices">> => [Excluded] }
+                )
+            )
+        end,
+        [{Name, SpecID}, {SpecID, Name}]
+    ),
+    ?assertEqual(
+        Mod,
+        hb_device:message_to_device(
+            #{ <<"device">> => Name },
+            #{ <<"exclude-devices">> => [<<"lua@5.3a">>] }
+        )
     ).
 
 %% @doc Resolve and memoise a reference, refusing re-entrant resolutions:
