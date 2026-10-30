@@ -87,7 +87,7 @@ admit_request(State, Raw, NodeMsg) ->
         {true, true} ->
             PricingMsg = State#{ <<"device">> => PricingDevice },
             LedgerMsg = State#{ <<"device">> => LedgerDevice },
-            Signers = hb_message:signers(Request, NodeMsg),
+            Signers = path_signers(Request, NodeMsg),
             PricingReq = #{
                 <<"path">> => <<"estimate">>,
                 <<"request">> => Request,
@@ -261,7 +261,7 @@ charge_response(State, RawResponse, NodeMsg) ->
                                 <<"path">> => <<"charge">>,
                                 <<"quantity">> => Price,
                                 <<"account">> =>
-                                    case hb_message:signers(Request, NodeMsg) of
+                                    case path_signers(Request, NodeMsg) of
                                         [Signer] -> Signer;
                                         Multiple -> Multiple
                                     end,
@@ -334,6 +334,23 @@ balance(_, Req, NodeMsg) ->
                     {error, Error}
             end
     end.
+
+%% @doc The signers of a request whose signature covers its `path': a signer
+%% pays only for a path that it signed.
+path_signers(Request, NodeMsg) ->
+    [
+        Signer
+    ||
+        Signer <- hb_message:signers(Request, NodeMsg),
+        lists:member(
+            <<"path">>,
+            hb_message:committed(
+                Request,
+                #{ <<"committers">> => [Signer] },
+                NodeMsg
+            )
+        )
+    ].
 
 %% @doc A hook-only key runs only when the node's lifecycle hook calls it. The
 %% server marks the hook request in a private key. A request over HTTP cannot
