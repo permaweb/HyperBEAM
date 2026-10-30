@@ -519,6 +519,15 @@ function validate_request(incoming_base, assignment)
         })
     end
 
+    -- A message that gives a target must give the ledger's signed process ID.
+    if assignment.body.target and assignment.body.target ~= assignment.process then
+        return "error", log_result(base, "error", {
+            message = "Message target is not the ledger's signed process ID.",
+            target = assignment.body.target,
+            process = assignment.process
+        })
+    end
+
     if assignment.body["from-process"] then
         -- If the request is proxied, we need to check that the source
         -- computation is trusted.
