@@ -209,7 +209,8 @@ test_manifest_subdomain_matches_path_id() ->
     ).
 
 %% @doc When a valid 52 char subdomain TXID doesn't match the TX ID provided,
-%% the path TXID is loaded as the target item.
+%% the manifest gives its fallback: an ID that it does not map is not served
+%% in its origin.
 test_manifest_subdomain_does_not_match_path_id() ->
     TestPath = <<"/1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs">>,
     Opts = manifest_opts(),
@@ -219,7 +220,14 @@ test_manifest_subdomain_does_not_match_path_id() ->
     ),
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
-    assert_manifest(Node, TestPath, Subdomain, <<"image/png">>, <<137, "PNG">>, Opts).
+    assert_manifest(
+        Node,
+        TestPath,
+        Subdomain,
+        <<"text/html">>,
+        <<"<title>Portal</title>">>,
+        Opts
+    ).
 
 %% @doc Assert a manifest response for a b32 subdomain request.
 assert_manifest(Node, Path, Subdomain, ContentType, BodyNeedle, Opts) ->
