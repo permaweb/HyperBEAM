@@ -69,7 +69,7 @@
 ) -> {ok, #{ _ => _ }} | {error, _}.
 commit(Base, Req, Opts) ->
     case generate(Base, Req, Opts) of
-        {ok, Key} ->
+        {ok, #{ <<"secret">> := Key }} ->
             Bound =
                 Base#{
                     <<"committer">> => lib_secret:to_committer(Key)
@@ -99,7 +99,7 @@ commit(Base, Req, Opts) ->
 verify(Base, RawReq, Opts) ->
     ?event({verify_invoked, {priv_base, Base}, {priv_req, RawReq}}),
     case generate(Base, RawReq, Opts) of
-        {ok, Key} ->
+        {ok, #{ <<"secret">> := Key }} ->
             ?event({verify_found_key, {priv_key, Key}, {priv_base, Base}}),
             Committer = hb_maps:get(<<"committer">>, Base, undefined, Opts),
             Req = hb_cache:ensure_loaded(RawReq, Opts),
@@ -112,8 +112,9 @@ verify(Base, RawReq, Opts) ->
             {error, Err}
     end.
 
-%% @doc Collect authentication information from the client, and derive a key
-%% from it and return it.
+%% @doc Give the request with the caller's secret in `secret', as a generator
+%% does. A key derived from the request's `authorization' comes from a value
+%% that the request's ID does not cover, so no cache keeps the reply.
 -spec generate(
     #{ _ => _ },
     #{
@@ -127,17 +128,20 @@ verify(Base, RawReq, Opts) ->
         _ => _
     },
     #{ _ => _ }
-) -> {ok, binary()} | {error, #{ status := integer(), _ => _ }}.
+) -> {ok, #{ _ => _ }} | {error, #{ status := integer(), _ => _ }}.
 generate(_Msg, ReqLink, Opts) when ?IS_LINK(ReqLink) ->
     generate(_Msg, hb_cache:ensure_loaded(ReqLink, Opts), Opts);
-generate(_Msg, #{ <<"secret">> := Secret }, _Opts) ->
-    {ok, Secret};
+generate(_Msg, Req = #{ <<"secret">> := _ }, _Opts) ->
+    {ok, Req};
 generate(_Msg, Req, Opts) ->
     case get_authorization(Req, Opts) of
         <<"Basic ", Auth/binary>> ->
             Decoded = base64:decode(Auth),
             ?event(key_gen, {generated_key, {priv_auth, Auth}, {priv_decoded, Decoded}}),
-            derive_key(Decoded, Opts);
+            maybe
+                {ok, Key} ?= derive_key(Decoded, Opts),
+                {ok, Req#{ <<"secret">> => Key, <<"cache-control">> => <<"no-store">> }}
+            end;
         undefined ->
             {error,
                 #{
@@ -246,13 +250,13 @@ request_pbkdf2_parameters_ignored_test() ->
     Auth = <<"Basic ", (base64:encode(<<"user:pass">>))/binary>>,
     Req = #{ <<"path">> => <<"generate">>, <<"authorization">> => Auth },
     Dev = #{ <<"device">> => <<"http-auth@1.0">> },
-    {ok, Key} = hb_ao:resolve(Dev, Req, #{}),
-    ?assertEqual(
-        {ok, Key},
+    {ok, #{ <<"secret">> := Key }} = hb_ao:resolve(Dev, Req, #{}),
+    ?assertMatch(
+        {ok, #{ <<"secret">> := Key }},
         hb_ao:resolve(Dev, Req#{ <<"raw">> => true }, #{})
     ),
-    ?assertEqual(
-        {ok, Key},
+    ?assertMatch(
+        {ok, #{ <<"secret">> := Key }},
         hb_ao:resolve(Dev, Req#{ <<"iterations">> => 1 }, #{})
     ).
 
