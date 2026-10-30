@@ -44,7 +44,21 @@
 %% which are `message@1.0' core functions, and Lua public utility functions.
 device_info(Base) ->
     #{
-        default => fun compute/4,
+        default =>
+            fun(Key, Msg, Req, Opts) ->
+                KeyForm =
+                    fun(K) ->
+                        Norm = hb_ao:normalize_key(K),
+                        try hb_util:to_lower(hb_util_string:dash_chars(Norm))
+                        catch error:_ -> Norm
+                        end
+                    end,
+                BaseKeys = lists:map(KeyForm, maps:keys(Msg)),
+                case lists:member(KeyForm(Key), BaseKeys) of
+                    true -> hb_ao:raw(<<"message@1.0">>, Key, Msg, Req, Opts);
+                    false -> compute(Key, Msg, Req, Opts)
+                end
+            end,
         excludes =>
             [
                 <<"id">>,
@@ -58,7 +72,18 @@ device_info(Base) ->
                 <<"encode">>,
                 <<"decode">>
             ] ++
-            maps:keys(Base)
+            [
+                Key
+            ||
+                Key <-
+                    [
+                        <<"init">>,
+                        <<"snapshot">>,
+                        <<"normalize">>,
+                        <<"functions">>
+                    ],
+                is_map_key(Key, Base)
+            ]
     }.
 
 %% @doc Initialize the device state, loading the script into memory if it is 
@@ -1128,6 +1153,30 @@ invoke_non_compute_key_test() ->
         {error, not_found},
         hb_ao:resolve(Base, <<"no_function">>, #{})
     ).
+
+fresh_base_keys_test() ->
+    Node = hb_http_server:start_node(#{ <<"priv-wallet">> => ar_wallet:new() }),
+    Keys =
+        [
+            <<"k", (integer_to_binary(rand:uniform(1 bsl 60)))/binary>>
+        ||
+            _ <- lists:seq(1, 3)
+        ],
+    Path =
+        iolist_to_binary(
+            [
+                <<"/~lua@5.3a">>,
+                [[<<"&">>, Key, <<"=v">>] || Key <- Keys],
+                <<"/">>,
+                hd(Keys)
+            ]
+        ),
+    Res = hb_http:get(Node, Path, #{}),
+    lists:foreach(
+        fun(Key) -> ?assertError(badarg, binary_to_existing_atom(Key)) end,
+        Keys
+    ),
+    ?assertEqual({ok, <<"v">>}, Res).
 
 %% @doc A Lua function reads the request without its private keys.
 request_private_keys_test() ->
