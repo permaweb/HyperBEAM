@@ -605,11 +605,25 @@ client(Peer, Address, Stop, Reply, Opts) ->
 %% the reply that the HTTP server gives it (`hb_http_server:error_reply/4').
 execute(Request, Opts) ->
     try
-        Singleton = singleton(Request, Opts),
+        Raw = singleton(Request, Opts),
         [Path | _] =
             binary:split(
-                hb_maps:get(<<"path">>, Singleton, <<"/">>, Opts),
+                hb_maps:get(<<"path">>, Raw, <<"/">>, Opts),
                 <<"?">>
+            ),
+        % A tunneled request runs as a request to the node directly does: its
+        % message keeps only the keys that its commitments cover, with no
+        % private keys, and the request line gives its method, path and accept.
+        Singleton =
+            maps:merge(
+                hb_ao:execution_input(
+                    hb_private:reset(hb_message:with_only_committed_deep(Raw, Opts)),
+                    Opts
+                ),
+                maps:with(
+                    [<<"method">>, <<"path">>, <<"accept">>, <<"accept-bundle">>],
+                    Raw
+                )
             ),
         Result =
             maybe
