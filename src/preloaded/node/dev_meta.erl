@@ -83,7 +83,12 @@ info(_, Request, NodeMsg) ->
         _ ->
             ?event({get_config_req, Request, NodeMsg}),
             DynamicKeys = add_dynamic_keys(NodeMsg),
-            {ok, filter_node_msg(DynamicKeys, NodeMsg)}
+            {ok,
+                lib_meta:without_credentials(
+                    filter_node_msg(DynamicKeys, NodeMsg),
+                    NodeMsg
+                )
+            }
     end,
     {ErlStatus, Res#{ <<"cache-control">> => <<"no-store">> }}.
 

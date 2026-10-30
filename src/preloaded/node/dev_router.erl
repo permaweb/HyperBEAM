@@ -157,7 +157,7 @@ routes(M1, M2, Opts) ->
                     end
             end;
         _ ->
-            {ok, Routes}
+            {ok, lib_meta:without_credentials(Routes, Opts)}
     end.
 
 %% @doc Add a route to the routes of the node message, and sort them by

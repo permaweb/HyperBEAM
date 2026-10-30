@@ -1,7 +1,7 @@
 %%% @doc Authorization for typed operations on a node. Only keys committed by
 %%% the requested role are returned to the caller.
 -module(lib_meta).
--export([is_authorized/4, authorized/3, role/2]).
+-export([is_authorized/4, authorized/3, role/2, without_credentials/2]).
 -include("include/hb.hrl").
 
 %% @doc Verify the role's commitments and require their signed operation type.
@@ -84,3 +84,22 @@ signed_keys(Link, Opts) when ?IS_LINK(Link) ->
 signed_keys(List, Opts) when is_list(List) ->
     [signed_keys(Value, Opts) || Value <- List];
 signed_keys(Value, _Opts) -> Value.
+
+%% @doc Remove the credentials that the node's options give in their values,
+%% for a view of the options that any caller reads: an `authorization' header,
+%% and the user information of a URL.
+without_credentials(Msg, Opts) when is_map(Msg) ->
+    hb_maps:map(
+        fun(_, Value) -> without_credentials(Value, Opts) end,
+        hb_maps:without([<<"authorization">>], Msg, Opts),
+        Opts
+    );
+without_credentials(List, Opts) when is_list(List) ->
+    [without_credentials(Item, Opts) || Item <- List];
+without_credentials(Value, _Opts) when is_binary(Value) ->
+    case uri_string:parse(Value) of
+        #{ userinfo := _ } = URI -> uri_string:recompose(maps:remove(userinfo, URI));
+        _ -> Value
+    end;
+without_credentials(Value, _Opts) ->
+    Value.
