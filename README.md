@@ -226,6 +226,11 @@ a local WASM executor, used for executing legacynet AO processes inside HyperBEA
 See the [HyperBEAM OS](https://github.com/permaweb/hb-os) repository for an 
 example setup with co-executing HyperBEAM and legacy-CU nodes.
 
+- `~rng@1.0`: Implements the HyperBEAM RNG protocol by verifying BLS12-381
+randomness-beacon signatures and deriving deterministic bytes from verified
+seed material. The device is stateless and can be called
+from other devices, including Lua processes through `ao.resolve`.
+
 - `p4@1.0`: The `p4@1.0` device runs as a `pre-processor` and `post-processor` in
 the framework provided by `~meta@1.0`, enabling a framework for node operators to
 sell usage of their machine's hardware to execute AO-Core devices. The `p4@1.0`
