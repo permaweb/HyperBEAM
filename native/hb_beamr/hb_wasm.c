@@ -449,7 +449,7 @@ void wasm_execute_function(void* raw) {
         // char* func_name;
 
         // DRV_DEBUG("WASM Exception: [func_index: %d, func_offset: %d] %.*s", func_index, func_offset, trap_msg.size, trap_msg.data);
-        send_error(proc, "%.*s", trap_msg.size, trap_msg.data);
+        send_trap(proc, "%.*s", trap_msg.size, trap_msg.data);
         wasm_name_delete(&trap_msg);
         wasm_trap_delete(trap);
         wasm_val_vec_delete(&results);

@@ -6,6 +6,7 @@
 // Declare the atoms used in Erlang driver communication
 ErlDrvTermData atom_ok;
 ErlDrvTermData atom_error;
+ErlDrvTermData atom_trap;
 ErlDrvTermData atom_import;
 ErlDrvTermData atom_execution_result;
 
@@ -324,6 +325,7 @@ static ErlDrvEntry wasm_driver_entry = {
 DRIVER_INIT(wasm_driver) {
     atom_ok = driver_mk_atom("ok");
     atom_error = driver_mk_atom("error");
+    atom_trap = driver_mk_atom("trap");
     atom_import = driver_mk_atom("import");
     atom_execution_result = driver_mk_atom("execution_result");
     return &wasm_driver_entry;

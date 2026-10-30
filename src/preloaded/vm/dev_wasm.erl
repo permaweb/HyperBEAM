@@ -274,15 +274,13 @@ compute(RawM1, M2, Opts) ->
                             Opts
                         ),
                     case ResType of
+                        trap ->
+                            % A trap halts the process, as a failure does: the
+                            % instance stops, so no slot runs on the memory
+                            % that the trapped call wrote.
+                            hb_beamr:stop(instance(M1, M2, Opts)),
+                            {failure, Res};
                         error ->
-                            % A trapped call leaves the instance usable, so
-                            % the error goes to the process device, which
-                            % stores it as the slot's results. The trap does
-                            % not unwind the instance's globals, so the
-                            % instance is replaced with a new one of the
-                            % image loaded with the memory as the trap left it:
-                            % the same steps a restore from a snapshot takes.
-                            ok = reset(M1, M2, Opts),
                             {error, Res};
                         _ ->
                             {ok,
@@ -298,30 +296,6 @@ compute(RawM1, M2, Opts) ->
             end;
         _ -> {ok, M1}
     end.
-
-%% @doc Replace an instance whose call trapped with a new instance of the
-%% image, loaded with the memory as the trapped call left it. The trapped call
-%% keeps the instance's globals, such as the stack pointer, where the call
-%% stopped, while a restore from a snapshot starts at a new instance, so
-%% the process goes on from the new instance on every node. The worker's
-%% pid is kept, so the state's private element stays valid.
-reset(M1, M2, Opts) ->
-    ?event({resetting_wasm_instance_after_trapped_call, {m1, M1}}),
-    Instance = instance(M1, M2, Opts),
-    {ok, Memory} = hb_beamr:serialize(Instance),
-    InPrefix =
-        hb_ao:get(
-            <<"input-prefix">>,
-            {as, <<"message@1.0">>, M1},
-            <<"">>,
-            Opts
-        ),
-    hb_beamr:reset(
-        Instance,
-        image(M1, InPrefix, Opts),
-        mode(M1, InPrefix, Opts),
-        Memory
-    ).
 
 %% @doc Normalize the message to have an open WASM instance, but no literal
 %% `State' key. Ensure that we do not change the hashpath during this process.
