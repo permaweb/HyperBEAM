@@ -18,7 +18,7 @@ function charge(base, assignment)
     -- Verify that the request is signed by the admin.
     local admin = base.admin
     local charge_req = assignment.body
-    local _, committers = ao.resolve(charge_req, "committers")
+    local committers = ao.signers(charge_req)
     ao.event({ "debug_charge", { "Validating charge requester: ", {
         admin = admin,
         committers = committers,
@@ -29,10 +29,13 @@ function charge(base, assignment)
         return "error", base
     end
 
+    -- The ledger keeps the state that `validate_request' gives, with its
+    -- record of the charge, so a charge counts once.
     local status, res, request = validate_request(base, assignment)
     if status ~= "ok" then
         return status, res
     end
+    base = res
 
     -- Ensure that the quantity and account are present in the request.
     if not request.quantity or not request.account then
