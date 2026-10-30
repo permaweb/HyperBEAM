@@ -993,7 +993,7 @@ block(Base, RawRequest, Opts) when is_map(Base) ->
             end
     end,
     case {Result, hb_util:bool(find_key(<<"include-block-index">>, Base, Request, Opts))} of
-        {{ok, Header}, true} ->
+        {{ok, Header}, true} when not ?IS_BLOCK_ID(Block) ->
             ok = dev_arweave_block_cache:index(#{
                 <<"height">> => hb_maps:get(<<"height">>, Header, not_found, Opts),
                 <<"weave-size">> => hb_maps:get(<<"weave-size">>, Header, not_found, Opts),
@@ -1421,7 +1421,7 @@ to_message(Path = <<"/block/", Ref/binary>>, <<"GET">>, {ok, #{ <<"body">> := Bo
         true ?= requested_block(Ref, Block, Opts),
         CacheRes =
             case hb_opts:get(arweave_index_blocks, true, Opts) of
-                true -> dev_arweave_block_cache:write(Block, Opts);
+                true -> dev_arweave_block_cache:write(Block, Ref, Opts);
                 false -> skipped
             end,
         ?event(

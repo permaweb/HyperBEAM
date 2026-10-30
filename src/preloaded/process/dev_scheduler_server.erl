@@ -261,11 +261,9 @@ do_assign(State, Message, ReplyPID) ->
     Assignment =
         commit_assignment(
             #{
-                <<"path">> =>
-                    case hb_path:from_message(request, Message, Opts) of
-                        undefined -> <<"compute">>;
-                        Path -> hb_path:to_binary(Path)
-                    end,
+                % A slot computes the assignment on the process's state; the
+                % path of the message in its `body' is the execution device's.
+                <<"path">> => <<"compute">>,
                 <<"data-protocol">> => <<"ao">>,
                 <<"variant">> => <<"ao.N.1">>,
                 <<"process">> => hb_util:id(maps:get(id, State)),

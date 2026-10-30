@@ -558,7 +558,27 @@ ao_data_key_test() ->
             <<"ans104@1.0">>
         ),
     ?assert(hb_message:verify(Own, all, #{})).
-        
+
+reserved_key_test() ->
+    Wallet = ar_wallet:new(),
+    Items = [
+        #tx{ tags = [{<<"ao-data-key">>, Key}], data = <<"marker">> }
+    ||
+        Key <- [<<"commitments">>, <<"priv">>, <<"target">>]
+    ] ++ [
+        #tx{ tags = [{<<"commitments">>, <<"marker">>}] },
+        #tx{ data = #{ <<"commitments">> => <<"marker">> } }
+    ],
+    lists:foreach(
+        fun(Item) ->
+            ?assertThrow(
+                {invalid_field, _, _},
+                from(ar_bundles:sign_item(Item, Wallet), #{}, #{})
+            )
+        end,
+        Items
+    ).
+
 simple_signed_to_httpsig_test() ->
     Structured =
         hb_message:commit(

@@ -519,6 +519,15 @@ function validate_request(incoming_base, assignment)
         })
     end
 
+    -- A message that gives a target must give the ledger's signed process ID.
+    if assignment.body.target and assignment.body.target ~= assignment.process then
+        return "error", log_result(base, "error", {
+            message = "Message target is not the ledger's signed process ID.",
+            target = assignment.body.target,
+            process = assignment.process
+        })
+    end
+
     if assignment.body["from-process"] then
         -- If the request is proxied, we need to check that the source
         -- computation is trusted.
@@ -872,7 +881,7 @@ end
 --- Index function, called by the `~process@1.0` device for scheduled messages.
 --- We route any `action' to the appropriate function based on the request path.
 function compute(base, assignment)
-    local action = string.lower(assignment.body.action or "")
+    local action = string.lower(assignment.body.action or assignment.body.path or "")
     ao.event(
         {
             "compute called",
@@ -892,6 +901,8 @@ function compute(base, assignment)
         return register(base, assignment)
     elseif action == "register-remote" then
         return _G["register-remote"](base, assignment)
+    elseif action == "charge" and charge then
+        return charge(base, assignment)
     else
         -- Handle unknown `action' values.
         _, base = ensure_initialized(base, assignment)

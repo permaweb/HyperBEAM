@@ -27,6 +27,16 @@ recovery_id_in_valid_range_test() ->
     <<_CompactSig:64/binary, RecId:8>> = Sig,
     ?assert(lists:member(RecId, [0, 1, 2, 3])).
 
+ethereum_recovery_byte_test() ->
+    Wallet = ar_wallet:new(ethereum),
+    Msg = <<"recovery byte test">>,
+    Sig = ar_wallet:sign(Wallet, Msg),
+    <<Compact:64/binary, V:8>> = Sig,
+    % ANS-104 signers give the recovery byte as 27 or 28.
+    ?assert(lists:member(V, [27, 28])),
+    ?assert(ar_wallet:verify(Wallet, Msg, Sig)),
+    ?assertNot(ar_wallet:verify(Wallet, Msg, <<Compact/binary, (V - 27):8>>)).
+
 signature_has_low_s_test() ->
     Wallet = ar_wallet:new_ecdsa(),
     %% Sign multiple messages and verify all have low-S

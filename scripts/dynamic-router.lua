@@ -296,11 +296,12 @@ function duration(state, assignment, opts)
 end
 
 function compute(state, assignment, opts)
-    if assignment.body.action == "register" then
+    local action = assignment.body.action or assignment.body.path
+    if action == "register" then
         return register(state, assignment, opts)
-    elseif assignment.body.action == "recalculate" then
+    elseif action == "recalculate" then
         return recalculate(state, assignment, opts)
-    elseif assignment.body.action == "performance" then
+    elseif action == "performance" then
         return duration(state, assignment, opts)
     else
         -- If we have been called without a relevant path, simply ensure that

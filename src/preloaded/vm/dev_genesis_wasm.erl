@@ -546,6 +546,12 @@ do_import(Base, CheckpointMessage, Opts) ->
                 Opts
             ),
         true ?= hb_message:verify(Checkpoint, all, Opts) orelse unverified,
+        % Import only a message that an import authority signed as a
+        % checkpoint.
+        true ?=
+            hb_maps:get(<<"type">>, Checkpoint, not_found, Opts) ==
+                <<"Checkpoint">>
+            orelse not_checkpoint,
         CheckpointTargetProcID = hb_maps:get(<<"process">>, Checkpoint, Opts),
         ProcID = lib_process:process_id(Base, #{}, Opts),
         % Keep the state and the ID on the same process message, so a base
@@ -582,6 +588,12 @@ do_import(Base, CheckpointMessage, Opts) ->
                 <<"status">> => 400,
                 <<"body">> =>
                     <<"Checkpoint message targets a different process.">>
+            }};
+        not_checkpoint ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> =>
+                    <<"Message is not a checkpoint.">>
             }};
         unverified ->
             {error, #{

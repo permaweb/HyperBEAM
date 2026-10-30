@@ -7,7 +7,7 @@
 %%% pair of independent hash and TX root. A separate height pointer selects
 %%% the canonical row; the device exposes these stored values as AO-Core messages.
 -module(dev_arweave_block_cache).
--export([latest/1, heights/1, read/2, write/2]).
+-export([latest/1, heights/1, read/2, write/3]).
 -export([path/2]).
 -export([index/2, indexed/2, blocks/2]).
 -include("include/hb.hrl").
@@ -70,8 +70,10 @@ path(Block, _Opts) when is_integer(Block) ->
     ]);
 path(Block, _Opts) -> Block.
 
-%% @doc Write a block to the cache and create pseudo-paths for it.
-write(Block, RawOpts) ->
+%% @doc Write a block to the cache and create pseudo-paths for it. A hash
+%% reference does not select the block at its height, so it does not link the
+%% height alias.
+write(Block, Ref, RawOpts) ->
     Opts = opts(RawOpts),
     {ok, Height} = hb_maps:find(<<"height">>, Block, Opts),
     {ok, BlockID} = hb_maps:find(<<"indep-hash">>, Block, Opts),
@@ -82,7 +84,10 @@ write(Block, RawOpts) ->
     hb_cache:link(MsgID, BlockID, Opts),
     hb_cache:link(MsgID, BlockHash, Opts),
     % Link the block height pseudo-path to the message.
-    hb_cache:link(MsgID, path(Height, Opts), Opts),
+    case Ref of
+        <<"hash/", _/binary>> -> ok;
+        _ -> hb_cache:link(MsgID, path(Height, Opts), Opts)
+    end,
     ?event(arweave_cache, {wrote_block, {height, Height}, {message_id, MsgID}}),
     {ok, MsgID}.
 

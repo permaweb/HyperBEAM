@@ -21,25 +21,42 @@ sign(Msg, PrivBytes) ->
 sign(Msg, PrivBytes, DigestType) ->
 	Digest = digest_message(DigestType, Msg),
 	{ok, Signature} = sign_recoverable(Digest, PrivBytes),
-	Signature.
+	ethereum_signature(Signature, DigestType).
 
 %% @doc DigestType can be `sha256`, `ethereum` or `{typed_ethereum, Address}`.
 ecrecover(Msg, Signature) ->
     ecrecover(Msg, Signature, sha256).
 ecrecover(Msg, Signature, DigestType) ->
 	Digest = digest_message(DigestType, Msg),
-    NormalizedSig = normalize_signature(Signature, DigestType),
-	case recover_pk_and_verify(Digest, NormalizedSig) of
-		{ok, true, PubKey} -> {true, PubKey};
-		{ok, false, _PubKey} -> {false, <<>>};
-		{error, _Reason} -> {false, <<>>}
-	end.
+    case normalize_signature(Signature, DigestType) of
+        invalid -> {false, <<>>};
+        NormalizedSig ->
+            case recover_pk_and_verify(Digest, NormalizedSig) of
+                {ok, true, PubKey} -> {true, PubKey};
+                {ok, false, _PubKey} -> {false, <<>>};
+                {error, _Reason} -> {false, <<>>}
+            end
+    end.
 
 digest_message(sha256, Msg) -> crypto:hash(sha256, Msg);
 digest_message(ethereum, Msg) -> ethereum_hash(Msg);
 digest_message({typed_ethereum, Address}, Msg) -> typed_ethereum_hash(Address, Msg).
 
-%% @doc Normalize Ethereum v values: 27/28 -> 0/1
+%% @doc Give an Ethereum signature the recovery byte `27' or `28' that
+%% ANS-104 signers give.
+ethereum_signature(<<Compact:64/binary, V:8>>, ethereum) when V < 2 ->
+    <<Compact/binary, (V + 27):8>>;
+ethereum_signature(Signature, _) ->
+    Signature.
+
+%% @doc Normalize the recovery byte of an Ethereum signature from `27' or
+%% `28' to `0' or `1'. A signature with any other recovery byte is `invalid'.
+normalize_signature(<<_Compact:64/binary, V:8>>, DigestType)
+        when (DigestType =:= ethereum orelse
+            (is_tuple(DigestType) andalso
+                element(1, DigestType) =:= typed_ethereum)),
+            V < 27 ->
+    invalid;
 normalize_signature(<<Compact:64/binary, V:8>>, ethereum) when V >= 27 -> 
     <<Compact/binary, (V - 27):8>>;
 normalize_signature(<<Compact:64/binary, V:8>>, {typed_ethereum, _}) when V >= 27 ->

@@ -616,6 +616,10 @@ error_slot_is_skipped_test_parallel() ->
                 function text(base)
                     return "x"
                 end
+                function compute(base, assignment)
+                    local handlers = { inc = inc, fail = fail, throw = throw, text = text }
+                    return handlers[assignment.body.path](base)
+                end
                 """
             >>,
             Opts

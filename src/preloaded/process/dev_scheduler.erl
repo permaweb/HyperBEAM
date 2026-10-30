@@ -800,7 +800,7 @@ remote_slot(ProcID, Redirect, Opts) ->
         hb_ao:get(<<"variant">>, Redirect, <<"ao.N.1">>, Opts),
         ProcID,
         Node,
-        Opts
+        Opts#{ <<"http-client-validate-accessible">> => true }
     ).
 
 %% @doc Get the current slot from a remote scheduler, based on the variant of
@@ -1029,7 +1029,11 @@ do_get_remote_schedule(
         hb_http:get(
             Node,
             Path,
-            Opts#{ <<"http-client">> => httpc, <<"protocol">> => http2 }
+            Opts#{
+                <<"http-client">> => httpc,
+                <<"protocol">> => http2,
+                <<"http-client-validate-accessible">> => true
+            }
         )
     of
         {ok, Res} ->
@@ -1301,7 +1305,11 @@ filter_json_assignments(ProcID, JSONRes, To, From, Opts) ->
     JSONRes#{ <<"edges">> => Filtered }.
 
 post_remote_schedule(RawProcID, Redirect, OnlyCommitted, Opts) ->
-    RemoteOpts = Opts#{ <<"http-client">> => httpc },
+    RemoteOpts =
+        Opts#{
+            <<"http-client">> => httpc,
+            <<"http-client-validate-accessible">> => true
+        },
     ProcID = without_hint(RawProcID),
     Node = node_from_redirect(Redirect, Opts),
     Variant = hb_ao:get(<<"variant">>, Redirect, <<"ao.N.1">>, Opts),
@@ -1399,7 +1407,11 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
                 {path, {string, P}},
                 {process_id, {string, ProcID}}
             }),
-            LegacyOpts = Opts#{ <<"protocol">> => http2 },
+            LegacyOpts =
+                Opts#{
+                    <<"protocol">> => http2,
+                    <<"http-client-validate-accessible">> => true
+                },
             case hb_http:post(Node, PostMsg, LegacyOpts) of
                 {ok, PostRes} ->
                     ?event({remote_schedule_result, PostRes}),

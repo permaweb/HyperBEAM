@@ -375,9 +375,22 @@ safe_to_id(<<>>) -> <<>>;
 safe_to_id(ID) -> hb_util:human_id(ID).
 
 maybe_list_to_binary(List) when is_list(List) ->
-    list_to_binary(List);
+    % A list gives bytes only if every element is a byte. Any other list has
+    % no JSON value of its own, and is given as `null', as a `data' that is
+    % not a binary is.
+    case is_byte_list(List) of
+        true -> list_to_binary(List);
+        false -> null
+    end;
 maybe_list_to_binary(Bin) ->
     Bin.
+
+is_byte_list([]) ->
+    true;
+is_byte_list([Byte | Rest]) when is_integer(Byte), Byte >= 0, Byte =< 255 ->
+    is_byte_list(Rest);
+is_byte_list(_) ->
+    false.
 
 %% @doc Convert a key to HTTP header-case. A key that is not UTF-8 text is
 %% kept as it is.
@@ -722,6 +735,20 @@ basic_aos_call_test_() ->
 		?assertMatch(
 			{ok, #{ <<"Data">> := null }},
 			to(#{}, #{ <<"message">> => #{ <<"data">> => 1 } }, #{})
+		),
+		% A tag value that is a list of byte lists gives those bytes, and any
+		% other list of values is `null'.
+		?assertMatch(
+			{ok, #{ <<"Tags">> := [
+				#{ <<"name">> := <<"Tag-A">>, <<"value">> := <<1>> }
+			] }},
+			to(#{}, #{ <<"message">> => #{ <<"tag-a">> => [[1]] } }, #{})
+		),
+		?assertMatch(
+			{ok, #{ <<"Tags">> := [
+				#{ <<"name">> := <<"Tag-A">>, <<"value">> := null }
+			] }},
+			to(#{}, #{ <<"message">> => #{ <<"tag-a">> => [[256]] } }, #{})
 		),
 		% Of a message from two signers that commit different keys, only the
 		% owner's key is given.

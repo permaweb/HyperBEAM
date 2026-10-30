@@ -377,11 +377,11 @@ default_worker(GroupName, Base, Opts) ->
     end.
 
 %% @doc Create a group name from a base and a request. If both have commitments
-%% and contain no signed message, the group name is `BaseID/ReqID': the path at
-%% which the cache links their result. `hb_ao' commits the base and the request
-%% before it groups them, so their IDs are read from those commitments.
-%% Otherwise, the group name is the SHA-256 of the base and the request without
-%% `priv', as an integer.
+%% and contain no signed message, the group is `BaseID/ReqID', followed by the
+%% hash of their private elements when they have any: the path at which the
+%% cache links their result. `hb_ao' commits the base and the request before it
+%% groups them, so their IDs are read from those commitments. Otherwise, the
+%% group is the SHA-256 of the base and the request as they are, as an integer.
 default_grouper(Base, Req, Opts) ->
     %?event({calculating_default_group_name, {base, Base}, {req, Req}}),
     case hb_opts:get(await_inprogress, true, Opts) of
@@ -393,22 +393,34 @@ default_grouper(Base, Req, Opts) ->
                     <<
                         (hb_message:id(Base, all, Opts))/binary,
                         "/",
-                        (hb_message:id(Req, all, Opts))/binary
+                        (hb_message:id(Req, all, Opts))/binary,
+                        (priv_hash(Base, Req, Opts))/binary
                     >>;
                 false ->
                     binary:decode_unsigned(
                         hb_crypto:sha256(
                             term_to_binary(
-                                {
-                                    hb_maps:without([<<"priv">>], Base, Opts),
-                                    hb_maps:without([<<"priv">>], Req, Opts)
-                                },
+                                {Base, Req},
                                 [deterministic]
                             )
                         )
                     )
             end;
         _ -> ungrouped_exec
+    end.
+
+%% @doc Hash the private elements of a base and a request, so that two requests
+%% that differ only in their private parts do not share one computation. A base
+%% and a request without private elements add nothing to the group.
+priv_hash(Base, Req, _Opts) ->
+    Priv = {hb_private:from_message(Base), hb_private:from_message(Req)},
+    case Priv of
+        {BasePriv, ReqPriv} when map_size(BasePriv) =:= 0,
+                map_size(ReqPriv) =:= 0 ->
+            <<>>;
+        _ ->
+            <<"/", (hb_util:human_id(hb_crypto:sha256(
+                term_to_binary(Priv, [deterministic]))))/binary>>
     end.
 
 %% @doc Return whether a message has commitments.

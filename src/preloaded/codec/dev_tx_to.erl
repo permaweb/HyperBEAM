@@ -70,6 +70,9 @@ data_fields(Prefix, TX = #tx{ format = 2, data_root = Root, data_size = Size })
         when Prefix =/= ?FIELD_PREFIX,
              (Root =:= ?DEFAULT_DATA_ROOT) =/= (Size =:= ?DEFAULT_DATA_SIZE) ->
     TX#tx{ data_root = ?DEFAULT_DATA_ROOT, data_size = ?DEFAULT_DATA_SIZE };
+% A format 1 signature covers the data itself, not its root or size.
+data_fields(_Prefix, TX = #tx{ format = 1 }) ->
+    TX#tx{ data_root = ?DEFAULT_DATA_ROOT, data_size = ?DEFAULT_DATA_SIZE };
 data_fields(_Prefix, TX) ->
     TX.
 

@@ -116,7 +116,9 @@ rules are normative.
 - **Request message shape (compute path).** When the catch-all handler runs, the
   request message MAY carry, taking precedence over the base-message fields:
   - `function` or `body/function` — the Lua function name to call.
-  - `parameters` or `body/parameters` — the Lua call arguments.
+  - `parameters` — the Lua call arguments. A message in the request's `body`
+    gives none: in a process, that message is any caller's, and its arguments
+    would replace the base, which is the process's state.
 
 - **Roles.**
   - **Direct invocation / hook.** A caller resolves a key (e.g. `.../~lua@5.3a/hello`)
@@ -222,7 +224,6 @@ reserved key and not an existing field of the base message (§3).
      - **default:** the resolved key `K` itself.
   3. **Determine the call arguments.** Take the **first present** list of, in
      order:
-     - `Req`'s `body/parameters`,
      - `Req`'s `parameters`,
      - `Base`'s `parameters`,
      - **default:** the 3-element list `[ Base-without-private, Req-without-private,
@@ -695,8 +696,8 @@ unreachable/offline path).
    globals resolve to the **last** loaded definition.
 4. **Function/parameter selection.** The called function name is the first present
    of request `body/function`, request `function`, base `function`, else the
-   resolved key. The arguments are the first present of request `body/parameters`,
-   request `parameters`, base `parameters`, else `[ base-without-private,
+   resolved key. The arguments are the first present of request `parameters`,
+   base `parameters`, else `[ base-without-private,
    request-without-private, {} ]`.
 5. **Single vs multi return.** A single Lua return value maps to status `ok` with
    that value as result; a two-value return maps the first to the **status** and

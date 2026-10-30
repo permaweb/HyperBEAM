@@ -648,7 +648,7 @@ fetch_full_header(TXID, Attempts, Opts) ->
 %% @doc Identify headers whose format-one signatures require omitted data.
 needs_format_one_data(Header, Opts) ->
     try hb_message:convert(Header, <<"tx@1.0">>, Opts) of
-        #tx{ format = 1, data_size = Size, data = <<>> } when Size > 0 -> true;
+        #tx{ format = 1, data = <<>> } -> true;
         #tx{} -> false
     catch
         _:_ -> false

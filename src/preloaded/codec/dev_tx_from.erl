@@ -61,8 +61,9 @@ reward_field(TX, Prefix, _Opts) ->
 
 %% @doc Return the data root of a TX under `Prefix': with the commitment's
 %% prefix for every TX that has a root, and as a message key only for a TX
-%% without data.
-data_root_field(#tx{data = Data, data_root = DataRoot}, Prefix, _Opts)
+%% without data. A format 1 signature covers the data itself, not its root or
+%% size, so a format 1 TX gives neither.
+data_root_field(#tx{format = 2, data = Data, data_root = DataRoot}, Prefix, _Opts)
         when Data =:= ?DEFAULT_DATA; Prefix =:= ?FIELD_PREFIX ->
     encoded_field(
         DataRoot,
@@ -74,7 +75,7 @@ data_root_field(#tx{data = Data, data_root = DataRoot}, Prefix, _Opts)
 data_root_field(_TX, _Prefix, _Opts) ->
     #{}.
 
-data_size_field(#tx{data = ?DEFAULT_DATA, data_size = DataSize}, Prefix, _Opts) ->
+data_size_field(#tx{format = 2, data = ?DEFAULT_DATA, data_size = DataSize}, Prefix, _Opts) ->
     encoded_field(
         DataSize,
         ?DEFAULT_DATA_SIZE,
