@@ -782,11 +782,6 @@ preprocess(Base, RawReq, Opts) ->
                         Opts
                     )
                 ),
-            MaybeCommit =
-                case CommitRequest of
-                    true -> #{ <<"commit-request">> => true };
-                    false -> #{}
-                end,
             % Construct a request to `relay@1.0/call' which will proxy a request
             % to `apply@1.0/body' with the original request body as the argument.
             % This allows us to potentially sign the request before sending it,
@@ -827,7 +822,21 @@ preprocess(Base, RawReq, Opts) ->
                     <<"user-path">> => UserPath,
                     <<"user-message">> => UserReqWithCommit
                 },
-            ?event(debug_preprocess, {prepared_relay_req, RelayReq}),
+            % With `commit-request', the router signs the request that it routes
+            % here, as a relayed request, so the relay only forwards it.
+            ProxyMsg =
+                case CommitRequest of
+                    true ->
+                        hb_message:commit(
+                            RelayReq#{
+                                <<"method">> => <<"POST">>,
+                                <<"type">> => <<"Relay-Request">>
+                            },
+                            Opts
+                        );
+                    false -> RelayReq
+                end,
+            ?event(debug_preprocess, {prepared_relay_req, ProxyMsg}),
             % This request matched a route, so rather than name a peer that the
             % relay would check, give the relay the user's path to route: it
             % picks the destination from the same routes, a destination the
@@ -837,7 +846,7 @@ preprocess(Base, RawReq, Opts) ->
                 RawReq#{
                     <<"body">> =>
                         [
-                            MaybeCommit#{
+                            #{
                                 <<"device">> => <<"relay@1.0">>,
                                 <<"relay-device">> => <<"apply@1.0">>,
                                 <<"method">> => <<"POST">>,
@@ -846,7 +855,7 @@ preprocess(Base, RawReq, Opts) ->
                             #{
                                 <<"path">> => <<"call">>,
                                 <<"relay-subject">> => <<"proxy-message">>,
-                                <<"proxy-message">> => RelayReq
+                                <<"proxy-message">> => ProxyMsg
                             }
                         ]
                 }

@@ -248,16 +248,16 @@ that relays it to the matched upstream, or run it locally if no route matches.
     normative):
     1. **Stage 1** binds the relay: `#{ <<"device">> => <<"relay@1.0">>,
        <<"relay-device">> => <<"apply@1.0">>, <<"method">> => <<"POST">>,
-       <<"relay-route">> => <the user's path> }`, **plus**
-       `<<"commit-request">> => true`
-       **iff** the base's `commit-request` was true (omit the key entirely when
-       false).
+       <<"relay-route">> => <the user's path> }`.
     2. **Stage 2** invokes `call`: `#{ <<"path">> => <<"call">>,
        <<"target">> => <<"proxy-message">>, <<"proxy-message">> => ProxyMsg }`
        where `ProxyMsg = #{ <<"device">> => <<"apply@1.0">>,
        <<"path">> => <<"//user-path">>, <<"source">> => <<"user-message">>,
        <<"user-path">> => <the user's path>,
        <<"user-message">> => <the user request (committed per below)> }`.
+       **Iff** the base's `commit-request` is true, `ProxyMsg` is signed here
+       with the node's key, with `method => POST` and `type => Relay-Request`
+       added, and the relay forwards it as it is.
     The user's inbound request is **committed first if it is unsigned** (an
     unsigned `httpsig@1.0` commitment is added — `commitment-device =>
     httpsig@1.0`, `type => unsigned`) so headers the relaying node adds are not
@@ -521,8 +521,7 @@ HTTP:
     `status: 404` message when it is `error`.
 24. `preprocess` with a matching route returns a two-element `body` list: stage 1
     binds `relay@1.0` (`relay-device => apply@1.0`, `method => POST`,
-    `relay-route => <path>`, and `commit-request => true` iff the base requested
-    it); stage 2 is `#{ path => call, target => proxy-message, proxy-message =>
+    `relay-route => <path>`); stage 2 is `#{ path => call, target => proxy-message, proxy-message =>
     #{ device => apply@1.0, path => //user-path, source => user-message,
     user-path => <path>, user-message => <user request> } }` (§4 `preprocess`).
     An unsigned user request is committed (unsigned httpsig) before relay and
