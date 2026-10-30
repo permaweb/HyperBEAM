@@ -257,7 +257,7 @@ charge_response(State, RawResponse, NodeMsg) ->
                     ChargeReq =
                         ledger_request(
                             LedgerDevice,
-                            #{
+                            (ledger_target(LedgerMsg, NodeMsg))#{
                                 <<"path">> => <<"charge">>,
                                 <<"quantity">> => Price,
                                 <<"account">> =>
@@ -346,6 +346,14 @@ refuse_caller() ->
         <<"status">> => 401,
         <<"body">> => <<"Unauthorized caller.">>
     }}.
+
+%% @doc The ledger's own ID, if its device gives one. A charge gives it as its
+%% `target', so that no other ledger takes the charge.
+ledger_target(LedgerMsg, NodeMsg) ->
+    case hb_ao:resolve(LedgerMsg, <<"target">>, NodeMsg) of
+        {ok, Target} -> #{ <<"target">> => Target };
+        _ -> #{}
+    end.
 
 %% @doc Prepare a request for the ledger. A `lua@5.3a' ledger reads an
 %% Arweave committer as its address, so we convert the accounts in the request
@@ -690,7 +698,10 @@ hyper_token_ledger() ->
     Res = hb_http:get(Node, SignedReq, #{}),
     ?event({expected_failure, Res}),
     ?assertMatch({error, _}, Res),
-    % We then move 50 tokens from Alice to Bob.
+    % We then move 50 tokens from Alice to Bob. The transfer gives the ledger's
+    % signed ID as its `target'.
+    {ok, LedgerID} =
+        hb_http:get(Node, <<LedgerPath/binary, "/id?committers=all">>, #{}),
     {ok, TopupRes} =
         hb_http:post(
             Node,
@@ -701,6 +712,7 @@ hyper_token_ledger() ->
                         hb_message:commit(
                             #{
                                 <<"path">> => <<"transfer">>,
+                                <<"target">> => LedgerID,
                                 <<"quantity">> => 50,
                                 <<"recipient">> => BobAddress
                             },

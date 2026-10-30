@@ -531,8 +531,8 @@ function validate_request(incoming_base, assignment)
         })
     end
 
-    -- A message that gives a target must give the ledger's signed process ID.
-    if assignment.body.target and assignment.body.target ~= assignment.process then
+    -- A message must give the ledger's signed process ID as its target.
+    if (not assignment.process) or (assignment.body.target ~= assignment.process) then
         return "error", log_result(base, "error", {
             message = "Message target is not the ledger's signed process ID.",
             target = assignment.body.target,

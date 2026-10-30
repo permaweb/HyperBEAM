@@ -22,6 +22,12 @@ function balance(base, request)
     return "ok", res
 end
 
+-- The ledger's signed process ID, which the node's charges give as their
+-- `target'.
+function target(base)
+    return ao.resolve({ path = base["ledger-path"] .. "/id?committers=all" })
+end
+
 -- Charge the user's balance in the current ledger state.
 function charge(base, request)
     ao.event("debug_charge", {
