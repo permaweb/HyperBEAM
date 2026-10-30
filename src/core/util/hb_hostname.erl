@@ -1,7 +1,7 @@
 %%% @doc Public DNS and local-network exclusion helpers.
 -module(hb_hostname).
 -export([is_public/2, public_ips/2, is_public_ip/1, uri_host/1, normalize/1]).
--export([is_blocked/2]).
+-export([is_blocked/2, to_ips/2]).
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_DNS_SERVERS, [{{1, 1, 1, 1}, 53}, {{8, 8, 8, 8}, 53}]).
@@ -20,6 +20,14 @@ is_public(Host, Opts) ->
 %% 2. Allowing access to a list of specific hosts by hostname or IP address,
 %%    provided by the `hosts-allowed` option.
 is_blocked(URI, Opts) ->
+    to_ips(URI, Opts) =:= {error, blocked_host}.
+
+%% @doc Return `{ok, IPs}' if the host that `URI' gives passes the host policy,
+%% where `IPs' are the public addresses that the policy vetted for it, so that a
+%% client connects to one of them and does not resolve the host again. They are
+%% `[]' when the policy vets no address. Otherwise return
+%% `{error, blocked_host}'.
+to_ips(URI, Opts) ->
     maybe
         true ?= (URI =/= undefined) orelse skip,
         {ok, Host} ?= uri_host(URI),
@@ -31,12 +39,11 @@ is_blocked(URI, Opts) ->
                     AllowedHosts
                 ),
         true ?= hb_opts:get(hosts_block_internal, true, Opts) orelse skip,
-        try not is_public(Host, Opts)
-        catch _:_ -> true
-        end
+        [_ | _] = IPs ?= try public_ips(Host, Opts) catch _:_ -> [] end,
+        {ok, IPs}
     else
-        skip -> false;
-        _ -> true
+        skip -> {ok, []};
+        _ -> {error, blocked_host}
     end.
 
 %% @doc Ensure that a given hostname either fully matches, or matches a

@@ -225,44 +225,46 @@ do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
                         {Node, relay_destination(not_found, RelayRoute), NodeOpts}
                 end
         end,
-    RequestOpts = RouteOpts#{ <<"http-redirects">> => 0 },
-    case hb_hostname:is_blocked(Destination, Opts) of
-        true -> {error, blocked_host};
-        false ->
-            Res =
-                case RelayPeer of
-                    not_found ->
-                        hb_http:request(TargetMod5, RequestOpts);
-                    _ ->
-                        ?event(debug_relay, {relaying_to_peer, RelayPeer}),
-                        hb_http:request(
-                            RelayMethod,
-                            RelayPeer,
-                            RelayPath,
-                            TargetMod5,
-                            RequestOpts
-                        )
-                end,
-            case Res of
-                {ok, R} ->
-                    % A reply that carries commitments is the message that the
-                    % peer sent: the result keeps the keys that they cover, so
-                    % the `status' that the client adds to the reply is not one.
-                    {ok, Sent} = hb_message:with_only_committed(R, any, Opts),
-                    % The reply's links name messages in the peer's stores, and
-                    % a client reads them from this node: load them here.
-                    Loaded = hb_cache:ensure_all_loaded(Sent, Opts),
-                    {ok, strip_cookies(Loaded, Opts)};
-                Err -> Err
-            end
+    % The client validates a host that the request chose where it connects to
+    % it, so the connection reaches an address that the host policy accepted.
+    RequestOpts =
+        RouteOpts#{
+            <<"http-redirects">> => 0,
+            <<"http-client-validate-accessible">> => Destination =/= undefined
+        },
+    Res =
+        case RelayPeer of
+            not_found ->
+                hb_http:request(TargetMod5, RequestOpts);
+            _ ->
+                ?event(debug_relay, {relaying_to_peer, RelayPeer}),
+                hb_http:request(
+                    RelayMethod,
+                    RelayPeer,
+                    RelayPath,
+                    TargetMod5,
+                    RequestOpts
+                )
+        end,
+    case Res of
+        {ok, R} ->
+            % A reply that carries commitments is the message that the peer
+            % sent: the result keeps the keys that they cover, so the `status'
+            % that the client adds to the reply is not one.
+            {ok, Sent} = hb_message:with_only_committed(R, any, Opts),
+            % The reply's links give messages in the peer's stores, and a client
+            % reads them from this node: load them here.
+            Loaded = hb_cache:ensure_all_loaded(Sent, Opts),
+            {ok, strip_cookies(Loaded, Opts)};
+        Err -> Err
     end.
 
 %% @doc Returns the destination the relay will contact: the `peer' when the
 %% request gives one, otherwise an absolute `route-path', `relay-path' or
 %% `relay-route'. If a relative path gives an authority, joining it to a route
 %% prefix makes the prefix userinfo and the path chooses the host, so return the
-%% path with a scheme for `hb_hostname:is_blocked/2' to check that host. Any
-%% other relative path gives no host and returns `undefined'.
+%% path with a scheme, as a host that the request chose. Any other relative
+%% path gives no host and returns `undefined'.
 relay_destination(not_found, <<"http://", _/binary>> = Path) -> Path;
 relay_destination(not_found, <<"https://", _/binary>> = Path) -> Path;
 relay_destination(not_found, <<"/", _/binary>>) -> undefined;

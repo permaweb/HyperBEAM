@@ -51,32 +51,69 @@ request(Args, RemainingRetries, Opts) ->
 %% @doc Make a request, following a `307' or `308' response to the absolute URL
 %% in its `location' with the same method, headers and body, up to
 %% `http-redirects' times. One more redirect is `{error, 'too-many-redirects'}'.
-%% With `http-redirects' at 0, the redirect is the response. If
-%% `hb_hostname:is_blocked/2' blocks the host of a `location', return
-%% `{error, blocked_host}' without following it.
+%% With `http-redirects' at 0, the redirect is the response. The host of a
+%% `location' is validated as one that a caller chose: if the host policy
+%% blocks it, return `{error, blocked_host}' without following it.
 redirect(Args, Redirects, Opts) ->
     Response =
-        request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts), Opts),
+        case validate_accessible(Args, Opts) of
+            {ok, Accessible} ->
+                request(
+                    Accessible,
+                    hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts),
+                    Opts
+                );
+            Blocked -> Blocked
+        end,
     MaxRedirects = hb_opts:get(http_redirects, ?DEFAULT_REDIRECTS, Opts),
     Location = location(Response),
     case uri_string:parse(Location) of
         URI = #{ scheme := _, host := _ } when Redirects < MaxRedirects ->
             Path = uri_string:recompose(maps:with([path, query], URI)),
-            case hb_hostname:is_blocked(Location, Opts) of
-                true -> {error, blocked_host};
-                false ->
-                    redirect(
-                        Args#{
-                            peer => Location,
-                            path => hb_path:normalize(Path)
-                        },
-                        Redirects + 1,
-                        Opts
-                    )
-            end;
+            redirect(
+                Args#{
+                    peer => Location,
+                    path => hb_path:normalize(Path)
+                },
+                Redirects + 1,
+                Opts#{ <<"http-client-validate-accessible">> => true }
+            );
         #{ scheme := _, host := _ } when MaxRedirects > 0 ->
             {error, 'too-many-redirects'};
         _ -> Response
+    end.
+
+%% @doc Return the arguments of a request to a host that a caller chose, which
+%% `http-client-validate-accessible' marks. The host must give addresses that
+%% the host policy accepts (`hb_hostname:to_ips/2'). A `http' peer is then given
+%% as one of those IPv4 addresses, with its own host in `host', so that the
+%% client does not resolve the host again and connects to the address that the
+%% policy accepted; a host with no such address is blocked. A `https' peer keeps
+%% its host: the certificate check binds the connection to it.
+validate_accessible(Args = #{ peer := Peer, headers := Headers }, Opts) ->
+    maybe
+        true ?= hb_opts:get(http_client_validate_accessible, false, Opts),
+        {ok, [_ | _] = IPs} ?= hb_hostname:to_ips(Peer, Opts),
+        {ok, {<<"http">>, Host, Port}} ?= parse_peer(Peer, Opts),
+        [IP | _] ?= [Vetted || Vetted <- IPs, tuple_size(Vetted) =:= 4],
+        PortBin = hb_util:bin(Port),
+        Authority =
+            case Port of
+                80 -> hb_util:bin(Host);
+                _ -> <<(hb_util:bin(Host))/binary, ":", PortBin/binary>>
+            end,
+        {ok,
+            Args#{
+                peer =>
+                    <<"http://", (hb_util:bin(inet:ntoa(IP)))/binary, ":",
+                        PortBin/binary>>,
+                headers => maps:merge(#{ <<"host">> => Authority }, Headers)
+            }
+        }
+    else
+        {error, blocked_host} = Blocked -> Blocked;
+        [] -> {error, blocked_host};
+        _ -> {ok, Args}
     end.
 
 %% @doc The `location' of a `307' or `308' response, else `<<>>'.

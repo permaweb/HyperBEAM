@@ -1027,7 +1027,8 @@ remote_schedule_result(Location, SignedReq, Opts) ->
     % Store a copy of the message for ourselves.
     {ok, _} = hb_cache:write(SignedReq, Opts),
     ?event(push, {remote_schedule_result, {path, Path}}, Opts),
-    case hb_http:post(Node, Path, hb_maps:without([<<"path">>], SignedReq, Opts), Opts) of
+    PostOpts = Opts#{ <<"http-client-validate-accessible">> => true },
+    case hb_http:post(Node, Path, hb_maps:without([<<"path">>], SignedReq, Opts), PostOpts) of
         {ok, Res} ->
             ?event(push, {remote_schedule_result, {res, Res}}, Opts),
             case hb_ao:get(<<"status">>, Res, 200, Opts) of
