@@ -120,11 +120,16 @@ function count_common(a, b)
     if type(a) ~= "table" then a = { a } end
     if type(b) ~= "table" then b = { b } end
 
-    local count = 0
+    -- Each value counts once, however often a list gives it.
+    local seen, count = {}, 0
     for _, v in ipairs(a) do
-        for _, w in ipairs(b) do
-            if v == w then
-                count = count + 1
+        if not seen[v] then
+            seen[v] = true
+            for _, w in ipairs(b) do
+                if v == w then
+                    count = count + 1
+                    break
+                end
             end
         end
     end
@@ -307,6 +312,13 @@ local function validate_new_peer_ledger(base, request)
             request = request
         })
         return true
+    end
+
+    -- A new peer is a process whose message a trusted authority pushed, which
+    -- `validate_request' then gives as `from'. A message that only its sender
+    -- signed gives no peer.
+    if (not request["from-process"]) or request.from ~= request["from-process"] then
+        return false
     end
 
     -- Calculate the expected base ID from the process's own `process` message,
