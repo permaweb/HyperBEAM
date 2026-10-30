@@ -881,7 +881,7 @@ end
 --- Index function, called by the `~process@1.0` device for scheduled messages.
 --- We route any `action' to the appropriate function based on the request path.
 function compute(base, assignment)
-    local action = string.lower(assignment.body.action or "")
+    local action = string.lower(assignment.body.action or assignment.body.path or "")
     ao.event(
         {
             "compute called",
@@ -901,6 +901,8 @@ function compute(base, assignment)
         return register(base, assignment)
     elseif action == "register-remote" then
         return _G["register-remote"](base, assignment)
+    elseif action == "charge" and charge then
+        return charge(base, assignment)
     else
         -- Handle unknown `action' values.
         _, base = ensure_initialized(base, assignment)
