@@ -2262,41 +2262,25 @@ function state.insertInbox(msg)
     table.remove(Inbox,1)
   end
 end
-local function getOwnerAddress(m)
-  local _owner = nil 
-  utils.map(function (k)
-    local c = m.commitments[k]
-    if c.alg == "rsa-pss-sha512" then
-      _owner = c.committer
-    elseif c.alg == "signed" and c['commitment-device'] == "ans104" then
-      _owner = c.commiter
-    end
-  end, utils.keys(m.commitments))
-  return _owner
+-- Whether a wallet signed a message, as the node reads its commitments.
+local function isSignedBy(m, address)
+  return address ~= nil and address ~= "" and utils.includes(address, ao.signers(m))
 end
 
-local function isFromOwner(m)
-  local _owner = getOwnerAddress(m)
-  local _fromProcess = m['from-process'] or _owner
-  return _owner ~= nil and _fromProcess == _owner
+-- Whether an authority signed a message.
+local function isSignedByAuthority(m)
+  return utils.find(function (authority)
+    return isSignedBy(m, authority)
+  end, ao.authorities) ~= nil
 end
 
+-- The sender of a message: the process that pushed it, or else the wallet
+-- that signed it.
 local function getOwner(m)
-  local id = ""
   if m['from-process'] then
     return m['from-process']
   end
-
-  utils.map(function (k)
-    local c = m.commitments[k]
-    if c.type == "rsa-pss-sha512" then
-        id = c.committer
-    elseif c.alg == "signed" and c['commitment-device'] == "ans104" then
-        id = c.committer
-    end
-end, utils.keys(m.commitments)
-)
-  return id
+  return ao.signers(m)[1] or ""
 end
 
 function state.init(req, base)
@@ -2342,26 +2326,21 @@ function state.getFrom(req)
   return getOwner(req.body)
 end
 
+-- A message is the owner's when the owner signed it and no process pushed it:
+-- a pushed message is its `from-process`'s, whoever signed it.
+function state.isFromOwner(m)
+  return m['from-process'] == nil and isSignedBy(m, Owner)
+end
+
+-- Any other message is trusted when an authority signed it, and the
+-- `from-process` that it gives, if any, is an authority.
 function state.isTrusted(req)
-  if isFromOwner(req.body) then
+  if state.isFromOwner(req.body) then
     return true
   end
-  local _trusted = false
-  
-  if req.body['from-process'] then
-    _trusted = utils.includes(
-        req.body['from-process'],
-        ao.authorities
-    )
-end
-
-if not _trusted then
-    _trusted = utils.includes(
-        getOwner(req.body), ao.authorities
-    )
-end
-
-  return _trusted
+  local fromProcess = req.body['from-process']
+  return isSignedByAuthority(req.body) and
+    (fromProcess == nil or utils.includes(fromProcess, ao.authorities))
 end
 
 function state.checkSlot(req, ao)
@@ -2446,20 +2425,7 @@ function process.handle(req, base)
 
   -- state.checkSlot(msg, ao)
   Handlers.add("_eval", function (_req)
-    local function getOwnerFrom(m)
-      local from = ""
-      Utils.map(
-        function (k)
-          local c = m.commitments[k]
-          if c.type == "rsa-pss-sha512" then
-            from = c.committer
-          end
-        end,
-        Utils.keys(m.commitments)
-      )
-      return from
-    end
-    return _req.body.action == "Eval" and Owner == getOwnerFrom(_req.body)
+    return _req.body.action == "Eval" and state.isFromOwner(_req.body)
   end, eval(ao))
 
   Handlers.add("_default",
