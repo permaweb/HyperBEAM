@@ -295,7 +295,7 @@ device_query(SpecID, TrustedSigners, ValidUntilHeight) ->
             _ -> <<", $validUntilHeight: Int">>
         end,
     Query =
-        <<"query($specid: [String!], $trusted: [String!]", ValidUntilVar/binary, ") { ",
+        <<"query($specid: [String!]!, $trusted: [String!]", ValidUntilVar/binary, ") { ",
                 "transactions(",
                 "owners: $trusted, ",
                 "tags: { name: \"implements-device\" values: $specid }, ",
@@ -545,6 +545,42 @@ subindex_to_tags(Subindex) ->
     <<"[", ListInner/binary, "]">>.
 
 %%% Tests
+%% @doc The discovery query's tag variables match the native GraphQL schema.
+device_query_native_schema_test() ->
+    Store = hb_test_utils:test_store(),
+    Opts = #{ <<"store">> => Store, <<"match-index">> => Store,
+        <<"priv-wallet">> => ar_wallet:new() },
+    ok = hb_store:start(Store),
+    try
+        SpecID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+        Item = hb_message:commit(
+            #{ <<"type">> => <<"Device-Implementation">>,
+               <<"implements-device">> => SpecID },
+            Opts,
+            #{ <<"commitment-device">> => <<"ans104@1.0">> }
+        ),
+        {ok, _} = hb_cache:write(Item, Opts),
+        {ok, Owner} = hb_committer:address(hd(hb_message:signers(Item, Opts))),
+        {Query, Variables} = device_query(SpecID, [Owner], undefined),
+        ?assertMatch({error, #{ <<"status">> := 400 }}, hb_ao:resolve(
+            #{ <<"path">> => <<"/~query@1.0/graphql">>,
+               <<"query">> => binary:replace(Query,
+                    <<"$specid: [String!]!">>, <<"$specid: [String!]">>),
+               <<"variables">> => Variables },
+            Opts
+        )),
+        {ok, Res} = hb_ao:resolve(
+            #{ <<"path">> => <<"/~query@1.0/graphql">>,
+               <<"query">> => Query, <<"variables">> => Variables },
+            Opts
+        ),
+        #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> :=
+            [#{ <<"node">> := #{ <<"id">> := ID }}] }}} =
+                hb_json:decode(hb_maps:get(<<"body">>, Res, Opts)),
+        ?assertEqual(hb_message:id(Item, signed, Opts), ID)
+    after hb_store:stop(Store)
+    end.
+
 device_valid_until_height_query_test() ->
     SpecID = <<"spec">>,
     [Alice, Bob] = [hb_util:human_id(<<N:256>>) || N <- [1, 2]],
