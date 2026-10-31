@@ -131,8 +131,18 @@ routes(M1, M2, Opts) ->
                                     hb_maps:is_key(<<"nodes">>, Route, Opts),
                             case IsRoute of
                                 true ->
-                                    ok = insert_route(Route, Opts),
-                                    {ok, <<"Route added.">>};
+                                    % An owner's route applies once for each
+                                    % of its `created' times.
+                                    lib_meta:ratcheted_apply(
+                                        <<"~router@1.0/routes">>,
+                                        <<"route-owner">>,
+                                        Signed,
+                                        fun() ->
+                                            ok = insert_route(Route, Opts),
+                                            {ok, <<"Route added.">>}
+                                        end,
+                                        Opts
+                                    );
                                 false ->
                                     {error, <<"The route gives no node.">>}
                             end;

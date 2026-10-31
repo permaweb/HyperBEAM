@@ -142,26 +142,36 @@ update_node_message(Request, NodeMsg) ->
             ?event({set_node_message_fail, Request}),
             {error, #{ <<"body">> => not_authorized }};
         {ok, Authorized} ->
-            case adopt_node_message(Authorized, NodeMsg) of
-                {ok, NewNodeMsg} ->
-                    NewH = hb_opts:get(node_history, [], NewNodeMsg),
-                    {ok,
-                        #{
-                            <<"body">> =>
-                                iolist_to_binary(
-                                    io_lib:format(
-                                        "Node message updated. History: ~p"
-                                            "updates.",
-                                        [length(NewH)]
-                                    )
-                                ),
-                            <<"history-length">> => length(NewH)
-                        }
-                    };
-                {error, Reason} ->
-                    ?event({set_node_message_fail, Request, Reason}),
-                    {error, #{ <<"body">> => Reason }}
-            end
+            % An admin's update applies once for each of its `created' times.
+            lib_meta:ratcheted_apply(
+                <<"~meta@1.0/info">>,
+                <<"admin">>,
+                Authorized,
+                fun() -> adopt_authorized(Request, Authorized, NodeMsg) end,
+                NodeMsg
+            )
+    end.
+
+adopt_authorized(Request, Authorized, NodeMsg) ->
+    case adopt_node_message(Authorized, NodeMsg) of
+        {ok, NewNodeMsg} ->
+            NewH = hb_opts:get(node_history, [], NewNodeMsg),
+            {ok,
+                #{
+                    <<"body">> =>
+                        iolist_to_binary(
+                            io_lib:format(
+                                "Node message updated. History: ~p"
+                                    "updates.",
+                                [length(NewH)]
+                            )
+                        ),
+                    <<"history-length">> => length(NewH)
+                }
+            };
+        {error, Reason} ->
+            ?event({set_node_message_fail, Request, Reason}),
+            {error, #{ <<"body">> => Reason }}
     end.
 
 %% @doc Attempt to adopt changes to a node message.
