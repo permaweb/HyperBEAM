@@ -506,9 +506,7 @@ function validate_request(incoming_base, assignment)
         return "error", log_result(base, "error", {
             message = "Deduplication failure.",
             assignment = assignment,
-            status = status,
-            incoming_base = incoming_base,
-            resulting_base = base
+            status = status
         })
     end
 
