@@ -290,7 +290,10 @@ data_root(Bin) ->
     data_root(arweavejs, Bin).
 
 data_root(Mode, Bin) ->
-    Chunks = chunk_binary(Mode, ?DATA_CHUNK_SIZE, Bin),
+    data_root_from_chunks(chunk_binary(Mode, ?DATA_CHUNK_SIZE, Bin)).
+
+%% @doc Compute the root for an explicit chunk layout.
+data_root_from_chunks(Chunks) ->
     SizeTaggedChunks = chunks_to_size_tagged_chunks(Chunks),
     SizeTaggedChunkIDs = sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
     {Root, _} = ar_merkle:generate_tree(SizeTaggedChunkIDs),
@@ -480,7 +483,13 @@ verify_v2_data(#tx{
         data_size = DataSize, data = Data }) ->
     (DataSize == byte_size(Data)) andalso
         (DataRoot == data_root(Data) orelse
-            DataRoot == data_root(legacy, Data));
+            DataRoot == data_root(legacy, Data) orelse
+            % Exact-size uploads may omit the terminal empty chunk.
+            (DataSize > 0 andalso DataSize rem ?DATA_CHUNK_SIZE == 0 andalso
+                DataRoot == data_root_from_chunks([
+                    Chunk || Chunk <- chunk_binary(legacy, ?DATA_CHUNK_SIZE, Data),
+                    Chunk =/= <<>>
+                ])));
 verify_v2_data(_) ->
     true.
 
@@ -774,6 +783,21 @@ chunk_binary_arweavejs_standard_test() ->
     Data = binary:copy(<<"c">>, DataSize),
     Chunks = chunk_binary(arweavejs, ChunkSize, Data),
     ?assertEqual([ChunkSize, MinChunkSize], [byte_size(Chunk) || Chunk <- Chunks]).
+
+verify_v2_data_without_empty_chunk_test() ->
+    Data = crypto:strong_rand_bytes(4 * ?DATA_CHUNK_SIZE),
+    Chunks = [Chunk || <<Chunk:?DATA_CHUNK_SIZE/binary>> <= Data],
+    {Root, _} = ar_merkle:generate_tree(
+        sized_chunks_to_sized_chunk_ids(chunks_to_size_tagged_chunks(Chunks))
+    ),
+    TX = #tx{format = 2, data = Data, data_size = byte_size(Data), data_root = Root},
+    ?assertNotEqual(data_root(Data), Root),
+    ?assert(verify_v2_data(TX)),
+    ?assert(verify_v2_data(TX#tx{data_root = data_root(Data)})),
+    <<First, Rest/binary>> = Data,
+    ?assertNot(verify_v2_data(TX#tx{data = <<(First bxor 1), Rest/binary>>})),
+    ?assertNot(verify_v2_data(TX#tx{data_size = byte_size(Data) - 1})),
+    ?assertNot(verify_v2_data(TX#tx{data_root = crypto:strong_rand_bytes(32)})).
 
 sign_tx_test_() ->
     {timeout, 30, fun test_sign_tx/0}.
