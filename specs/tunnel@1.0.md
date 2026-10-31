@@ -226,7 +226,10 @@ may have executed the request; the tunnel never retries application work.
   request, whose options never contain the node's wallet, or code that a
   request runs) the controls are the signed controls with the required key
   `peer`, and their signer MUST be an operator of the node according to
-  `meta@1.0`'s `is-operator`; else the result is `403`.
+  `meta@1.0`'s `is-operator`; else the result is `403`. A signed control MAY
+  carry an integer `created` time as a signed key. The node then refuses a
+  control whose `created` time is not newer than the last time that it applied
+  for that signer; a control without one applies as it is.
 - **Behaviour:**
   1. `peer`, the URL of the broker, MUST be a binary (`400`,
      `A tunnel peer is required.`).
@@ -322,6 +325,14 @@ that it receives:
   caller ends. A dispatched request whose wait is `infinity` ends when its
   caller ends.
 - After a request's wait ends, a response for it is unknown (`404`).
+- A signed `connect` control applies once. With
+  `lib_meta:ratcheted_apply/5`, the node keeps the newest `created` time that
+  it applied for each signer in its local store, at
+  `~tunnel@1.0/connect/<signer>`, and refuses a control whose time is not
+  newer. A `connect` that fails keeps no
+  time, so the same control can be sent again. A restart reads the kept time
+  with the next control, so no boot load is required. A new control only
+  needs a newer time.
 - No result is cached by this device.
 
 ## 7. Security & authority
@@ -331,7 +342,8 @@ that it receives:
 - A response is accepted only with the signature of the address to which its
   request was dispatched, over its ID, its status and the response.
 - A pool is changed only by the node itself, or with the signature of an
-  operator of the node.
+  operator of the node, at a `created` time newer than the last time applied
+  for that operator.
 - Keys that a control's commitment does not cover are never read, so unsigned
   additions cannot change a signed control.
 - The broker removes routing controls from a request only when its commitments
@@ -351,6 +363,7 @@ that it receives:
 | Condition | Status | `body` |
 | --- | --- | --- |
 | No qualifying signature, or a wrong signer | 403 | `Tunnel control signature required.` |
+| A signed `connect` whose time is not newer | 403 | `The control is not newer than the last one.` |
 | A response from another address | 403 | `Tunnel response signer does not match its address.` |
 | A response for an unknown request | 404 | `Unknown tunnel request.` |
 | An invalid target | 400 | `Invalid tunnel address.` |
