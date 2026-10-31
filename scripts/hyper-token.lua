@@ -85,33 +85,23 @@ local function log_result(base, status, message)
     return base
 end
 
--- Normalize a quantity value to ensure it is a proper integer.
--- Returns either the normalized integer value or nil and an error message.
+-- Normalize a quantity value to an integer. A string must be an optional `-'
+-- and digits, with a value that a number holds exactly; a number must be
+-- whole. Returns nil for any other value.
 local function normalize_int(value)
-    local num
-    -- Handle string conversion
     if type(value) == "string" then
-        -- Check for decimal part (not allowed)
-        if string.find(value, "%.") then
+        if not string.match(value, "^%-?%d+$") then
             return nil
         end
-        -- Convert to number
-        num = tonumber(value)
-        if not num then
+        local num = math.tointeger(tonumber(value))
+        if not num or string.format("%d", num) ~= value then
             return nil
         end
-    elseif type(value) == "number" then
-        num = value
-        -- Check if it's an integer
-        if num ~= math.floor(num) then
-            return nil
-        end
-    else
-        -- Any other type is invalid.
-        return nil
+        return num
+    elseif type(value) == "number" and value == math.floor(value) then
+        return math.tointeger(value)
     end
-    
-    return num
+    return nil
 end
 
 -- Count the number of elements in `a' that are also in `b'.
