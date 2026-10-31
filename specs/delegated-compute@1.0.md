@@ -348,7 +348,9 @@ the `process-id` query parameter.
 
 All four are dispatched through `relay@1.0`’s `call`; the **destination host** for
 these paths is the `delegated-compute-peer` node option (the relay `peer`), or,
-without it, chosen by the node's routing table.
+without it, chosen by the node's routing table. The default routing table has no
+route for them, so a caller's relay does not reach a compute unit:
+`genesis-wasm@1.0` gives its own server as the peer of each call.
 
 ## 6. Ordering, freshness & caching
 

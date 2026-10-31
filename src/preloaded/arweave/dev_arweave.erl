@@ -130,7 +130,10 @@ post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
     TX = hb_message:convert(Request, <<"tx@1.0">>, Opts),
     Res = post_tx_header(TX, Opts),
     case Res of
-        {ok, _} ->
+        % A format 1 signature does not fix how its bytes split into fields,
+        % so the node reads a format 1 transaction from Arweave, not from a
+        % caller.
+        {ok, _} when TX#tx.format =/= 1 ->
             CacheRes = hb_cache:write(Request, Opts),
             case CacheRes of
                 {ok, _} ->

@@ -52,9 +52,10 @@
 %%% We reply to the client with the result as follows:
 %%%
 %%% 1. The HTTP status of the reply is the result's `status' key, if it is an
-%%%    integer from 100 to 599, or the binary encoding of one. Otherwise, it is
-%%%    the code that `hb_http:status_code/2' gives for the result's Erlang
-%%%    status. We do not add a `status' key to the reply.
+%%%    integer from 200 to 599, or the binary encoding of one. A reply is never
+%%%    informational. Otherwise, it is the code that `hb_http:status_code/2'
+%%%    gives for the result's Erlang status. We do not add a `status' key to the
+%%%    reply.
 %%% 2. If the result is a literal or a list, we send it as the `body' of a
 %%%    message, with `ao-result' set to `body'.
 %%% 3. We find the codec of the reply from the request's `accept', read as RFC
@@ -119,6 +120,11 @@
     <<"GET">>, <<"HEAD">>, <<"POST">>, <<"PUT">>,
     <<"DELETE">>, <<"OPTIONS">>, <<"PATCH">>
 ]).
+%% A 128 MiB body bound leaves room for the bundler's default 100 MB items.
+-define(DEFAULT_MAX_BODY, 128 * 1024 * 1024).
+%% Read at most this many body fragments before any hook runs, so that a body
+%% sent as many tiny fragments has a bounded cost.
+-define(MAX_BODY_FRAGMENTS, 1_048_576).
 %% Define the max size we can return in 500 error details field.
 -define(DEFAULT_ERROR_DETAILS_MAX_SIZE, 32*1024).
 %% At most this many media ranges in `accept' are considered.
@@ -546,7 +552,12 @@ challenge_node(ACME, ServerID, NodeMsg) ->
     ).
 
 listener_protocol_options(ServerID, NodeMsg) ->
-    Dispatcher = cowboy_router:compile([{'_', [{'_', ?MODULE, ServerID}]}]),
+    MaxBody = hb_util:int(
+        hb_opts:get(http_max_body, ?DEFAULT_MAX_BODY, NodeMsg)
+    ),
+    Dispatcher = cowboy_router:compile(
+        [{'_', [{'_', ?MODULE, {ServerID, MaxBody}}]}]
+    ),
     #{
         env => #{ dispatch => Dispatcher, node_msg => NodeMsg },
         stream_handlers => [cowboy_stream_h],
@@ -672,25 +683,58 @@ start_http2(ServerID, ProtoOpts, NodeMsg, TLSOpts) ->
 
 %%% Request/response lifecycle.
 
-%% @doc Entrypoint for all HTTP requests. Receives the Cowboy request option and
-%% the server ID, which can be used to lookup the node message.
-init(Req, ServerID) ->
+%% @doc Entrypoint for all HTTP requests. Receives the Cowboy request option
+%% and the dispatch state: the server ID, which looks up the node message, and
+%% the body bound that the listener read when it started.
+init(Req, {ServerID, MaxBody}) ->
     case {cowboy_req:method(Req), ServerID} of
         {<<"OPTIONS">>, {tls_http_01, _}} ->
-            {ok, Body} = read_body(Req),
-            handle_request(Req, Body, ServerID);
+            request_body(Req, ServerID, MaxBody);
         {<<"OPTIONS">>, _} -> cors_reply(Req, ServerID);
         _ ->
-            {ok, Body} = read_body(Req),
-            handle_request(Req, Body, ServerID)
+            request_body(Req, ServerID, MaxBody)
     end.
 
-%% @doc Helper to grab the full body of a HTTP request, even if it's chunked.
-read_body(Req) -> read_body(Req, <<>>).
-read_body(Req0, Acc) ->
-    case cowboy_req:read_body(Req0) of
-        {ok, Data, _Req} -> {ok, << Acc/binary, Data/binary >>};
-        {more, Data, Req} -> read_body(Req, << Acc/binary, Data/binary >>)
+%% @doc Read and handle a request body within the node's limits.
+request_body(Req, ServerID, MaxBody) ->
+    case read_body(Req, MaxBody) of
+        {ok, Body} -> handle_request(Req, Body, ServerID);
+        {too_large, Req2} ->
+            {ok, cowboy_req:reply(
+                413, #{}, <<"Request body too large.">>, Req2
+            ), no_state};
+        {too_many_fragments, Req2} ->
+            {ok, cowboy_req:reply(
+                413, #{}, <<"Request body has too many fragments.">>, Req2
+            ), no_state}
+    end.
+
+%% @doc Helper to grab the full body of an HTTP request within the byte and
+%% fragment bounds, even if it is chunked.
+read_body(Req, Max) ->
+    case cowboy_req:body_length(Req) of
+        Length when is_integer(Length), Length > Max -> {too_large, Req};
+        _ -> read_body(Req, Max, 0, 0, [])
+    end.
+read_body(Req, _Max, _Size, Fragments, _Acc)
+        when Fragments >= ?MAX_BODY_FRAGMENTS ->
+    {too_many_fragments, Req};
+read_body(Req0, Max, Size, Fragments, Acc) ->
+    % Read one fragment at a time so Cowboy's buffer cannot hide the count.
+    case cowboy_req:read_body(Req0, #{ length => 1 }) of
+        {ok, Data, Req} ->
+            case Size + byte_size(Data) =< Max of
+                true -> {ok, iolist_to_binary(lists:reverse([Data | Acc]))};
+                false -> {too_large, Req}
+            end;
+        {more, Data, Req} ->
+            NewSize = Size + byte_size(Data),
+            case NewSize =< Max of
+                true -> read_body(
+                    Req, Max, NewSize, Fragments + 1, [Data | Acc]
+                );
+                false -> {too_large, Req}
+            end
     end.
 
 %% @doc Reply to CORS preflight requests.
@@ -1159,10 +1203,9 @@ reply(InitReq, TABMReq, Result, Opts) ->
     ),
     {ok, PostStreamReq, no_state}.
 
-%% @doc Whether a reply to this method and status carries no body. A `1xx'
-%% reply is informational and a `205' resets content, so both end at headers.
+%% @doc Whether a reply to this method and status carries no body. A `HEAD'
+%% request and the `204', `205' and `304' statuses all end at their headers.
 is_bodyless_reply(<<"HEAD">>, _Status) -> true;
-is_bodyless_reply(_Method, Status) when Status >= 100, Status < 200 -> true;
 is_bodyless_reply(_Method, Status)
         when Status == 204; Status == 205; Status == 304 -> true;
 is_bodyless_reply(_Method, _Status) -> false.
@@ -1400,10 +1443,14 @@ encode_reply(Status, TABMReq, RawMessage, Opts) ->
         _ ->
             % A codec other than `httpsig@1.0' sends the message as the body,
             % with the type and subtype of the media range that asked for the
-            % codec as its `content-type'.
+            % codec as its `content-type', and its `cache-control' as a header.
+            Headers = #{ <<"content-type">> => ContentType },
             {
                 Status,
-                #{ <<"content-type">> => ContentType },
+                case cache_control_header(Message, Opts) of
+                    <<>> -> Headers;
+                    CacheControl -> Headers#{ <<"cache-control">> => CacheControl }
+                end,
                 hb_http:encode(
                     Codec,
                     Message,
@@ -1412,6 +1459,27 @@ encode_reply(Status, TABMReq, RawMessage, Opts) ->
                 )
             }
     end.
+
+%% @doc The `cache-control' of a result as a header value: its directives, as
+%% `hb_cache_control' reads them, or `<<>>' without any. A directive with a
+%% control byte, which would end the header, is left out.
+cache_control_header(Message, Opts) ->
+    Directives =
+        hb_cache_control:directives(
+            hb_maps:get(<<"cache-control">>, Message, [], Opts)
+        ),
+    iolist_to_binary(
+        lists:join(
+            <<", ">>,
+            [
+                Directive
+            ||
+                Directive <- Directives,
+                lists:all(fun(Byte) -> Byte >= 32 andalso Byte =/= 127 end,
+                    binary_to_list(Directive))
+            ]
+        )
+    ).
 
 %% @doc Find the codec of the reply to a request from its `accept', read as RFC
 %% 9110 gives, and the `content-type' of a reply in that codec. The media ranges
@@ -2430,6 +2498,16 @@ binary_codec_reply_headers_test() ->
     ?assertEqual(
         Message,
         hb_message:convert(Body, <<"structured@1.0">>, <<"json@1.0">>, Opts)
+    ),
+    % A result's `cache-control' is given as a header.
+    ?assertMatch(
+        {200, #{ <<"cache-control">> := <<"no-cache, no-store">> }, _},
+        encode_reply(
+            200,
+            #{ <<"accept">> => <<"application/json">> },
+            Message#{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
+            Opts
+        )
     ),
     % A reply in `flat@1.0' has the keys of the result, without its `priv'.
     ?assertMatch(

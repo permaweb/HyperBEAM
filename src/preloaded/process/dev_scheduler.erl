@@ -602,8 +602,18 @@ find_server(ProcID, Base, ToSched, Opts) ->
             end
     end.
 
-%% @doc Find the process message for a given process ID and base message.
+%% @doc Find the process message for a given process ID and base message, with
+%% only the keys that the process commits: a request can carry the process
+%% with keys of its own beside them.
 find_process_message(ProcID, Base, ToSched, Opts) ->
+    {ok, Process} =
+        hb_message:with_only_committed(
+            find_carried_process(ProcID, Base, ToSched, Opts),
+            Opts
+        ),
+    Process.
+
+find_carried_process(ProcID, Base, ToSched, Opts) ->
     % Find the process from the message.
     MaybeProcessMsg =
         hb_ao:get(

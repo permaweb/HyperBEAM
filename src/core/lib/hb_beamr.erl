@@ -209,7 +209,12 @@ call(WASM, FuncRef, Args, ImportFun, StateMsg, Opts)
                 }
             ),
             ?event({waiting_for_call_result, self(), WASM}),
-            monitor_call(WASM, ImportFun, StateMsg, Opts);
+            % A call on an executor that has stopped, as one does at a trap,
+            % gives an error rather than waiting for a result.
+            Ref = erlang:monitor(process, WASM),
+            try monitor_call(WASM, ImportFun, StateMsg, Opts)
+            after erlang:demonitor(Ref, [flush])
+            end;
         false ->
             {error, <<"invalid-parameters">>, StateMsg}
     end.
@@ -256,7 +261,13 @@ monitor_call(WASM, ImportFun, StateMsg, Opts) ->
             end;
         {error, Error} ->
             ?event({wasm_error, Error}),
-            {error, Error, StateMsg}
+            {error, Error, StateMsg};
+        {trap, Error} ->
+            ?event({wasm_trap, Error}),
+            {trap, Error, StateMsg};
+        % An executor that stopped after a trap answers as the trap did.
+        {'DOWN', _Ref, process, WASM, _Reason} ->
+            {trap, <<"The WASM executor stopped.">>, StateMsg}
     end.
 
 %% @doc Check the type of an import response and dispatch it to a Beamr port.
@@ -411,7 +422,7 @@ trap_keeps_instance_usable_test() ->
     {ok, File} = file:read_file("test/test-64.wasm"),
     {ok, WASM, _ImportMap, _Exports} = start(File),
     ?assertMatch(
-        {error, _, #{}},
+        {trap, _, #{}},
         call(WASM, "fac", [1000000000.0], fun stub/3, #{})
     ),
     ?assertEqual({ok, [120.0]}, call(WASM, "fac", [5.0])),
@@ -452,5 +463,5 @@ indirect_table_kind_test() ->
             16#0A, 8, 1, 6, 0, 16#41, 0, 16#10, 0, 16#0B
         >>,
     {ok, WASM, _Imports, _Exports} = start(Module),
-    ?assertMatch({error, _, _}, call(WASM, "run", [], fun stub/3, #{})),
+    ?assertMatch({trap, _, _}, call(WASM, "run", [], fun stub/3, #{})),
     stop(WASM).

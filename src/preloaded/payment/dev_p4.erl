@@ -87,7 +87,7 @@ admit_request(State, Raw, NodeMsg) ->
         {true, true} ->
             PricingMsg = State#{ <<"device">> => PricingDevice },
             LedgerMsg = State#{ <<"device">> => LedgerDevice },
-            Signers = hb_message:signers(Request, NodeMsg),
+            Signers = path_signers(Request, NodeMsg),
             PricingReq = #{
                 <<"path">> => <<"estimate">>,
                 <<"request">> => Request,
@@ -257,11 +257,11 @@ charge_response(State, RawResponse, NodeMsg) ->
                     ChargeReq =
                         ledger_request(
                             LedgerDevice,
-                            #{
+                            (ledger_target(LedgerMsg, NodeMsg))#{
                                 <<"path">> => <<"charge">>,
                                 <<"quantity">> => Price,
                                 <<"account">> =>
-                                    case hb_message:signers(Request, NodeMsg) of
+                                    case path_signers(Request, NodeMsg) of
                                         [Signer] -> Signer;
                                         Multiple -> Multiple
                                     end,
@@ -335,6 +335,23 @@ balance(_, Req, NodeMsg) ->
             end
     end.
 
+%% @doc The signers of a request whose signature covers its `path': a signer
+%% pays only for a path that it signed.
+path_signers(Request, NodeMsg) ->
+    [
+        Signer
+    ||
+        Signer <- hb_message:signers(Request, NodeMsg),
+        lists:member(
+            <<"path">>,
+            hb_message:committed(
+                Request,
+                #{ <<"committers">> => [Signer] },
+                NodeMsg
+            )
+        )
+    ].
+
 %% @doc A hook-only key runs only when the node's lifecycle hook calls it. The
 %% server marks the hook request in a private key. A request over HTTP cannot
 %% carry private keys.
@@ -346,6 +363,14 @@ refuse_caller() ->
         <<"status">> => 401,
         <<"body">> => <<"Unauthorized caller.">>
     }}.
+
+%% @doc The ledger's own ID, if its device gives one. A charge gives it as its
+%% `target', so that no other ledger takes the charge.
+ledger_target(LedgerMsg, NodeMsg) ->
+    case hb_ao:resolve(LedgerMsg, <<"target">>, NodeMsg) of
+        {ok, Target} -> #{ <<"target">> => Target };
+        _ -> #{}
+    end.
 
 %% @doc Prepare a request for the ledger. A `lua@5.3a' ledger reads an
 %% Arweave committer as its address, so we convert the accounts in the request
@@ -690,7 +715,10 @@ hyper_token_ledger() ->
     Res = hb_http:get(Node, SignedReq, #{}),
     ?event({expected_failure, Res}),
     ?assertMatch({error, _}, Res),
-    % We then move 50 tokens from Alice to Bob.
+    % We then move 50 tokens from Alice to Bob. The transfer gives the ledger's
+    % signed ID as its `target'.
+    {ok, LedgerID} =
+        hb_http:get(Node, <<LedgerPath/binary, "/id?committers=all">>, #{}),
     {ok, TopupRes} =
         hb_http:post(
             Node,
@@ -701,6 +729,7 @@ hyper_token_ledger() ->
                         hb_message:commit(
                             #{
                                 <<"path">> => <<"transfer">>,
+                                <<"target">> => LedgerID,
                                 <<"quantity">> => 50,
                                 <<"recipient">> => BobAddress
                             },

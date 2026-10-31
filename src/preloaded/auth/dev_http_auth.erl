@@ -150,12 +150,12 @@ generate(_Msg, Req, Opts) ->
                     <<"details">> => <<"No authorization header provided.">>
                 }
             };
-        Unrecognized ->
+        _Unrecognized ->
+            % The header is a credential, so the error does not give it back.
             {error,
                 #{
                     <<"status">> => 400,
-                    <<"details">> =>
-                        <<"Unrecognized authorization header: ", Unrecognized/binary>>
+                    <<"details">> => <<"The authorization scheme is not supported.">>
                 }
             }
     end.

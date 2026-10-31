@@ -116,7 +116,10 @@ Read or mutate the routing table.
       `<<"Routes come from the provider.">>` and change nothing. Otherwise
       insert as the new route the request's `route` (`register` sends the
       offered route as `route`), else the request itself; it contains only the
-      keys that the owner's commitments cover. Then **re-sort the whole table
+      keys that the owner's commitments cover. A route that gives no `node` or
+      `nodes` is refused with error `<<"The route gives no node.">>`, as is a
+      message that the owner signed for another use, such as a receipt or a
+      location record. Then **re-sort the whole table
       ascending by each route's `priority`** (§6 ordering), install the new
       table as the node's routes, and return `{ok, <<"Route added.">>}`.
     - **Registrar configured:** do not insert locally; instead forward the

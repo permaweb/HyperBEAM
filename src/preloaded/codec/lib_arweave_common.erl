@@ -653,8 +653,10 @@ bundle_hint(Device, Msg, Req, Opts) ->
         _ -> not_found
     end.
 
-%% @doc Apply `bundle_hint/4' for an item codec, and name the committed keys of
-%% the commitment, which its item holds alone: `structured@1.0' encodes the
+%% @doc Give the bundling and the committed keys of an item codec's commitment.
+%% The item is bundled as verification reads it: as the commitment's `bundle'
+%% gives, or not when the commitment gives none, whatever the request gives.
+%% The item has only the committed keys: `structured@1.0' encodes the
 %% message over those keys, so keys given to it after signing do not reach the
 %% item. Returns `not_found' when no commitment for `Device' exists.
 item_hint(Device, Msg, Req, Opts) ->
@@ -670,13 +672,9 @@ item_hint(Device, Msg, Req, Opts) ->
                     hb_maps:get(<<"committed">>, Commitment, [], Opts),
                     Opts
                 ),
-            {ok,
-                with_bundle(
-                    Commitment,
-                    Req#{ <<"committed">> => Committed },
-                    Opts
-                )
-            };
+            Bundle =
+                hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts)),
+            {ok, Req#{ <<"committed">> => Committed, <<"bundle">> => Bundle }};
         _ -> not_found
     end.
 

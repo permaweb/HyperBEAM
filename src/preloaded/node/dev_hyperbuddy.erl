@@ -183,7 +183,9 @@ format(Base, Req, Opts, Scope) ->
 throw(_Msg, _Req, Opts) ->
     case hb_opts:get(mode, prod, Opts) of
         prod -> {error, <<"Forced-throw unavailable in `prod` mode.">>};
-        debug -> throw({intentional_error, Opts})
+        % The page that shows the reason needs no options: they carry the
+        % node's private keys.
+        debug -> throw(intentional_error)
     end.
 
 %% @doc Serve a file from the priv directory. Only serves files that are explicitly

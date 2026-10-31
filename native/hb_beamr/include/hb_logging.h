@@ -37,4 +37,12 @@ void beamr_print(int print, const char* file, int line, const char* format, ...)
  */
 void send_error(Proc* proc, const char* message_fmt, ...);
 
+/*
+ * Function: send_trap
+ * --------------------
+ * Sends a message, as send_error does, tagged `trap': a WASM call stopped at
+ * a trap after it ran, and the instance's memory may hold its writes.
+ */
+void send_trap(Proc* proc, const char* message_fmt, ...);
+
 #endif // HB_LOGGING_H

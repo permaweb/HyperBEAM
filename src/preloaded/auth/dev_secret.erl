@@ -670,7 +670,7 @@ commit_message(Message, #{ <<"wallet">> := Key }, Opts) ->
     #{ _ => _ },
     #{ keyids => [binary()] | binary(), _ => _ },
     #{ _ => _ }
-) -> {ok, [_]} | {error, binary()}.
+) -> {ok, #{ _ => _ }} | {error, binary()}.
 export(Base, Request, Opts) ->
     % A reply that is not a bundle gives each wallet as a link, which writes
     % the wallet, with its key, to the node's cache.
@@ -692,8 +692,7 @@ do_export(Base, Request, Opts) ->
     case request_to_wallets(Base, ModReq, Opts) of
         [] -> {error, <<"No wallets found to export.">>};
         Wallets ->
-            {
-                ok,
+            Exported =
                 lists:map(
                     fun(Wallet) ->
                         Loaded = load_wallet(Wallet, PrivOpts),
@@ -701,8 +700,11 @@ do_export(Base, Request, Opts) ->
                         Loaded#{ <<"cache-control">> => <<"no-store">> }
                     end,
                     Wallets
-                )
-            }
+                ),
+            {ok,
+                (hb_util:list_to_numbered_message(Exported))#{
+                    <<"cache-control">> => <<"no-store">>
+                }}
     end.    
 
 %% @doc Sync wallets from a remote node. Returns the `keyid's of the imported

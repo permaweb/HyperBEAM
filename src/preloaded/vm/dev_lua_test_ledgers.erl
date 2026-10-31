@@ -545,7 +545,7 @@ subledger_transfer() ->
     ?assertEqual(
         #{
             root => #{
-                balances => #{ alice => 90, bob => 7.0, subledger => 3.0 },
+                balances => #{ alice => 90, bob => 7, subledger => 3 },
                 ledgers => #{},
                 root => true
             },

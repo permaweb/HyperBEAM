@@ -1,8 +1,10 @@
 %%% @doc Authorization for typed operations on a node. Only keys committed by
 %%% the requested role are returned to the caller.
 -module(lib_meta).
--export([is_authorized/4, authorized/3, role/2]).
+-export([is_authorized/4, authorized/3, role/2, without_credentials/2]).
+-export([ratcheted_apply/5]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %% @doc Verify the role's commitments and require their signed operation type.
 %% The admin defaults to the operator, which defaults to the node wallet.
@@ -51,6 +53,46 @@ authorized(Committers, Msg, Opts) ->
             {error, not_authorized}
     end.
 
+%% @doc Apply a signed control once. `Control' has only the keys that its
+%% signer signed. If it gives an integer `created' time, `Fun' runs only if
+%% that time is newer than the time kept at `Path/<signer>' in the node's local
+%% store, and the time is kept only if `Fun' gives `{ok, _}', so a control that
+%% fails can be sent again. Controls for one signer and path run one at a time,
+%% and a node that restarts reads the kept time with the next control. A
+%% control without a `created' time runs as it is.
+ratcheted_apply(Path, Signer, Control, Fun, Opts) ->
+    Key = <<Path/binary, "/", Signer/binary>>,
+    case hb_util:safe_int(hb_maps:get(<<"created">>, Control, none, Opts)) of
+        {ok, Time} ->
+            hb_name:atomic(
+                {?MODULE, Key},
+                fun() -> ratchet(Key, Time, Fun, Opts) end
+            );
+        {error, _} -> Fun()
+    end.
+
+%% @doc Call `Fun' if `Time' is newer than the time kept under `Key', and keep
+%% `Time' if it succeeds.
+ratchet(Key, Time, Fun, Opts) ->
+    Store = hb_store:scope(hb_opts:get(store, no_viable_store, Opts), local),
+    Last =
+        case hb_store:read(Store, Key, Opts) of
+            {ok, Kept} -> hb_util:int(Kept);
+            {error, not_found} -> none
+        end,
+    maybe
+        true ?=
+            Last == none orelse Time > Last orelse
+                {error, #{
+                    <<"status">> => 403,
+                    <<"body">> =>
+                        <<"The control is not newer than the last one.">>
+                }},
+        {ok, _} = Result ?= Fun(),
+        ok = hb_store:write(Store, #{ Key => integer_to_binary(Time) }, Opts),
+        Result
+    end.
+
 %% @doc Return the configured identities for a role. Unclaimed roles deny access.
 role(admin, Opts) ->
     committers(hb_opts:get(admin, role(operator, Opts), Opts), Opts);
@@ -84,3 +126,49 @@ signed_keys(Link, Opts) when ?IS_LINK(Link) ->
 signed_keys(List, Opts) when is_list(List) ->
     [signed_keys(Value, Opts) || Value <- List];
 signed_keys(Value, _Opts) -> Value.
+
+%% @doc Remove the credentials that the node's options give in their values,
+%% for a view of the options that any caller reads: an `authorization' header,
+%% and the user information of a URL.
+without_credentials(Msg, Opts) when is_map(Msg) ->
+    hb_maps:map(
+        fun(_, Value) -> without_credentials(Value, Opts) end,
+        hb_maps:without([<<"authorization">>], Msg, Opts),
+        Opts
+    );
+without_credentials(List, Opts) when is_list(List) ->
+    [without_credentials(Item, Opts) || Item <- List];
+without_credentials(Value, _Opts) when is_binary(Value) ->
+    case uri_string:parse(Value) of
+        #{ userinfo := _ } = URI -> uri_string:recompose(maps:remove(userinfo, URI));
+        _ -> Value
+    end;
+without_credentials(Value, _Opts) ->
+    Value.
+
+%%% Tests
+
+ratcheted_apply_test() ->
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()] },
+    Apply =
+        fun(Control, Fun) ->
+            ratcheted_apply(
+                <<"test/control">>, <<"signer">>, Control, Fun, Opts
+            )
+        end,
+    Ok = fun() -> {ok, applied} end,
+    ?assertEqual({ok, applied}, Apply(#{}, Ok)),
+    ?assertEqual(
+        {error, failed},
+        Apply(#{ <<"created">> => 1 }, fun() -> {error, failed} end)
+    ),
+    ?assertEqual({ok, applied}, Apply(#{ <<"created">> => 1 }, Ok)),
+    ?assertMatch(
+        {error, #{ <<"status">> := 403 }},
+        Apply(#{ <<"created">> => 1 }, Ok)
+    ),
+    ?assertMatch(
+        {error, #{ <<"status">> := 403 }},
+        Apply(#{ <<"created">> => 0 }, Ok)
+    ),
+    ?assertEqual({ok, applied}, Apply(#{ <<"created">> => 2 }, Ok)).

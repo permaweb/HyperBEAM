@@ -20,6 +20,7 @@
 %%% it to `response' with its Erlang result tag.
 -module(dev_tunnel).
 -specification("../../../specs/tunnel@1.0.md").
+-device_libraries([lib_meta, lib_process]).
 -export([device_info/1, register/3, response/3, call/3, request/3]).
 -export([status/3, connect/3]).
 -include("include/hb.hrl").
@@ -163,7 +164,7 @@ status(_Base, _Req, Opts) ->
 %% workers end their current registrations.
 connect(Base, Req, Opts) ->
     maybe
-        {ok, Control} ?= connect_control(Base, Req, Opts),
+        {ok, Signer, Control} ?= connect_control(Base, Req, Opts),
         Peer = hb_maps:get(<<"peer">>, Control, none, Opts),
         true ?=
             is_binary(Peer) orelse
@@ -182,15 +183,28 @@ connect(Base, Req, Opts) ->
                 bad_request(
                     <<"The tunnel address must be this node's wallet.">>
                 ),
-        dev_tunnel_server:connect(
-            broker(Opts),
-            Peer,
-            Address,
-            Workers,
-            integer(hb_opts:get(tunnel_max_client_workers, 32, Opts)),
-            integer(hb_opts:get(tunnel_client_retire_timeout, 300_000, Opts)),
-            fun(Stop) -> client(Peer, Address, Stop, Opts) end
-        )
+        Connect =
+            fun() ->
+                dev_tunnel_server:connect(
+                    broker(Opts),
+                    Peer,
+                    Address,
+                    Workers,
+                    integer(hb_opts:get(tunnel_max_client_workers, 32, Opts)),
+                    integer(
+                        hb_opts:get(tunnel_client_retire_timeout, 300_000, Opts)
+                    ),
+                    fun(Stop) -> client(Peer, Address, Stop, Opts) end
+                )
+            end,
+        % A signed control applies once for each `created' time of its signer.
+        case Signer of
+            none -> Connect();
+            _ ->
+                lib_meta:ratcheted_apply(
+                    <<"~tunnel@1.0/connect">>, Signer, Control, Connect, Opts
+                )
+        end
     end.
 
 %% @doc Return the controls of a `connect'. A caller whose options contain the
@@ -203,7 +217,7 @@ connect_control(Base, Req, Opts) ->
     of
         no_viable_wallet ->
             maybe
-                {ok, _Signer, Control} ?=
+                {ok, Signer, Control} ?=
                     authenticate(Req, [<<"peer">>], Opts),
                 {ok, IsOperator} =
                     hb_ao:resolve(
@@ -215,9 +229,9 @@ connect_control(Base, Req, Opts) ->
                         Opts#{ <<"hashpath">> => ignore }
                     ),
                 true ?= IsOperator orelse denied(),
-                {ok, Control}
+                {ok, Signer, Control}
             end;
-        _ -> {ok, hb_maps:merge(Base, Req, Opts)}
+        _ -> {ok, none, hb_maps:merge(Base, Req, Opts)}
     end.
 
 %% @doc Select a signed envelope covering all required controls. Unsigned
@@ -591,11 +605,25 @@ client(Peer, Address, Stop, Reply, Opts) ->
 %% the reply that the HTTP server gives it (`hb_http_server:error_reply/4').
 execute(Request, Opts) ->
     try
-        Singleton = singleton(Request, Opts),
+        Raw = singleton(Request, Opts),
         [Path | _] =
             binary:split(
-                hb_maps:get(<<"path">>, Singleton, <<"/">>, Opts),
+                hb_maps:get(<<"path">>, Raw, <<"/">>, Opts),
                 <<"?">>
+            ),
+        % A tunneled request runs as a request to the node directly does: its
+        % message keeps only the keys that its commitments cover, with no
+        % private keys, and the request line gives its method, path and accept.
+        Singleton =
+            maps:merge(
+                hb_ao:execution_input(
+                    hb_private:reset(hb_message:with_only_committed_deep(Raw, Opts)),
+                    Opts
+                ),
+                maps:with(
+                    [<<"method">>, <<"path">>, <<"accept">>, <<"accept-bundle">>],
+                    Raw
+                )
             ),
         Result =
             maybe

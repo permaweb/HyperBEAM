@@ -122,11 +122,11 @@ The direct request returns the lower bound, `0`, on successful completion.
 
 The compact index finds the right block; GraphQL still needs its header for
 TX IDs, height and timestamp. Continue the existing header backfill in the
-same store. To fill every remaining header from the tip down, use:
+same store. To fill the next 1000 headers below the tip, use:
 
 ```sh
 curl --fail-with-body -sS \
-  "$HB_NODE/~copycat@1.0/arweave&mode=blocks&from=tip&to=0&reindex=false&include-proofs=false&include-block-index=true"
+  "$HB_NODE/~copycat@1.0/arweave&mode=blocks&from=tip&to=-999&reindex=false&include-proofs=false&include-block-index=true"
 ```
 
 `mode=blocks` only processes block headers. It does not enumerate/download TXs
@@ -140,7 +140,7 @@ one-shot cron launch is:
 
 ```sh
 curl --fail-with-body -sS \
-  "$HB_NODE/~cron@1.0/once?cron-path=/~copycat@1.0/arweave&mode=blocks&from=tip&to=0&reindex=false&include-proofs=false&include-block-index=true"
+  "$HB_NODE/~cron@1.0/once?cron-path=/~copycat@1.0/arweave&mode=blocks&from=tip&to=-999&reindex=false&include-proofs=false&include-block-index=true"
 ```
 
 The returned body identifies the task. This confirms launch, not completion.

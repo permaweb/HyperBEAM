@@ -59,7 +59,15 @@ register(_, Req, Opts) ->
                 }
             };
         {ok, Signed} ->
-            direct_register(Signed, Opts)
+            % An operator's registration applies once for each of its
+            % `created' times.
+            lib_meta:ratcheted_apply(
+                <<"~local-name@1.0/register">>,
+                <<"operator">>,
+                Signed,
+                fun() -> direct_register(Signed, Opts) end,
+                Opts
+            )
     end.
 
 %% @doc Register a name without checking if the caller is an operator. Exported

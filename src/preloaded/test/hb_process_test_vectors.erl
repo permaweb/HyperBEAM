@@ -292,6 +292,36 @@ test_device_compute_test_parallel() ->
     ?assertEqual(1, hb_ao:get(<<"results/assignment-slot">>, Res, Opts)),
     ?assertEqual([1,1,0,0], hb_ao:get(<<"already-seen">>, Res, Opts)).
 
+changed_state_is_not_cached_test_parallel() ->
+    Opts = test_opts(),
+    Base = test_process(Opts),
+    schedule_test_message(Base, <<"TEST TEXT 1">>, Opts),
+    schedule_test_message(Base, <<"TEST TEXT 2">>, Opts),
+    {ok, Slot0} = hb_ao:resolve(
+        Base,
+        #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
+        Opts
+    ),
+    {ok, Changed} = hb_ao:resolve(
+        Slot0,
+        #{ <<"path">> => <<"set">>, <<"test-extra">> => <<"caller-key">> },
+        Opts
+    ),
+    {ok, _} = hb_ao:resolve(
+        Changed,
+        #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
+        Opts
+    ),
+    {ok, Later} = hb_ao:resolve(
+        Base,
+        #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
+        Opts
+    ),
+    ?assertEqual(
+        not_found,
+        hb_maps:get(<<"test-extra">>, Later, not_found, Opts)
+    ).
+
 wasm_compute_test_parallel() ->
     Opts = test_opts(),
     Base = wasm_process(<<"test/test-64.wasm">>, Opts),

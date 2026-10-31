@@ -327,23 +327,6 @@ raw_default_message() ->
         <<"name-resolvers">> => ?DEFAULT_NAME_RESOLVERS,
         <<"name-reserved-host-labels">> => [],
         <<"routes">> => [
-            % Local CU routes.
-            #{
-                <<"template">> => <<"/result/.*">>,
-                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
-            },
-            #{
-                <<"template">> => <<"/snapshot/.*">>,
-                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
-            },
-            #{
-                <<"template">> => <<"/dry-run.*">>,
-                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
-            },
-            #{
-                <<"template">> => <<"/state.*">>,
-                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
-            },
             % GraphQL: send queries to the default gateway.
             #{
                 <<"template">> => <<"/graphql">>,

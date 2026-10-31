@@ -1198,7 +1198,16 @@ authorization(Ctx = #{
             maps:without([<<"priv-wallet">>, <<"identities">>], OwnerOpts)
         )
     ),
-    Signed = signed(#{<<"peer">> => URL, <<"workers">> => 2}, OwnerOpts),
+    Created = erlang:system_time(second),
+    Signed =
+        signed(
+            #{
+                <<"peer">> => URL,
+                <<"workers">> => 2,
+                <<"created">> => Created
+            },
+            OwnerOpts
+        ),
     success(
         hb_http:post(
             maps:get(url, First),
@@ -1209,8 +1218,22 @@ authorization(Ctx = #{
         Opts
     ),
     await(fun() -> registered(URL, maps:get(id, First), Opts) =:= 2 end),
+    Replayed =
+        response(
+            hb_http:post(
+                maps:get(url, First),
+                <<"/~tunnel@1.0/connect">>,
+                Signed,
+                Opts
+            ),
+            Opts
+        ),
+    ?assertEqual(403, hb_maps:get(<<"status">>, Replayed, not_found, Opts)),
     PeerOnly =
-        (signed(#{ <<"peer">> => URL }, OwnerOpts))#{ <<"workers">> => 9 },
+        (signed(
+            #{ <<"peer">> => URL, <<"created">> => Created + 1 },
+            OwnerOpts
+        ))#{ <<"workers">> => 9 },
     Kept =
         success(
             hb_http:post(

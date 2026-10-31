@@ -124,8 +124,28 @@ routes(M1, M2, Opts) ->
                         {ok, Signed} ->
                             Route =
                                 hb_maps:get(<<"route">>, Signed, Signed, Opts),
-                            ok = insert_route(Route, Opts),
-                            {ok, <<"Route added.">>};
+                            % A message that the owner signed for another
+                            % use, such as a receipt, gives no `node'.
+                            IsRoute =
+                                hb_maps:is_key(<<"node">>, Route, Opts) orelse
+                                    hb_maps:is_key(<<"nodes">>, Route, Opts),
+                            case IsRoute of
+                                true ->
+                                    % An owner's route applies once for each
+                                    % of its `created' times.
+                                    lib_meta:ratcheted_apply(
+                                        <<"~router@1.0/routes">>,
+                                        <<"route-owner">>,
+                                        Signed,
+                                        fun() ->
+                                            ok = insert_route(Route, Opts),
+                                            {ok, <<"Route added.">>}
+                                        end,
+                                        Opts
+                                    );
+                                false ->
+                                    {error, <<"The route gives no node.">>}
+                            end;
                         {error, _} -> {error, not_authorized}
                     end;
                 Registrar ->
@@ -157,7 +177,7 @@ routes(M1, M2, Opts) ->
                     end
             end;
         _ ->
-            {ok, Routes}
+            {ok, lib_meta:without_credentials(Routes, Opts)}
     end.
 
 %% @doc Add a route to the routes of the node message, and sort them by
@@ -357,18 +377,18 @@ do_apply_route(#{ <<"route-path">> := Path }, R, Opts) ->
 do_apply_route(_, #{ <<"uri">> := URI }, _Opts) ->
     {ok, URI};
 do_apply_route(#{ <<"path">> := RawPath }, #{ <<"prefix">> := RawPrefix }, Opts) ->
-    Path = hb_cache:ensure_loaded(RawPath, Opts),
+    Path = normalize_route_path(hb_cache:ensure_loaded(RawPath, Opts)),
     Prefix = hb_cache:ensure_loaded(RawPrefix, Opts),
     {ok, join_prefix(Prefix, Path)};
 do_apply_route(#{ <<"path">> := RawPath }, #{ <<"suffix">> := RawSuffix }, Opts) ->
-    Path = hb_cache:ensure_loaded(RawPath, Opts),
+    Path = normalize_route_path(hb_cache:ensure_loaded(RawPath, Opts)),
     Suffix = hb_cache:ensure_loaded(RawSuffix, Opts),
     {ok, <<Path/binary, Suffix/binary>>};
 do_apply_route(
         #{ <<"path">> := RawPath },
         #{ <<"match">> := RawMatch, <<"with">> := RawWith },
         Opts) ->
-    Path = hb_cache:ensure_loaded(RawPath, Opts),
+    Path = normalize_route_path(hb_cache:ensure_loaded(RawPath, Opts)),
     Match = hb_cache:ensure_loaded(RawMatch, Opts),
     With = hb_cache:ensure_loaded(RawWith, Opts),
     % Apply the regex to the path and replace the first occurrence. The route
@@ -396,6 +416,17 @@ url_host(URL) ->
     case uri_string:parse(URL) of
         #{ host := Host } = Parsed -> {Host, maps:get(port, Parsed, undefined)};
         _ -> undefined
+    end.
+
+%% @doc Return a path with its dot segments resolved, before a route applies
+%% it. The route prefix and the path then reach the same path that the route
+%% template matched.
+normalize_route_path(Path) ->
+    BinPath = hb_ao:normalize_key(Path),
+    try uri_string:normalize(BinPath) of
+        Normalized when is_binary(Normalized) -> Normalized;
+        _ -> BinPath
+    catch _:_ -> BinPath
     end.
 
 %% @doc Join a route's prefix to a path. A prefix that ends in `/' adds no
@@ -1778,6 +1809,10 @@ route_regex_matches_test_parallel() ->
         #{
             <<"template">> => <<"/.*/schedule">>,
             <<"node">> => <<"correct">>
+        },
+        #{
+            <<"template">> => <<"/result/.*">>,
+            <<"node">> => <<"incorrect">>
         }
     ],
     ?assertEqual(
@@ -1791,6 +1826,22 @@ route_regex_matches_test_parallel() ->
     ?assertEqual(
         {error, no_matches},
         route(#{ <<"path">> => <<"/a/b/c/bad-key">> }, #{ <<"routes">> => Routes })
+    ),
+    % A query parameter does not select a route.
+    ?assertEqual(
+        {error, no_matches},
+        route(
+            #{ <<"path">> => <<"/adm1n?x=/a/b/c/schedule">> },
+            #{ <<"routes">> => Routes }
+        )
+    ),
+    % An encoded separator does not select a route.
+    ?assertEqual(
+        {error, no_matches},
+        route(
+            #{ <<"path">> => <<"/result/..%2Fsecret">> },
+            #{ <<"routes">> => Routes }
+        )
     ).
 
 explicit_route_test_parallel() ->
@@ -1940,6 +1991,21 @@ add_route() ->
     ?assertEqual(
         {ok, <<"signed">>},
         hb_http:get(Node, <<"/~router@1.0/routes/4/node">>, #{})
+    ),
+    % A message that the owner signed with no `node' or `nodes' is no route.
+    ?assertMatch(
+        {error, _},
+        hb_http:post(
+            Node,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~router@1.0/routes">>,
+                    <<"template">> => <<"/no/node">>
+                },
+                #{ <<"priv-wallet">> => Owner }
+            ),
+            #{}
+        )
     ).
 
 %% @doc Test that the `preprocess/3' function re-routes a request to remote

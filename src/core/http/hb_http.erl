@@ -367,15 +367,16 @@ http_response_to_httpsig(HeaderMap, Body, Opts) ->
         Opts
     ).
 
-%% @doc The HTTP status of a result: its message's `status' if that is an
-%% integer from 100 to 599 or the binary encoding of one. Otherwise an `error'
-%% or `failure' whose `body' is an atom with a code of its own takes that code,
-%% and any other result the code of its Erlang status.
+%% @doc The HTTP status of a result. A message `status' that is an integer
+%% from 200 to 599, or the binary encoding of one, gives the code. A reply is
+%% never informational. An `error' or `failure' result with an atom `body'
+%% takes the code that the atom gives, if it gives one. Any other result takes
+%% the code of its Erlang status.
 status_code({ErlStatus, Msg}, Opts) ->
     ParsedStatus =
         hb_util:safe_int(hb_maps:get(<<"status">>, Msg, undefined, Opts)),
     case {ParsedStatus, Msg} of
-        {{ok, Status}, _} when Status >= 100, Status =< 599 ->
+        {{ok, Status}, _} when Status >= 200, Status =< 599 ->
             Status;
         {_, #{ <<"body">> := Error }} when is_atom(Error), ErlStatus == error;
                 is_atom(Error), ErlStatus == failure ->
