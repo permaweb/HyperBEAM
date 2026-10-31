@@ -81,6 +81,28 @@
     <<"from-value">> =>
         <<"~bits@1.0/from=_:77,start:49+integer,length:34+integer">>
 }).
+%% Additional ANS-104 data items, including nested Redstone messages.
+-define(DEFAULT_REDSTONE_OFFSET_INDEX, #{
+    <<"store-module">> => hb_store_arlmdb,
+    <<"name">> => <<"published-redstone-offset-index">>,
+    <<"root">> => <<"aOlX-irO0DEKk1U0dP4ZEoBNd2LyKVXFqaEUuxpihLI">>,
+    <<"prefix">> => <<"~arweave@2.9/offset=">>,
+    <<"to-key">> => <<"~base64url@1.0/decode/~bits@1.0/take=77">>,
+    <<"from-value">> =>
+        <<"~bits@1.0/from=_:77,start:49+integer,length:34+integer"
+            "/set&codec=ans104@1.0">>
+}).
+%% L1 transaction offsets retain their data lengths and transaction codec.
+-define(DEFAULT_L1_OFFSET_INDEX, #{
+    <<"store-module">> => hb_store_arlmdb,
+    <<"name">> => <<"published-l1-offset-index">>,
+    <<"root">> => <<"_BjLm7-qslpbSLcqNBQepUZMFoxgdeIbOdnRsaPAnuQ">>,
+    <<"prefix">> => <<"~arweave@2.9/offset=">>,
+    <<"to-key">> => <<"~base64url@1.0/decode/~bits@1.0/take=71">>,
+    <<"from-value">> =>
+        <<"~bits@1.0/from=_:71,start:49+integer,length:40+integer"
+            "/set&codec=tx@1.0">>
+}).
 -define(DEFAULT_GATEWAY, <<"https://arweave.net">>).
 -define(
     DEFAULT_HTTP_OPTS,
@@ -460,7 +482,12 @@ raw_default_message() ->
                     <<"store-module">> => hb_store_arweave,
                     <<"name">> => <<"cache-mainnet/arweave">>,
                     <<"index-store">> =>
-                        [?DEFAULT_PRIMARY_STORE, ?DEFAULT_OFFSET_INDEX],
+                        [
+                            ?DEFAULT_PRIMARY_STORE,
+                            ?DEFAULT_OFFSET_INDEX,
+                            ?DEFAULT_REDSTONE_OFFSET_INDEX,
+                            ?DEFAULT_L1_OFFSET_INDEX
+                        ],
                     <<"local-store">> => [?DEFAULT_PRIMARY_STORE],
                     <<"remote-index">> => true
                 }
