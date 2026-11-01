@@ -3,6 +3,55 @@
 -include("include/hb_http_client.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%% @doc HTTP/2 keepalive preserves a request longer than its peer's idle limit.
+http2_keepalive_test_() ->
+    {timeout, 30, fun() ->
+        application:ensure_all_started(hb),
+        lists:foreach(
+            fun(KeepAlive) ->
+                Test = self(),
+                Peer = hb_http_server:start_node(#{
+                    <<"priv-wallet">> => ar_wallet:new(),
+                    <<"idle-timeout">> => 200,
+                    <<"test-key">> => <<"keepalive">>,
+                    <<"on">> => #{
+                        <<"request">> => #{
+                            <<"device">> => #{
+                                <<"request">> => fun(_, Req, _) ->
+                                    Test ! request_started,
+                                    timer:sleep(600),
+                                    {ok, Req}
+                                end
+                            }
+                        }
+                    }
+                }),
+                Server = hb_opts:get(http_server, undefined,
+                    hb_http_server:get_opts()),
+                try
+                    Result = hb_http_client:request(#{
+                        peer => Peer, method => <<"GET">>,
+                        path => <<"/~meta@1.0/info/test-key">>,
+                        headers => #{}, body => <<>>
+                    }, #{
+                        <<"http-client">> => gun, <<"protocol">> => http2,
+                        <<"http-retry">> => 0,
+                        <<"http-client-keepalive">> => KeepAlive,
+                        <<"http-client-send-timeout">> => 10000
+                    }),
+                    receive request_started -> ok
+                    after 1000 -> error(request_not_started)
+                    end,
+                    case KeepAlive of
+                        60000 -> ?assertMatch({error, _}, Result);
+                        _ -> ?assertMatch({ok, 200, _, <<"keepalive">>}, Result)
+                    end
+                after cowboy:stop_listener(Server) end
+            end,
+            [20, 60000]
+        )
+    end}.
+
 %% @doc A peer's pool has the limits of the request that starts it, and keeps
 %% them when its supervisor restarts it.
 hackney_pool_restart_test_() ->

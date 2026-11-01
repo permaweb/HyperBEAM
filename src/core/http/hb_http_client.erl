@@ -456,17 +456,12 @@ open_connection(#{ peer := Peer }, Opts) ->
 
 open_connection_gun(Scheme, Host, Port, Peer, Opts) ->
     ?event(http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
+    KeepAlive = hb_opts:get(
+        http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
     BaseGunOpts =
         #{
-            http_opts =>
-                #{
-                    keepalive =>
-                        hb_opts:get(
-                            http_client_keepalive,
-                            ?DEFAULT_KEEPALIVE_TIMEOUT,
-                            Opts
-                        )
-                },
+            http_opts => #{keepalive => KeepAlive},
+            http2_opts => #{keepalive => KeepAlive},
             retry => 0,
             connect_timeout =>
                 hb_opts:get(
