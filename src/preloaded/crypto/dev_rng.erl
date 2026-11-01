@@ -445,7 +445,7 @@ timelock_vectors_test_() ->
             end
         }
     ||
-        {Name, Key, Inputs, Expected} <- dev_timelock_test_vectors:timelock_vectors()
+        {Name, Key, Inputs, Expected} <- dev_rng_timelock_test_vectors:timelock_vectors()
     ].
 
 %% @doc The challenge primes of the valid cracks, and of the reference's own
@@ -456,7 +456,7 @@ challenge_prime_test() ->
             {I, E}
         ||
             {_, <<"verify-crack">>, I, #{ <<"l">> := _ } = E}
-                <- dev_timelock_test_vectors:timelock_vectors()
+                <- dev_rng_timelock_test_vectors:timelock_vectors()
         ],
     ?assert(length(Cracks) >= 3),
     lists:foreach(
@@ -472,7 +472,7 @@ challenge_prime_test() ->
         end,
         Cracks
     ),
-    {{X, Y, T}, L} = dev_timelock_test_vectors:fixed_challenge_prime(),
+    {{X, Y, T}, L} = dev_rng_timelock_test_vectors:fixed_challenge_prime(),
     Prime = challenge_prime(X, Y, T),
     ?assertEqual(binary_to_integer(L, 16), Prime),
     ?assertEqual(128, bit_length(Prime)).
@@ -506,7 +506,7 @@ timelock_malformed_inputs_test() ->
             [
                 {Name, Inputs}
             ||
-                {Name, _, Inputs, _} <- dev_timelock_test_vectors:timelock_vectors()
+                {Name, _, Inputs, _} <- dev_rng_timelock_test_vectors:timelock_vectors()
             ]
         ),
     Reveal = maps:get(<<"t1024-reveal-valid">>, Vectors),

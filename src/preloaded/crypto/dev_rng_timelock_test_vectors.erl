@@ -13,7 +13,7 @@
 %%% built-in RSA-2048 group with T = 1024: the generator, reveals (c, alpha, h)
 %%% and Wesolowski cracks (x, t, y, proof), valid and invalid. The reference
 %%% agreed with every `valid' flag when they were generated.
--module(dev_timelock_test_vectors).
+-module(dev_rng_timelock_test_vectors).
 -export([bls_vectors/0, live_round/0]).
 -export([timelock_vectors/0, fixed_challenge_prime/0]).
 
