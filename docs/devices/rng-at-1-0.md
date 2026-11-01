@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `~rng@1.0` device implements the HyperBEAM RNG verification and derivation primitives. It checks randomness-beacon signatures and derives bytes from a seed. It is stateless and every key is a pure function of its inputs, so a process can call it from inside its computation (for example with `ao.resolve` from Lua) and every node that replays the process gets the same answer.
+The `~rng@1.0` device implements the HyperBEAM RNG verification and derivation primitives. It checks randomness-beacon signatures, verifies Any-Honest time-lock reveals and cracks, and derives bytes from a seed. It is stateless and every key is a pure function of its inputs, so a process can call it from inside its computation (for example with `ao.resolve` from Lua) and every node that replays the process gets the same answer.
 
 RNG Labs, a CipherPlay Inc. product, maintains the canonical protocol, versioning, reference beacon network, and provider implementation. CipherPlay Inc. owns the originating IP. This HyperBEAM device is the interoperable consensus verifier distributed under HyperBEAM's repository license.
 
@@ -11,6 +11,21 @@ Signatures are BLS12-381 in the IETF "minimal-pubkey-size" variant: public keys 
 Inputs are read from the request, then from the base message. Bad or missing inputs never raise an error: the result is `valid: false` with a `reason`.
 
 ## Core Functions (Keys)
+
+### `generator`
+
+Returns the fixed RSA-2048 unknown-order group as lowercase hexadecimal `g`
+and `n`. The factors of `n` are not known.
+
+### `verify-reveal`
+
+Checks `g^alpha = c mod n` and returns the canonical time-lock output
+`y = min(h^alpha mod n, n - h^alpha mod n)`.
+
+### `verify-crack`
+
+Checks the Wesolowski proof that `y` is the result of `t` sequential squarings
+from `x`, returning the same canonical `y` used by `verify-reveal`.
 
 ### `verify-bls`
 
