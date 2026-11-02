@@ -1,7 +1,7 @@
 %%% @doc Read the data of Arweave transactions from Arweave nodes for the
 %%% `~arweave@2.9' device: byte ranges of the weave or of a pending
 %%% transaction, read chunk by chunk, each chunk checked against its Merkle
-%%% proof.
+%%% proof, or a whole transaction checked against its data root.
 -module(dev_arweave_data).
 -export([get_chunk/2, get_chunk/3]).
 -export([get_chunk_range_relative/4, decode_relative_chunk/4]).
@@ -9,10 +9,58 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%% Arweave nodes serve the data of a transaction whole up to 12 MiB
+%% (`MAX_SERVED_TX_DATA_SIZE').
+-define(MAX_SERVED_TX_DATA_SIZE, 12 * 1024 * 1024).
+
 %% @doc Retrieve a chunk or slice of bytes by its offset, either relative to the
 %% global Arweave data tree, or relative to the start of a specific pending
-%% transaction.
-get_chunk(_Base, Request, Opts) ->
+%% transaction. A request that also gives the `tx' whose data the range is and
+%% that transaction's `data-root' is read whole when `tx_data/2' can read it.
+get_chunk(Base, Request, Opts) ->
+    case tx_data(Request, Opts) of
+        {ok, Data} -> {ok, Data};
+        Other ->
+            ?event(debug_arweave, {tx_data_not_read, {reason, Other}}),
+            get_range(Base, Request, Opts)
+    end.
+
+%% @doc Read the data of a transaction of at most 12 MiB in one request, as
+%% `/tx/<id>/data.bin' gives it, and keep it if it hashes to the request's
+%% `data-root', which proves every byte as the proofs of its chunks do.
+tx_data(Request, Opts) ->
+    maybe
+        {ok, TXID} ?= hb_maps:find(<<"tx">>, Request, Opts),
+        {ok, DataRoot} ?= hb_maps:find(<<"data-root">>, Request, Opts),
+        Offset = hb_util:int(hb_maps:get(<<"offset">>, Request, 0, Opts)),
+        Length = hb_util:int(hb_maps:get(<<"length">>, Request, 0, Opts)),
+        true ?= Length =< ?MAX_SERVED_TX_DATA_SIZE orelse {error, 'tx-data-too-large'},
+        {ok, Data} ?=
+            dev_arweave:request(
+                <<"GET">>,
+                <<"/tx/", TXID/binary, "/data.bin">>,
+                #{ <<"route-by">> => Offset },
+                Opts
+            ),
+        true ?=
+            (byte_size(Data) =:= Length
+                andalso has_data_root(Data, hb_util:decode(DataRoot)))
+            orelse {error, 'invalid-tx-data'},
+        {ok, Data}
+    end.
+
+%% @doc Whether the data hashes to the data root when it is split into chunks
+%% as arweave-js splits it or into fixed 256 KiB chunks, the layouts that
+%% clients use. Arweave also accepts other splits of the last two chunks, and
+%% from the 2.7 fork rebased subtrees, which these do not reproduce.
+has_data_root(Data, DataRoot) ->
+    lists:any(
+        fun(Mode) -> ar_tx:data_root(Mode, Data) =:= DataRoot end,
+        [arweavejs, legacy]
+    ).
+
+%% @doc Read the requested range chunk by chunk.
+get_range(_Base, Request, Opts) ->
     Offset = hb_util:int(hb_maps:get(<<"offset">>, Request, 0, Opts)),
     Length = hb_util:int(hb_maps:get(<<"length">>, Request, 1, Opts)),
     MaybeRelativeTXID = hb_maps:get(<<"pending">>, Request, undefined, Opts),
@@ -469,3 +517,38 @@ pending_relative_chunk_helpers_test_parallel() ->
     ?assertEqual([?DATA_CHUNK_SIZE], pending_relative_chunk_offsets(0, 1, DataSize)),
     ?assertEqual([DataSize], pending_relative_chunk_offsets(?DATA_CHUNK_SIZE, 1, DataSize)),
     ?assertEqual([?DATA_CHUNK_SIZE, DataSize], pending_relative_chunk_offsets(0, DataSize, DataSize)).
+
+%% @doc A range that is one whole transaction, read with its `tx' and
+%% `data-root', gives the bytes that a read chunk by chunk gives, as does a
+%% read with a data root that those bytes do not hash to.
+tx_data_test_parallel() ->
+    %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
+    TXID = <<"QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4">>,
+    DataRoot = <<"aHoisEr0IJ5xV2i0NjnE-vbtZOzZqI01ecyn15tojbE">>,
+    Read =
+        fun(Extra) ->
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                Extra#{
+                    <<"path">> => <<"chunk">>,
+                    <<"offset">> => 378092137521399,
+                    <<"length">> => 1264430
+                },
+                #{}
+            )
+        end,
+    {ok, Chunks} = Read(#{}),
+    ?assertEqual(DataRoot, hb_util:encode(ar_tx:data_root(Chunks))),
+    ?assertEqual(
+        {ok, Chunks},
+        Read(#{ <<"tx">> => TXID, <<"data-root">> => DataRoot })
+    ),
+    ?assertEqual(
+        {ok, Chunks},
+        Read(
+            #{
+                <<"tx">> => TXID,
+                <<"data-root">> => hb_util:encode(crypto:strong_rand_bytes(32))
+            }
+        )
+    ).

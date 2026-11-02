@@ -558,8 +558,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, IndexMode, Opts) ->
                     counters(0, 0, 0);
                 true when IndexMode =/= shallow ->
                     try
-                        case hb_store_arweave:read_chunks(
-                            TXStartOffset, TX#tx.data_size, Opts) of
+                        case read_tx_data(TX, TXStartOffset, Opts) of
                             {ok, BundleData} ->
                                 {TotalTime, IndexRes} = timer:tc(
                                     fun() ->
@@ -1051,6 +1050,22 @@ download_bundle_header(EndOffset, Size, Opts) ->
     observe_event(<<"bundle_header">>, fun() ->
         lib_arweave_common:bundle_header(EndOffset - Size, Size, Opts)
     end).
+
+%% @doc Read the data of a confirmed transaction: in one request when it hashes
+%% to the transaction's data root (see `~arweave@2.9/chunk'), chunk by chunk
+%% otherwise.
+read_tx_data(TX, StartOffset, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => StartOffset + 1,
+            <<"length">> => TX#tx.data_size,
+            <<"tx">> => hb_util:encode(TX#tx.id),
+            <<"data-root">> => hb_util:encode(TX#tx.data_root)
+        },
+        Opts
+    ).
 
 %% @doc The headers of a block's transactions, as `tx@1.0' records: those that
 %% the block carries in `tx-headers', or each read by its ID.

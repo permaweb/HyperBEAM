@@ -483,6 +483,9 @@ list_find(Key, [{XKey, Value} | Rest], Default) ->
 %%   offset and length.
 %% - `GET` with `txid`: `GET`s a chunk or range of bytes from the given offset,
 %%   relative to the given transaction's data root.
+%% - `GET` with `tx` and `data-root`, for a range that is the whole data of
+%%   that transaction: reads the data in one request when it is 12 MiB or less
+%%   and hashes to `data-root' (see `dev_arweave_data').
 -spec chunk(
     #{ _ => _ },
     #{
@@ -490,6 +493,8 @@ list_find(Key, [{XKey, Value} | Rest], Default) ->
         offset => binary() | integer(),
         length => binary() | integer(),
         pending => binary(),
+        tx => binary(),
+        'data-root' => binary(),
         _ => _
     },
     #{ _ => _ }
@@ -970,6 +975,10 @@ to_message(Path = <<"/block_index/", _/binary>>, <<"GET">>,
     {ok, hb_json:decode(Body)};
 to_message(Path = <<"/unconfirmed_tx/", ID/binary>>, <<"GET">>, Result, LogExtra, Req, Opts) ->
     to_tx_message(pending, ID, Path, Result, LogExtra, Req, Opts);
+to_message(Path = <<"/tx/", _:43/binary, "/data.bin">>, <<"GET">>,
+        {ok, Response}, LogExtra, _Req, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    {ok, hb_maps:get(<<"body">>, Response, <<>>, Opts)};
 to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>,
         {ok, #{ <<"status">> := 202 }}, LogExtra, Req, Opts) ->
     % A node answers 202, with no header, for a TX in its mempool. The TX is
