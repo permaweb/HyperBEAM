@@ -251,7 +251,26 @@ collect_ids(_Other, Acc, _Opts) -> Acc.
 collect_tokens(Value, Acc) ->
     Decoded = try hb_escape:decode(Value) catch _:_ -> Value end,
     lists:foldl(fun collect_binary_id/2, Acc,
-        re:split(Decoded, <<"[^A-Za-z0-9_-]+">>, [{return, binary}])).
+        binary:split(Decoded, token_separators(), [global, trim_all])).
+
+token_separators() ->
+    case persistent_term:get({?MODULE, token_separators}, undefined) of
+        undefined ->
+            Separators =
+                binary:compile_pattern(
+                    [<<C>> || C <- lists:seq(0, 255), not is_token_char(C)]
+                ),
+            persistent_term:put({?MODULE, token_separators}, Separators),
+            Separators;
+        Separators -> Separators
+    end.
+
+is_token_char(C) when C >= $A, C =< $Z -> true;
+is_token_char(C) when C >= $a, C =< $z -> true;
+is_token_char(C) when C >= $0, C =< $9 -> true;
+is_token_char($_) -> true;
+is_token_char($-) -> true;
+is_token_char(_) -> false.
 
 collect_binary_id(Bin, Acc) when ?IS_ID(Bin) ->
     [hb_util:human_id(Bin) | Acc];
@@ -707,3 +726,38 @@ parse_blacklist_performance_test() ->
     Duration = erlang:monotonic_time(millisecond) - Start,
     ?assert(length(Parsed) =:= 1000000),
     ?assert(Duration =< 2000).
+
+token_split_test() ->
+    Values =
+        [
+            <<>>, <<"/">>, <<"//">>, <<"a">>, <<"/a/">>, <<"a//b">>,
+            <<"--__">>, <<0, $a, 255, $b, 128>>, <<"é"/utf8>>,
+            crypto:strong_rand_bytes(65536)
+        ],
+    lists:foreach(
+        fun(Value) ->
+            ?assertEqual(
+                [
+                    Token
+                ||
+                    Token <-
+                        re:split(
+                            Value,
+                            <<"[^A-Za-z0-9_-]+">>,
+                            [{return, binary}]
+                        ),
+                    Token =/= <<>>
+                ],
+                binary:split(Value, token_separators(), [global, trim_all])
+            )
+        end,
+        Values
+    ).
+
+large_value_ids_test() ->
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Body =
+        iolist_to_binary(
+            [crypto:strong_rand_bytes(1000000), <<"/">>, ID, <<"/">>]
+        ),
+    ?assert(lists:member(ID, collect_tokens(Body, []))).
