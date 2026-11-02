@@ -5,8 +5,17 @@
 -export([encode/1, decode/1, decode/2]).
 
 %% @doc Takes a term in Erlang's native form and encodes it as a JSON string.
+%% The members of an object in the `ejson' form, `{[{Key, Value}]}', keep their
+%% order.
 encode(Term) ->
-    iolist_to_binary(json:encode(Term)).
+    iolist_to_binary(json:encode(Term, fun encode_value/2)).
+
+%% @doc Encode a value for `json:encode/2', giving an `ejson' object with its
+%% members in their order.
+encode_value({Members}, Encode) when is_list(Members) ->
+    json:encode_key_value_list(Members, Encode);
+encode_value(Value, Encode) ->
+    json:encode_value(Value, Encode).
 
 %% @doc Takes a JSON string and decodes it into an Erlang term.
 decode(Bin) -> json:decode(Bin).

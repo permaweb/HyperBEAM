@@ -282,13 +282,17 @@ serialize_bundle(_, Data, _Normalize) when is_binary(Data) ->
 serialize_bundle(_, Data, _Normalize) ->
     throw({cannot_serialize_tx_data, must_be_list_or_map_or_binary, Data}).
 
+%% @doc Return the manifest of a map bundle and the items of the bundle, the
+%% items and the members of the manifest in the sorted order of their keys.
 maybe_generate_manifest(map, BinItems) ->
-    Index = maps:map(fun(_, {TXID, _}) -> hb_util:encode(TXID) end, BinItems),
+    Sorted = hb_util:to_sorted_list(BinItems),
+    Index = {[{Key, hb_util:encode(TXID)} || {Key, {TXID, _}} <- Sorted]},
     Manifest = new_manifest(Index),
     ManifestID = id(Manifest, unsigned),
-    {Manifest, [{ManifestID, serialize(Manifest)} | maps:values(BinItems)]};
+    Items = [Item || {_Key, Item} <- Sorted],
+    {Manifest, [{ManifestID, serialize(Manifest)} | Items]};
 maybe_generate_manifest(_, BinItems) ->
-    {undefined, maps:values(BinItems)}.
+    {undefined, [Item || {_Key, Item} <- hb_util:to_sorted_list(BinItems)]}.
 
 finalize_bundle_data(Processed) ->
     Length = <<(length(Processed)):256/little-integer>>,
@@ -919,7 +923,25 @@ bundle_map_test() ->
     BundleItem = deserialize(Bundle),
     ?assertEqual(Item1#tx.data, (maps:get(<<"key1">>, BundleItem#tx.data))#tx.data),
     ?assertEqual(Item1B#tx.id, (maps:get(<<"key2">>, BundleItem#tx.data))#tx.id),
-    ?assert(verify_item(BundleItem)).
+    ?assert(verify_item(BundleItem)),
+    % A bundle of more than 32 items is in the sorted order of its keys.
+    Items =
+        maps:from_list(
+            [
+                {
+                    integer_to_binary(N),
+                    #tx{ format = ans104, data = integer_to_binary(N) }
+                }
+            ||
+                N <- lists:seq(1, 40)
+            ]
+        ),
+    ?assertEqual(
+        <<"Q0RLw4gb7mT33frdw84lHIRoPdL2f8pQ8rKLex_-qqQ">>,
+        hb_util:human_id(
+            id(ar_tx:normalize(#tx{ format = ans104, data = Items }), unsigned)
+        )
+    ).
 
 eddsa_cases_test() ->
     Key = ar_wallet:new(?EDDSA_KEY_TYPE),
