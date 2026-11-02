@@ -435,7 +435,7 @@ add_content_digest(Msg, _Opts) ->
 %% normalized for encoding. The components of the signature follow the order
 %% of the keys that the commitment lists. When `Ordered' is false, as for a
 %% commitment made without a `committed' list in its request, they follow the
-%% order of the keys of the encoded message. Every key of the message is
+%% sorted order of the keys of the encoded message. Every key of the message is
 %% encoded: the message contains only the keys of the commitment.
 -spec normalize_for_encoding(
     #{ _ => _ },
@@ -476,7 +476,7 @@ normalize_for_encoding(Msg, Commitment, Ordered, Opts) ->
     % `body' key from the encoded message.
     Encoded = maps:without([<<"body">>], EncodedWithSigInfo),
     % Transform the list of requested keys to their `httpsig@1.0' equivalents.
-    EncodedKeys = maps:keys(Encoded),
+    EncodedKeys = hb_util:to_sorted_keys(Encoded, Opts),
     EncodedKeysWithBodyKey =
         case hb_maps:get(<<"ao-body-key">>, EncodedWithSigInfo, not_found) of
             not_found ->
@@ -949,6 +949,27 @@ validate_large_message_from_http_test() ->
             Opts
         ),
     ?assertEqual([<<"hashpath">>], HashpathCommitted).
+
+%% @doc Wide maps and their nested encodings have runtime-independent identities.
+canonical_id_test() ->
+    Wide =
+        maps:from_list(
+            [{integer_to_binary(N), <<"x">>} || N <- lists:seq(1, 40)]
+        ),
+    ?assertEqual(
+        <<"FmPttD7QyZHU6IoBE2iGdnhlPTebuMGb-JKXvFkurvQ">>,
+        hb_message:id(Wide, uncommitted, #{})
+    ),
+    Nested = #{ <<"body">> => Wide },
+    ?assertEqual(
+        <<"kZeeF5Zf505_TMauDEa3d46AGcyB2j9qpK_C9-N1Sqc">>,
+        hb_message:id(Nested, uncommitted, #{})
+    ),
+    HTTP = hb_message:convert(Nested, <<"httpsig@1.0">>, #{}),
+    ?assertEqual(
+        <<"5ic-bzZ6c737RWtn0fR_4YxkbWtUmJVXTgrXlwX2f_c">>,
+        hb_util:human_id(hb_crypto:sha256(maps:get(<<"body">>, HTTP)))
+    ).
 
 committed_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
