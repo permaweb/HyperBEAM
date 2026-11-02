@@ -295,7 +295,7 @@ query(Msg, <<"owner">>, _Args, Opts) ->
                             Opts
                         ),
                     {ok, #{
-                        <<"address">> => owner_address(Committer, Key),
+                        <<"address">> => hb_util:raw_address(Committer),
                         <<"key">> => Key
                     }}
             end
@@ -1102,7 +1102,7 @@ index_predicates(Args, Opts) ->
     Get = fun(Filter) -> hb_maps:get(Filter, Args, null, Opts) end,
     Fields =
         [
-            {<<"committer">>, owner_committers(Get(<<"owners">>))},
+            {<<"committer">>, owner_committers(Get(<<"owners">>), Opts)},
             {<<"field-target">>, Get(<<"recipients">>)}
         ],
     maybe
@@ -1626,10 +1626,20 @@ match(<<"tags">>, Tags, Opts) ->
             )
     end;
 match(<<"owners">>, Owners, Opts) ->
-    {ok, matching_commitments(<<"committer">>, owner_committers(Owners), Opts)};
+    {ok,
+        matching_commitments(
+            <<"committer">>,
+            owner_committers(Owners, Opts),
+            Opts
+        )
+    };
 match(<<"owner">>, Owner, Opts) ->
     Res =
-        matching_commitments(<<"committer">>, hb_committer:uri(Owner), Opts),
+        matching_commitments(
+            <<"committer">>,
+            owner_committers([Owner], Opts),
+            Opts
+        ),
     ?event({match_owner, Owner, Res}),
     {ok, Res};
 match(<<"recipients">>, Recipients, Opts) ->
@@ -1742,19 +1752,41 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
     ?event({filtered_out_of_range, length(AnnotatedIDs) - length(Filtered)}),
     Filtered.
 
-%% @doc Convert the owners of a GraphQL query, which are Arweave addresses, to
-%% the URIs of their committers.
-owner_committers(null) -> null;
-owner_committers(Owners) -> [hb_committer:uri(Owner) || Owner <- Owners].
+%% @doc The committers that the owners of a GraphQL query can be. An owner is
+%% the raw address of a key (`hb_util:raw_address/1'): an Arweave address, `0x'
+%% and the hex of an Ethereum account, or the base58 key of a Solana account.
+%% An owner that can be more than one of these gives each of their committers.
+owner_committers(null, _Opts) -> null;
+owner_committers(Owners, Opts) ->
+    lists:flatmap(
+        fun(Owner) ->
+            [hb_committer:uri(Owner) | account_committers(Owner, Opts)]
+        end,
+        Owners
+    ).
 
-%% @doc The address of an owner as Arweave gateways give it: the SHA-256 of its
-%% key, for a key of any type. An Arweave key's committer is that address.
-owner_address(Committer, Key) ->
-    case hb_committer:address(Committer) of
-        {ok, Address} -> Address;
-        error when is_binary(Key) ->
-            hb_util:human_id(crypto:hash(sha256, hb_util:decode(Key)));
-        error -> <<>>
+%% @doc The `did:pkh:' committers of the accounts whose address is an owner.
+account_committers(<<"0x", _:40/binary>> = Address, _Opts) ->
+    [
+        <<"did:pkh:eip155:1:",
+            (hb_keccak:address_to_checksum_address(Address))/binary>>
+    ];
+account_committers(Owner, Opts) ->
+    case hb_util:base58_decode(Owner) of
+        {ok, <<_:32/binary>> = Key} ->
+            {ok, URI} =
+                hb_ao:resolve(
+                    #{
+                        <<"device">> => <<"did-pkh@1.0">>,
+                        <<"type">> => ?SOLANA_SIGN_TYPE,
+                        <<"owner">> => Key
+                    },
+                    #{ <<"path">> => <<"to">>, <<"type">> => <<"uri">> },
+                    Opts
+                ),
+            [URI];
+        _ ->
+            []
     end.
 
 %% @doc Return the IDs of the messages whose commitments carry a field:
