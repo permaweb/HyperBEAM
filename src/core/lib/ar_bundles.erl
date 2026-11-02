@@ -322,7 +322,7 @@ to_serialized_pair(Item, false, Signed) ->
     % TODO: This is a hack to get the ID of the item. We need to do this because we may not
     % have the ID in 'item' if it is just a map/list. We need to make this more efficient.
     Serialized = serialize(Item),
-    Deserialized = deserialize(Serialized),
+    Deserialized = deserialize_item_wrapper(Serialized),
     case id(Deserialized, Signed) of
         not_signed ->
             % A signed ID was requested, but the item is not signed, so fall
