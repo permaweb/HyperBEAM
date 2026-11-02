@@ -135,10 +135,22 @@ denormalize_message(Message, Opts) ->
         <<"id">> => hb_message:id(Message, all, Opts)
     }.
 
+%% @doc Return the commitment of a message that a process sees: the one with
+%% the lowest ID among the commitments of its first signer, or among all of its
+%% commitments if it has no signer.
+primary_commitment([], Msg, Opts) ->
+    lowest_id_commitment(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts);
+primary_commitment([Signer | _], Msg, Opts) ->
+    signer_commitment(Signer, Msg, Opts).
+
 %% @doc The commitment of a signer that a process sees: of two or more, the one
 %% with the lowest ID, so that every node gives the same.
 signer_commitment(Signer, Msg, Opts) ->
-    Commitments = hb_message:commitments(Signer, Msg, Opts),
+    lowest_id_commitment(hb_message:commitments(Signer, Msg, Opts), Opts).
+
+%% @doc Return the commitment with the lowest ID, or an empty message if there
+%% is none.
+lowest_id_commitment(Commitments, Opts) ->
     case lists:sort(hb_maps:keys(Commitments, Opts)) of
         [] -> #{};
         [ID | _] -> hb_maps:get(ID, Commitments, #{}, Opts)
@@ -176,11 +188,12 @@ message_to_json_struct(RawMsg, Features, Opts) ->
     MsgWithoutCommitments = hb_maps:without([<<"commitments">>], TABM, Opts),
     ID = hb_message:id(RawMsg, all),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),
+    Signers = hb_message:signers(Msg, Opts),
+    Commitment = primary_commitment(Signers, Msg, Opts),
 	{Owner, Signature, PublicKey} =
-        case hb_message:signers(Msg, Opts) of
+        case Signers of
             [] -> {<<>>, <<>>, <<>>};
             [Signer|_] ->
-                Commitment = signer_commitment(Signer, Msg, Opts),
                 CommitmentSignature =
                     hb_maps:get(<<"signature">>, Commitment, <<>>, Opts),
                 CommitmentKey =
@@ -254,7 +267,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
         % NOTE: When sent to ao "Owner" is the wallet address
         <<"Owner">> => Owner,
         <<"From">> => case ?IS_ID(From) of true -> safe_to_id(From); false -> From end,
-        <<"Tags">> => prepare_tags(TABM, Msg, Opts),
+        <<"Tags">> => prepare_tags(TABM, Msg, Commitment, Opts),
         <<"Target">> => safe_to_id(Target),
         <<"Data">> => Data,
         <<"Signature">> =>
@@ -275,8 +288,9 @@ to(Base, Req, Opts) ->
         )
     }.
 %% @doc Prepare the tags of a message as a key-value list, for use in the 
-%% construction of the JSON-Struct message.
-prepare_tags(Msg, RawMsg, Opts) ->
+%% construction of the JSON-Struct message. `Primary' is the commitment whose
+%% `committed' list orders the tags of a message without an ANS-104 commitment.
+prepare_tags(Msg, RawMsg, Primary, Opts) ->
     % Prepare an ANS-104 message for JSON-Struct construction.
     case hb_message:commitment(#{ <<"commitment-device">> => <<"ans104@1.0">> }, Msg, Opts) of
         {ok, _, Commitment} ->
@@ -286,18 +300,40 @@ prepare_tags(Msg, RawMsg, Opts) ->
                     ?event({using_original_tags, Res}),
                     Res;
                 error -> 
-                    prepare_header_case_tags(Msg, RawMsg, Opts)
+                    prepare_header_case_tags(Msg, RawMsg, Commitment, Opts)
             end;
         _ ->
-            prepare_header_case_tags(Msg, RawMsg, Opts)
+            prepare_header_case_tags(Msg, RawMsg, Primary, Opts)
     end.
 
 %% @doc Convert a message without an `original-tags' field into a list of
-%% key-value pairs, with the keys in HTTP header-case. A key with a list
-%% in the message gives a pair for each element of the list, because AOS reads
-%% several values of one tag as repeated tags.
-prepare_header_case_tags(TABM, RawMsg, Opts) ->
-    % Prepare a non-ANS-104 message for JSON-Struct construction. 
+%% key-value pairs, with the keys in HTTP header-case. The keys are in the order
+%% of the commitment's `committed' list, followed in sorted order by the keys
+%% that it does not list. A key with a list in the message gives a pair for each
+%% element of the list, because AOS reads several values of one tag as repeated
+%% tags.
+prepare_header_case_tags(TABM, RawMsg, Commitment, Opts) ->
+    % Remove the keys that the JSON-Struct gives as its own fields.
+    Tags =
+        hb_maps:without(
+            [
+                <<"id">>, <<"anchor">>, <<"owner">>, <<"data">>,
+                <<"target">>, <<"signature">>, <<"commitments">>
+            ],
+            TABM,
+            Opts
+        ),
+    Committed =
+        [
+            Key
+        ||
+            Key <-
+                hb_util:message_to_ordered_list(
+                    hb_maps:get(<<"committed">>, Commitment, [], Opts),
+                    Opts
+                ),
+            hb_maps:is_key(Key, Tags, Opts)
+        ],
     lists:flatmap(
         fun({Name, Value}) ->
             Values =
@@ -314,17 +350,12 @@ prepare_header_case_tags(TABM, RawMsg, Opts) ->
                 Element <- Values
             ]
         end,
-        hb_maps:to_list(
-            hb_maps:without(
-                [
-                    <<"id">>, <<"anchor">>, <<"owner">>, <<"data">>,
-                    <<"target">>, <<"signature">>, <<"commitments">>
-                ],
-                TABM,
-                Opts
-            ),
-			Opts
-        )
+        [
+            {Key, hb_util:ok(hb_maps:find(Key, Tags, Opts))}
+        ||
+            Key <- Committed
+        ] ++
+            hb_util:to_sorted_list(hb_maps:without(Committed, Tags, Opts), Opts)
     ).
 
 %% @doc Translates a compute result -- either from a WASM execution using the 
@@ -749,6 +780,28 @@ basic_aos_call_test_() ->
 				#{ <<"name">> := <<"Tag-A">>, <<"value">> := null }
 			] }},
 			to(#{}, #{ <<"message">> => #{ <<"tag-a">> => [[256]] } }, #{})
+		),
+		% A signed message gives its tags in the order of its `committed' list.
+		?assertMatch(
+			{ok, #{ <<"Tags">> := [
+				#{ <<"name">> := <<"B">> },
+				#{ <<"name">> := <<"A">> }
+			] }},
+			to(
+				#{},
+				#{
+					<<"message">> =>
+						hb_message:commit(
+							#{ <<"b">> => <<"1">>, <<"a">> => <<"2">> },
+							#{ <<"priv-wallet">> => ar_wallet:new() },
+							#{
+								<<"commitment-device">> => <<"httpsig@1.0">>,
+								<<"committed">> => [<<"b">>, <<"a">>]
+							}
+						)
+				},
+				#{}
+			)
 		),
 		% Of a message from two signers that commit different keys, only the
 		% owner's key is given.

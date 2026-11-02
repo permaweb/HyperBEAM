@@ -261,8 +261,8 @@ id_device(#{ <<"commitments">> := Commitments }, Opts) ->
 id_device(_, _) ->
     {ok, ?DEFAULT_ID_DEVICE}.
 
-%% @doc Return the committers of a message. A committer is listed once, however
-%% many commitments it made.
+%% @doc Return the committers of a message, in sorted order. A committer is
+%% listed once, however many commitments it made.
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
 -spec committers(
@@ -285,7 +285,7 @@ committers(#{ <<"commitments">> := Commitments }, _, NodeOpts) ->
             ),
             NodeOpts
         ),
-    {ok, hb_util:unique(Committers)};
+    {ok, lists:usort(Committers)};
 committers(_, _, _) ->
     {ok, []}.
 
@@ -1100,7 +1100,7 @@ remove(Base, #{ <<"items">> := Keys }, Opts) ->
         Opts
     ).
 
-%% @doc Get the public keys of a message.
+%% @doc Get the public keys of a message, in sorted order.
 keys(Msg) ->
 	keys(Msg, #{}).
 
@@ -1114,7 +1114,7 @@ keys(Msg, Opts) ->
         ok,
         lists:filter(
             fun(Key) -> not hb_private:is_private(Key) end,
-            hb_maps:keys(hb_message:uncommitted(Msg, Opts), Opts)
+            hb_util:to_sorted_keys(hb_message:uncommitted(Msg, Opts), Opts)
         )
     }.
 
@@ -1168,7 +1168,38 @@ is_private_mod_test() ->
 %%% Device functionality tests:
 
 keys_from_device_test() ->
-    ?assertEqual({ok, [<<"a">>]}, hb_ao:resolve(#{ <<"a">> => 1 }, keys, #{})).
+    ?assertEqual({ok, [<<"a">>]}, hb_ao:resolve(#{ <<"a">> => 1 }, keys, #{})),
+    % The keys of a wide message are in sorted order.
+    Keys =
+        lists:sort(
+            [<<"k", (integer_to_binary(N))/binary>> || N <- lists:seq(1, 40)]
+        ),
+    ?assertEqual({ok, Keys}, hb_ao:resolve(maps:from_keys(Keys, 1), keys, #{})).
+
+%% @doc The committers of a message are in sorted order.
+committers_order_test() ->
+    Committers =
+        [<<"committer-", (integer_to_binary(N))/binary>> || N <- lists:seq(1, 40)],
+    ?assertEqual(
+        {ok, lists:sort(Committers)},
+        hb_ao:resolve(
+            #{
+                <<"commitments">> =>
+                    maps:from_list(
+                        [
+                            {
+                                hb_util:human_id(hb_crypto:sha256(Committer)),
+                                #{ <<"committer">> => Committer }
+                            }
+                        ||
+                            Committer <- Committers
+                        ]
+                    )
+            },
+            committers,
+            #{}
+        )
+    ).
 
 private_keys_are_filtered_test() ->
     ?assertEqual(

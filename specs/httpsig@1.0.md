@@ -238,10 +238,9 @@ values are RFC 9651 Structured Fields. The serialisation MUST be exactly:
 - **SF-list:** members joined by `, ` (comma + single space). An *inner list*
   member is `(` + items joined by single spaces + `)` followed by its parameters.
 - **SF-dictionary:** members joined by `, ` (comma + single space). Each member
-  is `key` (for a boolean-true value) or `key=` + item-or-inner-list. **Member
-  order is the map's iteration order and is NOT defined by this spec** — see Open
-  questions; for `signature`/`signature-input` the two dictionaries MUST use the
-  **same** member order so names line up.
+  is `key` (for a boolean-true value) or `key=` + item-or-inner-list. The
+  members are in bytewise order of their names, so the `signature` and
+  `signature-input` dictionaries (§5.9) give their members in the same order.
 
 ### 5.2 The commitment message (the entry inside `commitments`)
 
@@ -454,7 +453,8 @@ type produced by the `signed` alias.
   SF-integer; atom → SF-string of its name; binary → SF-string with `%`, each
   byte outside printable ASCII and a leading `,` or `:` percent-encoded; list
   → SF-string of `,` followed by `:<element>` for each element; map →
-  SF-string of `:` followed by its `<key>:<value>` pairs joined by `", "`. A
+  SF-string of `:` followed by its `<key>:<value>` pairs, in bytewise order of
+  their keys, joined by `", "`. A
   key has `%`, `:`, `,` and each byte outside printable ASCII percent-encoded;
   an element or a value is its own encoding (for a binary, with those bytes
   percent-encoded), with those bytes percent-encoded again (`encode_param/1`
@@ -470,6 +470,10 @@ When encoding (`to`), each commitment becomes one member of the `signature` and
 - **Member name.** `comm-<n>`, where `<n>` is the lowercase base64url of
   `SHA-256(signature-bytes)` (so HMAC and signed members get distinct, stable
   names). The two dictionaries MUST use this same name for the same commitment.
+- **Member order.** The members of both dictionaries are in bytewise order of
+  their names (§5.1), so the `signature` and `signature-input` values of a
+  message with several commitments do not depend on the order in which its
+  commitments are read.
 - **`signature` member value.** the SF-binary (standard base64, §5.1) of the raw
   signature bytes (the base64url `signature` field decoded back to bytes).
 - **`signature-input` member value.** an SF inner-list of the commitment's
@@ -543,8 +547,8 @@ When more than one body part exists (or a single nested part), the body is
 - Each part is preceded by `--<boundary>` then CRLF, has at least a
   `content-disposition` header (`inline` for the body part, otherwise
   `form-data;name="<part-name>"`), then, if the part has a body, a blank line
-  and the body's bytes. Header lines within a part use CRLF separators and `: `
-  between name and value.
+  and the body's bytes. The header lines within a part are in bytewise order of
+  their names, and use CRLF separators and `: ` between name and value.
 - The **boundary** is `base64url(SHA-256(<the encoded parts, with their headers,
   joined by CRLF>))` — deterministic and content-derived, so the encoding is
   reproducible without knowing the message ID in advance.
@@ -698,7 +702,10 @@ An implementation MUST exhibit all of the following, each observable through
     `content-type`, `ao-body-key`) are absent from the decoded TABM.
 14. **Multipart determinism.** The multipart boundary is
     `base64url(SHA-256(parts joined by CRLF))`; the same message always yields the
-    same boundary and the same encoded bytes.
+    same boundary and the same encoded bytes. The parts of the body and the
+    header lines of each part are in bytewise order of their names, and the
+    members of `signature` and `signature-input` are in bytewise order of their
+    names (§5.9).
 15. **bundle / tag.** A `bundle`-requested commitment carries `bundle = "true"`,
     is computed over the inlined message, and emits `;bundle="true"`; a signed
     commitment of a message with a private `hashpath` emits `;tag="<hashpath>"`
@@ -717,19 +724,6 @@ An implementation MUST exhibit all of the following, each observable through
 
 ## Open questions
 
-- **SF-dictionary member order is unpinned.** `signature` and `signature-input`
-  members are emitted in the underlying map's iteration order, and the
-  `@signature-params` covered-component order is the covered-key list order while
-  the *parameter* order is byte-sorted. For a single commitment over a fixed
-  covered list this is fully determined, but the **relative order of multiple
-  commitments** in the `signature`/`signature-input` dictionaries is not specified
-  here. It does not affect any ID (each commitment's ID is independent and
-  `message@1.0` accumulates them order-independently) or verification (members are
-  paired by name), but two implementations MAY emit the dictionary members in
-  different orders and thus produce different `signature` header **bytes** for a
-  multi-commitment message. If byte-identical multi-commitment headers are
-  required, the member order MUST be pinned (e.g. ascending by member name) — flag
-  for validation.
 - **RSA-PSS salt length / MGF.** The salt length is taken to be the digest length
   (SHA-512) with MGF1-SHA-512 per the platform default; this is not independently
   restated by RFC 9421 and SHOULD be confirmed against a cross-implementation test
