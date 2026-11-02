@@ -248,8 +248,8 @@ index_blocks(Blocks, Opts) ->
     Indexed =
         hb_pmap:parallel_map(
             Transactions,
-            fun({Height, Index, TXID, Header}) ->
-                index_transaction(Height, Index, TXID, Header, Opts)
+            fun({Height, Index, Timestamp, TXID, Header}) ->
+                index_transaction(Height, Index, Timestamp, TXID, Header, Opts)
             end,
             max(
                 1,
@@ -271,6 +271,7 @@ index_blocks(Blocks, Opts) ->
 %% @doc Enumerate one block's transactions with their lossless ordinates, and
 %% the header of each where the block carries them (`tx-headers').
 block_transactions(Height, Block, Opts) ->
+    Timestamp = block_timestamp(Block, Opts),
     TXIDs =
         [
             hb_util:human_id(TXID)
@@ -279,7 +280,7 @@ block_transactions(Height, Block, Opts) ->
         ],
     Headers = hb_maps:get(<<"tx-headers">>, Block, [none || _ <- TXIDs], Opts),
     [
-        {Height, Index, TXID, Header}
+        {Height, Index, Timestamp, TXID, Header}
     ||
         {Index, TXID, Header} <-
             lists:zip3(lists:seq(0, length(TXIDs) - 1), TXIDs, Headers)
@@ -305,7 +306,8 @@ initialize_process(
         Opts
     ) ->
     maybe
-        {ok, Height, Index, SpawnOrdinate} ?= spawn_ordinate(ProcessID, Opts),
+        {ok, Height, Index, Timestamp, SpawnOrdinate} ?=
+            spawn_ordinate(ProcessID, Opts),
         ok ?= require_covered_spawn(ProcessID, Height, From, To),
         {ok, Header, #tx{}} ?= fetch_header(ProcessID, Opts),
         {ok, _} ?=
@@ -316,6 +318,7 @@ initialize_process(
                 0,
                 Height,
                 Index,
+                Timestamp,
                 ProcessID,
                 Opts
             ),
@@ -434,18 +437,19 @@ write_process_assignments(
         Slot,
         Opts
     ) ->
-    case dev_arweave_scheduler_cache:read_target(ProcessID, Ordinate, Opts) of
-        {ok, TXID, _Header} ->
-            case write_assignment(ProcessID, Slot, Height, Index, TXID, Opts) of
-                ok ->
-                    write_process_assignments(
-                        ProcessID,
-                        Rest,
-                        Slot + 1,
-                        Opts
-                    );
-                Error -> Error
-            end;
+    maybe
+        {ok, TXID, IndexedTimestamp, _Header} ?=
+            dev_arweave_scheduler_cache:read_target_timestamp(
+                ProcessID, Ordinate, Opts
+            ),
+        {ok, Timestamp} ?=
+            target_timestamp(Height, IndexedTimestamp, Opts),
+        ok ?=
+            write_assignment(
+                ProcessID, Slot, Height, Index, Timestamp, TXID, Opts
+            ),
+        write_process_assignments(ProcessID, Rest, Slot + 1, Opts)
+    else
         not_found ->
             {error,
                 #{
@@ -453,10 +457,32 @@ write_process_assignments(
                     <<"reason">> => <<"Indexed scheduler target is missing.">>,
                     <<"ordinate">> => Ordinate
                 }
-            }
+            };
+        Error -> Error
     end.
 
-write_assignment(ProcessID, Slot, Height, Index, TXID, Opts) ->
+%% @doc Read an indexed timestamp or recover it from the cached block.
+target_timestamp(Height, undefined, Opts) ->
+    case dev_arweave_scheduler_cache:read_block(Height, Opts) of
+        {ok, Block} -> {ok, block_timestamp(Block, Opts)};
+        not_found ->
+            {error,
+                #{
+                    <<"status">> => 500,
+                    <<"reason">> => <<"Indexed scheduler block is missing.">>,
+                    <<"block-height">> => Height
+                }
+            };
+        Error -> Error
+    end;
+target_timestamp(_Height, Timestamp, _Opts) ->
+    {ok, Timestamp}.
+
+%% @doc Return the integer timestamp from a block message.
+block_timestamp(Block, Opts) ->
+    hb_util:int(hb_maps:get(<<"timestamp">>, Block, not_found, Opts)).
+
+write_assignment(ProcessID, Slot, Height, Index, Timestamp, TXID, Opts) ->
     Body = {link, <<"ao:", TXID/binary>>, #{}},
     Assignment =
         #{
@@ -468,19 +494,21 @@ write_assignment(ProcessID, Slot, Height, Index, TXID, Opts) ->
             <<"slot">> => Slot,
             <<"block-height">> => Height,
             <<"block-index">> => Index,
+            <<"block-timestamp">> => Timestamp,
+            <<"timestamp">> => Timestamp * 1000,
             <<"body">> => Body,
             <<"type">> => <<"Assignment">>
         },
     dev_arweave_scheduler_cache:write_assignment(Assignment, Opts).
 
 %% @doc Fetch and route one transaction at its canonical block ordinate.
-index_transaction(Height, Index, TXID, Opts) ->
-    index_transaction(Height, Index, TXID, none, Opts).
+index_transaction(Height, Index, Timestamp, TXID, Opts) ->
+    index_transaction(Height, Index, Timestamp, TXID, none, Opts).
 
 %% @doc Route one transaction at its canonical block ordinate, from the header
 %% that its block carries, validated and cached as a fetched one is, or from a
 %% fetched header.
-index_transaction(Height, Index, TXID, Header, Opts) ->
+index_transaction(Height, Index, Timestamp, TXID, Header, Opts) ->
     HeaderRes =
         case Header of
             none -> fetch_header(TXID, Opts);
@@ -491,7 +519,7 @@ index_transaction(Height, Index, TXID, Header, Opts) ->
             Ordinate = ordinate(Height, Index),
             {ok,
                 [
-                    {Address, Ordinate, TXID}
+                    {Address, Ordinate, Timestamp, TXID}
                 ||
                     Address <- transaction_targets(TX)
                 ]
@@ -841,7 +869,8 @@ spawn_ordinate(ProcessID, Opts) ->
         ok ?= validate_spawn_block_height(Height, Block, Opts),
         {ok, Index} ?=
             find_index(TXID, hb_maps:get(<<"txs">>, Block, [], Opts), 0),
-        {ok, Height, Index, ordinate(Height, Index)}
+        Timestamp = block_timestamp(Block, Opts),
+        {ok, Height, Index, Timestamp, ordinate(Height, Index)}
     end.
 
 validate_spawn_block_height(Height, Block, Opts) ->
@@ -1297,7 +1326,7 @@ unparseable_types_header_indexing_test_() ->
                     fun(TXID) ->
                         ?assertMatch(
                             {ok, [_ | _]},
-                            index_transaction(1, 0, TXID, Opts)
+                            index_transaction(1, 0, 1000, TXID, Opts)
                         )
                     end,
                     [
@@ -1377,6 +1406,9 @@ sparse_materialization_test() ->
     TXIDB = hb_util:human_id(hb_message:id(HeaderB, signed, Opts)),
     {ok, _} = dev_arweave_scheduler_cache:write_header(HeaderA, Opts),
     {ok, _} = dev_arweave_scheduler_cache:write_header(HeaderB, Opts),
+    {ok, _} = dev_arweave_scheduler_cache:write_block(
+        101, #{ <<"timestamp">> => 101000 }, Opts
+    ),
     ok =
         dev_arweave_scheduler_cache:write_target(
             ProcessID,
@@ -1388,6 +1420,7 @@ sparse_materialization_test() ->
         dev_arweave_scheduler_cache:write_target(
             ProcessID,
             <<"100-0">>,
+            100000,
             TXIDA,
             Opts
         ),
@@ -1395,6 +1428,7 @@ sparse_materialization_test() ->
         dev_arweave_scheduler_cache:write_target(
             ProcessID,
             <<"100-10">>,
+            100000,
             TXIDB,
             Opts
         ),
@@ -1402,6 +1436,7 @@ sparse_materialization_test() ->
         dev_arweave_scheduler_cache:write_target(
             ProcessID,
             <<"100-2">>,
+            100000,
             TXIDA,
             Opts
         ),
@@ -1425,10 +1460,16 @@ sparse_materialization_test() ->
         dev_arweave_scheduler_cache:read_assignment(ProcessID, 3, Opts),
     ?assertEqual(100, hb_maps:get(<<"block-height">>, Assignment1, Opts)),
     ?assertEqual(2, hb_maps:get(<<"block-index">>, Assignment1, Opts)),
+    ?assertEqual(100000, hb_maps:get(<<"block-timestamp">>, Assignment1, Opts)),
+    ?assertEqual(100000000, hb_maps:get(<<"timestamp">>, Assignment1, Opts)),
     ?assertEqual(100, hb_maps:get(<<"block-height">>, Assignment2, Opts)),
     ?assertEqual(10, hb_maps:get(<<"block-index">>, Assignment2, Opts)),
+    ?assertEqual(100000, hb_maps:get(<<"block-timestamp">>, Assignment2, Opts)),
+    ?assertEqual(100000000, hb_maps:get(<<"timestamp">>, Assignment2, Opts)),
     ?assertEqual(101, hb_maps:get(<<"block-height">>, Assignment3, Opts)),
     ?assertEqual(0, hb_maps:get(<<"block-index">>, Assignment3, Opts)),
+    ?assertEqual(101000, hb_maps:get(<<"block-timestamp">>, Assignment3, Opts)),
+    ?assertEqual(101000000, hb_maps:get(<<"timestamp">>, Assignment3, Opts)),
     AssignmentIDs =
         [
             hb_message:id(Assignment1, signed, Opts),
@@ -1463,5 +1504,30 @@ sparse_materialization_test() ->
             Global#{ <<"to">> => 100 },
             Opts
         )
+    ),
+    ok = hb_store:stop(Store).
+
+header_timestamp_indexing_test() ->
+    Store = hb_test_utils:test_store(hb_store_volatile, <<"header-timestamp">>),
+    ok = hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store] },
+    Target = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    TX =
+        ar_tx:sign(
+            #tx{ format = 2, target = hb_util:native_id(Target) },
+            ar_wallet:new()
+        ),
+    TXID = hb_util:human_id(TX#tx.id),
+    Header = hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
+    Block = #{ <<"txs">> => [TXID], <<"tx-headers">> => [Header],
+        <<"timestamp">> => 123456 },
+    ?assertEqual(
+        [{100, 0, 123456, TXID, Header}],
+        block_transactions(100, Block, Opts)
+    ),
+    ok = index_blocks([{100, Block}], Opts),
+    ?assertMatch(
+        {ok, TXID, 123456, _},
+        dev_arweave_scheduler_cache:read_target_timestamp(Target, <<"100-0">>, Opts)
     ),
     ok = hb_store:stop(Store).
