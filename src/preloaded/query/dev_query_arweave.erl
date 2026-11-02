@@ -287,15 +287,16 @@ query(Msg, <<"owner">>, _Args, Opts) ->
                     {ok, Commitment} = hb_maps:find(CommID, Commitments, Opts),
                     {ok, Committer} =
                         hb_maps:find(<<"committer">>, Commitment, Opts),
+                    Key =
+                        hb_maps:get(
+                            <<"public-key">>,
+                            Commitment,
+                            hb_maps:get(<<"owner">>, Commitment, null, Opts),
+                            Opts
+                        ),
                     {ok, #{
-                        <<"address">> => hb_util:committer_address(Committer),
-                        <<"key">> =>
-                            hb_maps:get(
-                                <<"public-key">>,
-                                Commitment,
-                                hb_maps:get(<<"owner">>, Commitment, null, Opts),
-                                Opts
-                            )
+                        <<"address">> => owner_address(Committer, Key),
+                        <<"key">> => Key
                     }}
             end
     end;
@@ -1745,6 +1746,16 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
 %% the URIs of their committers.
 owner_committers(null) -> null;
 owner_committers(Owners) -> [hb_committer:uri(Owner) || Owner <- Owners].
+
+%% @doc The address of an owner as Arweave gateways give it: the SHA-256 of its
+%% key, for a key of any type. An Arweave key's committer is that address.
+owner_address(Committer, Key) ->
+    case hb_committer:address(Committer) of
+        {ok, Address} -> Address;
+        error when is_binary(Key) ->
+            hb_util:human_id(crypto:hash(sha256, hb_util:decode(Key)));
+        error -> <<>>
+    end.
 
 %% @doc Return the IDs of the messages whose commitments carry a field:
 %% their committer, or their target.
