@@ -136,7 +136,8 @@
 %% and main tree, and return the store instance: the location, the main
 %% tree and the layout. Fetched chunks are retained by the chunk
 %% store alone.
-start(StoreOpts = #{ <<"root">> := Root }, _Req, _Opts) ->
+start(Store = #{ <<"root">> := Root }, _Req, NodeOpts) ->
+    StoreOpts = maps:merge(NodeOpts, Store),
     maybe
         {ok, Start, Size} ?= read_location(Root, StoreOpts),
         {ok, Meta} ?= read_meta(Start, Size, StoreOpts),
@@ -156,7 +157,8 @@ scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_) -> scope().
 
 %% @doc A path's value, or the values under a key.
-read(StoreOpts, #{ <<"read">> := Key }, _NodeOpts) ->
+read(Store, #{ <<"read">> := Key }, NodeOpts) ->
+    StoreOpts = maps:merge(NodeOpts, Store),
     case hb_store:find(StoreOpts) of
         Meta = #{ <<"mode">> := default } ->
             path_read(hb_path:to_binary(Key), Meta, StoreOpts);
@@ -184,7 +186,8 @@ set_read(StoreOpts, Bits, Meta) ->
 
 %% @doc A group's children, or the values under a key, bounded by the
 %% request.
-list(StoreOpts, Req = #{ <<"list">> := Key }, _NodeOpts) ->
+list(Store, Req = #{ <<"list">> := Key }, NodeOpts) ->
+    StoreOpts = maps:merge(NodeOpts, Store),
     case hb_store:find(StoreOpts) of
         Meta = #{ <<"mode">> := default } ->
             path_list(hb_path:to_binary(Key), Req, Meta, StoreOpts);
