@@ -126,7 +126,7 @@ denormalize_message(Message, Opts) ->
             [PrimarySigner|_] ->
                 Commitment = signer_commitment(PrimarySigner, Message, Opts),
                 Message#{
-                    <<"owner">> => hb_util:committer_address(PrimarySigner),
+                    <<"owner">> => raw_address(PrimarySigner),
                     <<"signature">> =>
                         hb_maps:get(<<"signature">>, Commitment, <<>>, Opts)
                 }
@@ -134,6 +134,18 @@ denormalize_message(Message, Opts) ->
     NormOwnerMsg#{
         <<"id">> => hb_message:id(Message, all, Opts)
     }.
+
+%% @doc The address of a committer that AOS reads. An Arweave key gives its
+%% Arweave address. A `did:pkh:' committer gives the address at the end of its
+%% account: `0x' and the checksummed hex of an Ethereum key, or the base58 key
+%% of a Solana key.
+raw_address(Committer) ->
+    case hb_util:committer_address(Committer) of
+        <<"did:pkh:", Account/binary>> ->
+            lists:last(binary:split(Account, <<":">>, [global]));
+        Address ->
+            Address
+    end.
 
 %% @doc The commitment of a signer that a process sees: of two or more, the one
 %% with the lowest ID, so that every node gives the same.
@@ -195,7 +207,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                 case lists:member(owner_as_address, Features) of
                     true -> 
                         {
-                            hb_util:committer_address(Signer),
+                            raw_address(Signer),
                             CommitmentSignature,
                             CommitmentKey
                         };
@@ -791,6 +803,38 @@ basic_aos_call_test_() ->
 			to(#{}, #{ <<"message">> => OneSigner }, #{}),
 		?assertEqual([<<"A">>], [Name || #{ <<"name">> := Name } <- OneTags])
 	end}.
+
+%% @doc AOS reads the address of the key that signed a message, in the form
+%% that the key's type gives it, for every type of key.
+signer_address_of_each_key_type_test() ->
+    test_init(),
+    lists:foreach(
+        fun(File) ->
+            {ok, Bin} = file:read_file(<<"test/arbundles.js/", File/binary>>),
+            TX = ar_bundles:deserialize(Bin),
+            Address =
+                hb_util:human_id(
+                    ar_wallet:to_address(TX#tx.owner, TX#tx.signature_type)
+                ),
+            Msg =
+                hb_message:convert(
+                    TX,
+                    <<"structured@1.0">>,
+                    <<"ans104@1.0">>,
+                    #{}
+                ),
+            ?assertMatch(
+                {ok, #{ <<"Owner">> := Address, <<"From">> := Address }},
+                to(#{}, #{ <<"message">> => Msg }, #{})
+            )
+        end,
+        [
+            <<"ans104-item-ed25519.bin">>,
+            <<"ans104-item-ethereum.bin">>,
+            <<"ans104-item-typed-ethereum.bin">>,
+            <<"ans104-item-solana.bin">>
+        ]
+    ).
 
 aos_stack_benchmark_test_() ->
     {timeout, 20, fun() ->
