@@ -1617,6 +1617,60 @@ transactions_unsigned_owner_test_parallel() ->
         )
     ).
 
+%% @doc The owner of an item signed by a key of any type has the address that
+%% Arweave gateways give: the SHA-256 of its key.
+transactions_owner_of_each_key_type_test_parallel() ->
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"store">> => [hb_test_utils:test_store(hb_store_volatile)]
+    },
+    Node = hb_http_server:start_node(Opts),
+    Expected =
+        maps:from_list(
+            [
+                begin
+                    {ok, Bin} =
+                        file:read_file(<<"test/arbundles.js/", File/binary>>),
+                    TX = ar_bundles:deserialize(Bin),
+                    Msg =
+                        hb_message:convert(
+                            TX,
+                            <<"structured@1.0">>,
+                            <<"ans104@1.0">>,
+                            Opts
+                        ),
+                    {ok, _} = hb_cache:write(Msg, Opts),
+                    {
+                        hb_message:id(Msg, all, Opts),
+                        #{
+                            <<"address">> =>
+                                hb_util:human_id(crypto:hash(sha256, TX#tx.owner)),
+                            <<"key">> => hb_util:encode(TX#tx.owner)
+                        }
+                    }
+                end
+            ||
+                File <-
+                    [
+                        <<"ans104-item-ed25519.bin">>,
+                        <<"ans104-item-ethereum.bin">>,
+                        <<"ans104-item-typed-ethereum.bin">>,
+                        <<"ans104-item-solana.bin">>
+                    ]
+            ]
+        ),
+    #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := Edges }}} =
+        post_graphql(Node,
+            <<"query($ids: [ID!]) { transactions(ids: $ids) {",
+                " edges { node { id owner { address key } } } } }">>,
+            #{ <<"ids">> => maps:keys(Expected) }, #{}, Opts),
+    ?assertEqual(
+        Expected,
+        maps:from_list(
+            [{ID, Owner} || #{ <<"node">> := #{ <<"id">> := ID, <<"owner">> := Owner } } <- Edges]
+        )
+    ).
+
 %% @doc Preserve original tags, or exclude native fields from normalized keys.
 transaction_tags_exclude_fields_test_parallel() ->
     Wallet = ar_wallet:new(),
