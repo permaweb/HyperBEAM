@@ -12,6 +12,9 @@
 %%% descending order; `~copycat@1.0/arweave&mode=block-index' also resolves
 %%% tip-relative heights. A block request with `include-block-index=true'
 %%% records its compact entry alongside the fetched or cached header.
+%%% `include-tx-headers=true' reads a block by height or hash from `/block2',
+%%% which gives the headers of its transactions, in `tx-headers', when the
+%%% block is within 50 blocks of the serving node's tip.
 -module(dev_arweave).
 -implements(<<"arweave@2.9">>).
 -device_libraries([lib_arweave_common]).
@@ -970,7 +973,9 @@ block(Base, RawRequest, Opts) when is_map(Base) ->
                 true,
                 Opts
             )
-        ) },
+        ),
+        <<"include-tx-headers">> =>
+            hb_util:bool(find_key(<<"include-tx-headers">>, Base, RawRequest, Opts)) },
     Block =
         hb_maps:get_first(
             [
@@ -1006,6 +1011,19 @@ block(Base, RawRequest, Opts) when is_map(Base) ->
         _ -> ok
     end,
     Result;
+block({height, Height}, Req = #{ <<"include-tx-headers">> := true }, Opts) ->
+    % `ar_block:binary_to_json_struct/1' reads blocks from the 2.9 fork on.
+    case Height >= ar_fork:height_2_9() andalso not only_if_cached(Req, Opts) of
+        true ->
+            block2(<<"height/", (hb_util:bin(Height))/binary>>, {height, Height}, Req, Opts);
+        false ->
+            block({height, Height}, Req#{ <<"include-tx-headers">> := false }, Opts)
+    end;
+block({id, ID}, Req = #{ <<"include-tx-headers">> := true }, Opts) ->
+    case only_if_cached(Req, Opts) of
+        false -> block2(<<"hash/", ID/binary>>, {id, ID}, Req, Opts);
+        true -> block({id, ID}, Req#{ <<"include-tx-headers">> := false }, Opts)
+    end;
 block({id, ID}, Req, Opts) ->
     case read_cached_block(ID, Req, Opts) of
         {ok, Block} ->
@@ -1052,6 +1070,21 @@ block({height, Height}, Req, Opts) ->
                 Req,
                 Opts
             )
+    end.
+
+%% @doc Read a block from `/block2', asking for every transaction: the body
+%% has a set bit for each of the 1,000 transactions that a block can hold. A
+%% block that `/block2' does not give is read as a block without headers.
+block2(Path, Reference, Req, Opts) ->
+    Extra =
+        case Reference of
+            {height, Height} -> #{ <<"route-by">> => Height };
+            {id, _} -> #{}
+        end,
+    case request(<<"GET">>, <<"/block2/", Path/binary>>,
+            Extra#{ <<"body">> => binary:copy(<<255>>, 125) }, [], Req, Opts) of
+        {ok, Header} -> {ok, Header};
+        _ -> block(Reference, Req#{ <<"include-tx-headers">> := false }, Opts)
     end.
 
 %% @doc List the block heights available in the block cache.
@@ -1407,6 +1440,46 @@ to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, Response}, LogExtra, _R
     {ok, hb_maps:get(<<"body">>, Response, <<>>, Opts)};
 to_message(Path = <<"/block/", Ref/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Req, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
+    block_message(Path, Ref, Body, Req, Opts);
+to_message(Path = <<"/block2/", Ref/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Req, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    maybe
+        {ok, Struct, TXs} ?= ar_block:binary_to_json_struct(Body),
+        {ok, Block} ?= block_message(Path, Ref, hb_json:encode(Struct), Req, Opts),
+        with_tx_headers(Block, TXs, Opts)
+    end;
+to_message(Path = <<"/price/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    {ok, hb_util:int(Body)};
+to_message(Path = <<"/tx_anchor">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    {ok, hb_util:decode(Body)};
+to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    % All other responses that are `OK' status are converted from JSON to an
+    % AO-Core message.
+    ?event(
+        {arweave_json_response,
+            {path, Path},
+            {body_size, byte_size(Body)}
+        }
+    ),
+    {
+        ok,
+        hb_message:convert(
+            Body,
+            <<"structured@1.0">>,
+            #{
+                <<"device">> => <<"json@1.0">>,
+                <<"bundle">> => true
+            },
+            Opts
+        )
+    }.
+
+%% @doc Convert a block in Arweave's JSON form into its message, check that it
+%% is the block that the path asks for, and cache it.
+block_message(Path, Ref, Body, Req, Opts) ->
     Decoded =
         hb_message:convert(
             Body,
@@ -1438,35 +1511,35 @@ to_message(Path = <<"/block/", Ref/binary>>, <<"GET">>, {ok, #{ <<"body">> := Bo
             }
         ),
         {ok, Block}
-    end;
-to_message(Path = <<"/price/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
-    event_request(Path, <<"GET">>, 200, LogExtra),
-    {ok, hb_util:int(Body)};
-to_message(Path = <<"/tx_anchor">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
-    event_request(Path, <<"GET">>, 200, LogExtra),
-    {ok, hb_util:decode(Body)};
-to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, Opts) ->
-    event_request(Path, <<"GET">>, 200, LogExtra),
-    % All other responses that are `OK' status are converted from JSON to an
-    % AO-Core message.
-    ?event(
-        {arweave_json_response,
-            {path, Path},
-            {body_size, byte_size(Body)}
-        }
-    ),
-    {
-        ok,
-        hb_message:convert(
-            Body,
-            <<"structured@1.0">>,
-            #{
-                <<"device">> => <<"json@1.0">>,
-                <<"bundle">> => true
-            },
-            Opts
-        )
-    }.
+    end.
+
+%% @doc Add the headers of a block's transactions to it as `tx-headers', each
+%% verified as `tx/3' verifies a header, when `/block2' gave all of them.
+with_tx_headers(Block, TXs, Opts) ->
+    case lists:all(fun(TX) -> is_record(TX, tx) end, TXs) of
+        false -> {ok, Block};
+        true ->
+            maybe
+                {ok, Headers} ?= tx_header_messages(TXs, [], Opts),
+                {ok, Block#{ <<"tx-headers">> => Headers }}
+            end
+    end.
+
+%% @doc Verify each transaction header and convert it to a message, in order.
+tx_header_messages([], Headers, _Opts) ->
+    {ok, lists:reverse(Headers)};
+tx_header_messages([TX | TXs], Headers, Opts) ->
+    % A header carries the data of a format 1 transaction only, as a read with
+    % `exclude-data' gives it.
+    Header =
+        case TX#tx.format of
+            1 -> TX;
+            2 -> TX#tx{ data = ?DEFAULT_DATA }
+        end,
+    maybe
+        {ok, Msg} ?= verified_tx_message(hb_util:encode(TX#tx.id), Header, Opts),
+        tx_header_messages(TXs, [Msg | Headers], Opts)
+    end.
 
 %% @doc Generic handler for parsing a TX response from the Arweave node,
 %% including optionally adding the data payload if appropriate.
@@ -1603,6 +1676,79 @@ block_index_reindex_test() ->
 include_proofs_test_() ->
     [{timeout, 60, fun() -> include_proofs(Height) end}
         || Height <- [0, 1000000, 2003806]].
+
+%% @doc A block within 50 of the tip, read with `include-tx-headers', is the
+%% block that `/block' gives, with a verified header for each transaction in
+%% `tx-headers' that is the header `tx' reads. An older block, and one before
+%% the 2.9 fork, are read without headers.
+include_tx_headers_test_() ->
+    {timeout, 120, fun include_tx_headers/0}.
+
+include_tx_headers() ->
+    Stores = [hb_test_utils:test_store(hb_store_volatile)
+        || _ <- lists:seq(1, 2)],
+    lists:foreach(fun hb_store:start/1, Stores),
+    [Ambient, Blocks] = Stores,
+    Opts = #{
+        <<"store">> => [Ambient],
+        <<"arweave-block-store">> => [Blocks],
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    Read = fun(Req) ->
+        {ok, Msg} = hb_ao:resolve(Req, Opts),
+        hb_private:reset(hb_cache:ensure_all_loaded(Msg, Opts))
+    end,
+    Block = fun(Req) ->
+        Read(Req#{ <<"path">> => <<"~arweave@2.9/block">> })
+    end,
+    try
+        Tip = hb_maps:get(<<"height">>, Block(#{ <<"block">> => <<"current">> }), Opts),
+        % The nearest block to the tip, 5 or more below it, that has
+        % transactions.
+        WithTXs =
+            fun WithTXs(H) ->
+                B = Block(#{ <<"block">> => H }),
+                case hb_maps:get(<<"txs">>, B, [], Opts) of
+                    [] -> WithTXs(H - 1);
+                    _ -> {H, B}
+                end
+            end,
+        {Height, Plain} = WithTXs(Tip - 5),
+        WithHeaders =
+            Block(#{ <<"block">> => Height, <<"include-tx-headers">> => true }),
+        % The unsigned commitment of a block covers its `tx-headers' too.
+        ?assertEqual(
+            hb_message:uncommitted(Plain, Opts),
+            hb_message:uncommitted(
+                hb_maps:without([<<"tx-headers">>], WithHeaders, Opts), Opts)
+        ),
+        Headers = hb_maps:get(<<"tx-headers">>, WithHeaders, Opts),
+        TXIDs = hb_maps:get(<<"txs">>, Plain, Opts),
+        ?assertEqual(TXIDs, [hb_message:id(H, signed, Opts) || H <- Headers]),
+        ?assert(lists:all(fun(H) -> hb_message:verify(H, all, Opts) end, Headers)),
+        ?assertEqual(
+            Read(
+                #{
+                    <<"path">> => <<"~arweave@2.9/tx">>,
+                    <<"tx">> => hd(TXIDs),
+                    <<"exclude-data">> => true
+                }
+            ),
+            hd(Headers)
+        ),
+        lists:foreach(
+            fun(Old) ->
+                OldPlain = Block(#{ <<"block">> => Old }),
+                OldWithHeaders =
+                    Block(#{ <<"block">> => Old, <<"include-tx-headers">> => true }),
+                ?assertNot(hb_maps:is_key(<<"tx-headers">>, OldWithHeaders, Opts)),
+                ?assertEqual(OldPlain, OldWithHeaders)
+            end,
+            [2003806, 1000000]
+        )
+    after
+        lists:foreach(fun hb_store:stop/1, Stores)
+    end.
 
 %% @doc Exercise both proof representations across historical block formats.
 include_proofs(Height) ->
