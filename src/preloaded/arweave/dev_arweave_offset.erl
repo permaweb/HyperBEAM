@@ -180,7 +180,7 @@ load_item_from_header(StartOffset, HeaderSize, HeaderTX, DataSize, Opts) ->
 %% @doc Read the chunk containing the given offset and trim it to begin at the
 %% first byte of the requested item.
 chunk_from_offset(StartOffset, Opts) ->
-    case dev_arweave:get_chunk(StartOffset + 1, Opts) of
+    case dev_arweave_data:get_chunk(StartOffset + 1, Opts) of
         {ok, ChunkJSON} ->
             AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, ChunkJSON)),
             Chunk = hb_util:decode(maps:get(<<"chunk">>, ChunkJSON)),
