@@ -523,7 +523,7 @@ trim_ws_end(Value, N) ->
 -spec dictionary(#{binary() => sh_item() | sh_inner_list()} | sh_dictionary()) ->
     iolist().
 dictionary(Map) when is_map(Map) ->
-    dictionary(maps:to_list(Map));
+    dictionary(lists:keysort(1, maps:to_list(Map)));
 dictionary(KVList) when is_list(KVList) ->
     lists:join(
         <<", ">>,

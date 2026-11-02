@@ -969,6 +969,17 @@ canonical_id_test() ->
     ?assertEqual(
         <<"5ic-bzZ6c737RWtn0fR_4YxkbWtUmJVXTgrXlwX2f_c">>,
         hb_util:human_id(hb_crypto:sha256(maps:get(<<"body">>, HTTP)))
+    ),
+    % The headers of a body part of more than 32 fields are in sorted order.
+    Bundled =
+        hb_message:convert(
+            #{ <<"a">> => Wide },
+            #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
+            #{}
+        ),
+    ?assertEqual(
+        <<"VDiBw90CKudoJLuiuHeNOjMwpiTmdrRI5afYbPw4R_g">>,
+        hb_util:human_id(hb_crypto:sha256(maps:get(<<"body">>, Bundled)))
     ).
 
 committed_id_test() ->

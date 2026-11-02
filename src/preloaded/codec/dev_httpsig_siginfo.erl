@@ -152,7 +152,8 @@ param_value(Value) when is_integer(Value) -> Value;
 param_value(Value) -> encode_param(Value).
 
 %% @doc Lists start with a comma and a colon per element. Maps start with a
-%% colon and contain comma-separated key:value pairs. Nested values are escaped.
+%% colon and contain comma-separated key:value pairs, in the sorted order of
+%% their keys. Nested values are escaped.
 encode_param(Value) ->
     encode_param(Value, "%").
 encode_param(List, _Delimiters) when is_list(List) ->
@@ -168,7 +169,7 @@ encode_param(Map, _Delimiters) when is_map(Map) ->
             (escape_param(encode_param(Value, "%:,")))/binary
         >>
     ||
-        {Key, Value} <- maps:to_list(Map)
+        {Key, Value} <- hb_util:to_sorted_list(Map)
     ])))/binary>>;
 encode_param(Value, Delimiters) ->
     case escape_param(hb_util:bin(Value), Delimiters) of
@@ -663,4 +664,19 @@ original_tag_names_test() ->
         },
     Wire = encode_param(Tags),
     ?assertNotEqual(nomatch, binary:match(Wire, <<"Action">>)),
-    ?assertEqual(Tags, decode_param(Wire)).
+    ?assertEqual(Tags, decode_param(Wire)),
+    % The tags of an item with more than 32 tags are encoded in the sorted
+    % order of their numbers.
+    Numbers = lists:sort([integer_to_binary(N) || N <- lists:seq(1, 40)]),
+    Action = Tag(<<"Action">>, <<"Transfer">>),
+    Members =
+        [
+            Member
+        ||
+            N <- Numbers,
+            <<":", Member/binary>> <- [encode_param(#{ N => Action })]
+        ],
+    ?assertEqual(
+        hb_util:bin([<<":">>, lists:join(<<", ">>, Members)]),
+        encode_param(maps:from_keys(Numbers, Action))
+    ).

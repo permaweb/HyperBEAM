@@ -963,7 +963,8 @@ encode_http_msg(Msg, Opts) ->
 %% @doc Encode a HTTP message into a binary. The input *must* be a raw map of 
 %% binary keys and values.
 encode_http_flat_msg(Httpsig, Opts) ->
-    % Serialize the headers, to be included in the part of the multipart response
+    % Serialize the headers, in the sorted order of their names, to be included
+    % in the part of the multipart response
     HeaderList =
         lists:foldl(
             fun ({HeaderName, RawHeaderVal}, Acc) ->
@@ -972,7 +973,10 @@ encode_http_flat_msg(Httpsig, Opts) ->
                 [<<HeaderName/binary, ": ", HVal/binary>> | Acc]
             end,
             [],
-            hb_maps:to_list(hb_maps:without([<<"body">>, <<"priv">>], Httpsig, Opts), Opts)
+            hb_util:to_sorted_list(
+                hb_maps:without([<<"body">>, <<"priv">>], Httpsig, Opts),
+                Opts
+            )
         ),
     EncodedHeaders = iolist_to_binary(lists:join(?CRLF, lists:reverse(HeaderList))),
     case hb_maps:find(<<"body">>, Httpsig, Opts) of
