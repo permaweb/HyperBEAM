@@ -8,14 +8,22 @@
 
 opts() ->
     hb:init(),
-    {ok, Config} = hb_opts:load("config.json", #{}),
-    Config#{
+    #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"store">> => [hb_test_utils:test_store() | default_stores()]
     }.
 
 default_stores() ->
     hb_opts:get(store, [], hb_opts:default_message()).
+
+%% @doc The module the preloaded `token@1.0' device runs as.
+token() ->
+    {ok, Token} = hb_device_load:reference(<<"token@1.0">>, #{}),
+    Token.
+
+%% @doc The module the preloaded `token@1.0' client library runs as.
+token_lib() ->
+    hb_util:atom(<<(hb_util:bin(token()))/binary, "__lib">>).
 
 id(Bin) when is_binary(Bin) ->
     BitSize = byte_size(Bin) * 8,
@@ -75,7 +83,7 @@ balance(State, Account, Opts) ->
     end.
 
 public_balance(State, Account, Opts) ->
-    dev_token:balance(State, #{ <<"balance">> => Account }, Opts).
+    (token()):balance(State, #{ <<"balance">> => Account }, Opts).
 
 outbox(State, Opts) ->
     hb_util:message_to_ordered_list(
@@ -147,7 +155,7 @@ has_message(Pairs, Msgs, Opts) ->
     ).
 
 transfer(State, From, To, Quantity, Opts) ->
-    dev_token:handle_action(
+    (token()):handle_action(
         <<"transfer">>,
         State,
         #{
@@ -162,7 +170,7 @@ transfer(State, From, To, Quantity, Opts) ->
     ).
 
 mint(State, From, Recipient, Quantity, Opts) ->
-    dev_token:handle_action(
+    (token()):handle_action(
         <<"mint">>,
         State,
         #{
@@ -177,7 +185,7 @@ mint(State, From, Recipient, Quantity, Opts) ->
     ).
 
 set_field(State, From, Fields, Opts) ->
-    dev_token:handle_action(
+    (token()):handle_action(
         <<"set">>,
         State,
         #{ <<"body">> => Fields#{ <<"from">> => From } },
@@ -190,7 +198,7 @@ signed_set_field(State, From, Fields, Opts) ->
             Fields#{ <<"action">> => <<"Set">>, <<"from">> => From },
             Opts
         ),
-    dev_token:handle_action(
+    (token()):handle_action(
         <<"set">>,
         State,
         #{ <<"body">> => SignedBody },
@@ -244,9 +252,9 @@ committer_balance_client_reads_literal_account_test() ->
     Alice = <<"kRdpOYaT5pUUiNFDaUymqO1VcybZpAfNPnNdls-A134">>,
     URI = account_key(Alice),
     State = #{ <<"now">> => #{ <<"balances">> => #{ URI => 7 } } },
-    ?assertEqual(7, dev_token_lib:balance(State, Alice, Opts)),
-    ?assertEqual(7, dev_token_lib:balance(State, URI, Opts)),
-    ?assertEqual(0, dev_token_lib:balance(State, hb_util:to_lower(Alice), Opts)).
+    ?assertEqual(7, (token_lib()):balance(State, Alice, Opts)),
+    ?assertEqual(7, (token_lib()):balance(State, URI, Opts)),
+    ?assertEqual(0, (token_lib()):balance(State, hb_util:to_lower(Alice), Opts)).
 
 committer_client_ledger_survives_json_test() ->
     Opts = opts(),
@@ -255,7 +263,7 @@ committer_client_ledger_survives_json_test() ->
     URI = hb_committer:uri(Wallet, Opts),
     Other = <<"krdpoyat5puuinfdauymqo1vcybzpafnpnndls-a134">>,
     OtherURI = hb_committer:uri(Other),
-    Process = dev_token_lib:ledger(#{
+    Process = (token_lib()):ledger(#{
         <<"execution-device">> => <<"token@1.0">>,
         <<"balances">> => #{ Wallet => 3, URI => 4, Other => 2 },
         <<"total-supply">> => 9
@@ -266,33 +274,33 @@ committer_client_ledger_survives_json_test() ->
         <<"structured@1.0">>, <<"json@1.0">>, Opts
     ),
     ?assert(hb_message:verify(Roundtrip, all, Opts)),
-    Balances = dev_token_lib:balances(initial, Roundtrip, Opts),
+    Balances = (token_lib()):balances(initial, Roundtrip, Opts),
     ?assertEqual(7, hb_ao:get(URI, Balances, Opts)),
     ?assertEqual(2, hb_ao:get(OtherURI, Balances, Opts)),
     ?assertNot(lists:member(Owner, hb_ao:keys(Balances, Opts))),
     State = #{ <<"now">> => #{ <<"balances">> => Balances } },
-    ?assertEqual(7, dev_token_lib:balance(State, Wallet, Opts)),
-    ?assertEqual(7, dev_token_lib:balance(State, URI, Opts)),
-    ?assertEqual(7, dev_token_lib:balance(State, Owner, Opts)),
-    ?assertEqual(2, dev_token_lib:balance(State, Other, Opts)).
+    ?assertEqual(7, (token_lib()):balance(State, Wallet, Opts)),
+    ?assertEqual(7, (token_lib()):balance(State, URI, Opts)),
+    ?assertEqual(7, (token_lib()):balance(State, Owner, Opts)),
+    ?assertEqual(2, (token_lib()):balance(State, Other, Opts)).
 
 committer_client_transfer_preserves_raw_notices_test() ->
     Opts = opts(),
     Sender = ar_wallet:new(),
     Recipient = ar_wallet:new(),
-    Process = dev_token_lib:ledger(#{
+    Process = (token_lib()):ledger(#{
         <<"execution-device">> => <<"token@1.0">>,
         <<"balances">> => #{ Sender => 7 }, <<"total-supply">> => 7
     }, Opts),
-    {ok, Pushed} = dev_token_lib:transfer(Process, Sender, Recipient, 3, Opts),
+    {ok, Pushed} = (token_lib()):transfer(Process, Sender, Recipient, 3, Opts),
     Slot = hb_ao:get(<<"slot">>, Pushed, Opts),
     {ok, Computed} = hb_ao:resolve(Process, #{
         <<"path">> => <<"compute">>, <<"slot">> => Slot
     }, Opts),
-    ?assertEqual(4, dev_token_lib:balance(Computed, Sender, Opts)),
-    ?assertEqual(3, dev_token_lib:balance(Computed, Recipient, Opts)),
-    ?assertEqual(4, dev_token_lib:normalized_balance(Computed, Sender, Opts)),
-    ?assertEqual(3, dev_token_lib:normalized_balance(
+    ?assertEqual(4, (token_lib()):balance(Computed, Sender, Opts)),
+    ?assertEqual(3, (token_lib()):balance(Computed, Recipient, Opts)),
+    ?assertEqual(4, (token_lib()):normalized_balance(Computed, Sender, Opts)),
+    ?assertEqual(3, (token_lib()):normalized_balance(
         Computed, hb_committer:uri(Recipient, Opts), Opts
     )),
     Notices = outbox(Computed, Opts),
@@ -969,7 +977,7 @@ asset_tx(Wallet, Fields) ->
 
 asset_apply(Base, Body, Height, Opts) ->
     {ok, Updated} =
-        dev_token:compute(
+        (token()):compute(
             Base,
             asset_assignment(Body, Height, Opts),
             Opts
@@ -987,7 +995,7 @@ asset_assignment(Body, Height, Opts) ->
 
 asset_base(Owner, Opts) ->
     {ok, Initialized} =
-        dev_token:init(
+        (token()):init(
             #{
                 <<"device">> => <<"token@1.0">>,
                 <<"execution-device">> => <<"token@1.0">>,
@@ -1005,7 +1013,7 @@ asset_base(Owner, Opts) ->
     Initialized.
 
 asset_balance(Base, Account, Opts) ->
-    {ok, Amount} = dev_token:balance(Base, #{ <<"balance">> => Account }, Opts),
+    {ok, Amount} = (token()):balance(Base, #{ <<"balance">> => Account }, Opts),
     Amount.
 
 asset_orders(Base, Opts) ->
@@ -1073,7 +1081,7 @@ scalar_initial_holder_seeds_once_test() ->
     ?assertEqual(1, asset_balance(Seeded, Owner, Opts)),
     ?assertEqual(0, asset_balance(Seeded, NewOwner, Opts)),
     {ok, Moved} = transfer(Seeded, Owner, NewOwner, 1, Opts),
-    {ok, Reinitialized} = dev_token:init(Moved, #{}, Opts),
+    {ok, Reinitialized} = (token()):init(Moved, #{}, Opts),
     ?assertEqual(0, asset_balance(Reinitialized, Owner, Opts)),
     ?assertEqual(1, asset_balance(Reinitialized, NewOwner, Opts)).
 
@@ -1183,10 +1191,10 @@ request_fields_are_literal_test() ->
     {_, Owner} = party(),
     {_, Recipient} = party(),
     Base = asset_base(Owner, Opts),
-    ?assertEqual({ok, 1}, dev_token:balance(Base, #{
+    ?assertEqual({ok, 1}, (token()):balance(Base, #{
         <<"device">> => <<"nope@9.9">>, <<"balance">> => Owner
     }, Opts)),
-    {ok, Transferred} = dev_token:handle_action(<<"transfer">>, Base, #{
+    {ok, Transferred} = (token()):handle_action(<<"transfer">>, Base, #{
         <<"body">> => #{
             <<"device">> => <<"nope@9.9">>,
             <<"from">> => Owner,
@@ -1202,7 +1210,7 @@ scalar_initial_holder_requires_valid_scalars_test() ->
     {_, Owner} = party(),
     lists:foreach(
         fun(Base) ->
-            {ok, Initialized} = dev_token:init(Base, #{}, Opts),
+            {ok, Initialized} = (token()):init(Base, #{}, Opts),
             ?assertEqual(
                 not_found,
                 hb_maps:get(<<"balances">>, Initialized, not_found, Opts)

@@ -61,7 +61,8 @@ hyper_token_script() ->
 
 hb_script_file(File) ->
     Candidates =
-        [filename:join(["_build/default/lib/hb", "scripts", File])] ++
+        [filename:join("scripts", File),
+            filename:join(["_build/default/lib/hb", "scripts", File])] ++
             case code:lib_dir(hb) of
                 {error, _} -> [];
                 HBDir -> [filename:join([HBDir, "scripts", File])]
@@ -162,8 +163,9 @@ generate_identities(Users) ->
 generate_ledger(Opts) ->
     Extras = hb_opts:get(<<"spawn-extras">>, #{}, Opts),
     BalanceKey = balance_key(Extras, Opts),
+    {ok, Token} = hb_device_load:reference(<<"token@1.0">>, Opts),
     Ledger =
-        dev_token_lib:ledger(
+        (hb_util:atom(<<(hb_util:bin(Token))/binary, "__lib">>)):ledger(
             Extras#{
                 BalanceKey => generate_initial_balances(Opts),
                 <<"ledger-nonce">> => hb_invariant:int(small)
