@@ -20,9 +20,13 @@
 %% for the `arweave_index_store' option, and if not found, searches the main
 %% `store' list for the first Arweave store with an index.
 store_from_opts(Opts) ->
-    case hb_opts:get(arweave_index_store, no_store, Opts) of
+    Store = case hb_opts:get(arweave_index_store, no_store, Opts) of
         no_store -> first_arweave_store(hb_opts:get(store, [], Opts));
         IndexStoreOpts -> IndexStoreOpts
+    end,
+    case Store of
+        Definition when is_map(Definition) -> maps:merge(Opts, Definition);
+        Other -> Other
     end.
 
 %% @doc Find the first Arweave store with an index from a list of stores.
@@ -35,9 +39,9 @@ first_arweave_store(
 first_arweave_store([_ | Rest]) -> first_arweave_store(Rest).
 
 %% @doc Start the Arweave store, and the downstream associated index store.
-start(#{<<"index-store">> := IndexStore}, _Req, _Opts) ->
+start(Store = #{<<"index-store">> := IndexStore}, _Req, Opts) ->
     init_prometheus(),
-    hb_store:start(IndexStore).
+    hb_store:start(IndexStore, maps:merge(Opts, Store)).
 
 %% @doc Although the index is local, loading an item via the index will make
 %% requests to a remote node, so we define the scope as remote.
@@ -50,7 +54,7 @@ write(_, _, _) -> {error, not_found}.
 
 %% @doc Read the offset of the data at the given key.
 read_offset(StoreOpts, ID, Opts) ->
-    case read_index_offset(StoreOpts, ID) of
+    case read_index_offset(maps:merge(Opts, StoreOpts), ID) of
         not_found -> read_remote_offset(StoreOpts, ID, Opts);
         Offset -> Offset
     end.
