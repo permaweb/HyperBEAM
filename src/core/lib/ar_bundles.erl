@@ -274,7 +274,7 @@ serialize_bundle(BundleType, Map, Normalize) when is_map(Map) ->
             to_serialized_pair(Item, Normalize, signed)
         end,
         Map),
-    {Manifest, BinItems2} = maybe_generate_manifest(BundleType, BinItems, Normalize),
+    {Manifest, BinItems2} = maybe_generate_manifest(BundleType, BinItems),
     FinalizedData = finalize_bundle_data(BinItems2),
     {Manifest, FinalizedData};
 serialize_bundle(_, Data, _Normalize) when is_binary(Data) ->
@@ -282,13 +282,12 @@ serialize_bundle(_, Data, _Normalize) when is_binary(Data) ->
 serialize_bundle(_, Data, _Normalize) ->
     throw({cannot_serialize_tx_data, must_be_list_or_map_or_binary, Data}).
 
-maybe_generate_manifest(map, BinItems, Normalize) ->
+maybe_generate_manifest(map, BinItems) ->
     Index = maps:map(fun(_, {TXID, _}) -> hb_util:encode(TXID) end, BinItems),
     Manifest = new_manifest(Index),
-    {ManifestID, ManifestSerialized} =
-        to_serialized_pair(Manifest, Normalize, unsigned),
-    {Manifest, [{ManifestID, ManifestSerialized} | maps:values(BinItems)]};
-maybe_generate_manifest(_, BinItems, _Normalize) ->
+    ManifestID = id(Manifest, unsigned),
+    {Manifest, [{ManifestID, serialize(Manifest)} | maps:values(BinItems)]};
+maybe_generate_manifest(_, BinItems) ->
     {undefined, maps:values(BinItems)}.
 
 finalize_bundle_data(Processed) ->
@@ -316,21 +315,74 @@ to_serialized_pair(Item, Normalize, Signed) when is_binary(Item) ->
         #tx{ tags = [{<<"ao-type">>, <<"binary">>}], data = Item },
         Normalize, Signed);
 to_serialized_pair(Item, true, Signed) ->
-    to_serialized_pair(ar_tx:normalize(Item), false, Signed);
+    case is_serialized(Item) of
+        true ->
+            % `ar_tx:normalize/1' changes only the IDs and the data size of
+            % such an item. Its bytes are the same, and `bundle_id/3'
+            % calculates its ID.
+            to_serialized_pair(Item, false, Signed);
+        false ->
+            Normalized = ar_tx:normalize(Item),
+            Serialized = serialize(Normalized),
+            {bundle_id(Normalized, Serialized, Signed), Serialized}
+    end;
 to_serialized_pair(Item, false, Signed) ->
     ?event({to_serialized_pair, Item}),
-    % TODO: This is a hack to get the ID of the item. We need to do this because we may not
-    % have the ID in 'item' if it is just a map/list. We need to make this more efficient.
     Serialized = serialize(Item),
-    Deserialized = deserialize(Serialized),
-    case id(Deserialized, Signed) of
-        not_signed ->
-            % A signed ID was requested, but the item is not signed, so fall
-            % back to unsigned.
-            {id(Deserialized, unsigned), Serialized};
-        ID ->
-            {ID, Serialized}
+    {
+        bundle_id(
+            Item#tx{ id = ?DEFAULT_ID, unsigned_id = ?DEFAULT_ID },
+            Serialized,
+            Signed
+        ),
+        Serialized
+    }.
+
+%% @doc Return the ID of an item in a bundle header, as deserializing its bytes
+%% gives it: its signed ID if it is signed and `Signed' is `signed', or its
+%% unsigned ID. The ID of an item whose fields are those of its bytes is
+%% calculated from its fields. Other items are deserialized from their bytes.
+bundle_id(Item, Serialized, Signed) ->
+    case is_serialized(Item) of
+        true -> serialized_id(Item, Signed);
+        false ->
+            Deserialized = deserialize_item_wrapper(Serialized),
+            case id(Deserialized, Signed) of
+                not_signed ->
+                    % A signed ID was requested, but the item is not signed, so
+                    % fall back to unsigned.
+                    id(Deserialized, unsigned);
+                ID -> ID
+            end
     end.
+
+%% @doc Return the ID of an item whose fields are those of its bytes. A signed
+%% item gives the SHA-256 of its signature. Otherwise the item's unsigned ID is
+%% returned, or calculated from its fields if it has none.
+serialized_id(Item = #tx{ signature = Sig }, signed) when Sig =/= ?DEFAULT_SIG ->
+    ar_tx:generate_id(Item, signed);
+serialized_id(Item = #tx{ unsigned_id = ?DEFAULT_ID }, _Signed) ->
+    ar_tx:generate_id(Item, unsigned);
+serialized_id(#tx{ unsigned_id = UnsignedID }, _Signed) ->
+    UnsignedID.
+
+%% @doc Check whether an item's fields are those that deserializing its bytes
+%% gives: it is an ANS-104 item with binary data and 32-byte IDs, and its
+%% signature and owner have the sizes that `decode_signature/1' reads for its
+%% signature type.
+is_serialized(#tx{
+        format = ans104,
+        id = ID,
+        unsigned_id = UnsignedID,
+        data = Data,
+        signature_type = SigType,
+        signature = Sig,
+        owner = Owner
+    }) when byte_size(ID) == 32, byte_size(UnsignedID) == 32,
+        is_binary(Data), is_binary(Sig), is_binary(Owner) ->
+    signature_sizes(SigType) =:= {byte_size(Sig), byte_size(Owner)};
+is_serialized(_) ->
+    false.
 
 %% @doc Only RSA 4096 is currently supported.
 %% Note: the signature type '1' corresponds to RSA 4096 -- but it is is written in
@@ -531,6 +583,15 @@ decode_signature(Other) ->
         {sig_type, {explicit, SigType}}}),
     {unsupported_tx_format, SigType}.
 
+%% @doc The sizes of the signature and the owner of each signature type, as
+%% `decode_signature/1' reads them.
+signature_sizes({rsa, 65537}) -> {512, 512};
+signature_sizes({eddsa, ed25519}) -> {64, 32};
+signature_sizes(ethereum) -> {65, 65};
+signature_sizes(solana) -> {64, 32};
+signature_sizes(typed_ethereum) -> {65, 42};
+signature_sizes(_) -> unsupported.
+
 %% @doc Decode tags from a binary format using Apache Avro, with their Avro
 %% form.
 decode_tags(<<0:64/little-integer, 0:64/little-integer, Rest/binary>>) ->
@@ -687,6 +748,31 @@ with_zero_length_tag_test() ->
     Serialized = serialize(Item),
     Deserialized = deserialize(Serialized),
     ?assertEqual(Item, Deserialized).
+
+%% @doc An item with the signature and owner sizes that `signature_sizes/1'
+%% gives for its signature type deserializes to the same signature and owner.
+signature_sizes_test() ->
+    lists:foreach(
+        fun(SigType) ->
+            {SigSize, OwnerSize} = signature_sizes(SigType),
+            Item = #tx{
+                signature_type = SigType,
+                signature = binary:copy(<<1>>, SigSize),
+                owner = binary:copy(<<2>>, OwnerSize),
+                data = <<"data">>
+            },
+            {ok, _, Deserialized} = deserialize_header(serialize(Item)),
+            ?assertEqual(
+                {SigType, Item#tx.signature, Item#tx.owner},
+                {
+                    Deserialized#tx.signature_type,
+                    Deserialized#tx.signature,
+                    Deserialized#tx.owner
+                }
+            )
+        end,
+        [{rsa, 65537}, {eddsa, ed25519}, ethereum, solana, typed_ethereum]
+    ).
 
 bundle_header_size_test() ->
     ?assertEqual(672, bundle_header_size(<<10:256/little, 1234/little>>)),
