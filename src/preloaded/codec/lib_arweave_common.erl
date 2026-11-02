@@ -915,7 +915,14 @@ data(MaybeCommitment, TABM, Req, Opts) ->
         {?DEFAULT_DATA, _} ->
             NestedMsgs;
         {DataVal, _} ->
-            NestedMsgs#{ DataKey => hb_util:ok(to(DataVal, Req, Opts)) }
+            % A data key other than `data' can be in `NestedMsgs' already,
+            % encoded from the same value if it is not a link.
+            Encoded =
+                case {maps:find(DataKey, NestedMsgs), maps:get(DataKey, TABM)} of
+                    {{ok, Item}, Value} when not ?IS_LINK(Value) -> Item;
+                    _ -> hb_util:ok(to(DataVal, Req, Opts))
+                end,
+            NestedMsgs#{ DataKey => Encoded }
     end.
 
 %% @doc Calculate data messages for large tag values or nested messages. A
