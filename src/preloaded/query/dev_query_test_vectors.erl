@@ -1617,8 +1617,8 @@ transactions_unsigned_owner_test_parallel() ->
         )
     ).
 
-%% @doc The owner of an item signed by a key of any type has the address that
-%% Arweave gateways give: the SHA-256 of its key.
+%% @doc The owner of an item signed by a key of any type has the raw address of
+%% the key, and an `owners' query of that address finds the item.
 transactions_owner_of_each_key_type_test_parallel() ->
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
@@ -1644,7 +1644,12 @@ transactions_owner_of_each_key_type_test_parallel() ->
                         hb_message:id(Msg, all, Opts),
                         #{
                             <<"address">> =>
-                                hb_util:human_id(crypto:hash(sha256, TX#tx.owner)),
+                                hb_util:human_id(
+                                    ar_wallet:to_address(
+                                        TX#tx.owner,
+                                        TX#tx.signature_type
+                                    )
+                                ),
                             <<"key">> => hb_util:encode(TX#tx.owner)
                         }
                     }
@@ -1669,6 +1674,20 @@ transactions_owner_of_each_key_type_test_parallel() ->
         maps:from_list(
             [{ID, Owner} || #{ <<"node">> := #{ <<"id">> := ID, <<"owner">> := Owner } } <- Edges]
         )
+    ),
+    maps:foreach(
+        fun(ID, #{ <<"address">> := Address }) ->
+            ?assertMatch(
+                #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := [
+                    #{ <<"node">> := #{ <<"id">> := ID } }
+                ] } } },
+                post_graphql(Node,
+                    <<"query($owners: [String!]) { transactions(owners: $owners) {",
+                        " edges { node { id } } } }">>,
+                    #{ <<"owners">> => [Address] }, #{}, Opts)
+            )
+        end,
+        Expected
     ).
 
 %% @doc Preserve original tags, or exclude native fields from normalized keys.

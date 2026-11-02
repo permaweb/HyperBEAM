@@ -126,7 +126,7 @@ denormalize_message(Message, Opts) ->
             [PrimarySigner|_] ->
                 Commitment = signer_commitment(PrimarySigner, Message, Opts),
                 Message#{
-                    <<"owner">> => raw_address(PrimarySigner),
+                    <<"owner">> => hb_util:raw_address(PrimarySigner),
                     <<"signature">> =>
                         hb_maps:get(<<"signature">>, Commitment, <<>>, Opts)
                 }
@@ -134,18 +134,6 @@ denormalize_message(Message, Opts) ->
     NormOwnerMsg#{
         <<"id">> => hb_message:id(Message, all, Opts)
     }.
-
-%% @doc The address of a committer that AOS reads. An Arweave key gives its
-%% Arweave address. A `did:pkh:' committer gives the address at the end of its
-%% account: `0x' and the checksummed hex of an Ethereum key, or the base58 key
-%% of a Solana key.
-raw_address(Committer) ->
-    case hb_util:committer_address(Committer) of
-        <<"did:pkh:", Account/binary>> ->
-            lists:last(binary:split(Account, <<":">>, [global]));
-        Address ->
-            Address
-    end.
 
 %% @doc The commitment of a signer that a process sees: of two or more, the one
 %% with the lowest ID, so that every node gives the same.
@@ -207,7 +195,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                 case lists:member(owner_as_address, Features) of
                     true -> 
                         {
-                            raw_address(Signer),
+                            hb_util:raw_address(Signer),
                             CommitmentSignature,
                             CommitmentKey
                         };

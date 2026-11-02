@@ -30,7 +30,7 @@
 -export([all_atoms/0, binary_is_atom/1]).
 -export([lowercase_key/1]).
 -export([base58_encode/1, base58_decode/1, atom_to_dashed_binary/1]).
--export([committer_address/1]).
+-export([committer_address/1, raw_address/1]).
 -include("include/hb.hrl").
 
 -include_lib("eunit/include/eunit.hrl").
@@ -307,6 +307,18 @@ committer_address(Committer) ->
     case hb_committer:address(Committer) of
         {ok, Address} -> Address;
         error -> Committer
+    end.
+
+%% @doc The raw address of a committer, the address that a key had before
+%% committers had URIs: that of an Arweave key, or the address at the end of a
+%% `did:pkh:' account -- `0x' and the checksummed hex of an Ethereum key, or
+%% the base58 key of a Solana key.
+raw_address(Committer) ->
+    case committer_address(Committer) of
+        <<"did:pkh:", Account/binary>> ->
+            lists:last(binary:split(Account, <<":">>, [global]));
+        Address ->
+            Address
     end.
 
 %% @doc Check whether a binary is a human-readable ID: the base64url encoding
