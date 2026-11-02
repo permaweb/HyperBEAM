@@ -95,7 +95,8 @@ precondition for almost every other device.
 
 ### `keys` — list public keys
 - **Returns:** `{ok, List}` where `List` is every **public** (non-private) key of
-  the message, **excluding** the `commitments` key. Order is unspecified.
+  the message, **excluding** the `commitments` key, in the bytewise order of
+  the keys.
 
 ### `set` — deep-merge new values
 - **Reads:** `Base`; the request message `Req` whose non-reserved keys are the
@@ -185,7 +186,7 @@ precondition for almost every other device.
 - **Reads:** `Base` (its `commitments`).
 - **Behaviour:** Return the `committer` value of every commitment that has one,
   each value once.
-- **Returns:** `{ok, [URI]}` (empty if uncommitted). Order unspecified.
+- **Returns:** `{ok, [URI]}` (empty if uncommitted), in bytewise order.
 
 ### `committed` — list committed keys
 - **Reads:** `Base`; the same `committers`/`ids` selectors as `id`.
@@ -267,7 +268,8 @@ Given `Req` selectors, compute the set of commitment IDs to operate on:
 - The device performs no caching of its own, except that a `signed` `commit`
   without `bundle` writes the nested messages of its target to the cache; it
   operates on the supplied message and request.
-- `keys`/`committers` return order is unspecified; callers MUST NOT depend on it.
+- `keys` returns the keys, and `committers` the committers, in bytewise
+  order.
 
 ## 7. Security & authority
 
