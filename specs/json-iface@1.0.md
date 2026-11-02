@@ -254,7 +254,8 @@ For a subject message, emit a JSON object with **exactly** these members
 Field-derivation rules (MUST):
 
 - **Primary signer.** The "primary" committer is the first element of the
-  message's signer (committer) list. If the message has no signers, `Owner`,
+  message's signer (committer) list (`message@1.0` `committers`, in bytewise
+  order). If the message has no signers, `Owner`,
   `Signature`, and `PublicKey` are all `""`, and `From` defaults from the
   (empty) owner. Of two or more commitments by the primary signer, the
   primary commitment is the one with the lowest ID. Of a signed message, every
@@ -388,9 +389,10 @@ A message's `Tags` array is produced as follows (MUST):
     (e.g. `block-height` → `Block-Height`, `from-process` → `From-Process`,
     `action` → `Action`);
   - values are emitted as-is (binary → JSON string).
-  - The order of non-`original-tags` entries is **unspecified** (derived from
-    map iteration); consumers MUST NOT depend on it. Only the `original-tags`
-    path guarantees order.
+  - the entries are first the keys that the `committed` list of the message's
+    ANS-104 commitment gives, or else that of its primary commitment (§5.1), in
+    the order of that list; then the other keys, in the bytewise order of the
+    keys. A message with neither commitment gives every key in bytewise order.
 
 The **inverse** (folding a JSON message's `Tags` back into a flat map, used in
 §5.2 step 4a and for patches) is: take the message's `Tags` list, and produce a
@@ -421,9 +423,8 @@ key-removal mechanism. Non-string and nested-map values are passed through
 ## 6. Ordering, freshness & caching
 
 - **Determinism.** Given the same subject message, `to` and the message-structure
-  builder are deterministic **except** for the order of the `Tags` array on the
-  non-`original-tags` path (map-iteration order). The `original-tags` path is
-  fully ordered. `outbox` numeric keys preserve `Messages` input order.
+  builder are deterministic. The `Tags` array follows §5.5. `outbox` numeric
+  keys preserve `Messages` input order.
 - The device performs **no result caching of its own**; it is a pure transform
   over the supplied message/request (the compute path's only state is read/write
   through the cooperating WASM environment, which it does not own).
@@ -554,7 +555,7 @@ a key against a constructed message (or by parsing a known JSON input):
    one header-cased `{name,value}` per remaining field (one per element of a
    field whose value is a list), **excluding** `id`, `anchor`, `owner`, `data`,
    `target`, `signature`, `commitments`; keys are rendered in `Header-Case`
-   (e.g. `block-height` → `Block-Height`).
+   (e.g. `block-height` → `Block-Height`), in the order that §5.5 gives.
 10. **Result mapping (`from`).** A result structure with `Output`/`Messages`/
     `patches` maps to `{ outbox, patches, data }`: `outbox` is keyed by 1-based
     integer position over `Messages` (input order preserved); `data` is
@@ -618,10 +619,6 @@ a key against a constructed message (or by parsing a known JSON input):
   not handled at all. A spec consumer relying on separate `Spawns`/`Assignments`
   arrays would diverge — confirm whether the legacy contract truly folds these
   into `Messages` or whether this device intentionally drops them.
-- **Non-`original-tags` `Tags` order is unspecified.** When a message has no
-  ANS-104 `original-tags`, the `Tags` array order is map-iteration order. If a
-  legacy handler is order-sensitive on tags, this is a latent incompatibility;
-  consider mandating a sorted order on that path.
 - **`Signature` for non-512-byte committers.** A non-RSA (e.g. ECDSA/Ethereum)
   signature is passed through **as-is** rather than base64url-encoded. Confirm
   the legacy handler's expectation for such signatures, or mandate base64url for
