@@ -217,7 +217,19 @@ validate_blocks([{Height, Block} | Blocks], State, Opts) ->
 write_blocks([], _Opts) ->
     ok;
 write_blocks([{Height, Block} | Blocks], Opts) ->
-    case dev_arweave_scheduler_cache:write_block(Height, Block, Opts) of
+    % The headers that a block carries are cached as its transactions are
+    % indexed, so the cached block is the block without them.
+    Cached =
+        case hb_maps:is_key(<<"tx-headers">>, Block, Opts) of
+            true ->
+                hb_maps:without(
+                    [<<"tx-headers">>],
+                    hb_message:uncommitted(Block, Opts),
+                    Opts
+                );
+            false -> Block
+        end,
+    case dev_arweave_scheduler_cache:write_block(Height, Cached, Opts) of
         {ok, _} -> write_blocks(Blocks, Opts);
         Error -> Error
     end.
@@ -236,8 +248,8 @@ index_blocks(Blocks, Opts) ->
     Indexed =
         hb_pmap:parallel_map(
             Transactions,
-            fun({Height, Index, TXID}) ->
-                index_transaction(Height, Index, TXID, Opts)
+            fun({Height, Index, TXID, Header}) ->
+                index_transaction(Height, Index, TXID, Header, Opts)
             end,
             max(
                 1,
@@ -256,7 +268,8 @@ index_blocks(Blocks, Opts) ->
         Error -> Error
     end.
 
-%% @doc Enumerate one block's transactions with their lossless ordinates.
+%% @doc Enumerate one block's transactions with their lossless ordinates, and
+%% the header of each where the block carries them (`tx-headers').
 block_transactions(Height, Block, Opts) ->
     TXIDs =
         [
@@ -264,11 +277,12 @@ block_transactions(Height, Block, Opts) ->
         ||
             TXID <- hb_maps:get(<<"txs">>, Block, [], Opts)
         ],
+    Headers = hb_maps:get(<<"tx-headers">>, Block, [none || _ <- TXIDs], Opts),
     [
-        {Height, Index, TXID}
+        {Height, Index, TXID, Header}
     ||
-        {Index, TXID} <-
-            lists:zip(lists:seq(0, length(TXIDs) - 1), TXIDs)
+        {Index, TXID, Header} <-
+            lists:zip3(lists:seq(0, length(TXIDs) - 1), TXIDs, Headers)
     ].
 
 materialize_process(ProcessID, Global, Opts) ->
@@ -461,7 +475,18 @@ write_assignment(ProcessID, Slot, Height, Index, TXID, Opts) ->
 
 %% @doc Fetch and route one transaction at its canonical block ordinate.
 index_transaction(Height, Index, TXID, Opts) ->
-    case fetch_header(TXID, Opts) of
+    index_transaction(Height, Index, TXID, none, Opts).
+
+%% @doc Route one transaction at its canonical block ordinate, from the header
+%% that its block carries, validated and cached as a fetched one is, or from a
+%% fetched header.
+index_transaction(Height, Index, TXID, Header, Opts) ->
+    HeaderRes =
+        case Header of
+            none -> fetch_header(TXID, Opts);
+            _ -> cache_header(TXID, Header, Opts)
+        end,
+    case HeaderRes of
         {ok, _Header, TX} ->
             Ordinate = ordinate(Height, Index),
             {ok,
@@ -536,6 +561,7 @@ fetch_block_remote(Height, Attempts, Opts) ->
             <<"path">> => <<?ARWEAVE_DEVICE/binary, "/block">>,
             <<"block">> => Height,
             <<"include-proofs">> => false,
+            <<"include-tx-headers">> => true,
             <<"cache-control">> => [<<"no-cache">>]
         },
         FetchOpts

@@ -360,12 +360,12 @@ raw_default_message() ->
                         }
                     ]
             },
-            % chunk requests: route to the nearest data nodes by
-            % partition midpoint (byte offset).
+            % chunk and transaction data requests: route to the nearest data
+            % nodes by partition midpoint (byte offset).
             #{
                 <<"template">> => 
                     #{
-                        <<"path">> => <<"^/arweave/chunk">>,
+                        <<"path">> => <<"^/arweave/(chunk|tx/[^/]+/data\\.bin)">>,
                         <<"method">> => <<"GET">>
                     },
                 <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES),

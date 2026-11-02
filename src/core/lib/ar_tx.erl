@@ -8,7 +8,7 @@
 -export([convert_bundle_list_to_map/1, convert_bundle_map_to_list/1]).
 -export([serialize_sig_type/1, deserialize_sig_type/1]).
 -export([generate_signature_data_segment/1, generate_chunk_id/1]).
--export([json_struct_to_tx/1, tx_to_json_struct/1]).
+-export([json_struct_to_tx/1, tx_to_json_struct/1, binary_to_tx/1]).
 -export([generate_chunk_tree/1, generate_chunk_tree/2]).
 -export([chunk_binary/2, chunk_binary/3, chunking_mode/1]).
 -export([chunks_to_size_tagged_chunks/1, sized_chunks_to_sized_chunk_ids/1]).
@@ -559,15 +559,86 @@ json_struct_to_tx(TXStruct) ->
             end,
         denomination = Denomination
     },
-    %% For ECDSA transactions, recover the owner from the signature
-    case SigType of
-        ?ECDSA_KEY_TYPE ->
-            DataSegment = generate_signature_data_segment(TX),
-            Owner2 = ar_wallet:recover_key(DataSegment, Sig, SigType),
-            TX#tx{ owner = Owner2, owner_address = ar_wallet:to_address(Owner2, SigType) };
-        ?RSA_KEY_TYPE ->
-            TX#tx{ owner_address = get_owner_address(TX) }
-    end.
+    with_owner(TX).
+
+%% @doc Parse a transaction in the binary form of Arweave's
+%% `ar_serialize:tx_to_binary/1', without its size prefix: a header, or the ID
+%% alone that a `/block2' response gives for a transaction it does not include.
+binary_to_tx(<< TXID:32/binary >>) ->
+    {ok, TXID};
+binary_to_tx(<< Format:8, TXID:32/binary,
+        AnchorSize:8, Anchor:AnchorSize/binary,
+        OwnerSize:16, Owner:OwnerSize/binary,
+        TargetSize:8, Target:TargetSize/binary,
+        QuantitySize:8, Quantity:(QuantitySize * 8),
+        DataSizeSize:16, DataSize:(DataSizeSize * 8),
+        DataRootSize:8, DataRoot:DataRootSize/binary,
+        SignatureSize:16, Signature:SignatureSize/binary,
+        RewardSize:8, Reward:(RewardSize * 8),
+        DataEncodingSize:24, Data:DataEncodingSize/binary,
+        Rest/binary >>) when Format == 1 orelse Format == 2 ->
+    maybe
+        {ok, Tags, Rest2} ?= binary_to_tags(Rest),
+        {ok, Denomination} ?= binary_to_denomination(Rest2),
+        TX = #tx{
+            format = Format,
+            id = TXID,
+            anchor = Anchor,
+            owner = Owner,
+            tags = Tags,
+            target = Target,
+            quantity = Quantity,
+            data = Data,
+            reward = Reward,
+            signature = Signature,
+            signature_type = set_sig_type_from_pub_key(Owner),
+            % The size of a format 1 transaction is the size of its data.
+            data_size =
+                case Format of
+                    1 -> byte_size(Data);
+                    2 -> DataSize
+                end,
+            data_root = DataRoot,
+            denomination = Denomination
+        },
+        {ok, with_owner(TX)}
+    end;
+binary_to_tx(_Bin) ->
+    {error, 'invalid-tx'}.
+
+%% @doc Parse the tags of a binary transaction. Arweave writes them in reverse
+%% order, so collecting them in reverse gives them in their own order.
+binary_to_tags(<< Count:16, Rest/binary >>) when Count =< 2048 ->
+    binary_to_tags(Count, Rest, []);
+binary_to_tags(_Bin) ->
+    {error, 'invalid-tx-tags'}.
+binary_to_tags(0, Rest, Tags) ->
+    {ok, Tags, Rest};
+binary_to_tags(N, << NameSize:16, ValueSize:16, Name:NameSize/binary,
+        Value:ValueSize/binary, Rest/binary >>, Tags) ->
+    binary_to_tags(N - 1, Rest, [{Name, Value} | Tags]);
+binary_to_tags(_N, _Bin, _Tags) ->
+    {error, 'invalid-tx-tags'}.
+
+%% @doc Parse the denomination that ends a binary transaction: absent for the
+%% original denomination, 0.
+binary_to_denomination(<<>>) -> {ok, 0};
+binary_to_denomination(<< Denomination:24 >>) when Denomination > 0 ->
+    {ok, Denomination};
+binary_to_denomination(_Rest) ->
+    {error, 'invalid-tx-denomination'}.
+
+%% @doc Set the owner address of a parsed transaction. An ECDSA transaction
+%% carries no owner: its key is recovered from the signature.
+with_owner(TX = #tx{ signature_type = ?ECDSA_KEY_TYPE }) ->
+    DataSegment = generate_signature_data_segment(TX),
+    Owner = ar_wallet:recover_key(DataSegment, TX#tx.signature, ?ECDSA_KEY_TYPE),
+    TX#tx{
+        owner = Owner,
+        owner_address = ar_wallet:to_address(Owner, ?ECDSA_KEY_TYPE)
+    };
+with_owner(TX = #tx{ signature_type = ?RSA_KEY_TYPE }) ->
+    TX#tx{ owner_address = get_owner_address(TX) }.
 
 %% @doc Determine signature type from owner and signature.
 %% For ECDSA transactions, the owner is empty in JSON (recovered from signature).

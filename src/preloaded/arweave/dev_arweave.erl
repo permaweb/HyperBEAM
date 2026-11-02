@@ -12,6 +12,9 @@
 %%% descending order; `~copycat@1.0/arweave&mode=block-index' also resolves
 %%% tip-relative heights. A block request with `include-block-index=true'
 %%% records its compact entry alongside the fetched or cached header.
+%%% `include-tx-headers=true' reads a block by height or hash from `/block2',
+%%% which gives the headers of its transactions, in `tx-headers', when the
+%%% block is within 50 blocks of the serving node's tip.
 -module(dev_arweave).
 -implements(<<"arweave@2.9">>).
 -device_libraries([lib_arweave_common]).
@@ -19,8 +22,8 @@
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3, block_heights/3, blocks/3, block_index/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
-%%% Helper functions
--export([get_chunk/2]).
+%%% Helper functions for `dev_arweave_data'
+-export([request/3, request/4]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -480,6 +483,9 @@ list_find(Key, [{XKey, Value} | Rest], Default) ->
 %%   offset and length.
 %% - `GET` with `txid`: `GET`s a chunk or range of bytes from the given offset,
 %%   relative to the given transaction's data root.
+%% - `GET` with `tx` and `data-root`, for a range that is the whole data of
+%%   that transaction: reads the data in one request when it is 12 MiB or less
+%%   and hashes to `data-root' (see `dev_arweave_data').
 -spec chunk(
     #{ _ => _ },
     #{
@@ -487,6 +493,8 @@ list_find(Key, [{XKey, Value} | Rest], Default) ->
         offset => binary() | integer(),
         length => binary() | integer(),
         pending => binary(),
+        tx => binary(),
+        'data-root' => binary(),
         _ => _
     },
     #{ _ => _ }
@@ -494,7 +502,7 @@ list_find(Key, [{XKey, Value} | Rest], Default) ->
 chunk(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"POST">> -> post_chunk(Base, Request, Opts);
-        <<"GET">> -> get_chunk(Base, Request, Opts)
+        <<"GET">> -> dev_arweave_data:get_chunk(Base, Request, Opts)
     end.
 
 %% @doc Post a single chunk to the Arweave node, via its JSON encoding
@@ -509,446 +517,6 @@ post_chunk(Request, Opts) ->
         },
         Opts
     ).
-
-%% @doc Retrieve a chunk or slice of bytes by its offset, either relative to the
-%% global Arweave data tree, or relative to the start of a specific pending
-%% transaction.
-get_chunk(_Base, Request, Opts) ->
-    Offset = hb_util:int(hb_maps:get(<<"offset">>, Request, 0, Opts)),
-    Length = hb_util:int(hb_maps:get(<<"length">>, Request, 1, Opts)),
-    MaybeRelativeTXID = hb_maps:get(<<"pending">>, Request, undefined, Opts),
-    case fetch_chunk_range(Offset, Length, MaybeRelativeTXID, Opts) of
-        {ok, Chunks} ->
-            Data = iolist_to_binary(Chunks),
-            case hb_maps:is_key(<<"length">>, Request, Opts) of
-                true ->
-                    {ok, binary:part(Data, 0, min(Length, byte_size(Data)))};
-                false ->
-                    {ok, Data}
-            end;
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
-fetch_chunk_range(Offset, Length, undefined, Opts)
-        when (Offset >= ?STRICT_DATA_SPLIT_THRESHOLD) andalso
-        ((Offset + Length - 1) >= ?STRICT_DATA_SPLIT_THRESHOLD) ->
-    get_chunk_range_fixed_size(Offset, (Offset + Length - 1), Opts);
-fetch_chunk_range(Offset, Length, undefined, Opts)
-        when (Offset < ?STRICT_DATA_SPLIT_THRESHOLD) andalso
-        ((Offset + Length - 1) < ?STRICT_DATA_SPLIT_THRESHOLD) ->
-    get_chunk_range_variable_size(Offset, (Offset + Length - 1), Opts);
-fetch_chunk_range(_Offset, _Length, undefined, _Opts) ->
-    {error, chunk_range_spans_strict_data_split_threshold};
-fetch_chunk_range(Offset, Length, RelativeTXID, Opts)
-        when is_binary(RelativeTXID) ->
-    get_chunk_range_relative(Offset, Length, RelativeTXID, Opts).
-
-%% @doc Post-threshold: chunks occupy fixed 256KiB buckets aligned to
-%% absolute weave offsets, which need not coincide with Offset. Query at
-%% DATA_CHUNK_SIZE increments and let fill_gaps iteratively cover any
-%% remaining holes until the range is contiguous.
-get_chunk_range_fixed_size(Offset, EndOffset, Opts) ->
-    hb_prometheus:observe(
-        EndOffset - Offset,
-        arweave_chunk_load_requested_bytes,
-        []),
-    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
-    case fetch_and_collect(Offsets, Opts) of
-        {ok, ChunkInfos} -> fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
-        Error -> Error
-    end.
-
-%% @doc Pre-threshold: chunks can be any size <= 256KiB. First pass at
-%% DATA_CHUNK_SIZE increments plus one extra candidate chunk, then
-%% iteratively fill gaps until contiguous.
-get_chunk_range_variable_size(Offset, EndOffset, Opts) ->
-    hb_prometheus:observe(
-        EndOffset - Offset,
-        arweave_chunk_load_requested_bytes,
-        []),
-    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
-    case fetch_and_collect(Offsets, Opts) of
-        {ok, ChunkInfos} -> fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
-        Error -> Error
-    end.
-
-%% @doc Return a chunk or range of bytes relative to a specific, unconfirmed,
-%% transaction's data root.
-get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
-    case pending(
-        #{},
-        #{ <<"pending">> => RelativeTXID, <<"exclude-data">> => true },
-        Opts
-    ) of
-        {ok, PendingTX} ->
-            DataSize = hb_util:int(maps:get(<<"data-size">>, PendingTX)),
-            DataRoot = hb_util:decode(maps:get(<<"data-root">>, PendingTX)),
-            hb_prometheus:observe(
-                Length,
-                arweave_chunk_load_requested_bytes,
-                []
-            ),
-            Offsets = pending_relative_chunk_offsets(Offset, Length, DataSize),
-            GETFun =
-                fun(XOffset) ->
-                    decode_relative_chunk(
-                        XOffset,
-                        DataRoot,
-                        DataSize,
-                        get_pending_chunk(RelativeTXID, XOffset, Opts)
-                    )
-                end,
-            % A peer answers 404 for an offset that is not the end of a chunk,
-            % so a chunk that does not end at one of `Offsets' is missing here.
-            Concurrency =
-                hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
-            Found =
-                [
-                    ChunkInfo
-                ||
-                    {ok, ChunkInfo} <-
-                        hb_pmap:parallel_map(Offsets, GETFun, Concurrency)
-                ],
-            case fill_relative_gaps(
-                Found,
-                max(1, Offset + 1),
-                min(Offset + Length, DataSize),
-                DataSize,
-                GETFun,
-                Opts
-            ) of
-                {ok, ChunkInfos} ->
-                    {ok, Binaries} = assemble_chunks(ChunkInfos, Offset + 1),
-                    {ok, iolist_to_binary(Binaries)};
-                Error -> Error
-            end;
-        Error ->
-            Error
-    end.
-
-%% @doc Decode a pending chunk response into a {Start, End, Binary} tuple,
-%% taking the start and end from the chunk's proof. The proof must verify
-%% against the data root under either rule set by which a node admits a
-%% pending chunk, and the chunk must contain the byte at the offset it was
-%% fetched for.
-decode_relative_chunk(Offset, DataRoot, DataSize, {ok, JSON}) ->
-    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
-    ChunkID = ar_tx:generate_chunk_id(Chunk),
-    DataPath = hb_util:decode(maps:get(<<"data_path">>, JSON)),
-    Validate =
-        fun(Ruleset) ->
-            ar_merkle:validate_path(
-                DataRoot,
-                Offset - 1,
-                DataSize,
-                DataPath,
-                Ruleset
-            )
-        end,
-    % A proof with rebased subtrees verifies only under the rebase rule set.
-    Bounds =
-        case Validate(strict_borders_ruleset) of
-            false -> Validate(offset_rebase_support_ruleset);
-            StrictBounds -> StrictBounds
-        end,
-    case Bounds of
-        {ChunkID, Start, End}
-                when End - Start =:= byte_size(Chunk),
-                    Start < Offset, Offset =< End ->
-            {ok, {Start + 1, End, Chunk}};
-        _ ->
-            {error, 'invalid-chunk-proof'}
-    end;
-decode_relative_chunk(_Offset, _DataRoot, _DataSize, {error, _} = Err) ->
-    Err.
-
-%% @doc Fetch pending chunks until they cover bytes `RangeStart' to `RangeEnd'.
-%% A peer serves a pending chunk only at its end offset, which is the start of
-%% the chunk after it. So the chunk that contains the last byte of a gap is
-%% asked for at the start of the first chunk after the gap, or at the data
-%% size if no chunk after the gap is known.
-fill_relative_gaps(ChunkInfos, RangeStart, RangeEnd, DataSize, GETFun, Opts) ->
-    Sorted = sort_chunks(ChunkInfos),
-    case find_gaps(Sorted, RangeStart, RangeEnd) of
-        [] ->
-            {ok, [Info || Info = {Start, _, _} <- Sorted, Start =< RangeEnd]};
-        Gaps ->
-            Offsets =
-                [
-                    hd(
-                        [Start - 1 || {Start, _, _} <- Sorted, Start > GapEnd]
-                            ++ [DataSize]
-                    )
-                ||
-                    {_GapStart, GapEnd} <- Gaps
-                ],
-            case fetch_and_collect(Offsets, GETFun, Opts) of
-                {ok, NewInfos} ->
-                    fill_relative_gaps(
-                        Sorted ++ NewInfos,
-                        RangeStart,
-                        RangeEnd,
-                        DataSize,
-                        GETFun,
-                        Opts
-                    );
-                Error -> Error
-            end
-    end.
-
-%% @doc Iteratively detect gaps in coverage and fetch the chunk at the start
-%% of each gap until the entire range [Offset, EndOffset] is covered.
-fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
-    Sorted = sort_chunks(ChunkInfos),
-    case find_gaps(Sorted, Offset, EndOffset) of
-        [] ->
-            assemble_chunks(Sorted, Offset);
-        Gaps ->
-            GapOffsets = [Start || {Start, _End} <- Gaps],
-            ?event(debug_arweave,
-                {fill_gaps, 
-                    {offset, Offset},
-                    {end_offset, EndOffset},
-                    {chunks,
-                        [
-                            {Start, End, byte_size(Chunk)}
-                        ||
-                            {Start, End, Chunk} <- Sorted
-                        ]
-                    },
-                    {gap_offsets, GapOffsets}
-                }
-            ),
-            case fetch_and_collect(GapOffsets, Opts) of
-                {ok, NewInfos} ->
-                    ?event(debug_arweave, {fill_gaps, NewInfos}),
-                    fill_gaps(
-                        Sorted ++ NewInfos,
-                        Offset, EndOffset, Opts
-                    );
-                Error -> Error
-            end
-    end.
-
-%% @doc Fetch chunks at the given offsets in parallel and parse the responses
-%% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
-fetch_and_collect(Offsets, Opts) ->
-    fetch_and_collect(
-        Offsets,
-        fun(Offset) -> decode_chunk(Offset, get_chunk(Offset, Opts)) end,
-        Opts
-    ).
-fetch_and_collect(Offsets, GETFun, Opts) ->
-    Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
-    collect_chunks(hb_pmap:parallel_map(Offsets, GETFun, Concurrency)).
-
-%% @doc Generate a list of offsets from Start to End (inclusive) stepping by
-%% Step bytes. Used to produce candidate query offsets at 256KiB increments.
-generate_offsets(Start, End, Step) ->
-    generate_offsets(Start, End, Step, []).
-generate_offsets(Current, End, _Step, Acc) when Current > End ->
-    Offsets = lists:reverse(Acc),
-    ?event(debug_arweave, {fetch_chunk_offsets, {offsets, Offsets}}),
-    Offsets;
-generate_offsets(Current, End, Step, Acc) ->
-    generate_offsets(Current + Step, End, Step, [Current | Acc]).
-
-pending_relative_chunk_offsets(Offset, Length, DataSize) ->
-    RangeStart = max(1, Offset + 1),
-    RangeEnd = min(Offset + Length, DataSize),
-    case RangeStart > RangeEnd of
-        true ->
-            [];
-        false ->
-            FirstChunk = ((RangeStart - 1) div ?DATA_CHUNK_SIZE) + 1,
-            LastChunk = ((RangeEnd - 1) div ?DATA_CHUNK_SIZE) + 1,
-            [min(Chunk * ?DATA_CHUNK_SIZE, DataSize) ||
-                Chunk <- lists:seq(FirstChunk, LastChunk)]
-    end.
-
-%% @doc Decode a chunk response into a {Start, End, Binary} tuple, if the chunk
-%% contains the byte at the offset it was fetched for.
-%% Runs inside the pmap worker so raw JSON is GC'd per-worker.
-decode_chunk(Offset, {ok, JSON}) ->
-    AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
-    {AbsStart, _AbsEnd, Chunk} = ChunkTuple = decode_chunk_tuple(JSON, AbsEnd),
-    ?event(debug_arweave,
-        {decode_chunk,
-            {abs_start, AbsStart},
-            {abs_end, AbsEnd},
-            {size, byte_size(Chunk)}}),
-    case AbsStart =< Offset andalso Offset =< AbsEnd of
-        true -> {ok, ChunkTuple};
-        false -> {error, 'chunk-not-at-offset'}
-    end;
-decode_chunk(_Offset, {error, _} = Err) ->
-    Err.
-
-decode_chunk_tuple(JSON, ChunkEnd) ->
-    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
-    {ChunkEnd - byte_size(Chunk) + 1, ChunkEnd, Chunk}.
-
-%% @doc Collect decoded chunk results. Fails fast on the first error.
-collect_chunks(Results) ->
-    collect_chunks(Results, []).
-
-collect_chunks([], Acc) ->
-    {ok, lists:reverse(Acc)};
-collect_chunks([{ok, ChunkInfo} | Rest], Acc) ->
-    collect_chunks(Rest, [ChunkInfo | Acc]);
-collect_chunks([{error, Reason} | _], _Acc) ->
-    {error, Reason}.
-
-%% @doc Sort chunk infos by start offset. If duplicate starts appear, log a
-%% warning since this should not happen.
-sort_chunks(ChunkInfos) ->
-    Sorted = lists:sort(
-        fun({StartA, EndA, _}, {StartB, EndB, _}) ->
-            case StartA =:= StartB of
-                true ->
-                    % This should never happen. Logging rather than ignoring
-                    % "just in case".
-                    ?event(
-                        warning,
-                        {duplicate_chunk_start_offset,
-                            {start, StartA},
-                            {left_end, EndA},
-                            {right_end, EndB}
-                        }
-                    );
-                false ->
-                    ok
-            end,
-            StartA =< StartB
-        end,
-        ChunkInfos
-    ),
-    Sorted.
-
-%% @doc Find byte ranges within [RangeStart, RangeEnd] not covered by any
-%% chunk. Returns a list of {GapStart, GapEnd} tuples.
-%% WARNING: the find_gaps logic is untested in production and may not be 
-%%          needed. We have yet to find an L1 TX that is chunked in such
-%%          a way as to create gaps when using our naive 256KiB chunking.
-find_gaps(SortedChunks, RangeStart, RangeEnd) ->
-    find_gaps(SortedChunks, RangeStart, RangeEnd, []).
-
-find_gaps([], Pos, RangeEnd, Gaps) when Pos =< RangeEnd ->
-    lists:reverse([{Pos, RangeEnd} | Gaps]);
-find_gaps([], _Pos, _RangeEnd, Gaps) ->
-    lists:reverse(Gaps);
-find_gaps([{ChunkStart, ChunkEnd, _} | Rest], Pos, RangeEnd, Gaps) ->
-    NewGaps = case ChunkStart > Pos of
-        true -> [{Pos, ChunkStart - 1} | Gaps];
-        false -> Gaps
-    end,
-    find_gaps(Rest, max(Pos, ChunkEnd + 1), RangeEnd, NewGaps).
-
-%% @doc Assemble chunk infos into a list of contiguous binaries suitable for
-%% iolist_to_binary. The first chunk is sliced if it starts before Offset.
-assemble_chunks(ChunkInfos, Offset) ->
-    Sorted = sort_chunks(ChunkInfos),
-    Binaries = lists:map(
-        fun({ChunkStart, _ChunkEnd, Data}) ->
-            case ChunkStart < Offset of
-                true ->
-                    % The first chunk may start before the requested offset;
-                    % trim the leading bytes to start exactly at Offset.
-                    Skip = Offset - ChunkStart,
-                    ?event(debug_arweave, {assemble_chunks,
-                        {skip, Skip},
-                        {chunk_start, ChunkStart},
-                        {offset, Offset},
-                        {byte_size, byte_size(Data)},
-                        {length, byte_size(Data) - Skip}
-                    }),
-                    binary:part(Data, Skip, byte_size(Data) - Skip);
-                false ->
-                    ?event(debug_arweave, {assemble_chunks,
-                        {chunk_start, ChunkStart},
-                        {offset, Offset},
-                        {byte_size, byte_size(Data)}
-                    }),
-                    Data
-            end
-        end,
-        Sorted
-    ),
-    {ok, Binaries}.
-
-get_chunk(Offset, Opts) ->
-    % Note: it's possible that we will need to add the x-bucket-based-offset
-    % header to *some* queries. When querying L1 TX chunks from after the
-    % strict data split threshold, in theory that header is needed. But I
-    % haven't found a TX which requires it. However, including the header
-    % when querying some *dataitems* does cause an error. So for now we will
-    % leaeve the header out and continue to search for a case where it is
-    % needed.
-    Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
-    maybe
-        {ok, JSON} ?=
-            request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts),
-        TXPath = hb_util:decode(maps:get(<<"tx_path">>, JSON)),
-        TXEnd = ar_merkle:extract_note(TXPath),
-        % The transaction proof supplies the data root and transaction bounds.
-        % Its block root is not available on this read path.
-        {ok, TXRoot} ?= ar_merkle:extract_root(TXPath),
-        {DataRoot, TXStart, TXEnd} =
-            ar_merkle:validate_path(TXRoot, TXEnd - 1, TXEnd, TXPath),
-        validate_chunk(JSON, DataRoot, TXEnd - TXStart)
-    end.
-
-%% @doc Check the data path, chunk hash and size against the data root.
-validate_chunk(JSON, DataRoot, DataSize) ->
-    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
-    ChunkID = ar_tx:generate_chunk_id(Chunk),
-    DataPath = hb_util:decode(maps:get(<<"data_path">>, JSON)),
-    {ChunkEnd, Ruleset} = chunk_position(DataPath, 0, 0, basic_ruleset),
-    case ar_merkle:validate_path(
-        DataRoot,
-        ChunkEnd - 1,
-        DataSize,
-        DataPath,
-        Ruleset
-    ) of
-        {ChunkID, Start, End} when End - Start =:= byte_size(Chunk) ->
-            {ok, JSON};
-        _ -> {error, 'invalid-chunk-proof'}
-    end.
-
-%% @doc Recover the transaction-relative end offset, including subtree rebases.
-chunk_position(<<_:32/binary, End:256>>, _Left, Shift, Ruleset) ->
-    {Shift + End, Ruleset};
-chunk_position(Path, Left, Shift, Ruleset) ->
-    {Rebased, Branch} =
-        case Path of
-            <<0:256, Rest/binary>> -> {true, Rest};
-            _ -> {false, Path}
-        end,
-    <<L:32/binary, _:32/binary, Note:256, Child/binary>> = Branch,
-    {ok, ChildRoot} =
-        ar_merkle:extract_root(
-            case Child of
-                <<0:256, ChildBranch/binary>> -> ChildBranch;
-                _ -> Child
-            end
-        ),
-    NextLeft =
-        case ChildRoot of
-            L -> Left;
-            _ -> max(Left, Note)
-        end,
-    case Rebased of
-        true ->
-            chunk_position(
-                Child,
-                0,
-                Shift + NextLeft,
-                offset_rebase_support_ruleset
-            );
-        false -> chunk_position(Child, NextLeft, Shift, Ruleset)
-    end.
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -970,7 +538,9 @@ block(Base, RawRequest, Opts) when is_map(Base) ->
                 true,
                 Opts
             )
-        ) },
+        ),
+        <<"include-tx-headers">> =>
+            hb_util:bool(find_key(<<"include-tx-headers">>, Base, RawRequest, Opts)) },
     Block =
         hb_maps:get_first(
             [
@@ -1006,6 +576,19 @@ block(Base, RawRequest, Opts) when is_map(Base) ->
         _ -> ok
     end,
     Result;
+block({height, Height}, Req = #{ <<"include-tx-headers">> := true }, Opts) ->
+    % `ar_block:binary_to_json_struct/1' reads blocks from the 2.9 fork on.
+    case Height >= ar_fork:height_2_9() andalso not only_if_cached(Req, Opts) of
+        true ->
+            block2(<<"height/", (hb_util:bin(Height))/binary>>, {height, Height}, Req, Opts);
+        false ->
+            block({height, Height}, Req#{ <<"include-tx-headers">> := false }, Opts)
+    end;
+block({id, ID}, Req = #{ <<"include-tx-headers">> := true }, Opts) ->
+    case only_if_cached(Req, Opts) of
+        false -> block2(<<"hash/", ID/binary>>, {id, ID}, Req, Opts);
+        true -> block({id, ID}, Req#{ <<"include-tx-headers">> := false }, Opts)
+    end;
 block({id, ID}, Req, Opts) ->
     case read_cached_block(ID, Req, Opts) of
         {ok, Block} ->
@@ -1052,6 +635,21 @@ block({height, Height}, Req, Opts) ->
                 Req,
                 Opts
             )
+    end.
+
+%% @doc Read a block from `/block2', asking for every transaction: the body
+%% has a set bit for each of the 1,000 transactions that a block can hold. A
+%% block that `/block2' does not give is read as a block without headers.
+block2(Path, Reference, Req, Opts) ->
+    Extra =
+        case Reference of
+            {height, Height} -> #{ <<"route-by">> => Height };
+            {id, _} -> #{}
+        end,
+    case request(<<"GET">>, <<"/block2/", Path/binary>>,
+            Extra#{ <<"body">> => binary:copy(<<255>>, 125) }, [], Req, Opts) of
+        {ok, Header} -> {ok, Header};
+        _ -> block(Reference, Req#{ <<"include-tx-headers">> := false }, Opts)
     end.
 
 %% @doc List the block heights available in the block cache.
@@ -1268,9 +866,9 @@ pending(Base, Request, Opts) ->
                                 },
                                 Opts
                             ),
-                        {ok, JSON} ?= get_pending_chunk(TXID, Offset, Opts),
+                        {ok, JSON} ?= dev_arweave_data:get_pending_chunk(TXID, Offset, Opts),
                         {ok, _} ?=
-                            decode_relative_chunk(
+                            dev_arweave_data:decode_relative_chunk(
                                 Offset,
                                 hb_util:decode(maps:get(<<"data-root">>, TX)),
                                 hb_util:int(maps:get(<<"data-size">>, TX)),
@@ -1280,19 +878,6 @@ pending(Base, Request, Opts) ->
                     end
             end
     end.
-
-%% @doc Download an unconfirmed chunk by its offset.
-get_pending_chunk(TXID, Offset, Opts) ->
-    request(
-        <<"GET">>,
-        <<
-            "/unconfirmed_chunk/",
-            TXID/binary,
-            "/",
-            (hb_util:bin(Offset))/binary
-        >>,
-        Opts
-    ).
 
 %%% Internal Functions
 
@@ -1390,6 +975,10 @@ to_message(Path = <<"/block_index/", _/binary>>, <<"GET">>,
     {ok, hb_json:decode(Body)};
 to_message(Path = <<"/unconfirmed_tx/", ID/binary>>, <<"GET">>, Result, LogExtra, Req, Opts) ->
     to_tx_message(pending, ID, Path, Result, LogExtra, Req, Opts);
+to_message(Path = <<"/tx/", _:43/binary, "/data.bin">>, <<"GET">>,
+        {ok, Response}, LogExtra, _Req, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    {ok, hb_maps:get(<<"body">>, Response, <<>>, Opts)};
 to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>,
         {ok, #{ <<"status">> := 202 }}, LogExtra, Req, Opts) ->
     % A node answers 202, with no header, for a TX in its mempool. The TX is
@@ -1407,6 +996,46 @@ to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, Response}, LogExtra, _R
     {ok, hb_maps:get(<<"body">>, Response, <<>>, Opts)};
 to_message(Path = <<"/block/", Ref/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Req, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
+    block_message(Path, Ref, Body, Req, Opts);
+to_message(Path = <<"/block2/", Ref/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Req, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    maybe
+        {ok, Struct, TXs} ?= ar_block:binary_to_json_struct(Body),
+        {ok, Block} ?= block_message(Path, Ref, hb_json:encode(Struct), Req, Opts),
+        with_tx_headers(Block, TXs, Opts)
+    end;
+to_message(Path = <<"/price/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    {ok, hb_util:int(Body)};
+to_message(Path = <<"/tx_anchor">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    {ok, hb_util:decode(Body)};
+to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    % All other responses that are `OK' status are converted from JSON to an
+    % AO-Core message.
+    ?event(
+        {arweave_json_response,
+            {path, Path},
+            {body_size, byte_size(Body)}
+        }
+    ),
+    {
+        ok,
+        hb_message:convert(
+            Body,
+            <<"structured@1.0">>,
+            #{
+                <<"device">> => <<"json@1.0">>,
+                <<"bundle">> => true
+            },
+            Opts
+        )
+    }.
+
+%% @doc Convert a block in Arweave's JSON form into its message, check that it
+%% is the block that the path asks for, and cache it.
+block_message(Path, Ref, Body, Req, Opts) ->
     Decoded =
         hb_message:convert(
             Body,
@@ -1438,35 +1067,35 @@ to_message(Path = <<"/block/", Ref/binary>>, <<"GET">>, {ok, #{ <<"body">> := Bo
             }
         ),
         {ok, Block}
-    end;
-to_message(Path = <<"/price/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
-    event_request(Path, <<"GET">>, 200, LogExtra),
-    {ok, hb_util:int(Body)};
-to_message(Path = <<"/tx_anchor">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, _Opts) ->
-    event_request(Path, <<"GET">>, 200, LogExtra),
-    {ok, hb_util:decode(Body)};
-to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Req, Opts) ->
-    event_request(Path, <<"GET">>, 200, LogExtra),
-    % All other responses that are `OK' status are converted from JSON to an
-    % AO-Core message.
-    ?event(
-        {arweave_json_response,
-            {path, Path},
-            {body_size, byte_size(Body)}
-        }
-    ),
-    {
-        ok,
-        hb_message:convert(
-            Body,
-            <<"structured@1.0">>,
-            #{
-                <<"device">> => <<"json@1.0">>,
-                <<"bundle">> => true
-            },
-            Opts
-        )
-    }.
+    end.
+
+%% @doc Add the headers of a block's transactions to it as `tx-headers', each
+%% verified as `tx/3' verifies a header, when `/block2' gave all of them.
+with_tx_headers(Block, TXs, Opts) ->
+    case lists:all(fun(TX) -> is_record(TX, tx) end, TXs) of
+        false -> {ok, Block};
+        true ->
+            maybe
+                {ok, Headers} ?= tx_header_messages(TXs, [], Opts),
+                {ok, Block#{ <<"tx-headers">> => Headers }}
+            end
+    end.
+
+%% @doc Verify each transaction header and convert it to a message, in order.
+tx_header_messages([], Headers, _Opts) ->
+    {ok, lists:reverse(Headers)};
+tx_header_messages([TX | TXs], Headers, Opts) ->
+    % A header carries the data of a format 1 transaction only, as a read with
+    % `exclude-data' gives it.
+    Header =
+        case TX#tx.format of
+            1 -> TX;
+            2 -> TX#tx{ data = ?DEFAULT_DATA }
+        end,
+    maybe
+        {ok, Msg} ?= verified_tx_message(hb_util:encode(TX#tx.id), Header, Opts),
+        tx_header_messages(TXs, [Msg | Headers], Opts)
+    end.
 
 %% @doc Generic handler for parsing a TX response from the Arweave node,
 %% including optionally adding the data payload if appropriate.
@@ -1496,7 +1125,7 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Req, Opts
                         tx ->
                             request(<<"GET">>, <<"/raw/", ID/binary>>, Opts);
                         pending ->
-                            get_chunk_range_relative(
+                            dev_arweave_data:get_chunk_range_relative(
                                 0,
                                 TXHeader#tx.data_size,
                                 ID,
@@ -1603,6 +1232,79 @@ block_index_reindex_test() ->
 include_proofs_test_() ->
     [{timeout, 60, fun() -> include_proofs(Height) end}
         || Height <- [0, 1000000, 2003806]].
+
+%% @doc A block within 50 of the tip, read with `include-tx-headers', is the
+%% block that `/block' gives, with a verified header for each transaction in
+%% `tx-headers' that is the header `tx' reads. An older block, and one before
+%% the 2.9 fork, are read without headers.
+include_tx_headers_test_() ->
+    {timeout, 120, fun include_tx_headers/0}.
+
+include_tx_headers() ->
+    Stores = [hb_test_utils:test_store(hb_store_volatile)
+        || _ <- lists:seq(1, 2)],
+    lists:foreach(fun hb_store:start/1, Stores),
+    [Ambient, Blocks] = Stores,
+    Opts = #{
+        <<"store">> => [Ambient],
+        <<"arweave-block-store">> => [Blocks],
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    Read = fun(Req) ->
+        {ok, Msg} = hb_ao:resolve(Req, Opts),
+        hb_private:reset(hb_cache:ensure_all_loaded(Msg, Opts))
+    end,
+    Block = fun(Req) ->
+        Read(Req#{ <<"path">> => <<"~arweave@2.9/block">> })
+    end,
+    try
+        Tip = hb_maps:get(<<"height">>, Block(#{ <<"block">> => <<"current">> }), Opts),
+        % The nearest block to the tip, 5 or more below it, that has
+        % transactions.
+        WithTXs =
+            fun WithTXs(H) ->
+                B = Block(#{ <<"block">> => H }),
+                case hb_maps:get(<<"txs">>, B, [], Opts) of
+                    [] -> WithTXs(H - 1);
+                    _ -> {H, B}
+                end
+            end,
+        {Height, Plain} = WithTXs(Tip - 5),
+        WithHeaders =
+            Block(#{ <<"block">> => Height, <<"include-tx-headers">> => true }),
+        % The unsigned commitment of a block covers its `tx-headers' too.
+        ?assertEqual(
+            hb_message:uncommitted(Plain, Opts),
+            hb_message:uncommitted(
+                hb_maps:without([<<"tx-headers">>], WithHeaders, Opts), Opts)
+        ),
+        Headers = hb_maps:get(<<"tx-headers">>, WithHeaders, Opts),
+        TXIDs = hb_maps:get(<<"txs">>, Plain, Opts),
+        ?assertEqual(TXIDs, [hb_message:id(H, signed, Opts) || H <- Headers]),
+        ?assert(lists:all(fun(H) -> hb_message:verify(H, all, Opts) end, Headers)),
+        ?assertEqual(
+            Read(
+                #{
+                    <<"path">> => <<"~arweave@2.9/tx">>,
+                    <<"tx">> => hd(TXIDs),
+                    <<"exclude-data">> => true
+                }
+            ),
+            hd(Headers)
+        ),
+        lists:foreach(
+            fun(Old) ->
+                OldPlain = Block(#{ <<"block">> => Old }),
+                OldWithHeaders =
+                    Block(#{ <<"block">> => Old, <<"include-tx-headers">> => true }),
+                ?assertNot(hb_maps:is_key(<<"tx-headers">>, OldWithHeaders, Opts)),
+                ?assertEqual(OldPlain, OldWithHeaders)
+            end,
+            [2003806, 1000000]
+        )
+    after
+        lists:foreach(fun hb_store:stop/1, Stores)
+    end.
 
 %% @doc Exercise both proof representations across historical block formats.
 include_proofs(Height) ->
@@ -2789,12 +2491,6 @@ serialize_data_item_test_disabled() ->
     ?assertEqual(length(DataItem#tx.tags), length(VerifiedItem#tx.tags)),
     ?assert(ar_bundles:verify_item(VerifiedItem)),
     ok.
-
-pending_relative_chunk_helpers_test_parallel() ->
-    DataSize = 315127,
-    ?assertEqual([?DATA_CHUNK_SIZE], pending_relative_chunk_offsets(0, 1, DataSize)),
-    ?assertEqual([DataSize], pending_relative_chunk_offsets(?DATA_CHUNK_SIZE, 1, DataSize)),
-    ?assertEqual([?DATA_CHUNK_SIZE, DataSize], pending_relative_chunk_offsets(0, DataSize, DataSize)).
 
 get_partial_chunk_post_split_test_parallel() ->
     %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset

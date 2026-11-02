@@ -246,6 +246,11 @@ list_index_blocks(Request, Current, To, Opts, Acc) ->
     end.
 
 fetch_block_header(Height, Request, Opts) ->
+    fetch_block_header(Height, Request, false, Opts).
+
+%% @doc Fetch a block. With `TXHeaders', the block carries the headers of its
+%% transactions where the node gives them (see `~arweave@2.9/block').
+fetch_block_header(Height, Request, TXHeaders, Opts) ->
     ?event(debug_copycat, {fetching_block, Height}),
     CacheControl =
         lists:flatten([hb_maps:get(<<"cache-control">>, Request, [], Opts)]),
@@ -259,7 +264,8 @@ fetch_block_header(Height, Request, Opts) ->
                         false -> CacheControl
                     end,
                 <<"include-proofs">> => hb_maps:get(<<"include-proofs">>, Request, true, Opts),
-                <<"include-block-index">> => include_block_index(Request, Opts) },
+                <<"include-block-index">> => include_block_index(Request, Opts),
+                <<"include-tx-headers">> => TXHeaders },
             Opts
         )
     end).
@@ -302,7 +308,13 @@ fetch_blocks(Req, Current, To, IndexMode, Opts) ->
     % this mode, so overlapping ranges from different callers are not re-fetched.
     (reindex(Req, Opts) orelse not is_block_indexed(Current, IndexMode, Req, Opts))
         andalso observe_event(<<"block_indexed">>, fun() ->
-            process_block(fetch_block_header(Current, Req, Opts), Current, To, IndexMode, Opts)
+            process_block(
+                fetch_block_header(Current, Req, IndexMode =/= blocks, Opts),
+                Current,
+                To,
+                IndexMode,
+                Opts
+            )
         end),
     fetch_blocks(Req, Current - 1, To, IndexMode, Opts).
 
@@ -317,7 +329,7 @@ fetch_to_indexed_block(Req, Current, IndexMode, Lowest, Opts) ->
         false when Current =< Lowest ->
             {error, <<"Copycat range exceeds the node limit.">>};
         false ->
-            BlockRes = fetch_block_header(Current, Req, Opts),
+            BlockRes = fetch_block_header(Current, Req, IndexMode =/= blocks, Opts),
             case IndexMode =:= shallow andalso is_already_indexed(BlockRes, Opts) of
                 true ->
                     stop_at_indexed_block(Req, Current);
@@ -478,7 +490,7 @@ maybe_index_ids(Block, IndexMode, Opts) ->
             BlockSize = hb_util:int(
                 hb_maps:get(<<"block-size">>, Block, 0, Opts)),
             BlockStartOffset = BlockEndOffset - BlockSize,
-            case resolve_tx_headers(TXIDs, Opts) of
+            case block_tx_headers(Block, TXIDs, Opts) of
                 error ->
                     % Skip entire block if any transaction errors
                     {block_skipped, #{
@@ -546,8 +558,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, IndexMode, Opts) ->
                     counters(0, 0, 0);
                 true when IndexMode =/= shallow ->
                     try
-                        case hb_store_arweave:read_chunks(
-                            TXStartOffset, TX#tx.data_size, Opts) of
+                        case read_tx_data(TX, TXStartOffset, Opts) of
                             {ok, BundleData} ->
                                 {TotalTime, IndexRes} = timer:tc(
                                     fun() ->
@@ -1039,6 +1050,42 @@ download_bundle_header(EndOffset, Size, Opts) ->
     observe_event(<<"bundle_header">>, fun() ->
         lib_arweave_common:bundle_header(EndOffset - Size, Size, Opts)
     end).
+
+%% @doc Read the data of a confirmed transaction: in one request when it hashes
+%% to the transaction's data root (see `~arweave@2.9/chunk'), chunk by chunk
+%% otherwise.
+read_tx_data(TX, StartOffset, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => StartOffset + 1,
+            <<"length">> => TX#tx.data_size,
+            <<"tx">> => hb_util:encode(TX#tx.id),
+            <<"data-root">> => hb_util:encode(TX#tx.data_root)
+        },
+        Opts
+    ).
+
+%% @doc The headers of a block's transactions, as `tx@1.0' records: those that
+%% the block carries in `tx-headers', or each read by its ID.
+block_tx_headers(Block, TXIDs, Opts) ->
+    case hb_maps:find(<<"tx-headers">>, Block, Opts) of
+        {ok, Headers} ->
+            {ok,
+                [
+                    hb_message:convert(
+                        Header,
+                        <<"tx@1.0">>,
+                        <<"structured@1.0">>,
+                        Opts
+                    )
+                ||
+                    Header <- Headers
+                ]};
+        error ->
+            resolve_tx_headers(TXIDs, Opts)
+    end.
 
 resolve_tx_headers(TXIDs, Opts) ->
     Results = parallel_map(
@@ -2609,6 +2656,31 @@ small_block_full_mode_test() ->
     ?assert(hb_message:verify(L3Header, all, Opts), {verify_failed, L3ID}),
     ?assertEqual(L3ID, hb_message:id(L3Header, signed, Opts)),
     ok.
+
+%% @doc A block within 50 of the tip is indexed from the transaction headers
+%% that its block read carries.
+tip_block_shallow_mode_test_() ->
+    {timeout, 120, fun() ->
+        {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+        {ok, Tip} = hb_ao:resolve(<<"~arweave@2.9/current">>, Opts),
+        Height = hb_maps:get(<<"height">>, Tip, Opts) - 5,
+        {ok, Block} = fetch_block_header(Height, #{}, true, Opts),
+        ?assert(hb_maps:is_key(<<"tx-headers">>, Block, Opts)),
+        {ok, Height} =
+            hb_ao:resolve(
+                <<
+                    "~copycat@1.0/arweave&"
+                    "from=", (hb_util:bin(Height))/binary, "&"
+                    "to=", (hb_util:bin(Height))/binary, "&"
+                    "mode=shallow"
+                >>,
+                Opts
+            ),
+        lists:foreach(
+            fun(TXID) -> ?assert(is_tx_indexed(TXID, Opts), TXID) end,
+            hb_maps:get(<<"txs">>, Block, [], Opts)
+        )
+    end}.
 
 %% @doc Every index mode caches L1 transaction headers in the local store, so a
 %% transaction's committed fields -- here its `target' -- are matchable from the
