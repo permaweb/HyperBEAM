@@ -284,7 +284,9 @@ committer_client_ledger_survives_json_test() ->
     ?assertEqual(7, (token_lib()):balance(State, Owner, Opts)),
     ?assertEqual(2, (token_lib()):balance(State, Other, Opts)).
 
-committer_client_transfer_preserves_raw_notices_test() ->
+%% @doc A transfer's notices give the sender and the recipient as the URIs of
+%% their accounts.
+committer_client_transfer_gives_account_notices_test() ->
     Opts = opts(),
     Sender = ar_wallet:new(),
     Recipient = ar_wallet:new(),
@@ -304,15 +306,17 @@ committer_client_transfer_preserves_raw_notices_test() ->
         Computed, hb_committer:uri(Recipient, Opts), Opts
     )),
     Notices = outbox(Computed, Opts),
+    SenderURI = hb_committer:uri(Sender, Opts),
+    RecipientURI = hb_committer:uri(Recipient, Opts),
     ?assert(has_message([
         {<<"action">>, <<"Debit-Notice">>},
-        {<<"target">>, hb:address(Sender)},
-        {<<"recipient">>, hb:address(Recipient)}
+        {<<"target">>, SenderURI},
+        {<<"recipient">>, RecipientURI}
     ], Notices, Opts)),
     ?assert(has_message([
         {<<"action">>, <<"Credit-Notice">>},
-        {<<"target">>, hb:address(Recipient)},
-        {<<"sender">>, hb:address(Sender)}
+        {<<"target">>, RecipientURI},
+        {<<"sender">>, SenderURI}
     ], Notices, Opts)).
 
 balance_missing_account_returns_zero_test() ->
@@ -403,9 +407,9 @@ mixed_case_transfer_updates_canonical_balances_test() ->
         Notice <- Notices,
         hb_ao:get(<<"action">>, Notice, Opts) =:= <<"Credit-Notice">>
     ],
-    ?assertEqual(Alice, hb_ao:get(<<"target">>, Debit, Opts)),
-    ?assertEqual(Bob, hb_ao:get(<<"target">>, Credit, Opts)),
-    ?assertEqual(Alice, hb_ao:get(<<"sender">>, Credit, Opts)).
+    ?assertEqual(account_key(Alice), hb_ao:get(<<"target">>, Debit, Opts)),
+    ?assertEqual(account_key(Bob), hb_ao:get(<<"target">>, Credit, Opts)),
+    ?assertEqual(account_key(Alice), hb_ao:get(<<"sender">>, Credit, Opts)).
 
 outbox_default_broadcast_subscription_test() ->
     Opts = opts(),

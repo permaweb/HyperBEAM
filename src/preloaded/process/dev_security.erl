@@ -141,7 +141,7 @@ validate_authority(Base, Assignment, Opts) ->
                         hb_ao:set(
                             Assignment,
                             <<"body/from">>,
-                            Sender,
+                            hb_committer:uri(Sender),
                             Opts
                         )
                     }
@@ -197,13 +197,7 @@ decode_authority_actions(Encoded) ->
 %% @doc If a message purporting to be from a process satisfies the compute
 %% authority constraints, return true, otherwise return false.
 validate(Key, Base, SubjectMsg, Opts) ->
-    validate(
-        Key,
-        Base,
-        SubjectMsg,
-        [hb_util:committer_address(S) || S <- hb_message:signers(SubjectMsg, Opts)],
-        Opts
-    ).
+    validate(Key, Base, SubjectMsg, hb_message:signers(SubjectMsg, Opts), Opts).
 validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
     Template = security_template(Key, Base, Opts),
     validate_with_template(Template, Key, Base, SubjectMsg, RawFrom, Opts).
@@ -219,7 +213,7 @@ verified_signers(SubjectMsg, Opts) when is_map(SubjectMsg) ->
                 {error, <<"Security subject has no signers.">>};
             _ ->
                 case hb_message:verify(SubjectMsg, Signers, Opts) of
-                    true -> {ok, [hb_util:committer_address(S) || S <- Signers]};
+                    true -> {ok, Signers};
                     false ->
                         {error, <<"Security subject signature verification failed.">>}
                 end
@@ -255,7 +249,7 @@ validate_with_template(<<"static-signer-set">>, Key, Base, SubjectMsg, RawFrom, 
                     true
             end,
         %% Dedup identities so duplicate committers cannot satisfy min-N thresholds.
-        From = lists:uniq(as_list(RawFrom, Opts)),
+        From = lists:uniq([hb_committer:uri(F) || F <- as_list(RawFrom, Opts)]),
         ValidOrError = as_signer_config_list(hb_ao:get(Key, Base, [], Opts), Opts),
         true ?= is_list(ValidOrError) orelse ValidOrError,
         Valid = lists:uniq(ValidOrError),
@@ -379,7 +373,7 @@ valid_static_signer(_Signer) ->
     true.
 
 single_authority_candidate(RawFrom, Opts) ->
-    case lists:uniq(as_list(RawFrom, Opts)) of
+    case lists:uniq([hb_committer:uri(F) || F <- as_list(RawFrom, Opts)]) of
         [Candidate] ->
             maybe
                 true ?= validate_address(Candidate, [], Opts),
@@ -574,11 +568,13 @@ count_common(ListA, ListB) -> length([X || X <- ListA, lists:member(X, ListB)]).
 as_list(Value, _Opts) when is_list(Value) -> Value;
 as_list(Value, _Opts) -> [Value].
 
-%% @doc Normalize signer config values. Supports true lists and comma-separated
-%% binary encodings used in process security configuration.
-as_signer_config_list(Value, _Opts) when is_list(Value) -> Value;
-as_signer_config_list(Value, _Opts) when is_binary(Value) ->
-    hb_util:binary_to_strings(Value);
+%% @doc Normalize signer config values to the URIs of their committers. Supports
+%% true lists and comma-separated binary encodings used in process security
+%% configuration.
+as_signer_config_list(Value, _Opts) when is_list(Value) ->
+    [hb_committer:uri(Signer) || Signer <- Value];
+as_signer_config_list(Value, Opts) when is_binary(Value) ->
+    as_signer_config_list(hb_util:binary_to_strings(Value), Opts);
 as_signer_config_list(_Value, _Opts) ->
     {error, <<"Signer config must be a binary or a list.">>}.
 %% @doc Normalize and validate a `*-match` threshold against the acceptable

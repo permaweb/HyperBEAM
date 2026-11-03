@@ -395,7 +395,7 @@ transfer(Base, Assignment, Opts) ->
             end,
         % Send transfer notices.
         {ok, WithNotices} ?= outbox_send(
-            transfer_notices(From0, Recipient0, Quantity, Req, Opts),
+            transfer_notices(From, Recipient, Quantity, Req, Opts),
             NewBaseAfterTransfer,
             Opts
         ),

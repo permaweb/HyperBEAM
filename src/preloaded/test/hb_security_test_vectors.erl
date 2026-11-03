@@ -76,7 +76,10 @@ token_policy(Balances, TotalSupply, Extra, Opts) ->
     StoredBalances =
         case maps:get(<<"swap-device">>, Extra, not_found) of
             not_found -> canonical_balances(Balances);
-            _ -> Balances
+            _ ->
+                maps:from_list(
+                    [{hb_committer:uri(ID), Amount} || ID := Amount <- Balances]
+                )
         end,
     {ok, BalanceTrie} =
         hb_ao:resolve(
@@ -167,7 +170,7 @@ assigned_message_device_test_() ->
                     case Accepted of
                         true ->
                             {ok, Secured} = Result,
-                            ?assertEqual(Sender,
+                            ?assertEqual(hb_committer:uri(Sender),
                                 hb_ao:get(<<"body/from">>, Secured, Opts)),
                             ?assertEqual(<<"message@1.0">>,
                                 hb_ao:get(<<"body/device">>, Secured, Opts));
@@ -268,7 +271,10 @@ compute_hydrates_two_of_three_assignment_body_vector_test() ->
             Opts
         ),
     From = hb_ao:get(<<"body/from">>, SecuredAssignment, Opts),
-    ?assertEqual(lists:sort([AdminA, AdminB]), lists:sort(From)),
+    ?assertEqual(
+        lists:sort([hb_committer:uri(AdminA), hb_committer:uri(AdminB)]),
+        lists:sort(From)
+    ),
     ?assertEqual(
         {ok, true},
         validate(
@@ -309,7 +315,7 @@ delegated_transfer_action_allowed_vector_test() ->
             Opts
         ),
     ?assertEqual(
-        DelegatedSender,
+        hb_committer:uri(DelegatedSender),
         hb_ao:get(<<"body/from">>, SecuredAssignment, Opts)
     ).
 
@@ -512,7 +518,7 @@ wallet_action_does_not_require_delegated_policy_vector_test() ->
             Opts
         ),
     ?assertEqual(
-        WalletAddress,
+        hb_committer:uri(WalletAddress),
         hb_ao:get(<<"body/from">>, SecuredAssignment, Opts)
     ).
 
@@ -678,8 +684,10 @@ set_authority_supply_owner_uses_canonical_swap_id_vector_test() ->
         {ok, true},
         validate(<<"set-authority">>, Policy, Owner, Opts)
     ),
-    ?assertEqual(
-        {ok, true},
+    % A committer's URI keeps the case of its address: the address in
+    % lowercase is another account.
+    ?assertMatch(
+        {error, _},
         validate(
             <<"set-authority">>,
             Policy,
