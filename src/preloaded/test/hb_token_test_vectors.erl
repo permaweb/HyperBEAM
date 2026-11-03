@@ -1316,3 +1316,43 @@ unrelated_all_mode_traffic_is_ignored_test() ->
     ?assertEqual(1, asset_balance(Result, Owner, Opts)),
     ?assertEqual([], asset_orders(Result, Opts)),
     ?assertEqual([], outbox(Result, Opts)).
+
+%% @doc A recipient, balance or mint subject that is not a committer is an
+%% error, not a throw, and does not block a later transfer. Every form of a
+%% committer gives its one account.
+malformed_accounts_do_not_block_followup_transfer_test() ->
+    Opts = opts(),
+    Alice = id(<<"alice">>),
+    Bob = id(<<"bob">>),
+    Ethereum = <<"0x52908400098527886E0F7030069857D2E4169EE7">>,
+    Base = token_state(#{ initial_balances => #{ Alice => 2 } }, Opts),
+    Rejected = lists:foldl(
+        fun({Account, Reason}, State) ->
+            ?assertEqual({error, Reason}, public_balance(State, Account, Opts)),
+            ?assertEqual(
+                {error, Reason},
+                (token()):mint(
+                    State,
+                    #{ <<"body">> => #{ <<"subject">> => Account } },
+                    Opts
+                )
+            ),
+            {ok, Next} = transfer(State, Alice, Account, 1, Opts),
+            ?assertEqual(2, balance(Next, Alice, Opts)),
+            [Notice | _] = outbox(Next, Opts),
+            ?assertEqual(Reason, hb_ao:get(<<"reason">>, Notice, Opts)),
+            Next
+        end,
+        Base,
+        [
+            {<<255>>, <<"Not the address or URI of a committer.">>},
+            {42, <<"A committer must be given as a binary.">>}
+        ]
+    ),
+    {ok, ToBob} = transfer(Rejected, Alice, <<"did:ar:", Bob/binary>>, 1, Opts),
+    {ok, Updated} = transfer(ToBob, Alice, Ethereum, 1, Opts),
+    ?assertEqual({ok, 1}, public_balance(Updated, account_key(Bob), Opts)),
+    ?assertEqual(
+        {ok, 1},
+        public_balance(Updated, <<"did:pkh:eip155:1:", Ethereum/binary>>, Opts)
+    ).
