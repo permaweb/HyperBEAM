@@ -10,8 +10,6 @@
 -implements(<<"security@1.0">>).
 %%% Device API.
 -export([device_info/0, compute/3, validate/3]).
-%%% Public helpers.
--export([validate_address/3]).
 
 %% @doc Return the public security device API.
 device_info() ->
@@ -131,7 +129,7 @@ validate_authority(Base, Assignment, Opts) ->
                 maybe
                     %% A delegated sender must be one valid identity, never a
                     %% list interpreted as multiple authorization candidates.
-                    true ?= validate_address(Sender, [], Opts),
+                    {ok, From} ?= hb_committer:validated(Sender),
                     true ?= (length(Signers) =:= 1) orelse
                         {error, <<"Delegated messages require exactly one signer.">>},
                     true ?= validate(<<"authority">>, Base, Msg, Signers, Opts),
@@ -141,7 +139,7 @@ validate_authority(Base, Assignment, Opts) ->
                         hb_ao:set(
                             Assignment,
                             <<"body/from">>,
-                            hb_committer:uri(Sender),
+                            From,
                             Opts
                         )
                     }
@@ -378,10 +376,7 @@ valid_static_signer(_Signer) ->
 single_authority_candidate(RawFrom, Opts) ->
     case lists:uniq([hb_committer:uri(F) || F <- as_list(RawFrom, Opts)]) of
         [Candidate] ->
-            maybe
-                true ?= validate_address(Candidate, [], Opts),
-                {ok, Candidate}
-            end;
+            hb_committer:validated(Candidate);
         [] ->
             {error, <<"Authority candidate not found.">>};
         _ ->
@@ -450,78 +445,6 @@ parse_integer(Value) when is_binary(Value) ->
     end;
 parse_integer(_Value) ->
     {error, <<"Integer value is invalid.">>}.
-
-id_key(ID) -> hb_util:to_lower(hb_util:bin(ID)).
-
-validate_address(Address, _, _) when not is_binary(Address) ->
-    {error, <<"Address must be a binary.">>};
-validate_address(Address, CustomList, Opts) ->
-    validate_address(Address, CustomList, Opts, id_key(Address)).
-
-validate_address(Address, CustomList, Opts, IDKey)
-        when is_binary(Address), is_list(CustomList) ->
-    CanonicalCustomKeys = [id_key(Key) || Key <- CustomList, is_binary(Key)],
-    case byte_size(Address) of
-        0 -> {error, <<"Address cannot be empty.">>};
-        N when N > 128 -> {error, <<"Address is too long.">>};
-        _ ->
-            TrieReservedKeys = trie_reserved_keys(Opts),
-            maybe
-                true ?= (IDKey =/= <<"path">>)
-                    orelse {error, <<"Address uses the reserved path key.">>},
-                true ?= (not is_device_key(IDKey, Opts))
-                    orelse {error, <<"Address uses a reserved device key.">>},
-                true ?= (not is_reserved_trie_key(Address, TrieReservedKeys))
-                    orelse {error, <<"Address uses a reserved trie internal key.">>},
-                true ?= (not is_reserved_trie_key(IDKey, TrieReservedKeys))
-                    orelse {error, <<"Address uses a reserved trie internal key.">>},
-                true ?= (not is_reserved_custom_key(Address, CustomList))
-                    orelse {error, <<"Address is a reserved custom key.">>},
-                true ?= (not is_reserved_custom_key(IDKey, CanonicalCustomKeys))
-                    orelse {error, <<"Address is a reserved custom key.">>},
-                true ?= valid_address_chars(Address)
-                    orelse {error, <<"Address contains unsupported characters.">>}
-            end
-    end;
-validate_address(_, _, _, _) ->
-    {error, <<"Address must be a binary.">>}.
-
-is_device_key(Key, Opts) ->
-    lists:any(
-        fun(Device) ->
-            case hb_device:message_to_fun(
-                #{<<"device">> => Device}, Key, Opts
-            ) of
-                {ok, _, _} -> true;
-                {add_key, _, _} -> false
-            end
-        end,
-        [<<"message@1.0">>, <<"trie@1.0">>]
-    ).
-
-trie_reserved_keys(Opts) ->
-    {ok, Trie} = hb_device_load:reference(<<"trie@1.0">>, Opts),
-    maps:get(reserved, Trie:device_info(), []).
-
-is_reserved_trie_key(Key, ReservedKeys) ->
-    lists:member(Key, ReservedKeys).
-
-is_reserved_custom_key(Key, List) when is_binary(Key), is_list(List) ->
-    lists:member(Key, List);
-is_reserved_custom_key(_, _) ->
-    false.
-
-valid_address_chars(<<>>) ->
-    true;
-valid_address_chars(<<Char, Rest/binary>>) when
-        Char >= $A, Char =< $Z;
-        Char >= $a, Char =< $z;
-        Char >= $0, Char =< $9;
-        Char =:= $_;
-        Char =:= $- ->
-    valid_address_chars(Rest);
-valid_address_chars(_) ->
-    false.
 
 %% @doc Validate that the request satisfies the given constraints.
 %% Returns true if:

@@ -14,6 +14,10 @@ opts() ->
 base() ->
     #{ <<"device">> => <<"process-outbox@1.0">> }.
 
+%% @doc The address of a test account, and the host-form URI of its committer.
+account(Name) -> hb_util:human_id(crypto:hash(sha256, Name)).
+uri(Name) -> hb_committer:uri(account(Name)).
+
 call(Path, State, Req, Opts) ->
     hb_ao:resolve(State, Req#{ <<"path">> => Path }, Opts).
 
@@ -97,7 +101,8 @@ subscribe_default_broadcast_vector_test() ->
         call(
             <<"subscribe">>,
             base(),
-            subscription_req(<<"Ping">>, default, <<"listener-a">>, 11),
+            subscription_req(
+                <<"Ping">>, default, <<"did:ar:", (account(<<"listener-a">>))/binary>>, 11),
             Opts
         ),
     {ok, Subscribers} =
@@ -107,7 +112,7 @@ subscribe_default_broadcast_vector_test() ->
             #{ <<"action">> => <<"Ping">> },
             Opts
         ),
-    ?assertEqual([<<"listener-a">>], Subscribers),
+    ?assertEqual([uri(<<"listener-a">>)], Subscribers),
     {ok, WithNotice} =
         call(
             <<"send">>,
@@ -120,7 +125,7 @@ subscribe_default_broadcast_vector_test() ->
     ?assert(has_message(
         [
             {<<"action">>, <<"notify">>},
-            {<<"target">>, <<"listener-a">>},
+            {<<"target">>, uri(<<"listener-a">>)},
             {<<"x-action">>, <<"Ping">>}
         ],
         Notices,
@@ -133,14 +138,14 @@ targeted_subscription_vector_test() ->
         call(
             <<"subscribe">>,
             base(),
-            subscription_req(<<"Debit-Notice">>, <<"alice">>, <<"listener-a">>, 21),
+            subscription_req(<<"Debit-Notice">>, account(<<"alice">>), account(<<"listener-a">>), 21),
             Opts
         ),
     {ok, BothSubscribed} =
         call(
             <<"subscribe">>,
             AliceSubscribed,
-            subscription_req(<<"Debit-Notice">>, <<"bob">>, <<"listener-b">>, 22),
+            subscription_req(<<"Debit-Notice">>, account(<<"bob">>), account(<<"listener-b">>), 22),
             Opts
         ),
     {ok, Updated} =
@@ -151,7 +156,7 @@ targeted_subscription_vector_test() ->
                 <<"messages">> =>
                     #{
                         <<"action">> => <<"Debit-Notice">>,
-                        <<"target">> => <<"alice">>,
+                        <<"target">> => account(<<"alice">>),
                         <<"quantity">> => 5
                     }
             },
@@ -161,8 +166,8 @@ targeted_subscription_vector_test() ->
     ?assert(has_message(
         [
             {<<"action">>, <<"notify">>},
-            {<<"target">>, <<"listener-a">>},
-            {<<"x-target">>, <<"alice">>},
+            {<<"target">>, uri(<<"listener-a">>)},
+            {<<"x-target">>, account(<<"alice">>)},
             {<<"x-quantity">>, 5}
         ],
         Notices,
@@ -171,7 +176,7 @@ targeted_subscription_vector_test() ->
     ?assertNot(has_message(
         [
             {<<"action">>, <<"notify">>},
-            {<<"target">>, <<"listener-b">>}
+            {<<"target">>, uri(<<"listener-b">>)}
         ],
         Notices,
         Opts
@@ -179,7 +184,7 @@ targeted_subscription_vector_test() ->
 
 unsubscribe_removes_listener_vector_test() ->
     Opts = opts(),
-    Req = subscription_req(<<"Debit-Notice">>, <<"alice">>, <<"listener-a">>, 31),
+    Req = subscription_req(<<"Debit-Notice">>, account(<<"alice">>), account(<<"listener-a">>), 31),
     {ok, Subscribed} = call(<<"subscribe">>, base(), Req, Opts),
     {ok, Unsubscribed} = call(<<"unsubscribe">>, Subscribed, Req, Opts),
     {ok, Subscribers} =
@@ -188,7 +193,7 @@ unsubscribe_removes_listener_vector_test() ->
             Unsubscribed,
             #{
                 <<"action">> => <<"Debit-Notice">>,
-                <<"target">> => <<"alice">>
+                <<"target">> => account(<<"alice">>)
             },
             Opts
         ),
@@ -201,7 +206,7 @@ unsubscribe_removes_listener_vector_test() ->
                 <<"messages">> =>
                     #{
                         <<"action">> => <<"Debit-Notice">>,
-                        <<"target">> => <<"alice">>
+                        <<"target">> => account(<<"alice">>)
                     }
             },
             Opts
@@ -214,7 +219,7 @@ notify_only_vector_test() ->
         call(
             <<"subscribe">>,
             base(),
-            subscription_req(<<"Audit">>, <<"alice">>, <<"listener-a">>, 41),
+            subscription_req(<<"Audit">>, account(<<"alice">>), account(<<"listener-a">>), 41),
             Opts
         ),
     {ok, Updated} =
@@ -225,7 +230,7 @@ notify_only_vector_test() ->
                 <<"messages">> =>
                     #{
                         <<"action">> => <<"Audit">>,
-                        <<"target">> => <<"alice">>,
+                        <<"target">> => account(<<"alice">>),
                         <<"quantity">> => 42
                     }
             },
@@ -233,9 +238,9 @@ notify_only_vector_test() ->
         ),
     [Notice] = outbox(Updated, Opts),
     ?assertEqual(<<"notify">>, hb_ao:get(<<"action">>, Notice, Opts)),
-    ?assertEqual(<<"listener-a">>, hb_ao:get(<<"target">>, Notice, Opts)),
+    ?assertEqual(uri(<<"listener-a">>), hb_ao:get(<<"target">>, Notice, Opts)),
     ?assertEqual(<<"Audit">>, hb_ao:get(<<"x-action">>, Notice, Opts)),
-    ?assertEqual(<<"alice">>, hb_ao:get(<<"x-target">>, Notice, Opts)),
+    ?assertEqual(account(<<"alice">>), hb_ao:get(<<"x-target">>, Notice, Opts)),
     ?assertEqual(42, hb_ao:get(<<"x-quantity">>, Notice, Opts)).
 
 malformed_subscribe_vector_test() ->
@@ -255,6 +260,30 @@ malformed_subscribe_vector_test() ->
             <<"subscribe">>,
             base(),
             #{ <<"body">> => #{ <<"subscribe-action">> => <<"Ping">> } },
+            Opts
+        )
+    ),
+    ?assertEqual(
+        {error, <<"Not the address or URI of a committer.">>},
+        call(
+            <<"subscribe">>,
+            base(),
+            subscription_req(<<"Ping">>, default, <<"listener-a">>, 1),
+            Opts
+        )
+    ),
+    % An action that is not a binary is refused rather than thrown on.
+    ?assertEqual(
+        {error, <<"`subscribe-action` must be a binary.">>},
+        call(
+            <<"subscribe">>,
+            base(),
+            subscription_req(
+                #{ <<"a">> => 1 },
+                default,
+                hb_util:human_id(crypto:hash(sha256, <<"listener">>)),
+                1
+            ),
             Opts
         )
     ).

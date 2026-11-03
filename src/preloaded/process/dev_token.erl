@@ -6,8 +6,6 @@
 %%% as publicly callable device keys, either by having arity > 3, or by gating
 %%% the public surface in `device_info/0`.
 -export([handle_action/4]).
-%%% Public helpers.
--export([validate_address/2]).
 -include("include/hb.hrl").
 
 -implements(<<"token@1.0">>).
@@ -48,29 +46,6 @@
         <<"hashpath">>
     ]
 ).
-%% @doc `validate_address/2` built-in reserved keys list
--define(AO_RESERVED_ADDRESS_KEYS,
-    [
-        <<"path">>,
-        <<"get">>,
-        <<"set">>,
-        <<"remove">>,
-        <<"verify">>,
-        <<"keys">>,
-        <<"id">>,
-        <<"commit">>,
-        <<"committed">>,
-        <<"committers">>,
-        <<"index">>,
-        <<"info">>,
-        <<"set_path">>,
-        <<"reserved_keys">>,
-        <<"is_reserved_key">>,
-        <<"dedup">>,
-        <<"dedup-subject">>
-    ]
-).
-
 %% @doc Return the configured `set` field whitelist. Defaults to open policy
 %% via wildcard unless `whitelisted-fields` is explicitly restricted.
 whitelisted_auth_fields(Base, Opts) ->
@@ -205,7 +180,7 @@ seed_holding(Base, Opts) ->
             ) of
                 {ok, Supply} when Supply >= 0 ->
                     Base#{
-                        <<"balances">> => #{ account_key(Holder) => Supply }
+                        <<"balances">> => #{ hb_committer:uri(Holder) => Supply }
                     };
                 _ ->
                     Base
@@ -282,8 +257,7 @@ normalize_action(Action) ->
 balance(Base, Req, Opts) ->
     maybe
         {ok, Account0} ?= field(<<"balance">>, Req, Opts),
-        true ?= validate_address(Account0, [], Opts),
-        Account = account_key(Account0),
+        {ok, Account} ?= hb_committer:validated(Account0),
         ?event(
             debug_token,
             {balance_request,
@@ -340,11 +314,8 @@ transfer(Base, Assignment, Opts) ->
                 {ok, Integer} -> Integer;
                 _ -> Quantity0
             end,
-        % validate From/Recipient sanity
-        true ?= validate_address(From0, [], Opts),
-        true ?= validate_address(Recipient0, [], Opts),
-        From = account_key(From0),
-        Recipient = account_key(Recipient0),
+        {ok, From} ?= hb_committer:validated(From0),
+        {ok, Recipient} ?= hb_committer:validated(Recipient0),
         % Normalize the base's minting state for the sender.
         {ok, NormBase} ?=
             normalize_mint(
@@ -449,12 +420,12 @@ mint(Base, Assignment, Opts) ->
                     as_mint_device(<<"mint">>, Base, Assignment, Opts);
                 {ok, Subject} ->
                     maybe
-                        true ?= validate_address(Subject, [], Opts),
+                        {ok, Account} ?= hb_committer:validated(Subject),
                         MintReq1 =
                             hb_ao:set(
                                 Assignment#{ <<"device">> => <<"message@1.0">> },
                                 <<"subject">>,
-                                account_key(Subject),
+                                Account,
                                 Opts
                             ),
                         as_mint_device(<<"mint">>, Base, MintReq1, Opts)
@@ -587,56 +558,6 @@ field(Key, Msg, Opts) ->
         {ok, Value} -> {ok, Value};
         error -> {error, not_found}
     end.
-
-%% @doc Validate address format for security. the validation
-%% allows binary addresses up to 128 bytes and prevent invalid
-%% addresses such as trie reserved keys.
-validate_address(Address, CustomList) ->
-    validate_address(Address, CustomList, #{}).
-
-validate_address(Address, CustomList, Opts) when is_binary(Address), is_list(CustomList) ->
-    ReservedKeys = ?AO_RESERVED_ADDRESS_KEYS ++ CustomList,
-    AccountKey = hb_util:to_lower(Address),
-    CanonicalReservedKeys = [hb_util:to_lower(Key) || Key <- ReservedKeys, is_binary(Key)],
-    case byte_size(Address) of
-        0 -> {error, <<"Address cannot be empty.">>};
-        N when N > 128 -> {error, <<"Address is too long.">>};
-        _ ->
-            TrieReservedKeys = trie_reserved_keys(Opts),
-            maybe
-                true ?= (not is_reserved_trie_key(Address, TrieReservedKeys))
-                    orelse {error, <<"Address uses a reserved trie internal key.">>},
-                true ?= (not is_reserved_trie_key(AccountKey, TrieReservedKeys))
-                    orelse {error, <<"Address uses a reserved trie internal key.">>},
-                true ?= (not is_reserved_custom_key(Address, ReservedKeys))
-                    orelse {error, <<"Address is a reserved ao/custom key">>},
-                true ?= (not is_reserved_custom_key(AccountKey, CanonicalReservedKeys))
-                    orelse {error, <<"Address is a reserved ao/custom key">>},
-                % Check for path separators (security: prevent path traversal) and whitespaces.
-                case binary:match(Address, [<<"/">>, <<"\\">>, <<" ">>, <<"\n">>, <<"\r">>, <<"\t">>]) of
-                    nomatch -> true;
-                    _ -> {error, <<"Address cannot contain path separators or whitespaces">>}
-                end
-            end
-    end;
-validate_address(_, _, _) ->
-    {error, <<"Address must be a binary.">>}.
-
-account_key(Address) when is_binary(Address) ->
-    hb_committer:uri(Address).
-
-is_reserved_trie_key(Key, ReservedKeys) ->
-    lists:member(Key, ReservedKeys).
-
-trie_reserved_keys(Opts) ->
-    {ok, Trie} = hb_device_load:reference(<<"trie@1.0">>, Opts),
-    maps:get(reserved, Trie:device_info(), []).
-
-%% @doc Check if the given Key exists in the passed List
-is_reserved_custom_key(Key, List) when is_binary(Key), is_list(List) ->
-    lists:member(Key, List);
-is_reserved_custom_key(_, _) -> 
-    false.
 
 outbox_send(Messages, Base, Opts) ->
     maybe

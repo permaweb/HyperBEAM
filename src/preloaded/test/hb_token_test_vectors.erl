@@ -334,7 +334,7 @@ balance_reserved_account_rejected_test() ->
     Opts = opts(),
     Base = token_state(#{}, Opts),
     ?assertEqual(
-        {error, <<"Address is a reserved ao/custom key">>},
+        {error, <<"Not the address or URI of a committer.">>},
         public_balance(Base, <<"path">>, Opts)
     ).
 
@@ -342,11 +342,11 @@ uppercase_reserved_account_rejected_test() ->
     Opts = opts(),
     Base = token_state(#{}, Opts),
     ?assertEqual(
-        {error, <<"Address is a reserved ao/custom key">>},
+        {error, <<"Not the address or URI of a committer.">>},
         public_balance(Base, <<"PATH">>, Opts)
     ),
     ?assertEqual(
-        {error, <<"Address uses a reserved trie internal key.">>},
+        {error, <<"Not the address or URI of a committer.">>},
         public_balance(Base, <<"DEVICE">>, Opts)
     ).
 
@@ -416,11 +416,11 @@ outbox_default_broadcast_subscription_test() ->
     {ok, Subscribed} =
         outbox_subscribe(
             #{},
-            subscription_req(<<"Ping">>, default, <<"listener-a">>, 11),
+            subscription_req(<<"Ping">>, default, id(<<"listener-a">>), 11),
             Opts
         ),
     ?assertEqual(
-        [<<"listener-a">>],
+        [account_key(id(<<"listener-a">>))],
         outbox_subscribers(Subscribed, <<"Ping">>, Opts)
     ),
     Updated =
@@ -434,7 +434,7 @@ outbox_default_broadcast_subscription_test() ->
     ?assert(has_message(
         [
             {<<"action">>, <<"notify">>},
-            {<<"target">>, <<"listener-a">>},
+            {<<"target">>, account_key(id(<<"listener-a">>))},
             {<<"x-action">>, <<"Ping">>}
         ],
         Notices,
@@ -446,30 +446,30 @@ outbox_targeted_subscriptions_do_not_overwrite_test() ->
     {ok, AliceSubscribed} =
         outbox_subscribe(
             #{},
-            subscription_req(<<"Debit-Notice">>, <<"alice">>, <<"listener-a">>, 21),
+            subscription_req(<<"Debit-Notice">>, id(<<"alice">>), id(<<"listener-a">>), 21),
             Opts
         ),
     {ok, BothSubscribed} =
         outbox_subscribe(
             AliceSubscribed,
-            subscription_req(<<"Debit-Notice">>, <<"bob">>, <<"listener-b">>, 22),
+            subscription_req(<<"Debit-Notice">>, id(<<"bob">>), id(<<"listener-b">>), 22),
             Opts
         ),
     ?assertEqual(
-        [<<"listener-a">>],
+        [account_key(id(<<"listener-a">>))],
         outbox_subscribers(
             BothSubscribed,
             <<"Debit-Notice">>,
-            <<"alice">>,
+            id(<<"alice">>),
             Opts
         )
     ),
     ?assertEqual(
-        [<<"listener-b">>],
+        [account_key(id(<<"listener-b">>))],
         outbox_subscribers(
             BothSubscribed,
             <<"Debit-Notice">>,
-            <<"bob">>,
+            id(<<"bob">>),
             Opts
         )
     ),
@@ -477,7 +477,7 @@ outbox_targeted_subscriptions_do_not_overwrite_test() ->
         outbox_send(
             #{
                 <<"action">> => <<"Debit-Notice">>,
-                <<"target">> => <<"alice">>,
+                <<"target">> => id(<<"alice">>),
                 <<"quantity">> => 5
             },
             BothSubscribed,
@@ -487,8 +487,8 @@ outbox_targeted_subscriptions_do_not_overwrite_test() ->
     ?assert(has_message(
         [
             {<<"action">>, <<"notify">>},
-            {<<"target">>, <<"listener-a">>},
-            {<<"x-target">>, <<"alice">>},
+            {<<"target">>, account_key(id(<<"listener-a">>))},
+            {<<"x-target">>, id(<<"alice">>)},
             {<<"x-quantity">>, 5}
         ],
         Notices,
@@ -497,7 +497,7 @@ outbox_targeted_subscriptions_do_not_overwrite_test() ->
     ?assertNot(has_message(
         [
             {<<"action">>, <<"notify">>},
-            {<<"target">>, <<"listener-b">>}
+            {<<"target">>, account_key(id(<<"listener-b">>))}
         ],
         Notices,
         Opts
@@ -505,7 +505,7 @@ outbox_targeted_subscriptions_do_not_overwrite_test() ->
 
 outbox_unsubscribe_removes_listener_test() ->
     Opts = opts(),
-    Req = subscription_req(<<"Debit-Notice">>, <<"alice">>, <<"listener-a">>, 31),
+    Req = subscription_req(<<"Debit-Notice">>, id(<<"alice">>), id(<<"listener-a">>), 31),
     {ok, Subscribed} = outbox_subscribe(#{}, Req, Opts),
     {ok, Unsubscribed} = outbox_unsubscribe(Subscribed, Req, Opts),
     ?assertEqual(
@@ -513,7 +513,7 @@ outbox_unsubscribe_removes_listener_test() ->
         outbox_subscribers(
             Unsubscribed,
             <<"Debit-Notice">>,
-            <<"alice">>,
+            id(<<"alice">>),
             Opts
         )
     ),
@@ -521,7 +521,7 @@ outbox_unsubscribe_removes_listener_test() ->
         outbox_send(
             #{
                 <<"action">> => <<"Debit-Notice">>,
-                <<"target">> => <<"alice">>
+                <<"target">> => id(<<"alice">>)
             },
             Unsubscribed,
             Opts
@@ -1349,3 +1349,43 @@ unrelated_all_mode_traffic_is_ignored_test() ->
     ?assertEqual(1, asset_balance(Result, Owner, Opts)),
     ?assertEqual([], asset_orders(Result, Opts)),
     ?assertEqual([], outbox(Result, Opts)).
+
+%% @doc A recipient, balance or mint subject that is not a committer is an
+%% error, not a throw, and does not block a later transfer. Every form of a
+%% committer gives its one account.
+malformed_accounts_do_not_block_followup_transfer_test() ->
+    Opts = opts(),
+    Alice = id(<<"alice">>),
+    Bob = id(<<"bob">>),
+    Ethereum = <<"0x52908400098527886E0F7030069857D2E4169EE7">>,
+    Base = token_state(#{ initial_balances => #{ Alice => 2 } }, Opts),
+    Rejected = lists:foldl(
+        fun({Account, Reason}, State) ->
+            ?assertEqual({error, Reason}, public_balance(State, Account, Opts)),
+            ?assertEqual(
+                {error, Reason},
+                (token()):mint(
+                    State,
+                    #{ <<"body">> => #{ <<"subject">> => Account } },
+                    Opts
+                )
+            ),
+            {ok, Next} = transfer(State, Alice, Account, 1, Opts),
+            ?assertEqual(2, balance(Next, Alice, Opts)),
+            [Notice | _] = outbox(Next, Opts),
+            ?assertEqual(Reason, hb_ao:get(<<"reason">>, Notice, Opts)),
+            Next
+        end,
+        Base,
+        [
+            {<<255>>, <<"Not the address or URI of a committer.">>},
+            {42, <<"A committer must be given as a binary.">>}
+        ]
+    ),
+    {ok, ToBob} = transfer(Rejected, Alice, <<"did:ar:", Bob/binary>>, 1, Opts),
+    {ok, Updated} = transfer(ToBob, Alice, Ethereum, 1, Opts),
+    ?assertEqual({ok, 1}, public_balance(Updated, account_key(Bob), Opts)),
+    ?assertEqual(
+        {ok, 1},
+        public_balance(Updated, <<"did:pkh:eip155:1:", Ethereum/binary>>, Opts)
+    ).
