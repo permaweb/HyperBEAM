@@ -307,3 +307,31 @@ pkh_host_accounts_vector_test_() ->
         {<<"7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv">>,
             <<"did:pkh:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv">>}
     ]].
+
+malformed_subscription_identities_do_not_throw_vector_test() ->
+    Opts = opts(),
+    Listener = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    lists:foreach(fun({Action, Target, From}) ->
+        ?assertMatch({ok, _}, call(<<"subscribe">>, base(),
+            subscription_req(Action, Target, From, 1), Opts)),
+        ?assertMatch({ok, _}, call(<<"unsubscribe">>, base(),
+            subscription_req(Action, Target, From, 1), Opts))
+    end, [
+        {<<"ping">>, <<255>>, Listener},
+        {<<"ping">>, Listener, <<255>>},
+        {<<255>>, Listener, Listener}
+    ]),
+    {ok, State} = call(<<"subscribe">>, base(),
+        subscription_req(<<"ping">>, Listener, Listener, 1), Opts),
+    ?assertEqual({ok, [hb_committer:uri(Listener, Opts)]}, call(<<"subscribers">>, State,
+        #{ <<"action">> => <<"ping">>, <<"target">> => Listener }, Opts)).
+
+malformed_forwarded_key_does_not_throw_vector_test() ->
+    Opts = opts(),
+    Target = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Res = call(<<"send">>, base(), #{
+        <<"messages">> => #{ <<"action">> => <<"ping">>, <<"target">> => Target },
+        <<"x-ok">> => <<"1">>,
+        <<16#C3, "x">> => <<"2">>
+    }, Opts),
+    ?assertMatch({ok, _}, Res).

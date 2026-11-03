@@ -270,9 +270,9 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
     end.
 
 set_subscription(State, Action, Target, Listener, unset, Opts) ->
-    ActionBin = hb_util:to_lower(hb_util:bin(Action)),
-    TargetBin = hb_util:to_lower(hb_committer:uri(hb_util:bin(Target), Opts)),
-    ListenerBin = hb_util:to_lower(hb_committer:uri(hb_util:bin(Listener), Opts)),
+    ActionBin = hb_util:lowercase_key(hb_util:bin(Action)),
+    TargetBin = hb_util:lowercase_key(hb_committer:uri(hb_util:bin(Target), Opts)),
+    ListenerBin = hb_util:lowercase_key(hb_committer:uri(hb_util:bin(Listener), Opts)),
     Subscribers = subscription_map(State, Opts),
     ActionSubscribers = hb_maps:get(ActionBin, Subscribers, #{}, Opts),
     TargetSubscribers = hb_maps:get(TargetBin, ActionSubscribers, #{}, Opts),
@@ -283,9 +283,9 @@ set_subscription(State, Action, Target, Listener, unset, Opts) ->
         maybe_remove_empty(ActionBin, NewActionSubscribers, Subscribers),
     write_subscribers(State, NewSubscribers, Opts);
 set_subscription(State, Action, Target, Listener, SubscriptionInfo, Opts) ->
-    ActionBin = hb_util:to_lower(hb_util:bin(Action)),
-    TargetBin = hb_util:to_lower(hb_committer:uri(hb_util:bin(Target), Opts)),
-    ListenerBin = hb_util:to_lower(hb_committer:uri(hb_util:bin(Listener), Opts)),
+    ActionBin = hb_util:lowercase_key(hb_util:bin(Action)),
+    TargetBin = hb_util:lowercase_key(hb_committer:uri(hb_util:bin(Target), Opts)),
+    ListenerBin = hb_util:lowercase_key(hb_committer:uri(hb_util:bin(Listener), Opts)),
     Subscribers = subscription_map(State, Opts),
     ActionSubscribers = hb_maps:get(ActionBin, Subscribers, #{}, Opts),
     TargetSubscribers = hb_maps:get(TargetBin, ActionSubscribers, #{}, Opts),
@@ -315,8 +315,8 @@ write_subscribers(State, Subscribers, Opts) ->
     hb_ao:set(State, <<"subscribers">>, Subscribers, Opts).
 
 subscribers_for(State, Action, Target, Opts) ->
-    ActionBin = hb_util:to_lower(hb_util:bin(Action)),
-    TargetBin = hb_util:to_lower(hb_committer:uri(hb_util:bin(Target), Opts)),
+    ActionBin = hb_util:lowercase_key(hb_util:bin(Action)),
+    TargetBin = hb_util:lowercase_key(hb_committer:uri(hb_util:bin(Target), Opts)),
     Subscribers = subscription_map(State, Opts),
     ActionSubscribers = hb_maps:get(ActionBin, Subscribers, #{}, Opts),
     TargetSubscribers = hb_maps:get(TargetBin, ActionSubscribers, #{}, Opts),
@@ -360,10 +360,10 @@ forwarded_keys(Req, Opts) ->
     with_prefix([<<"x-">>], Req, Opts).
 
 with_prefix(Prefixes, Map, Opts) when is_list(Prefixes) ->
-    PrefixBins = [hb_util:to_lower(hb_util:bin(P)) || P <- Prefixes],
+    PrefixBins = [hb_util:lowercase_key(hb_util:bin(P)) || P <- Prefixes],
     hb_maps:filter(
         fun(Key, _Value) ->
-            KeyBin = hb_util:to_lower(hb_util:bin(Key)),
+            KeyBin = hb_util:lowercase_key(hb_util:bin(Key)),
             lists:any(
                 fun(Prefix) ->
                     binary:match(KeyBin, Prefix) =:= {0, byte_size(Prefix)}
