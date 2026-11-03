@@ -170,7 +170,7 @@ make_offer(Base, Body, Height, Opts) ->
         {ok, Deposit} ?= amount(<<"deposit">>, Body, Opts),
         {ok, Fee} ?= amount(<<"minimum-fee">>, Body, Opts),
         {ok, Deadline} ?= amount(<<"deadline">>, Body, ?DEFAULT_DEADLINE, Opts),
-        Recipient = field(<<"recipient">>, Body, Seller, Opts),
+        {ok, Recipient} ?= account(field(<<"recipient">>, Body, Seller, Opts)),
         true ?= Quantity >= 1,
         true ?= Asking >= 1,
         true ?= Deposit >= 0,
@@ -334,7 +334,8 @@ payment(Base, Body, Target, Height, Opts) ->
             <<"recipient">> := Recipient,
             <<"asking">> := Asking
         } = Order,
-        true ?= Target =:= Recipient,
+        {ok, TargetAccount} ?= account(Target),
+        true ?= TargetAccount =:= Recipient,
         % A seller completing their own order from the address that made it
         % would take the goods straight back. These two comparisons close that;
         % they cannot close a second wallet, and nothing here can.
@@ -602,19 +603,25 @@ tx_field(Body, Field, Default, Opts) ->
             Default
     end.
 
-%% @doc Return the Arweave address of the single signer of a message. A
+%% @doc Return the host-form Arweave committer of the single signer. A
 %% message with any other number of signers is not attributable to one party,
 %% so it cannot open, cancel, reserve or pay for anything.
 signer(Body, Opts) ->
     SignerURIs = hb_message:signers(Body, Opts),
-    case [hb_committer:address(SignerURI) || SignerURI <- SignerURIs] of
+    case [account(SignerURI) || SignerURI <- SignerURIs] of
         [{ok, Address}] -> {ok, Address};
         _ -> not_found
     end.
 
+account(Value) ->
+    maybe
+        {ok, Address} ?= hb_committer:address(Value),
+        {ok, hb_committer:uri(Address)}
+    end.
+
 %%% Tests
 
-%%% The tests drive `compute/3' directly with synthetic assignments, exactly as
+%%% The tests resolve `compute' with synthetic assignments, exactly as
 %%% `~process@1.0' would: the device reads chain data but performs no I/O, so a
 %%% whole trade can be played out without a weave.
 
@@ -625,7 +632,7 @@ test_opts() -> #{ <<"priv-wallet">> => ar_wallet:new() }.
 %% @doc A party to a trade: a wallet and the address it signs as.
 party() ->
     Wallet = ar_wallet:new(),
-    {Wallet, hb_util:human_id(ar_wallet:to_address(Wallet))}.
+    {Wallet, hb_committer:uri(hb_util:human_id(ar_wallet:to_address(Wallet)))}.
 
 %% @doc A process base with the given balances and nothing else.
 base(Balances) ->
@@ -634,7 +641,12 @@ base(Balances) ->
 %% @doc An L1 transaction, committed as the base layer commits them.
 tx(Wallet, Fields) ->
     hb_message:commit(
-        Fields,
+        maps:map(
+            fun(<<"target">>, Target) -> hb_util:committer_address(Target);
+               (_, Value) -> Value
+            end,
+            Fields
+        ),
         #{ <<"priv-wallet">> => Wallet },
         #{ <<"commitment-device">> => <<"tx@1.0">> }
     ).
@@ -711,9 +723,10 @@ tag_only_tx(Wallet, Tags) ->
 %% as `~arweave-scheduler@1.0' does.
 apply_tx(Base, Body, Height, Opts) ->
     {ok, New} =
-        compute(
-            Base,
+        hb_ao:resolve(
+            Base#{ <<"device">> => <<"arweave-swap@1.0">> },
             #{
+                <<"path">> => <<"compute">>,
                 <<"process">> => ?PROCESS,
                 <<"slot">> => 1,
                 <<"block-height">> => Height,
@@ -975,6 +988,9 @@ partial_settlement_test() ->
         <<"minimum-fee">> := 5, <<"deposit">> := 5 }, Held),
     ?assertMatch(#{ <<"quantity">> := 2, <<"asking">> := 202,
         <<"minimum-fee">> := 3, <<"deposit">> := 3 }, Open),
+    ?assertEqual(SellerAddr, maps:get(<<"creator">>, Held)),
+    ?assertEqual(SellerAddr, maps:get(<<"creator">>, Open)),
+    ?assertEqual(BuyerAddr, maps:get(<<"buyer">>, Held)),
     ?assertEqual(2, balance(Reserved, BuyerAddr, Opts)),
     Underpaid = apply_tx(Reserved, pay(Buyer, SellerAddr, 301, OrderID), 111, Opts),
     ?assertEqual(2, length(orders(Underpaid, Opts))),
@@ -1219,7 +1235,7 @@ assigned_non_payment_test() ->
             150,
             Opts
         ),
-    ?assertEqual(150, hb_ao:get(<<"swap-height">>, Ticked, 0, Opts)),
+    ?assertEqual(150, state(<<"swap-height">>, Ticked, 0, Opts)),
     ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Ticked, Opts))),
     ?assertEqual(90, balance(Ticked, SellerAddr, Opts)).
 
@@ -1650,12 +1666,70 @@ next_deadline_tracked_test() ->
             Opts
         ),
     % An offer alone has nothing pending: it never expires.
-    ?assertEqual(0, hb_ao:get(<<"next-deadline">>, Opened, 0, Opts)),
+    ?assertEqual(0, state(<<"next-deadline">>, Opened, 0, Opts)),
     OrderID = maps:get(<<"order-id">>, only_order(Opened, Opts)),
     Reserved =
         apply_tx(Opened, order_action(Buyer, <<"register-interest">>, OrderID), 110, Opts),
     % A reservation is the only thing a clock waits for.
     ?assertEqual(
         110 + 20 + 1,
-        hb_ao:get(<<"next-deadline">>, Reserved, 0, Opts)
+        state(<<"next-deadline">>, Reserved, 0, Opts)
     ).
+
+account_forms_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAccount} = party(),
+    {Buyer, BuyerAccount} = party(),
+    Raw = <<"kY9RAgTJEImkBpiKgVeXrsGV02T-D4dI3ZvSpnn7HSk">>,
+    Account = hb_committer:uri(Raw),
+    Other = hb_committer:uri(hb_util:to_lower(Raw)),
+    lists:foreach(
+        fun(Recipient) ->
+            Opened =
+                apply_tx(
+                    base(#{ SellerAccount => 10, Other => 7 }),
+                    tx(Seller, #{
+                        <<"target">> => ?PROCESS,
+                        <<"action">> => <<"make-offer">>,
+                        <<"offer-quantity">> => <<"10">>,
+                        <<"asking">> => <<"500">>,
+                        <<"recipient">> => Recipient
+                    }),
+                    100,
+                    Opts
+                ),
+            Order = only_order(Opened, Opts),
+            ?assertEqual(SellerAccount, maps:get(<<"creator">>, Order)),
+            ?assertEqual(Account, maps:get(<<"recipient">>, Order)),
+            Payment = pay(Buyer, Raw, 500, maps:get(<<"order-id">>, Order)),
+            Sold = apply_tx(Opened, Payment, 101, Opts),
+            ?assertEqual(10, balance(Sold, BuyerAccount, Opts)),
+            ?assertEqual(7, balance(Sold, Other, Opts)),
+            ?assertEqual([], orders(Sold, Opts))
+        end,
+        [Raw, <<"did:ar:", Raw/binary>>, Account,
+            hb_committer:encode({address, ?RSA_KEY_TYPE}, Raw)]
+    ).
+
+replay_is_deterministic_test() ->
+    Opts = (test_opts())#{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
+    {Seller, SellerAccount} = party(),
+    {Buyer, BuyerAccount} = party(),
+    Base = base(#{ SellerAccount => 10, BuyerAccount => 5 }),
+    Offer = offer(Seller, 10, 500, 5, 20),
+    OrderID = hb_util:human_id(hb_message:id(Offer, signed, Opts)),
+    Inputs = [
+        {100, Offer},
+        {101, order_action(Buyer, <<"register-interest">>, OrderID)},
+        {102, pay(Buyer, SellerAccount, 500, OrderID)}
+    ],
+    Replay = fun() ->
+        lists:foldl(
+            fun({Height, Body}, State) -> apply_tx(State, Body, Height, Opts) end,
+            Base,
+            Inputs
+        )
+    end,
+    First = Replay(),
+    ?assertEqual(15, balance(First, BuyerAccount, Opts)),
+    ?assertEqual(First, Replay()).
