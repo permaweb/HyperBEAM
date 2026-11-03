@@ -1316,3 +1316,69 @@ unrelated_all_mode_traffic_is_ignored_test() ->
     ?assertEqual(1, asset_balance(Result, Owner, Opts)),
     ?assertEqual([], asset_orders(Result, Opts)),
     ?assertEqual([], outbox(Result, Opts)).
+
+malformed_address_rejected_without_throwing_test() ->
+    lists:foreach(
+        fun(Address) ->
+            ?assertEqual(
+                {error, <<"Address contains unsupported characters.">>},
+                (token()):validate_address(Address, [])
+            )
+        end,
+        [<<255>>, <<16#C3>>, <<16#80>>, <<16#C0, 16#AF>>]
+    ),
+    ?assertEqual(
+        {error, <<"Address is too long.">>},
+        (token()):validate_address(binary:copy(<<255>>, 129), [])
+    ),
+    ?assertEqual(
+        {error, <<"Address must be a binary.">>},
+        (token()):validate_address(42, [])
+    ).
+
+malformed_balance_and_mint_subjects_return_errors_test() ->
+    lists:foreach(
+        fun({Address, Error}) ->
+            ?assertEqual(
+                {error, Error},
+                (token()):balance(#{}, #{ <<"balance">> => Address }, #{})
+            ),
+            ?assertEqual(
+                {error, Error},
+                (token()):mint(
+                    #{},
+                    #{ <<"body">> => #{ <<"subject">> => Address } },
+                    #{}
+                )
+            )
+        end,
+        [
+            {<<255>>, <<"Address contains unsupported characters.">>},
+            {42, <<"Address must be a binary.">>}
+        ]
+    ).
+
+malformed_recipients_do_not_block_followup_transfer_test() ->
+    Opts = opts(),
+    Alice = id(<<"alice">>),
+    Bob = id(<<"bob">>),
+    Base = token_state(#{ initial_balances => #{ Alice => 1 } }, Opts),
+    Rejected = lists:foldl(
+        fun({Recipient, Reason}, State) ->
+            {ok, Next} = transfer(State, Alice, Recipient, 1, Opts),
+            ?assertEqual(1, balance(Next, Alice, Opts)),
+            ?assertEqual(0, balance(Next, Bob, Opts)),
+            [Notice | _] = outbox(Next, Opts),
+            ?assertEqual(Alice, hb_ao:get(<<"target">>, Notice, Opts)),
+            ?assertEqual(Reason, hb_ao:get(<<"reason">>, Notice, Opts)),
+            Next
+        end,
+        Base,
+        [
+            {<<255>>, <<"Address contains unsupported characters.">>},
+            {42, <<"Address must be a binary.">>}
+        ]
+    ),
+    {ok, Updated} = transfer(Rejected, Alice, Bob, 1, Opts),
+    ?assertEqual(0, balance(Updated, Alice, Opts)),
+    ?assertEqual(1, balance(Updated, Bob, Opts)).
