@@ -48,12 +48,7 @@ device_info() -> #{ exports => [<<"balance">>] }.
 %% @doc Resolve a balance with the deployed token's account-key semantics.
 balance(Base, Req, Opts) ->
     ID = hb_ao:get(<<"balance">>, Req, Opts),
-    Key =
-        case hb_ao:get(<<"swap-device">>, Base, not_found, Opts) of
-            not_found -> id_key(ID);
-            _ -> ID
-        end,
-    {ok, hb_ao:get([<<"balances">>, Key], Base, 0, Opts)}.
+    {ok, hb_ao:get([<<"balances">>, hb_committer:uri(ID)], Base, 0, Opts)}.
 
 base(Policy) ->
     Policy#{ <<"device">> => <<"security@1.0">> }.
@@ -73,14 +68,7 @@ validate(Key, Policy, From, Opts) ->
 token_policy(Balances, TotalSupply, Opts) ->
     token_policy(Balances, TotalSupply, #{}, Opts).
 token_policy(Balances, TotalSupply, Extra, Opts) ->
-    StoredBalances =
-        case maps:get(<<"swap-device">>, Extra, not_found) of
-            not_found -> canonical_balances(Balances);
-            _ ->
-                maps:from_list(
-                    [{hb_committer:uri(ID), Amount} || ID := Amount <- Balances]
-                )
-        end,
+    StoredBalances = canonical_balances(Balances),
     {ok, BalanceTrie} =
         hb_ao:resolve(
             #{ <<"device">> => <<"trie@1.0">> },
@@ -95,15 +83,15 @@ token_policy(Balances, TotalSupply, Extra, Opts) ->
 canonical_balances(Balances) ->
     maps:fold(
         fun(ID, Amount, Acc) ->
-            Key = id_key(ID),
+            Key = hb_committer:uri(ID),
             Acc#{ Key => maps:get(Key, Acc, 0) + Amount }
         end,
         #{},
         Balances
     ).
 
-id_key(ID) ->
-    hb_util:to_lower(ID).
+%% @doc The address of a test account.
+account(Name) -> hb_util:human_id(crypto:hash(sha256, Name)).
 
 signer() ->
     Wallet = ar_wallet:new(),
@@ -331,7 +319,7 @@ delegated_non_binary_sender_rejected_vector_test() ->
                 Opts
             ),
             ?assertEqual(
-                {skip, <<"Address must be a binary.">>},
+                {skip, <<"A committer must be given as a binary.">>},
                 hb_ao:resolve(
                     base(#{
                         <<"scheduler">> => Scheduler,
@@ -598,12 +586,12 @@ set_authority_default_supply_owner_requires_token_state_vector_test() ->
     Opts = opts(),
     ?assertEqual(
         {error, <<"Balances not configured.">>},
-        validate(<<"set-authority">>, #{}, <<"alice">>, Opts)
+        validate(<<"set-authority">>, #{}, account(<<"alice">>), Opts)
     ).
 
 set_authority_default_supply_owner_allows_full_owner_vector_test() ->
     Opts = opts(),
-    Owner = <<"alice">>,
+    Owner = account(<<"alice">>),
     ?assertEqual(
         {ok, true},
         validate(
@@ -620,8 +608,8 @@ set_authority_default_supply_owner_rejects_non_owner_vector_test() ->
         {error, <<"Supply-threshold owner requirement not satisfied.">>},
         validate(
             <<"set-authority">>,
-            token_policy(#{ <<"alice">> => 10 }, 10, Opts),
-            <<"bob">>,
+            token_policy(#{ account(<<"alice">>) => 10 }, 10, Opts),
+            account(<<"bob">>),
             Opts
         )
     ).
@@ -632,8 +620,8 @@ set_authority_default_supply_owner_rejects_split_supply_vector_test() ->
         {error, <<"Supply-threshold owner requirement not satisfied.">>},
         validate(
             <<"set-authority">>,
-            token_policy(#{ <<"alice">> => 5, <<"bob">> => 5 }, 10, Opts),
-            <<"alice">>,
+            token_policy(#{ account(<<"alice">>) => 5, account(<<"bob">>) => 5 }, 10, Opts),
+            account(<<"alice">>),
             Opts
         )
     ).
@@ -645,7 +633,7 @@ set_authority_supply_threshold_bps_allows_half_owner_vector_test() ->
         validate(
             <<"set-authority">>,
             token_policy(
-                #{ <<"alice">> => 5, <<"bob">> => 5 },
+                #{ account(<<"alice">>) => 5, account(<<"bob">>) => 5 },
                 10,
                 #{
                     <<"set-authority-template">> => <<"supply-threshold-owner">>,
@@ -653,7 +641,7 @@ set_authority_supply_threshold_bps_allows_half_owner_vector_test() ->
                 },
                 Opts
             ),
-            <<"alice">>,
+            account(<<"alice">>),
             Opts
         )
     ).
@@ -664,8 +652,8 @@ set_authority_supply_owner_uses_canonical_id_vector_test() ->
         {ok, true},
         validate(
             <<"set-authority">>,
-            token_policy(#{ <<"alice">> => 10 }, 10, Opts),
-            <<"ALICE">>,
+            token_policy(#{ account(<<"alice">>) => 10 }, 10, Opts),
+            <<"did:ar:", (account(<<"alice">>))/binary>>,
             Opts
         )
     ).
@@ -702,8 +690,8 @@ set_authority_supply_owner_accepts_wire_supply_vector_test() ->
         {ok, true},
         validate(
             <<"set-authority">>,
-            token_policy(#{ <<"alice">> => 1 }, <<"1">>, Opts),
-            <<"alice">>,
+            token_policy(#{ account(<<"alice">>) => 1 }, <<"1">>, Opts),
+            account(<<"alice">>),
             Opts
         )
     ).
@@ -795,11 +783,11 @@ set_authority_match_only_static_policy_rejected_vector_test() ->
 set_authority_supply_owner_rejects_path_candidate_vector_test() ->
     Opts = opts(),
     ?assertEqual(
-        {error, <<"Address contains unsupported characters.">>},
+        {error, <<"Not the address or URI of a committer.">>},
         validate(
             <<"set-authority">>,
-            token_policy(#{ <<"alice">> => 10 }, 10, Opts),
-            <<"alice/bob">>,
+            token_policy(#{ account(<<"alice">>) => 10 }, 10, Opts),
+            <<(account(<<"alice">>))/binary, "/bob">>,
             Opts
         )
     ).
@@ -811,7 +799,7 @@ set_authority_supply_owner_rejects_invalid_threshold_vector_test() ->
         validate(
             <<"set-authority">>,
             token_policy(
-                #{ <<"alice">> => 10 },
+                #{ account(<<"alice">>) => 10 },
                 10,
                 #{
                     <<"set-authority-template">> => <<"supply-threshold-owner">>,
@@ -819,7 +807,7 @@ set_authority_supply_owner_rejects_invalid_threshold_vector_test() ->
                 },
                 Opts
             ),
-            <<"alice">>,
+            account(<<"alice">>),
             Opts
         )
     ).
