@@ -311,14 +311,12 @@ committer_address(Committer) ->
 
 %% @doc The raw address of a committer, the address that a key had before
 %% committers had URIs: that of an Arweave key, or the address at the end of a
-%% `did:pkh:' account -- `0x' and the checksummed hex of an Ethereum key, or
-%% the base58 key of a Solana key.
+%% `did:pkh:' account in either form -- `0x' and the checksummed hex of an
+%% Ethereum key, or the base58 key of a Solana key.
 raw_address(Committer) ->
-    case committer_address(Committer) of
-        <<"did:pkh:", Account/binary>> ->
-            lists:last(binary:split(Account, <<":">>, [global]));
-        Address ->
-            Address
+    case hb_committer:account(Committer) of
+        {ok, Account} -> lists:last(binary:split(Account, <<":">>, [global]));
+        error -> committer_address(Committer)
     end.
 
 %% @doc Check whether a binary is a human-readable ID: the base64url encoding

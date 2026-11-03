@@ -1755,39 +1755,24 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
 %% @doc The committers that the owners of a GraphQL query can be. An owner is
 %% the raw address of a key (`hb_util:raw_address/1'): an Arweave address, `0x'
 %% and the hex of an Ethereum account, or the base58 key of a Solana account.
-%% An owner that can be more than one of these gives each of their committers.
+%% `hb_committer:uri/1' reads a 43-character owner as an Arweave address, so
+%% such an owner also gives the committer of the Solana key it can be.
 owner_committers(null, _Opts) -> null;
-owner_committers(Owners, Opts) ->
+owner_committers(Owners, _Opts) ->
     lists:flatmap(
-        fun(Owner) ->
-            [hb_committer:uri(Owner) | account_committers(Owner, Opts)]
+        fun(Owner = <<_:43/binary>>) ->
+                [
+                    hb_committer:uri(Owner),
+                    hb_committer:uri(
+                        <<"did:pkh:solana:", ?SOLANA_MAINNET/binary, ":",
+                            Owner/binary>>
+                    )
+                ];
+           (Owner) ->
+                [hb_committer:uri(Owner)]
         end,
         Owners
     ).
-
-%% @doc The `did:pkh:' committers of the accounts whose address is an owner.
-account_committers(<<"0x", _:40/binary>> = Address, _Opts) ->
-    [
-        <<"did:pkh:eip155:1:",
-            (hb_keccak:address_to_checksum_address(Address))/binary>>
-    ];
-account_committers(Owner, Opts) ->
-    case hb_util:base58_decode(Owner) of
-        {ok, <<_:32/binary>> = Key} ->
-            {ok, URI} =
-                hb_ao:resolve(
-                    #{
-                        <<"device">> => <<"did-pkh@1.0">>,
-                        <<"type">> => ?SOLANA_SIGN_TYPE,
-                        <<"owner">> => Key
-                    },
-                    #{ <<"path">> => <<"to">>, <<"type">> => <<"uri">> },
-                    Opts
-                ),
-            [URI];
-        _ ->
-            []
-    end.
 
 %% @doc Return the IDs of the messages whose commitments carry a field:
 %% their committer, or their target.

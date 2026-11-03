@@ -14,6 +14,14 @@
 %%%       key (an RSA, Ed25519 or ECDSA key), is `did-ar@1.0'. Its URI is
 %%%       `did:ar:<address>' in host form with no key type:
 %%%       `uri-did-ar-<L><B>'.</li>
+%%%   <li>The committer of an Ethereum or Solana key is `did-pkh@1.0'. Its URI
+%%%       is `did:pkh:<account>' in host form: `uri-did-pkh-eip155-1-0x' and
+%%%       the 40 hex digits of an Ethereum address in lowercase, or
+%%%       `uri-did-pkh-solana-' and the base58 key of a Solana account in
+%%%       lowercase, followed by 9 base36 characters of one bit for each of
+%%%       its characters, 1 for a capital letter, as B is for L below. The
+%%%       EIP-55 checksum of the Ethereum address is computed again on
+%%%       reading, and the account of a Solana key is on mainnet.</li>
 %%%   <li>The URI of any other committer is the one that its device gives.</li>
 %%% </ul>
 %%%
@@ -53,32 +61,34 @@
 %%% in the form that `hb_util:human_id/1' gives.
 -module(hb_committer).
 -export([uri/1, uri/2, matches_commitment/3, address/1, encode/2, decode/1]).
+-export([account/1, account_label/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Return the URI of a committer given as a binary, in the form that
 %% compares equal (see the module doc). An Arweave address, or a `did:ar:' URI
 %% of an address in either form, gives the URI of its `did-ar@1.0' committer.
-%% A query after it, such as the `?hint=' of a scheduler, is kept. Any other
-%% URI is returned as it is. Any other binary is not a committer: we return it
-%% as it is, so that it matches no signer, and log it as an `invalid_committer'
-%% event. Any other term is returned as it is.
+%% An Ethereum or Solana address, or a `did:pkh:' URI of its account in either
+%% form, gives the URI of its `did-pkh@1.0' committer. A query after it, such
+%% as the `?hint=' of a scheduler, is kept. Any other URI is returned as it
+%% is. Any other binary is not a committer: we return it as it is, so that it
+%% matches no signer, and log it as an `invalid_committer' event. Any other
+%% term is returned as it is.
 uri(Value) when is_binary(Value) ->
     [Main | Query] = binary:split(Value, <<"?">>),
     case address(Main) of
         {ok, Address} ->
-            iolist_to_binary(
-                lists:join(
-                    <<"?">>,
-                    [encode({address, undefined}, Address) | Query]
-                )
-            );
+            with_query(encode({address, undefined}, Address), Query);
         error ->
-            case hb_uri:scheme(Value) of
-                {ok, _Scheme, _Rest} -> Value;
-                _ ->
-                    ?event(committer, {invalid_committer, Value}),
-                    Value
+            case account(Main) of
+                {ok, Account} -> with_query(account_label(Account), Query);
+                error ->
+                    case hb_uri:scheme(Value) of
+                        {ok, _Scheme, _Rest} -> Value;
+                        _ ->
+                            ?event(committer, {invalid_committer, Value}),
+                            Value
+                    end
             end
     end;
 uri(Value) ->
@@ -144,6 +154,90 @@ human_id(Bin) ->
         true -> {ok, Bin};
         false -> error
     end.
+
+%% @doc Join a URI and the query that followed it.
+with_query(URI, Query) ->
+    iolist_to_binary(lists:join(<<"?">>, [URI | Query])).
+
+%% @doc Return the CAIP-10 account of an Ethereum or Solana committer: a
+%% `did:pkh:' URI in either form, `0x' and the 40 hex digits of an Ethereum
+%% address in any case, or the base58 key of a Solana account. A Solana key
+%% that is also an Arweave address is read as one by `uri/1', so only its URI
+%% gives its account there. Returns `error' for any other value.
+account(<<"did:pkh:eip155:1:0x", Hex:40/binary>>) ->
+    ethereum_account(Hex);
+account(<<"did:pkh:solana:", Reference:32/binary, ":", Key/binary>>)
+        when Reference =:= ?SOLANA_MAINNET ->
+    solana_account(Key);
+account(<<"uri-did-pkh-eip155-1-0x", Hex:40/binary>>) ->
+    case hb_util:to_lower(Hex) of
+        Hex -> ethereum_account(Hex);
+        _ -> error
+    end;
+account(<<"uri-did-pkh-solana-", Label/binary>>) ->
+    maybe
+        {ok, Key} ?= restore_label_case(Label),
+        solana_account(Key)
+    end;
+account(<<"0x", Hex:40/binary>>) ->
+    ethereum_account(Hex);
+account(Key) when is_binary(Key) ->
+    solana_account(Key);
+account(_Value) ->
+    error.
+
+%% @doc Return the account of an Ethereum address, with its EIP-55 checksum.
+ethereum_account(Hex) ->
+    case re:run(Hex, <<"\\A[0-9a-fA-F]+\\z">>, [{capture, none}]) of
+        match ->
+            {ok,
+                <<"eip155:1:",
+                    (hb_keccak:address_to_checksum_address(<<"0x", Hex/binary>>))/binary>>};
+        nomatch ->
+            error
+    end.
+
+%% @doc Return the account of a Solana key: the base58 encoding of 32 bytes on
+%% mainnet.
+solana_account(Key) ->
+    case hb_util:base58_decode(Key) of
+        {ok, <<_:32/binary>> = Bytes} ->
+            case hb_util:base58_encode(Bytes) of
+                Key -> {ok, <<"solana:", ?SOLANA_MAINNET/binary, ":", Key/binary>>};
+                _ -> error
+            end;
+        _ ->
+            error
+    end.
+
+%% @doc Return the host form of the URI of a `did:pkh:' account (see the
+%% module doc).
+account_label(<<"eip155:1:0x", Hex:40/binary>>) ->
+    <<"uri-did-pkh-eip155-1-0x", (hb_util:to_lower(Hex))/binary>>;
+account_label(<<"solana:", _Reference:32/binary, ":", Key/binary>>) ->
+    <<"uri-did-pkh-solana-", (label_case(Key))/binary>>.
+
+%% @doc Give a binary in lowercase, followed by 9 base36 characters that hold
+%% one bit for each of its characters, the first character first: 1 for a
+%% capital letter.
+label_case(Bin) ->
+    Size = byte_size(Bin),
+    <<Value:Size>> = << <<(case_bit(C)):1>> || <<C>> <= Bin >>,
+    Base36 = hb_util:bin(io_lib:format("~9.36.0b", [Value])),
+    <<(hb_util:to_lower(Bin))/binary, Base36/binary>>.
+
+%% @doc Restore the case of a binary from `label_case/1'. Returns `error' for a
+%% label in any other form.
+restore_label_case(Label) when byte_size(Label) > 9, byte_size(Label) =< 55 ->
+    Size = byte_size(Label) - 9,
+    <<Lower:Size/binary, Base36:9/binary>> = Label,
+    maybe
+        {ok, Value} ?= base36(Base36, 0),
+        true ?= Value < 1 bsl Size orelse error,
+        restore_case(Lower, <<Value:Size>>, <<>>)
+    end;
+restore_label_case(_Label) ->
+    error.
 
 %% @doc Encode an address or a message ID as a `uri-did-ar-' label of a type:
 %% `{address, KeyType}' for an address, with `undefined' for no key type, or
@@ -288,3 +382,45 @@ uri_test() ->
     ?assertEqual(error, address(encode({id, undefined}, Address))),
     ?assertEqual(<<"hmac:constant:ao">>, uri(<<"hmac:constant:ao">>)),
     ?assertEqual(<<"not a committer">>, uri(<<"not a committer">>)).
+
+%% @doc Every form of an Ethereum or Solana committer gives the host form of
+%% its `did-pkh@1.0' URI, which keeps the case of the address. A Solana key
+%% that is also an Arweave address is read as one unless its URI is given.
+account_uri_test() ->
+    Ethereum = <<"0x626334b6ef6D3e8537E9f8d97d65f59832219315">>,
+    EthereumURI =
+        <<"uri-did-pkh-eip155-1-0x626334b6ef6d3e8537e9f8d97d65f59832219315">>,
+    Solana = <<"7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv">>,
+    SolanaAccount = <<"solana:", ?SOLANA_MAINNET/binary, ":", Solana/binary>>,
+    SolanaURI = account_label(SolanaAccount),
+    lists:foreach(
+        fun({URI, Raw, Forms}) ->
+            lists:foreach(fun(Form) -> ?assertEqual(URI, uri(Form)) end, Forms),
+            ?assertEqual(Raw, hb_util:raw_address(URI))
+        end,
+        [
+            {EthereumURI, Ethereum,
+                [Ethereum, hb_util:to_lower(Ethereum), EthereumURI,
+                    <<"did:pkh:eip155:1:", Ethereum/binary>>]},
+            {SolanaURI, Solana,
+                [Solana, SolanaURI, <<"did:pkh:", SolanaAccount/binary>>]}
+        ]
+    ),
+    ?assertEqual({ok, SolanaAccount}, account(SolanaURI)),
+    ?assertMatch(<<"uri-did-pkh-solana-7s3p4hxjpyyiggzodywhtcxzyuqe9jibmhyrwxaraakv", _:9/binary>>, SolanaURI),
+    % Of the Solana keys of 43 characters, those that are Arweave addresses give
+    % an Arweave committer and the others a Solana one.
+    Keys43 =
+        [
+            Key
+        ||
+            N <- lists:seq(1, 400),
+            Key <- [hb_util:base58_encode(crypto:hash(sha256, <<N:16>>))],
+            byte_size(Key) == 43
+        ],
+    {Arweave, Others} = lists:partition(fun hb_util:is_human_id/1, Keys43),
+    ?assertMatch([<<"uri-did-ar-", _/binary>> | _], [uri(K) || K <- Arweave]),
+    ?assertMatch([<<"uri-did-pkh-solana-", _/binary>> | _], [uri(K) || K <- Others]),
+    % The host form gives the hex of an Ethereum address in lowercase only.
+    <<Prefix:23/binary, Hex/binary>> = EthereumURI,
+    ?assertEqual(error, account(<<Prefix/binary, (string:uppercase(Hex))/binary>>)).

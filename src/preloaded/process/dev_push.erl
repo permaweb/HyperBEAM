@@ -394,7 +394,7 @@ maybe_evaluate_message(Message, Opts) ->
 %% the slot number from which it was sent, and the outbox key of the message,
 %% and the depth to which downstream results should be included in the message.
 push_result_message(MsgToPush, Origin, Opts) ->
-    NormMsgToPush = hb_ao:normalize_keys(MsgToPush, Opts),
+    NormMsgToPush = process_target(hb_ao:normalize_keys(MsgToPush, Opts), Opts),
     case hb_ao:get(<<"target">>, NormMsgToPush, undefined, Opts) of
         undefined ->
             ?event(push,
@@ -622,6 +622,17 @@ normalize_message(MsgToPush, Opts) ->
         Opts#{ <<"hashpath">> => ignore }
     ).
 
+%% @doc Give a message to push the ID of the process that it targets. A ledger
+%% gives an account as the URI of its committer, and the address of an Arweave
+%% committer is the ID of the process at that address.
+process_target(Msg, Opts) when is_map(Msg) ->
+    case hb_committer:address(hb_maps:get(<<"target">>, Msg, not_found, Opts)) of
+        {ok, Address} -> Msg#{ <<"target">> => Address };
+        error -> Msg
+    end;
+process_target(Msg, _Opts) ->
+    Msg.
+
 %% @doc Find the target process ID for a message to push.
 target_process(MsgToPush, Opts) ->
     case hb_ao:get(<<"target">>, MsgToPush, Opts) of
@@ -699,7 +710,7 @@ schedule(Base, Req, Opts) ->
             hb_ao:normalize_keys(
                 hb_private:reset(hb_ao:get(<<"outbox">>, Result, Opts))
             ),
-        RawMsg = hb_maps:get(Key, Outbox, [], Opts),
+        RawMsg = process_target(hb_maps:get(Key, Outbox, [], Opts), Opts),
         MsgToPush =
             case maybe_evaluate_message(RawMsg, Opts) of
                 {ok, R} -> R;
