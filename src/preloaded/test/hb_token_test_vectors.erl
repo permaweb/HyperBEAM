@@ -334,7 +334,7 @@ balance_reserved_account_rejected_test() ->
     Opts = opts(),
     Base = token_state(#{}, Opts),
     ?assertEqual(
-        {error, <<"Address is a reserved ao/custom key">>},
+        {error, <<"Not the address or URI of a committer.">>},
         public_balance(Base, <<"path">>, Opts)
     ).
 
@@ -342,11 +342,11 @@ uppercase_reserved_account_rejected_test() ->
     Opts = opts(),
     Base = token_state(#{}, Opts),
     ?assertEqual(
-        {error, <<"Address is a reserved ao/custom key">>},
+        {error, <<"Not the address or URI of a committer.">>},
         public_balance(Base, <<"PATH">>, Opts)
     ),
     ?assertEqual(
-        {error, <<"Address uses a reserved trie internal key.">>},
+        {error, <<"Not the address or URI of a committer.">>},
         public_balance(Base, <<"DEVICE">>, Opts)
     ).
 
