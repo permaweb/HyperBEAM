@@ -61,8 +61,14 @@ device_info() ->
         excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>]
     }.
 
-%% @doc The carrier state is already a plain message.
-init(Base, _Req, _Opts) -> {ok, Base}.
+%% @doc Initialize the holder's account form.
+init(Base, _Req, Opts) ->
+    case hb_maps:find(<<"initial-holder">>, Base, Opts) of
+        error -> {ok, Base};
+        {ok, Holder} ->
+            {ok, Account} = account(Holder),
+            {ok, Base#{ <<"initial-holder">> => Account }}
+    end.
 snapshot(Base, _Req, _Opts) -> {ok, Base}.
 normalize(Base, _Req, _Opts) -> {ok, Base}.
 
@@ -202,8 +208,7 @@ normalize_action(Action) -> Action.
 transfer(Base, Body, Opts) ->
     maybe
         {ok, Sender} ?= signer(Body, Opts),
-        Recipient = field(<<"recipient">>, Body, not_found, Opts),
-        true ?= is_binary(Recipient),
+        {ok, Recipient} ?= account(field(<<"recipient">>, Body, not_found, Opts)),
         {ok, Quantity} ?= hb_util:safe_int(field(<<"quantity">>, Body, 0, Opts)),
         true ?= Quantity >= 1,
         true ?= balance(Base, Sender, Opts) >= Quantity,
@@ -359,7 +364,7 @@ credit(Base, Address, Amount, Opts) ->
     Base#{
         ?BALANCES =>
             hb_maps:put(
-                hb_util:lowercase_key(Address),
+                Address,
                 balance(Base, Address, Opts) + Amount,
                 state(?BALANCES, Base, #{}, Opts),
                 Opts
@@ -368,19 +373,25 @@ credit(Base, Address, Amount, Opts) ->
 
 debit(Base, Address, Amount, Opts) -> credit(Base, Address, -Amount, Opts).
 
-%% @doc Return the Arweave address of the single signer of a message. A
+%% @doc Return the host-form Arweave committer of the single signer. A
 %% message with any other number of signers is not attributable to one party,
 %% so it can neither move the unit nor speak for the name.
 signer(Body, Opts) ->
     SignerURIs = hb_message:signers(Body, Opts),
-    case [hb_committer:address(SignerURI) || SignerURI <- SignerURIs] of
+    case [account(SignerURI) || SignerURI <- SignerURIs] of
         [{ok, Address}] -> {ok, Address};
         _ -> not_found
     end.
 
+account(Value) ->
+    maybe
+        {ok, Address} ?= hb_committer:address(Value),
+        {ok, hb_committer:uri(Address)}
+    end.
+
 %%% Tests
 
-%%% The tests drive `compute/3' directly with synthetic assignments, exactly as
+%%% The tests resolve `compute' with synthetic assignments, exactly as
 %%% `~process@1.0' would. The process id must be a real 43-character address so
 %%% the transaction codec can carry it as the layer-1 target.
 -define(PROCESS, <<"cArRiEr000000000000000000000000000000000000">>).
@@ -389,29 +400,39 @@ test_opts() -> #{ <<"priv-wallet">> => ar_wallet:new() }.
 
 party() ->
     Wallet = ar_wallet:new(),
-    {Wallet, hb_util:human_id(ar_wallet:to_address(Wallet))}.
+    {Wallet, hb_committer:uri(hb_util:human_id(ar_wallet:to_address(Wallet)))}.
 
 %% @doc A name held by one address, as it stands at spawn.
 name_held_by(Address) ->
-    #{
+    initialized(#{
         <<"name">> => <<"test-name">>,
         <<"ticker">> => <<"NAME">>,
         <<"denomination">> => 0,
         <<"total-supply">> => 1,
         ?BALANCES => #{ Address => 1 }
-    }.
+    }).
+
+initialized(Base) ->
+    {ok, New} =
+        hb_ao:resolve(Base#{ <<"device">> => <<"carrier@1.0">> }, <<"init">>, #{}),
+    New.
 
 tx(Wallet, Fields) ->
     hb_message:commit(
-        Fields,
+        maps:map(
+            fun(<<"target">>, Target) -> hb_util:committer_address(Target);
+               (_, Value) -> Value
+            end,
+            Fields
+        ),
         #{ <<"priv-wallet">> => Wallet },
         #{ <<"commitment-device">> => <<"tx@1.0">> }
     ).
 
 apply_tx(Base, Body, Opts) ->
     {ok, New} =
-        compute(
-            Base,
+        hb_ao:resolve(
+            Base#{ <<"device">> => <<"carrier@1.0">> },
             #{
                 <<"process">> => ?PROCESS,
                 <<"slot">> => 1,
@@ -715,9 +736,7 @@ malformed_actions_do_not_block_transfer_test() ->
     {Owner, OwnerAddr} = party(),
     {_, BuyerAddr} = party(),
     % The state is in `structured@1.0' form, as `compute' returns it.
-    Base = (name_held_by(hb_util:lowercase_key(OwnerAddr)))#{
-        <<"device">> => <<"carrier@1.0">>
-    },
+    Base = hb_message:uncommitted(name_held_by(OwnerAddr)),
     Unchanged = lists:foldl(
         fun(Action, State) ->
             {ok, Next} = hb_ao:resolve(
@@ -787,7 +806,7 @@ seeded_from_initial_holder_test() ->
             <<"initial-holder">> => OwnerAddr
         },
     % The first relevant message brings the name to life.
-    Alive = apply_tx(Spawned, assigned_tx(Owner), Opts),
+    Alive = apply_tx(initialized(Spawned), assigned_tx(Owner), Opts),
     ?assertEqual(1, held_by(Alive, OwnerAddr, Opts)),
     % And the holder can immediately speak for it.
     Set = apply_tx(Alive, set_tx(Owner, #{ <<"greeting">> => <<"mine">> }), Opts),
@@ -809,7 +828,7 @@ seeded_value_test() ->
             <<"initial-holder">> => OwnerAddr,
             <<"initial-value">> => <<"aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_-aBcDe">>
         },
-    Alive = apply_tx(Spawned, assigned_tx(Owner), Opts),
+    Alive = apply_tx(initialized(Spawned), assigned_tx(Owner), Opts),
     ?assertEqual(
         <<"aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_-aBcDe">>,
         hb_ao:get(<<"target">>, value(Alive, Opts), not_found, Opts)
@@ -828,11 +847,11 @@ unreadable_supply_is_one_unit_test() ->
     {Owner, OwnerAddr} = party(),
     Alive =
         apply_tx(
-            #{
+            initialized(#{
                 <<"name">> => <<"test-name">>,
                 <<"total-supply">> => <<"one">>,
                 <<"initial-holder">> => OwnerAddr
-            },
+            }),
             assigned_tx(Owner),
             Opts
         ),
@@ -871,7 +890,7 @@ seeding_happens_once_test() ->
             <<"total-supply">> => 1,
             <<"initial-holder">> => OwnerAddr
         },
-    Alive = apply_tx(Spawned, assigned_tx(Owner), Opts),
+    Alive = apply_tx(initialized(Spawned), assigned_tx(Owner), Opts),
     Moved = apply_tx(Alive, transfer_tx(Owner, StrangerAddr, 1), Opts),
     Later = apply_tx(Moved, assigned_tx(Stranger), Opts),
     ?assertEqual(0, held_by(Later, OwnerAddr, Opts)),
@@ -1010,3 +1029,29 @@ request_dereferences_process_test() ->
     ),
     IDReq = Req#{ <<"body">> => [TargetID] },
     ?assertEqual({ok, IDReq}, request(#{}, IDReq, Opts)).
+
+account_forms_test() ->
+    Opts = (test_opts())#{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] },
+    {Owner, OwnerAccount} = party(),
+    {Buyer, BuyerAccount} = party(),
+    {ok, RawOwner} = hb_committer:address(OwnerAccount),
+    {ok, RawBuyer} = hb_committer:address(BuyerAccount),
+    lists:foreach(
+        fun({Holder, Recipient}) ->
+            Base = initialized(#{ <<"initial-holder">> => Holder }),
+            ?assertEqual(OwnerAccount, state(<<"initial-holder">>, Base, not_found, Opts)),
+            Body = transfer_tx(Owner, Recipient, 1),
+            Moved = apply_tx(Base, Body, Opts),
+            ?assertEqual(0, held_by(Moved, OwnerAccount, Opts)),
+            ?assertEqual(1, held_by(Moved, BuyerAccount, Opts)),
+            ?assertEqual(Moved, apply_tx(Base, Body, Opts)),
+            ?assertEqual(
+                BuyerAccount,
+                state([<<"results">>, <<"outbox">>, 2, <<"target">>],
+                    Moved, not_found, Opts)
+            )
+        end,
+        [{RawOwner, RawBuyer},
+            {<<"did:ar:", RawOwner/binary>>, <<"did:ar:", RawBuyer/binary>>},
+            {OwnerAccount, BuyerAccount}]
+    ).
