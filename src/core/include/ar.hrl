@@ -114,6 +114,10 @@
 -define(SOLANA_SIGN_TYPE, <<"solana">>).
 -define(SOLANA_TYPE_BYTE, <<4>>).
 -define(SOLANA_KEY_TYPE, solana).
+%% The CAIP-2 reference of Solana mainnet: the first 32 characters of the
+%% base58 hash of the network's genesis block,
+%% `5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d'.
+-define(SOLANA_MAINNET, <<"5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp">>).
 
 -define(ETHEREUM_SIGN_ALG, ethereum).
 -define(ETHEREUM_SIGN_TYPE, <<"ethereum">>).

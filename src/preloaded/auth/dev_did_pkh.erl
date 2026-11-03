@@ -26,35 +26,45 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc The CAIP-2 reference of Solana mainnet. It is the first 32 characters
-%% of the base58 hash of the network's genesis block,
-%% `5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d'.
--define(SOLANA_MAINNET, <<"5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp">>).
-
 %% @doc Read the committer of a `did:pkh:' URI. `hb_uri' gives the account as
-%% the `body' of the message, which is already the committer. We refuse an
-%% account that `to' does not give for any key.
+%% the `body' of the message, which is already the committer. In host form,
+%% the body is the rest of the label that `hb_committer' describes, and we give
+%% the account that it encodes. We refuse an account that `to' does not give
+%% for any key.
 -spec from(
     #{ body := binary(), _ => _ },
-    #{ type := binary(), _ => _ },
+    #{ type := binary(), characters => binary(), _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ body := binary(), _ => _ }} | {error, _}.
-from(Committer, #{ <<"type">> := <<"uri">> }, _Opts) ->
-    case is_account(maps:get(<<"body">>, Committer)) of
-        true -> {ok, Committer};
-        false -> {error, #{ <<"error">> => <<"invalid-account">> }}
+from(Committer = #{ <<"body">> := Body }, Req = #{ <<"type">> := <<"uri">> },
+        Opts) ->
+    case hb_maps:get(<<"characters">>, Req, <<"all">>, Opts) of
+        <<"host">> ->
+            case hb_committer:account(<<"uri-did-pkh-", Body/binary>>) of
+                {ok, Account} -> {ok, Committer#{ <<"body">> => Account }};
+                error -> {error, #{ <<"error">> => <<"invalid-account">> }}
+            end;
+        _ ->
+            case is_account(Body) of
+                true -> {ok, Committer};
+                false -> {error, #{ <<"error">> => <<"invalid-account">> }}
+            end
     end.
 
-%% @doc Write the `did:pkh:' URI of a committer, from its account.
+%% @doc Write the `did:pkh:' URI of a committer, from its account. With
+%% `characters => host', give the URI in host form.
 -spec to(
     #{ body => binary(), owner => binary(), type => binary(), _ => _ },
-    #{ type := binary(), _ => _ },
+    #{ type := binary(), characters => binary(), _ => _ },
     #{ _ => _ }
 ) -> {ok, binary()} | {error, _}.
-to(Committer, #{ <<"type">> := <<"uri">> }, Opts) ->
+to(Committer, Req = #{ <<"type">> := <<"uri">> }, Opts) ->
     maybe
         {ok, Account} ?= account(Committer, Opts),
-        {ok, <<"did:pkh:", Account/binary>>}
+        case hb_maps:get(<<"characters">>, Req, <<"all">>, Opts) of
+            <<"host">> -> {ok, hb_committer:account_label(Account)};
+            _ -> {ok, <<"did:pkh:", Account/binary>>}
+        end
     end.
 
 %% @doc Sign the request's `body' with the committer's key, using the
@@ -120,16 +130,8 @@ key_account(_Owner, _KeyType) ->
 %% @doc Check that an account is one that `key_account/2' returns for a key. The
 %% address of an Ethereum account carries its EIP-55 checksum, and the address
 %% of a Solana account is the base58 encoding of 32 bytes.
-is_account(Account = <<"eip155:1:0x", Hex:40/binary>>) ->
-    re:run(Hex, <<"\\A[0-9a-fA-F]+\\z">>, [{capture, none}]) =:= match andalso
-        key_account(<<"0x", Hex/binary>>, ?TYPED_ETHEREUM_KEY_TYPE) =:=
-            {ok, Account};
-is_account(<<"solana:", Reference:32/binary, ":", Address/binary>>)
-        when Reference =:= ?SOLANA_MAINNET ->
-    case hb_util:base58_decode(Address) of
-        {ok, Key} -> byte_size(Key) == 32;
-        error -> false
-    end;
+is_account(Account) when is_binary(Account) ->
+    hb_committer:account(<<"did:pkh:", Account/binary>>) =:= {ok, Account};
 is_account(_Account) ->
     false.
 
@@ -171,6 +173,16 @@ uri_test() ->
     ?assertEqual(
         {ok, SolanaURI},
         hb_uri:to(SolanaRead, #{ <<"scheme">> => <<"did">> }, Opts)
+    ),
+    % Each committer reads back from its URI in host form, with the same URI.
+    Host = #{ <<"scheme">> => <<"did">>, <<"characters">> => <<"host">> },
+    lists:foreach(
+        fun(Committer) ->
+            {ok, HostURI} = hb_uri:to(Committer, Host, Opts),
+            {ok, HostRead} = hb_uri:from(HostURI, Opts),
+            ?assertEqual({ok, HostURI}, hb_uri:to(HostRead, Host, Opts))
+        end,
+        [Ethereum, Solana]
     ).
 
 %% @doc Ensure that a committer's signature verifies with the committer read
