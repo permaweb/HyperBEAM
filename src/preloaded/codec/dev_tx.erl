@@ -709,7 +709,7 @@ tags_and_fields_test() ->
     },
     UnsignedID = ar_tx:generate_id(TX, unsigned),
     UnsignedTABM = #{
-        <<"anchor">> => hb_util:encode(AnchorField),
+        <<"anchor">> => hb_util:encode(AnchorTag),
         <<"commitments">> => #{
             hb_util:encode(UnsignedID) => #{
                 <<"commitment-device">> => <<"tx@1.0">>,
@@ -756,11 +756,11 @@ tags_and_fields_test() ->
                 <<"bundle">> => <<"false">>
             }
         },
-        <<"quantity">> => <<"5">>,
-        <<"reward">> => <<"6">>,
-        <<"target">> => hb_util:encode(TargetField),
-        <<"data-root">> => hb_util:encode(DataRootField),
-        <<"data-size">> => <<"7">>,
+        <<"quantity">> => <<"1000">>,
+        <<"reward">> => <<"2000">>,
+        <<"target">> => hb_util:encode(TargetTag),
+        <<"data-root">> => hb_util:encode(DataRootTag),
+        <<"data-size">> => <<"100">>,
         <<"format">> => <<"1">>
     },
     SignedCommitment = #{

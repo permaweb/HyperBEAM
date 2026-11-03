@@ -275,20 +275,19 @@ tag_keys(Item, _Opts) ->
     ).
 
 %% @doc Return the complete message for an item, less its commitments. Each
-%% committed key takes its value from `Data', then `Fields', then `Tags'. A
-%% field in `Fields' takes precedence over a tag of the same name, and the tag
-%% stays only in the commitment's `original-tags'. A field with its default
-%% value is not in `Fields', so a tag of the same name gives the key's value.
-%% Section 5.5 of `specs/tx@1.0.md' gives each case in a table.
+%% committed key takes its value from `Data', then `Tags', then `Fields'. A tag
+%% takes precedence over a field of the same name, and the field's value stays
+%% only in the commitment's `field-<name>'. A field with its default value is
+%% not in `Fields'. Section 5.5 of `specs/tx@1.0.md' gives each case in a table.
 base(CommittedKeys, Fields, Tags, Data, Opts) ->
     hb_maps:from_list(
         lists:map(
             fun(Key) ->
                 case hb_maps:find(Key, Data, Opts) of
                     error ->
-                        case hb_maps:find(Key, Fields, Opts) of
+                        case hb_maps:find(Key, Tags, Opts) of
                             error ->
-                                case hb_maps:find(Key, Tags, Opts) of
+                                case hb_maps:find(Key, Fields, Opts) of
                                     error -> throw({missing_key, Key});
                                     {ok, Value} -> {Key, Value}
                                 end;
@@ -796,7 +795,9 @@ commitment_to_tx(Message, Data, Commitment, FieldsFun, Opts) ->
 
 %% @doc Check that a message still contains the values of the fields and tags
 %% that its commitment restores. Keys added after signing are not compared. A
-%% field key that does not give a base field its own value is not a field.
+%% field key that does not give a base field its own value is not a field, and
+%% a field with the name of a tag is not compared: decoding takes the tag's
+%% value.
 holds_signed_values(Commitment, OriginalTags, TABM, Data, FieldsFun, Opts) ->
     Default = FieldsFun(#tx{}, ?FIELD_PREFIX, #{}, Opts),
     Fields =
@@ -818,16 +819,16 @@ holds_signed_values(Commitment, OriginalTags, TABM, Data, FieldsFun, Opts) ->
             ?DEFAULT_DATA -> Fields;
             _ -> maps:remove(<<"data-root">>, Fields)
         end,
-    holds(MessageFields, TABM, Opts) andalso
-        holds_tags(OriginalTags, maps:keys(MessageFields), TABM, Opts).
+    TagKeys = tag_keys(#tx{ tags = OriginalTags }, Opts),
+    holds(maps:without(TagKeys, MessageFields), TABM, Opts) andalso
+        holds_tags(OriginalTags, TABM, Opts).
 
 %% @doc Check that a message contains the values of its commitment's tags. A tag
-%% with the name of a field is skipped: decoding takes the field's value. So is
-%% a tag with the name of a nested message, such as a list bundle's tag `1':
-%% decoding takes the item in the data.
-holds_tags([], _FieldKeys, _TABM, _Opts) ->
+%% with the name of a nested message, such as a list bundle's tag `1', is
+%% skipped: decoding takes the item in the data.
+holds_tags([], _TABM, _Opts) ->
     true;
-holds_tags(OriginalTags, FieldKeys, TABM, Opts) ->
+holds_tags(OriginalTags, TABM, Opts) ->
     Tags = deduplicating_from_list(OriginalTags, Opts),
     Nested =
         maps:keys(
@@ -838,7 +839,7 @@ holds_tags(OriginalTags, FieldKeys, TABM, Opts) ->
         ),
     Keys =
         hb_util:list_without(
-            FieldKeys ++ Nested,
+            Nested,
             tag_keys(#tx{ tags = OriginalTags }, Opts)
         ),
     holds(maps:with(Keys, Tags), TABM, Opts).

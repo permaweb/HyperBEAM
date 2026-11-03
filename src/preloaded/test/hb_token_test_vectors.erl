@@ -972,6 +972,39 @@ party() ->
     Wallet = ar_wallet:new(),
     {Wallet, hb_util:human_id(ar_wallet:to_address(Wallet))}.
 
+%% @doc An L1 transfer that also pays native AR moves the quantity of its signed
+%% `Quantity' tag, not the native quantity.
+l1_quantity_tag_over_native_quantity_test() ->
+    Opts = opts(),
+    {Wallet, Owner} = party(),
+    {_, Recipient} = party(),
+    Base = token_state(#{ initial_balances => #{ Owner => 1000 } }, Opts),
+    TX =
+        ar_tx:sign(
+            #tx{
+                format = 2,
+                target = hb_util:native_id(?ASSET_PROCESS),
+                quantity = 1,
+                reward = 1,
+                tags = [
+                    {<<"Action">>, <<"Transfer">>},
+                    {<<"Recipient">>, Recipient},
+                    {<<"Quantity">>, <<"700">>}
+                ]
+            },
+            Wallet
+        ),
+    Body = hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
+    {ok, Updated} =
+        (token()):handle_action(
+            <<"transfer">>,
+            Base,
+            #{ <<"body">> => Body#{ <<"from">> => Owner } },
+            Opts
+        ),
+    ?assertEqual(300, balance(Updated, Owner, Opts)),
+    ?assertEqual(700, balance(Updated, Recipient, Opts)).
+
 asset_tx(Wallet, Fields) ->
     hb_message:commit(
         Fields,
