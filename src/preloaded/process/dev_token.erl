@@ -432,11 +432,15 @@ transfer(Base, Assignment, Opts) ->
         Recipient = account_key(Recipient0),
         % Normalize the base's minting state for the sender.
         {ok, NormBase} ?=
-            normalize_mint(
-                Base,
-                Assignment#{ <<"subject">> => From },
-                Opts
-            ),
+            case Quantity of
+                0 -> {ok, Base};
+                _ ->
+                    normalize_mint(
+                        Base,
+                        Assignment#{ <<"subject">> => From },
+                        Opts
+                    )
+            end,
         % Retrieve balances from the base state.
         Balances = hb_ao:get(<<"balances">>, NormBase, Opts),
         ?event(debug_token, {balances_before_transfer, Balances}, Opts),
@@ -463,7 +467,7 @@ transfer(Base, Assignment, Opts) ->
             orelse {error, <<"Insufficient balance.">>},
         % Handle self-transfer: skip balance updates
         NewBaseAfterTransfer =
-            case From =:= Recipient of
+            case (Quantity =:= 0) orelse (From =:= Recipient) of
                 true -> NormBase;
                 false ->
                     {ok, NewBalances} =

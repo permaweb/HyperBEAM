@@ -1470,3 +1470,40 @@ signed_l1_quantity_survives_security_projection_test() ->
     ?assertEqual(not_found, hb_message:commitment(
         #{ <<"commitment-device">> => <<"tx@1.0">> }, CorrectedBody, Opts
     )).
+
+zero_l1_transfer_skips_mint_and_balance_writes_test() ->
+    Opts = opts(),
+    {Wallet, Sender} = party(),
+    Recipient = id(<<"Bob">>),
+    Base0 = token_state(#{ initial_balances => #{ Sender => 100 } }, Opts),
+    Base = hb_ao:set(Base0, #{
+        <<"process">> => Base0,
+        <<"mint-device">> => #{
+            <<"mint">> => fun(MintBase, _, MintOpts) ->
+                {ok, hb_ao:set(MintBase, <<"mint-called">>, true, MintOpts)}
+            end
+        }
+    }, Opts),
+    Body = l1_transfer_body(
+        Wallet, Recipient, 1, [{<<"Quantity">>, <<"0">>}], Opts
+    ),
+    {ok, Updated} = (token()):handle_action(
+        <<"transfer">>, Base, #{ <<"body">> => Body#{ <<"from">> => Sender } }, Opts
+    ),
+    ?assertEqual(not_found, hb_ao:get(<<"mint-called">>, Updated, not_found, Opts)),
+    ?assertEqual(
+        hb_message:id(hb_ao:get(<<"balances">>, Base, Opts), all, Opts),
+        hb_message:id(hb_ao:get(<<"balances">>, Updated, Opts), all, Opts)
+    ),
+    ?assertEqual(100, balance(Updated, Sender, Opts)),
+    ?assertEqual(0, balance(Updated, Recipient, Opts)),
+    Notices = outbox(Updated, Opts),
+    ?assertEqual(2, length(Notices)),
+    ?assert(has_message([
+        {<<"action">>, <<"Debit-Notice">>},
+        {<<"target">>, account_key(Sender)}, {<<"quantity">>, 0}
+    ], Notices, Opts)),
+    ?assert(has_message([
+        {<<"action">>, <<"Credit-Notice">>},
+        {<<"target">>, account_key(Recipient)}, {<<"quantity">>, 0}
+    ], Notices, Opts)).
