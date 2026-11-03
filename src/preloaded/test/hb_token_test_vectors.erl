@@ -1507,3 +1507,25 @@ zero_l1_transfer_skips_mint_and_balance_writes_test() ->
         {<<"action">>, <<"Credit-Notice">>},
         {<<"target">>, account_key(Recipient)}, {<<"quantity">>, 0}
     ], Notices, Opts)).
+
+malformed_request_key_does_not_block_transfer_test() ->
+    Opts = opts(),
+    Alice = id(<<"alice">>),
+    Bob = id(<<"bob">>),
+    Base = token_state(#{ initial_balances => #{ Alice => 2 } }, Opts),
+    {ok, Updated} = (token()):handle_action(
+        <<"transfer">>,
+        Base,
+        #{
+            <<"body">> =>
+                #{
+                    <<"from">> => Alice,
+                    <<"recipient">> => Bob,
+                    <<"quantity">> => 1,
+                    <<16#C3, "x">> => <<"1">>
+                }
+        },
+        Opts
+    ),
+    ?assertEqual(1, balance(Updated, Alice, Opts)),
+    ?assertEqual(1, balance(Updated, Bob, Opts)).

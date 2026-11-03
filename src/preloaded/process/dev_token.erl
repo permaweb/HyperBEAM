@@ -766,7 +766,7 @@ process_outbox(Opts) ->
 forwarded_keys(Req, Opts) ->
     hb_maps:filter(
         fun(Key, _Value) ->
-            KeyBin = hb_util:to_lower(hb_util:bin(Key)),
+            KeyBin = hb_util:lowercase_key(hb_util:bin(Key)),
             binary:match(KeyBin, <<"x-">>) =:= {0, 2}
         end,
         Req,
