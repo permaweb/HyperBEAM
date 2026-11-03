@@ -15,10 +15,11 @@
 %%%     outbox entries.
 %%%
 %%% subscribers:
-%%%     Nested message of action -> target -> listener-key -> subscription.
-%%%     Each subscription retains the case-sensitive `listener' and its `info':
-%%%     the request's `slot' when present, otherwise its signed ID. The default
-%%%     target is `broadcast'.
+%%%     Nested message of action -> target -> listener -> subscription-info.
+%%%     A target is `broadcast', the default, or the host-form URI of a
+%%%     committer, as a listener is. `subscription-info' is the request's
+%%%     `slot' when present, otherwise the signed ID of the subscription
+%%%     request.
 %%% ```
 %%%
 %%% The public AO paths are:
@@ -241,19 +242,23 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
                 <<"No `subscribe-action` key to filter upon provided.">>,
                 Opts
             ),
-        Subject = hb_maps:get(<<"subscribe-target">>, Msg, <<"broadcast">>, Opts),
-        {ok, Listener} ?=
+        {ok, Target} ?=
+            subscription_target(
+                hb_maps:get(<<"subscribe-target">>, Msg, <<"broadcast">>, Opts)
+            ),
+        {ok, From} ?=
             find_or_error(
                 <<"from">>,
                 Msg,
                 <<"No security-normalized `from` key found in request.">>,
                 Opts
             ),
+        {ok, Listener} ?= hb_committer:validated(From),
         NewState =
             set_subscription(
                 State,
                 Action,
-                Subject,
+                Target,
                 Listener,
                 SubscriptionInfo,
                 Opts
@@ -264,32 +269,30 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
             {error, Reason}
     end.
 
+%% @doc Return the target of a subscription: `broadcast', or the host-form URI
+%% of a committer.
+subscription_target(<<"broadcast">>) -> {ok, <<"broadcast">>};
+subscription_target(Target) -> hb_committer:validated(Target).
+
 set_subscription(State, Action, Target, Listener, unset, Opts) ->
-    ActionBin = hb_util:to_lower(hb_util:bin(Action)),
-    TargetBin = hb_util:to_lower(hb_util:bin(Target)),
-    ListenerBin = hb_util:to_lower(hb_util:bin(Listener)),
+    ActionBin = hb_util:lowercase_key(hb_util:bin(Action)),
     Subscribers = subscription_map(State, Opts),
     ActionSubscribers = hb_maps:get(ActionBin, Subscribers, #{}, Opts),
-    TargetSubscribers = hb_maps:get(TargetBin, ActionSubscribers, #{}, Opts),
-    NewTargetSubscribers = maps:remove(ListenerBin, hb_private:reset(TargetSubscribers)),
+    TargetSubscribers = hb_maps:get(Target, ActionSubscribers, #{}, Opts),
+    NewTargetSubscribers = maps:remove(Listener, hb_private:reset(TargetSubscribers)),
     NewActionSubscribers =
-        maybe_remove_empty(TargetBin, NewTargetSubscribers, ActionSubscribers),
+        maybe_remove_empty(Target, NewTargetSubscribers, ActionSubscribers),
     NewSubscribers =
         maybe_remove_empty(ActionBin, NewActionSubscribers, Subscribers),
     write_subscribers(State, NewSubscribers, Opts);
 set_subscription(State, Action, Target, Listener, SubscriptionInfo, Opts) ->
-    ActionBin = hb_util:to_lower(hb_util:bin(Action)),
-    TargetBin = hb_util:to_lower(hb_util:bin(Target)),
-    ListenerBin = hb_util:to_lower(hb_util:bin(Listener)),
+    ActionBin = hb_util:lowercase_key(hb_util:bin(Action)),
     Subscribers = subscription_map(State, Opts),
     ActionSubscribers = hb_maps:get(ActionBin, Subscribers, #{}, Opts),
-    TargetSubscribers = hb_maps:get(TargetBin, ActionSubscribers, #{}, Opts),
+    TargetSubscribers = hb_maps:get(Target, ActionSubscribers, #{}, Opts),
     NewTargetSubscribers =
-        (hb_private:reset(TargetSubscribers))#{ ListenerBin => #{
-            <<"listener">> => Listener,
-            <<"info">> => SubscriptionInfo
-        } },
-    NewActionSubscribers = ActionSubscribers#{ TargetBin => NewTargetSubscribers },
+        (hb_private:reset(TargetSubscribers))#{ Listener => SubscriptionInfo },
+    NewActionSubscribers = ActionSubscribers#{ Target => NewTargetSubscribers },
     NewSubscribers = Subscribers#{ ActionBin => NewActionSubscribers },
     write_subscribers(State, NewSubscribers, Opts).
 
@@ -310,15 +313,14 @@ write_subscribers(State, Subscribers, Opts) ->
     hb_ao:set(State, <<"subscribers">>, Subscribers, Opts).
 
 subscribers_for(State, Action, Target, Opts) ->
-    ActionBin = hb_util:to_lower(hb_util:bin(Action)),
-    TargetBin = hb_util:to_lower(hb_util:bin(Target)),
+    ActionBin = hb_util:lowercase_key(hb_util:bin(Action)),
+    TargetBin = hb_committer:uri(Target),
     Subscribers = subscription_map(State, Opts),
     ActionSubscribers = hb_maps:get(ActionBin, Subscribers, #{}, Opts),
     TargetSubscribers = hb_maps:get(TargetBin, ActionSubscribers, #{}, Opts),
     case TargetSubscribers of
         Map when is_map(Map) ->
-            [hb_maps:get(<<"listener">>, Subscription, undefined, Opts)
-                || Subscription <- hb_maps:values(hb_private:reset(Map), Opts)];
+            hb_maps:keys(hb_private:reset(Map), Opts);
         List when is_list(List) ->
             List;
         _ ->
@@ -407,27 +409,30 @@ send_appends_message_test() ->
     ?assertEqual(<<"1">>, hb_ao:get(<<"x-trace">>, Notice, #{})).
 
 subscribe_send_unsubscribe_test() ->
+    Alice = hb_util:human_id(crypto:hash(sha256, <<"alice">>)),
+    Listener = hb_util:human_id(crypto:hash(sha256, <<"listener">>)),
+    ListenerURI = hb_committer:uri(Listener),
     SubscribeReq =
         #{
             <<"slot">> => 7,
             <<"body">> =>
                 #{
                     <<"subscribe-action">> => <<"Debit-Notice">>,
-                    <<"subscribe-target">> => <<"alice">>,
-                    <<"from">> => <<"listener">>
+                    <<"subscribe-target">> => Alice,
+                    <<"from">> => Listener
                 }
         },
     {ok, Subscribed} = subscribe(#{}, SubscribeReq, #{}),
     ?assertEqual(
-        [<<"listener">>],
-        subscribers_for(Subscribed, <<"Debit-Notice">>, <<"alice">>, #{})
+        [ListenerURI],
+        subscribers_for(Subscribed, <<"Debit-Notice">>, Alice, #{})
     ),
     SendReq =
         #{
             <<"messages">> =>
                 #{
                     <<"action">> => <<"Debit-Notice">>,
-                    <<"target">> => <<"alice">>,
+                    <<"target">> => Alice,
                     <<"quantity">> => 1
                 }
         },
@@ -441,12 +446,12 @@ subscribe_send_unsubscribe_test() ->
     ?assert(lists:any(
         fun(Msg) ->
             hb_ao:get(<<"action">>, Msg, #{}) =:= <<"notify">>
-                andalso hb_ao:get(<<"target">>, Msg, #{}) =:= <<"listener">>
+                andalso hb_ao:get(<<"target">>, Msg, #{}) =:= ListenerURI
         end,
         Outbox
     )),
     {ok, Unsubscribed} = unsubscribe(Subscribed, SubscribeReq, #{}),
     ?assertEqual(
         [],
-        subscribers_for(Unsubscribed, <<"Debit-Notice">>, <<"alice">>, #{})
+        subscribers_for(Unsubscribed, <<"Debit-Notice">>, Alice, #{})
     ).

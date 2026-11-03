@@ -416,11 +416,11 @@ outbox_default_broadcast_subscription_test() ->
     {ok, Subscribed} =
         outbox_subscribe(
             #{},
-            subscription_req(<<"Ping">>, default, <<"listener-a">>, 11),
+            subscription_req(<<"Ping">>, default, id(<<"listener-a">>), 11),
             Opts
         ),
     ?assertEqual(
-        [<<"listener-a">>],
+        [account_key(id(<<"listener-a">>))],
         outbox_subscribers(Subscribed, <<"Ping">>, Opts)
     ),
     Updated =
@@ -434,7 +434,7 @@ outbox_default_broadcast_subscription_test() ->
     ?assert(has_message(
         [
             {<<"action">>, <<"notify">>},
-            {<<"target">>, <<"listener-a">>},
+            {<<"target">>, account_key(id(<<"listener-a">>))},
             {<<"x-action">>, <<"Ping">>}
         ],
         Notices,
@@ -446,30 +446,30 @@ outbox_targeted_subscriptions_do_not_overwrite_test() ->
     {ok, AliceSubscribed} =
         outbox_subscribe(
             #{},
-            subscription_req(<<"Debit-Notice">>, <<"alice">>, <<"listener-a">>, 21),
+            subscription_req(<<"Debit-Notice">>, id(<<"alice">>), id(<<"listener-a">>), 21),
             Opts
         ),
     {ok, BothSubscribed} =
         outbox_subscribe(
             AliceSubscribed,
-            subscription_req(<<"Debit-Notice">>, <<"bob">>, <<"listener-b">>, 22),
+            subscription_req(<<"Debit-Notice">>, id(<<"bob">>), id(<<"listener-b">>), 22),
             Opts
         ),
     ?assertEqual(
-        [<<"listener-a">>],
+        [account_key(id(<<"listener-a">>))],
         outbox_subscribers(
             BothSubscribed,
             <<"Debit-Notice">>,
-            <<"alice">>,
+            id(<<"alice">>),
             Opts
         )
     ),
     ?assertEqual(
-        [<<"listener-b">>],
+        [account_key(id(<<"listener-b">>))],
         outbox_subscribers(
             BothSubscribed,
             <<"Debit-Notice">>,
-            <<"bob">>,
+            id(<<"bob">>),
             Opts
         )
     ),
@@ -477,7 +477,7 @@ outbox_targeted_subscriptions_do_not_overwrite_test() ->
         outbox_send(
             #{
                 <<"action">> => <<"Debit-Notice">>,
-                <<"target">> => <<"alice">>,
+                <<"target">> => id(<<"alice">>),
                 <<"quantity">> => 5
             },
             BothSubscribed,
@@ -487,8 +487,8 @@ outbox_targeted_subscriptions_do_not_overwrite_test() ->
     ?assert(has_message(
         [
             {<<"action">>, <<"notify">>},
-            {<<"target">>, <<"listener-a">>},
-            {<<"x-target">>, <<"alice">>},
+            {<<"target">>, account_key(id(<<"listener-a">>))},
+            {<<"x-target">>, id(<<"alice">>)},
             {<<"x-quantity">>, 5}
         ],
         Notices,
@@ -497,7 +497,7 @@ outbox_targeted_subscriptions_do_not_overwrite_test() ->
     ?assertNot(has_message(
         [
             {<<"action">>, <<"notify">>},
-            {<<"target">>, <<"listener-b">>}
+            {<<"target">>, account_key(id(<<"listener-b">>))}
         ],
         Notices,
         Opts
@@ -505,7 +505,7 @@ outbox_targeted_subscriptions_do_not_overwrite_test() ->
 
 outbox_unsubscribe_removes_listener_test() ->
     Opts = opts(),
-    Req = subscription_req(<<"Debit-Notice">>, <<"alice">>, <<"listener-a">>, 31),
+    Req = subscription_req(<<"Debit-Notice">>, id(<<"alice">>), id(<<"listener-a">>), 31),
     {ok, Subscribed} = outbox_subscribe(#{}, Req, Opts),
     {ok, Unsubscribed} = outbox_unsubscribe(Subscribed, Req, Opts),
     ?assertEqual(
@@ -513,7 +513,7 @@ outbox_unsubscribe_removes_listener_test() ->
         outbox_subscribers(
             Unsubscribed,
             <<"Debit-Notice">>,
-            <<"alice">>,
+            id(<<"alice">>),
             Opts
         )
     ),
@@ -521,7 +521,7 @@ outbox_unsubscribe_removes_listener_test() ->
         outbox_send(
             #{
                 <<"action">> => <<"Debit-Notice">>,
-                <<"target">> => <<"alice">>
+                <<"target">> => id(<<"alice">>)
             },
             Unsubscribed,
             Opts
