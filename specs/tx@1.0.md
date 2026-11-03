@@ -111,8 +111,8 @@ IDs, and commitments are normative.
      nested sub-messages.
   4. Compute the three component maps — **fields**, **tags**, **data** (§5.4) —
      then the **committed key set** (§5.6) and assemble the **base message** by
-     selecting, for each committed key, its value with precedence **data > field
-     > tag** (§5.5). A committed key absent from all three is an error
+     selecting, for each committed key, its value with precedence **data > tag
+     > field** (§5.5). A committed key absent from all three is an error
      (`{missing_key, Key}`).
   5. Attach **commitments** (§5.9): if the transaction is signed, a signed
      commitment keyed by its signed ID; else if its tags are not all-normal (case
@@ -306,25 +306,25 @@ From a (normalised, validated) transaction the codec derives three maps:
 ### 5.5 Base-message assembly & field/tag precedence (`from`)
 
 The base message contains exactly the **committed keys** (§5.6). For each key the
-value is chosen by precedence **data > fields > tags** (first hit wins); a key
+value is chosen by precedence **data > tags > fields** (first hit wins); a key
 found in none throws `{missing_key, Key}`.
 
-This precedence is what lets a tag named like a base field (`anchor`, `quantity`,
-…) but carrying a **non-conforming value** (not a valid ID / not an integer)
-survive: such a value cannot become the typed header field, so it is preserved as
-a tag and, because the field reconstruction (§5.7) rejects it, the message keeps
-the tag value.
+A tag takes precedence over a base field of the same name (`anchor`,
+`quantity`, …), so no signed tag value is found only in `original-tags`. The
+field's value, when it is not the default, is the commitment's `field-<name>`.
+A tag with a **non-conforming value** (not a valid ID / not an integer) gives the
+key its value in the same way.
 
-A field at its default value (§5.1) is not in the fields map, so a tag of the
-same name gives the key's value. For a transaction with a `tx@1.0` commitment
-(§5.9), a base field `<name>` and a tag of the same name give:
+A field at its default value (§5.1) is not in the fields map. For a transaction
+with a `tx@1.0` commitment (§5.9), a base field `<name>` and a tag of the same
+name give:
 
 | Field | Tag of the same name | `field-<name>` in the commitment | The message's key `<name>` |
 |---|---|---|---|
 | at its default value | absent | absent | absent |
 | at its default value | present | absent | the tag's value |
 | not at its default value | absent | the field's value | the field's value |
-| not at its default value | present | the field's value | the field's value |
+| not at its default value | present | the field's value | the tag's value |
 
 A base field's name is reserved, so in both rows with a tag the commitment's
 `original-tags` (§5.6) contains the tag, and `to` reproduces it. The same rows
@@ -653,10 +653,10 @@ public codec / commit / verify surface:
    bundle), `from` attaches a commitment carrying `original-tags` as a 1-based
    numbered `{name,value}` message in original order; `to` reproduces the exact
    original tag list from it.
-10. Base-message value precedence is data > field > tag; a same-named tag whose
-    value is non-conforming for the typed field is preserved (header field keeps
-    the valid value, tag value survives via `original-tags`); a committed key
-    missing from all three sources errors `{missing_key, Key}`.
+10. Base-message value precedence is data > tag > field; a same-named tag gives
+    the key its value, and a non-default field's value is the commitment's
+    `field-<name>`; a committed key missing from all three sources errors
+    `{missing_key, Key}`.
 11. A signed commitment has `commitment-device = tx@1.0`, `committer` = the
     URI of the owner's committer (§5.9.2), `signature` (base64url), `owner`
     (base64url), `type` per §5.9.1, `bundle`, the relevant
