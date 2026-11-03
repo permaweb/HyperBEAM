@@ -242,6 +242,8 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
                 <<"No `subscribe-action` key to filter upon provided.">>,
                 Opts
             ),
+        true ?= is_binary(Action)
+            orelse {error, <<"`subscribe-action` must be a binary.">>},
         {ok, Target} ?=
             subscription_target(
                 hb_maps:get(<<"subscribe-target">>, Msg, <<"broadcast">>, Opts)

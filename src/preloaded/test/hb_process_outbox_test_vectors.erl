@@ -271,4 +271,19 @@ malformed_subscribe_vector_test() ->
             subscription_req(<<"Ping">>, default, <<"listener-a">>, 1),
             Opts
         )
+    ),
+    % An action that is not a binary is refused rather than thrown on.
+    ?assertEqual(
+        {error, <<"`subscribe-action` must be a binary.">>},
+        call(
+            <<"subscribe">>,
+            base(),
+            subscription_req(
+                #{ <<"a">> => 1 },
+                default,
+                hb_util:human_id(crypto:hash(sha256, <<"listener">>)),
+                1
+            ),
+            Opts
+        )
     ).
