@@ -186,7 +186,10 @@ authority_actions(Base, Opts) ->
 decode_authority_actions(Encoded) ->
     try
         [
-            hb_structured_fields:from_bare_item(Item)
+            case Item of
+                {token, Token} -> Token;
+                _ -> hb_structured_fields:from_bare_item(Item)
+            end
         ||
             {item, Item, _Params} <- hb_structured_fields:parse_list(Encoded)
         ]
