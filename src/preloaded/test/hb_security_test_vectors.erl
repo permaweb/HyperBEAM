@@ -844,3 +844,26 @@ prod_mode_allows_explicit_single_signer_policy_vector_test() ->
             Opts
         )
     ).
+
+%% @doc An authority action that is also an existing atom (`compute') matches.
+delegated_action_policy_decodes_tokens_as_binaries_vector_test() ->
+    Opts = opts(),
+    {Scheduler, SchedulerWallet} = signer(),
+    {DelegatedSender, _DelegatedWallet} = signer(),
+    Assignment =
+        sign_assignment(
+            #{
+                <<"action">> => <<"compute">>,
+                <<"from-process">> => DelegatedSender
+            },
+            SchedulerWallet,
+            SchedulerWallet,
+            Opts
+        ),
+    Policy =
+        #{
+            <<"scheduler">> => Scheduler,
+            <<"authority">> => Scheduler,
+            <<"authority-actions">> => <<"compute">>
+        },
+    ?assertMatch({ok, _}, hb_ao:resolve(base(Policy), Assignment, Opts)).
