@@ -1382,3 +1382,91 @@ malformed_recipients_do_not_block_followup_transfer_test() ->
     {ok, Updated} = transfer(Rejected, Alice, Bob, 1, Opts),
     ?assertEqual(0, balance(Updated, Alice, Opts)),
     ?assertEqual(1, balance(Updated, Bob, Opts)).
+
+l1_transfer_body(Wallet, Recipient, NativeQuantity, QuantityTags, Opts) ->
+    Signed = ar_tx:sign(
+        #tx{
+            format = 2,
+            target = hb_util:native_id(id(<<"target">>)),
+            quantity = NativeQuantity,
+            reward = 1,
+            tags = [
+                {<<"Action">>, <<"Transfer">>},
+                {<<"Recipient">>, Recipient}
+                | QuantityTags
+            ]
+        },
+        Wallet
+    ),
+    hb_message:convert(Signed, <<"structured@1.0">>, <<"tx@1.0">>, Opts).
+
+signed_l1_quantity_tag_overrides_native_quantity_test() ->
+    Opts = opts(),
+    {Wallet, Alice} = party(),
+    Bob = id(<<"bob">>),
+    Base = token_state(#{ initial_balances => #{ Alice => 1000 } }, Opts),
+    Body = l1_transfer_body(Wallet, Bob, 1, [{<<"Quantity">>, <<"700">>}], Opts),
+    ?assertEqual({ok, 1}, hb_util:safe_int(hb_maps:get(<<"quantity">>, Body, Opts))),
+    {ok, Updated} = (token()):handle_action(
+        <<"transfer">>, Base, #{ <<"body">> => Body#{ <<"from">> => Alice } }, Opts
+    ),
+    ?assertEqual(300, balance(Updated, Alice, Opts)),
+    ?assertEqual(700, balance(Updated, Bob, Opts)),
+    ?assertEqual(
+        [700, 700],
+        lists:sort([hb_ao:get(<<"quantity">>, Notice, Opts) || Notice <- outbox(Updated, Opts)])
+    ).
+
+signed_l1_missing_quantity_tag_rejected_test() ->
+    Opts = opts(),
+    {Wallet, Alice} = party(),
+    Bob = id(<<"bob">>),
+    Base = token_state(#{ initial_balances => #{ Alice => 1000 } }, Opts),
+    Body = l1_transfer_body(Wallet, Bob, 1, [], Opts),
+    ?assertEqual({ok, 1}, hb_util:safe_int(hb_maps:get(<<"quantity">>, Body, Opts))),
+    {ok, Updated} = (token()):handle_action(
+        <<"transfer">>, Base, #{ <<"body">> => Body#{ <<"from">> => Alice } }, Opts
+    ),
+    ?assertEqual(1000, balance(Updated, Alice, Opts)),
+    ?assertEqual(0, balance(Updated, Bob, Opts)),
+    [Notice] = outbox(Updated, Opts),
+    ?assertEqual(<<"Quantity tag is required.">>, hb_ao:get(<<"reason">>, Notice, Opts)).
+
+signed_l1_duplicate_quantity_tags_rejected_test() ->
+    Opts = opts(),
+    {Wallet, Alice} = party(),
+    Bob = id(<<"bob">>),
+    Base = token_state(#{ initial_balances => #{ Alice => 1000 } }, Opts),
+    Body = l1_transfer_body(
+        Wallet,
+        Bob,
+        1,
+        [{<<"Quantity">>, <<"700">>}, {<<"quantity">>, <<"1">>}],
+        Opts
+    ),
+    {ok, Updated} = (token()):handle_action(
+        <<"transfer">>, Base, #{ <<"body">> => Body#{ <<"from">> => Alice } }, Opts
+    ),
+    ?assertEqual(1000, balance(Updated, Alice, Opts)),
+    ?assertEqual(0, balance(Updated, Bob, Opts)),
+    [Notice] = outbox(Updated, Opts),
+    ?assertEqual(<<"Ambiguous Quantity tags.">>, hb_ao:get(<<"reason">>, Notice, Opts)).
+
+signed_l1_quantity_survives_security_projection_test() ->
+    Opts = opts(),
+    {Wallet, Alice} = party(),
+    Bob = id(<<"bob">>),
+    Body = l1_transfer_body(Wallet, Bob, 1, [{<<"Quantity">>, <<"700">>}], Opts),
+    SecureBody = (hb_message:uncommitted(Body, Opts))#{ <<"from">> => Alice },
+    {ok, Corrected} = (token()):restore_signed_quantity(
+        <<"transfer">>,
+        #{ <<"body">> => Body },
+        #{ <<"body">> => SecureBody },
+        Opts
+    ),
+    CorrectedBody = hb_maps:get(<<"body">>, Corrected, Opts),
+    ?assertEqual(<<"700">>, hb_maps:get(<<"quantity">>, CorrectedBody, Opts)),
+    ?assertEqual(Alice, hb_maps:get(<<"from">>, CorrectedBody, Opts)),
+    ?assertEqual(not_found, hb_message:commitment(
+        #{ <<"commitment-device">> => <<"tx@1.0">> }, CorrectedBody, Opts
+    )).

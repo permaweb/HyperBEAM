@@ -5,7 +5,7 @@
 %%% Non-public device API functions. Note: Ensure that these are not exported
 %%% as publicly callable device keys, either by having arity > 3, or by gating
 %%% the public surface in `device_info/0`.
--export([handle_action/4]).
+-export([handle_action/4, restore_signed_quantity/4]).
 %%% Public helpers.
 -export([validate_address/2]).
 -include("include/hb.hrl").
@@ -161,7 +161,9 @@ compute_token(Base, Assignment, Opts) ->
                 {ok, SecureReq} ?= enforce_security(DedupedBase, Assignment, Opts),
                 {ok, Body} ?= field(<<"body">>, Assignment, Opts),
                 {ok, Action} ?= field(<<"action">>, Body, Opts),
-                {ok, Res} ?= handle_action(Action, DedupedBase, SecureReq, Opts),
+                {ok, ActionReq} ?=
+                    restore_signed_quantity(Action, Assignment, SecureReq, Opts),
+                {ok, Res} ?= handle_action(Action, DedupedBase, ActionReq, Opts),
                 ?event(debug_token, {route_result, Res}, Opts),
                 {ok, Res}
             else
@@ -228,6 +230,89 @@ tx_field(Body, Field, Default, Opts) ->
         _ ->
             Default
     end.
+
+transfer_quantity(Body, Opts) ->
+    case hb_message:commitment(
+        #{ <<"commitment-device">> => <<"tx@1.0">> },
+        Body,
+        Opts
+    ) of
+        {ok, _ID, Commitment} ->
+            case hb_maps:get(<<"original-tags">>, Commitment, not_found, Opts) of
+                Tags when is_map(Tags) -> quantity_tag(Tags, Opts);
+                _ -> field(<<"quantity">>, Body, Opts)
+            end;
+        _ ->
+            field(<<"quantity">>, Body, Opts)
+    end.
+
+restore_signed_quantity(Action, Assignment, SecureReq, Opts) ->
+    case lists:member(
+        normalize_action(Action),
+        [<<"transfer">>, <<"deposit">>, <<"withdraw">>,
+            <<"delegate">>, <<"undelegate">>]
+    ) of
+        false ->
+            {ok, SecureReq};
+        true ->
+            case field(<<"body">>, Assignment, Opts) of
+                {ok, SignedBody} ->
+                    case hb_message:commitment(
+                        #{ <<"commitment-device">> => <<"tx@1.0">> },
+                        SignedBody,
+                        Opts
+                    ) of
+                        {ok, _ID, _Commitment} ->
+                            restore_signed_quantity(SignedBody, SecureReq, Opts);
+                        not_found ->
+                            {ok, SecureReq};
+                        _ ->
+                            {error, <<"Ambiguous transaction commitments.">>}
+                    end;
+                Error ->
+                    Error
+            end
+    end.
+
+restore_signed_quantity(SignedBody, SecureReq, Opts) ->
+    maybe
+        {ok, Quantity} ?= transfer_quantity(SignedBody, Opts),
+        {ok, SecureBody} ?= field(<<"body">>, SecureReq, Opts),
+        {ok, SecureReq#{
+            <<"body">> =>
+                (hb_message:uncommitted(SecureBody, Opts))#{
+                    <<"quantity">> => Quantity
+                }
+        }}
+    end.
+
+quantity_tag(Tags, Opts) ->
+    Matches = hb_maps:fold(
+        fun(_Index, #{ <<"name">> := Name, <<"value">> := Value }, Acc) ->
+                case is_quantity_tag(Name) of
+                    true -> [Value | Acc];
+                    false -> Acc
+                end;
+           (_Index, _Tag, Acc) ->
+                Acc
+        end,
+        [],
+        Tags,
+        Opts
+    ),
+    case Matches of
+        [Value] -> {ok, Value};
+        [] -> {error, <<"Quantity tag is required.">>};
+        _ -> {error, <<"Ambiguous Quantity tags.">>}
+    end.
+
+is_quantity_tag(Name) when is_binary(Name) ->
+    try hb_util:to_lower(Name) =:= <<"quantity">>
+    catch
+        _:_ -> false
+    end;
+is_quantity_tag(_) ->
+    false.
 
 %% @doc Deduplicate token computations by the signed assignment body. Replayed
 %% assignments get fresh slots, so the assignment itself cannot be the subject.
@@ -334,7 +419,7 @@ transfer(Base, Assignment, Opts) ->
         {ok, Req} ?= field(<<"body">>, Assignment, Opts),
         {ok, From0} ?= field(<<"from">>, Req, Opts),
         {ok, Recipient0} ?= field(<<"recipient">>, Req, Opts),
-        {ok, Quantity0} ?= field(<<"quantity">>, Req, Opts),
+        {ok, Quantity0} ?= transfer_quantity(Req, Opts),
         Quantity =
             case hb_util:safe_int(Quantity0) of
                 {ok, Integer} -> Integer;
