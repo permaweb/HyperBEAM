@@ -258,3 +258,52 @@ malformed_subscribe_vector_test() ->
             Opts
         )
     ).
+
+committer_host_accounts_vector_test() ->
+    Opts = opts(),
+    Target = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Listener = hb_util:human_id(ar_wallet:to_address(maps:get(<<"priv-wallet">>, Opts))),
+    HostTarget = hb_committer:uri(Target, Opts),
+    HostListener = hb_committer:uri(Listener, Opts),
+    Subscribed = lists:foldl(fun(Form, State) ->
+        Request = hb_message:commit(subscription_req(<<"ping">>, Target, Form, 1), Opts),
+        {ok, Next} = call(<<"subscribe">>, State, Request, Opts),
+        Next
+    end, base(), [Listener, <<"did:ar:", Listener/binary>>, HostListener]),
+    lists:foreach(fun(Form) ->
+        ?assertEqual({ok, [HostListener]}, call(<<"subscribers">>, Subscribed,
+            #{ <<"action">> => <<"ping">>, <<"target">> => Form }, Opts))
+    end, [Target, <<"did:ar:", Target/binary>>, HostTarget]),
+    ?assertEqual({ok, []}, call(<<"subscribers">>, Subscribed,
+        #{ <<"action">> => <<"ping">>, <<"target">> => Listener }, Opts)),
+    {ok, Sent} = call(<<"send">>, Subscribed, #{ <<"messages">> => #{
+        <<"action">> => <<"ping">>, <<"target">> => Target
+    } }, Opts),
+    ?assert(has_message([{<<"target">>, HostTarget}], outbox(Sent, Opts), Opts)),
+    ?assert(has_message([{<<"target">>, HostListener}], outbox(Sent, Opts), Opts)),
+    {ok, Unsubscribed} = call(<<"unsubscribe">>, Subscribed,
+        subscription_req(<<"ping">>, HostTarget, HostListener, 1), Opts),
+    ?assertEqual({ok, []}, call(<<"subscribers">>, Unsubscribed,
+        #{ <<"action">> => <<"ping">>, <<"target">> => Target }, Opts)).
+
+pkh_host_accounts_vector_test_() ->
+    [{Normal, fun() ->
+        Opts = opts(),
+        Host = hb_committer:uri(Normal, Opts),
+        ?assertMatch(<<"uri-", _/binary>>, Host),
+        lists:foreach(fun(Form) ->
+            ?assertEqual(Host, hb_committer:uri(Form, Opts)),
+            {ok, State} = call(<<"subscribe">>, base(),
+                subscription_req(<<"ping">>, Form, Form, 1), Opts),
+            ?assertEqual({ok, [Host]}, call(<<"subscribers">>, State,
+                #{ <<"action">> => <<"ping">>, <<"target">> => Host }, Opts)),
+            {ok, Sent} = call(<<"send">>, State,
+                #{ <<"messages">> => #{ <<"target">> => Form } }, Opts),
+            ?assert(has_message([{<<"target">>, Host}], outbox(Sent, Opts), Opts))
+        end, [Raw, Normal, Host])
+    end} || {Raw, Normal} <- [
+        {<<"0x52908400098527886E0F7030069857D2E4169EE7">>,
+            <<"did:pkh:eip155:1:0x52908400098527886E0F7030069857D2E4169EE7">>},
+        {<<"7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv">>,
+            <<"did:pkh:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv">>}
+    ]].

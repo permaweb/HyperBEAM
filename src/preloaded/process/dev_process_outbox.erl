@@ -189,11 +189,16 @@ send_messages(Msgs, State, Req, Opts) ->
     ).
 
 raw_send(Msg, State, Opts) ->
+    CanonicalMsg = case hb_maps:find(<<"target">>, Msg, Opts) of
+        {ok, Target} -> hb_ao:set(Msg,
+            <<"target">>, hb_committer:uri(Target, Opts), Opts);
+        error -> Msg
+    end,
     hb_ao:set(
         State,
         <<"results/outbox">>,
         [
-            Msg
+            CanonicalMsg
         |
             hb_util:message_to_ordered_list(
                 hb_ao:get(<<"results/outbox">>, State, [], Opts),
@@ -266,8 +271,8 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
 
 set_subscription(State, Action, Target, Listener, unset, Opts) ->
     ActionBin = hb_util:to_lower(hb_util:bin(Action)),
-    TargetBin = hb_util:to_lower(hb_util:bin(Target)),
-    ListenerBin = hb_util:to_lower(hb_util:bin(Listener)),
+    TargetBin = hb_util:to_lower(hb_committer:uri(hb_util:bin(Target), Opts)),
+    ListenerBin = hb_util:to_lower(hb_committer:uri(hb_util:bin(Listener), Opts)),
     Subscribers = subscription_map(State, Opts),
     ActionSubscribers = hb_maps:get(ActionBin, Subscribers, #{}, Opts),
     TargetSubscribers = hb_maps:get(TargetBin, ActionSubscribers, #{}, Opts),
@@ -279,14 +284,14 @@ set_subscription(State, Action, Target, Listener, unset, Opts) ->
     write_subscribers(State, NewSubscribers, Opts);
 set_subscription(State, Action, Target, Listener, SubscriptionInfo, Opts) ->
     ActionBin = hb_util:to_lower(hb_util:bin(Action)),
-    TargetBin = hb_util:to_lower(hb_util:bin(Target)),
-    ListenerBin = hb_util:to_lower(hb_util:bin(Listener)),
+    TargetBin = hb_util:to_lower(hb_committer:uri(hb_util:bin(Target), Opts)),
+    ListenerBin = hb_util:to_lower(hb_committer:uri(hb_util:bin(Listener), Opts)),
     Subscribers = subscription_map(State, Opts),
     ActionSubscribers = hb_maps:get(ActionBin, Subscribers, #{}, Opts),
     TargetSubscribers = hb_maps:get(TargetBin, ActionSubscribers, #{}, Opts),
     NewTargetSubscribers =
         (hb_private:reset(TargetSubscribers))#{ ListenerBin => #{
-            <<"listener">> => Listener,
+            <<"listener">> => hb_committer:uri(hb_util:bin(Listener), Opts),
             <<"info">> => SubscriptionInfo
         } },
     NewActionSubscribers = ActionSubscribers#{ TargetBin => NewTargetSubscribers },
@@ -311,7 +316,7 @@ write_subscribers(State, Subscribers, Opts) ->
 
 subscribers_for(State, Action, Target, Opts) ->
     ActionBin = hb_util:to_lower(hb_util:bin(Action)),
-    TargetBin = hb_util:to_lower(hb_util:bin(Target)),
+    TargetBin = hb_util:to_lower(hb_committer:uri(hb_util:bin(Target), Opts)),
     Subscribers = subscription_map(State, Opts),
     ActionSubscribers = hb_maps:get(ActionBin, Subscribers, #{}, Opts),
     TargetSubscribers = hb_maps:get(TargetBin, ActionSubscribers, #{}, Opts),
