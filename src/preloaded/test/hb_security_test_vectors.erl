@@ -844,3 +844,26 @@ prod_mode_allows_explicit_single_signer_policy_vector_test() ->
             Opts
         )
     ).
+
+delegated_action_policy_decodes_tokens_as_binaries_vector_test() ->
+    Opts = opts(),
+    {Scheduler, SchedulerWallet} = signer(),
+    {DelegatedSender, _DelegatedWallet} = signer(),
+    true = is_atom(compute),
+    Assignment =
+        sign_assignment(
+            #{
+                <<"action">> => <<"compute">>,
+                <<"from-process">> => DelegatedSender
+            },
+            SchedulerWallet,
+            SchedulerWallet,
+            Opts
+        ),
+    Policy =
+        #{
+            <<"scheduler">> => Scheduler,
+            <<"authority">> => Scheduler,
+            <<"authority-actions">> => <<"compute">>
+        },
+    ?assertMatch({ok, _}, hb_ao:resolve(base(Policy), Assignment, Opts)).
