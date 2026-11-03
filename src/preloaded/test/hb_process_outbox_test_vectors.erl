@@ -279,7 +279,7 @@ committer_host_accounts_vector_test() ->
     {ok, Sent} = call(<<"send">>, Subscribed, #{ <<"messages">> => #{
         <<"action">> => <<"ping">>, <<"target">> => Target
     } }, Opts),
-    ?assert(has_message([{<<"target">>, HostTarget}], outbox(Sent, Opts), Opts)),
+    ?assert(has_message([{<<"target">>, Target}], outbox(Sent, Opts), Opts)),
     ?assert(has_message([{<<"target">>, HostListener}], outbox(Sent, Opts), Opts)),
     {ok, Unsubscribed} = call(<<"unsubscribe">>, Subscribed,
         subscription_req(<<"ping">>, HostTarget, HostListener, 1), Opts),
@@ -296,10 +296,7 @@ pkh_host_accounts_vector_test_() ->
             {ok, State} = call(<<"subscribe">>, base(),
                 subscription_req(<<"ping">>, Form, Form, 1), Opts),
             ?assertEqual({ok, [Host]}, call(<<"subscribers">>, State,
-                #{ <<"action">> => <<"ping">>, <<"target">> => Host }, Opts)),
-            {ok, Sent} = call(<<"send">>, State,
-                #{ <<"messages">> => #{ <<"target">> => Form } }, Opts),
-            ?assert(has_message([{<<"target">>, Host}], outbox(Sent, Opts), Opts))
+                #{ <<"action">> => <<"ping">>, <<"target">> => Host }, Opts))
         end, [Raw, Normal, Host])
     end} || {Raw, Normal} <- [
         {<<"0x52908400098527886E0F7030069857D2E4169EE7">>,

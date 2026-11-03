@@ -189,16 +189,11 @@ send_messages(Msgs, State, Req, Opts) ->
     ).
 
 raw_send(Msg, State, Opts) ->
-    CanonicalMsg = case hb_maps:find(<<"target">>, Msg, Opts) of
-        {ok, Target} -> hb_ao:set(Msg,
-            <<"target">>, hb_committer:uri(Target, Opts), Opts);
-        error -> Msg
-    end,
     hb_ao:set(
         State,
         <<"results/outbox">>,
         [
-            CanonicalMsg
+            Msg
         |
             hb_util:message_to_ordered_list(
                 hb_ao:get(<<"results/outbox">>, State, [], Opts),
