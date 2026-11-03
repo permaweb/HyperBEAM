@@ -2,7 +2,7 @@
 -module(hb_security_test_vectors).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
--export([device_info/0, balance/3]).
+-export([device_info/0, balance/3, mint/3]).
 
 %% @doc Configure the packaged security device and token Balance test endpoint.
 opts() ->
@@ -43,7 +43,7 @@ opts() ->
     }.
 
 %% @doc Test-only implementation of the token Balance contract.
-device_info() -> #{ exports => [<<"balance">>] }.
+device_info() -> #{ exports => [<<"balance">>, <<"mint">>] }.
 
 %% @doc Resolve a balance with the deployed token's account-key semantics.
 balance(Base, Req, Opts) ->
@@ -53,7 +53,31 @@ balance(Base, Req, Opts) ->
             not_found -> id_key(ID);
             _ -> ID
         end,
-    {ok, hb_ao:get([<<"balances">>, Key], Base, 0, Opts)}.
+    Settled = case mint(Base, #{ <<"subject">> => Key }, Opts) of
+        {ok, State} -> State;
+        {error, _} -> Base
+    end,
+    {ok, hb_ao:get([<<"balances">>, Key], Settled, 0, Opts)}.
+
+mint(Base, Req, Opts) ->
+    case hb_ao:get(<<"test-mint-credit">>, Base, 0, Opts) of
+        0 -> {ok, Base};
+        <<"error">> -> {error, <<"Test mint failed.">>};
+        <<"raise">> -> erlang:error(test_mint_called);
+        Credit ->
+            Key = id_key(hb_ao:get(<<"subject">>, Req, Opts)),
+            Balance = hb_ao:get([<<"balances">>, Key], Base, 0, Opts),
+            {ok, Balances} = hb_ao:resolve(
+                hb_ao:get(<<"balances">>, Base, Opts),
+                #{ <<"path">> => <<"set">>, Key => Balance + Credit },
+                Opts
+            ),
+            {ok, hb_ao:set(Base, #{
+                <<"balances">> => Balances,
+                <<"total-supply">> => hb_ao:get(<<"total-supply">>, Base, Opts)
+                    + Credit
+            }, Opts)}
+    end.
 
 base(Policy) ->
     Policy#{ <<"device">> => <<"security@1.0">> }.
@@ -844,6 +868,28 @@ prod_mode_allows_explicit_single_signer_policy_vector_test() ->
             Opts
         )
     ).
+
+set_authority_supply_owner_uses_one_snapshot_vector_test() ->
+    Opts = opts(),
+    Alice = <<"alice">>,
+    Pending = token_policy(#{ Alice => 10, <<"bob">> => 37 }, 47,
+        #{ <<"test-mint-credit">> => 37 }, Opts),
+    ?assertEqual(
+        {error, <<"Supply-threshold owner requirement not satisfied.">>},
+        validate(<<"set-authority">>, Pending, Alice, Opts)
+    ),
+    ?assertEqual({ok, true}, validate(<<"set-authority">>,
+        Pending#{ <<"set-authority-threshold-bps">> => 5000 }, Alice, Opts)),
+    ?assertEqual(
+        {error, <<"Supply-threshold owner requirement not satisfied.">>},
+        validate(<<"set-authority">>,
+            Pending#{ <<"set-authority-threshold-bps">> => 6000 }, Alice, Opts)
+    ),
+    Full = token_policy(#{ Alice => 10 }, 10,
+        #{ <<"test-mint-credit">> => 37 }, Opts),
+    ?assertEqual({ok, true}, validate(<<"set-authority">>, Full, Alice, Opts)),
+    ?assertEqual({ok, true}, validate(<<"set-authority">>,
+        Full#{ <<"test-mint-credit">> => <<"error">> }, Alice, Opts)).
 
 delegated_action_policy_decodes_tokens_as_binaries_vector_test() ->
     Opts = opts(),

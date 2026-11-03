@@ -294,8 +294,8 @@ validate_with_template(<<"supply-threshold-owner">>, Key, Base, _SubjectMsg, Raw
         true ?= (not has_static_policy(Key, Base, Opts))
             orelse {error, <<"Ambiguous security policy configuration.">>},
         {ok, Candidate} ?= single_authority_candidate(RawFrom, Opts),
-        {ok, Balance} ?= candidate_balance(Candidate, Base, Opts),
-        {ok, TotalSupply} ?= total_supply(Base, Opts),
+        {ok, Balance, OwnerState} ?= candidate_balance(Candidate, Base, Opts),
+        {ok, TotalSupply} ?= total_supply(OwnerState, Opts),
         {ok, ThresholdBps} ?= threshold_bps(Key, Base, Opts),
         true ?= (Balance =< TotalSupply)
             orelse {error, <<"Balance exceeds total supply.">>},
@@ -393,24 +393,34 @@ candidate_balance(Candidate, Base, Opts) ->
         not_found ->
             {error, <<"Balances not configured.">>};
         _Balances ->
-            case hb_ao:raw(
-                <<"token@1.0">>,
-                <<"balance">>,
-                Base,
-                #{ <<"balance">> => Candidate },
-                Opts
-            ) of
-                {ok, Balance} when is_integer(Balance), Balance >= 0 ->
-                    {ok, Balance};
-                {ok, Balance} when is_integer(Balance) ->
-                    {error, <<"Balance cannot be negative.">>};
-                {ok, _Balance} ->
-                    {error, <<"Balance must be an integer.">>};
-                {error, not_found} ->
-                    {ok, 0};
-                {error, Reason} ->
-                    {error, Reason}
+            Account = hb_committer:uri(Candidate),
+            Req = #{ <<"balance">> => Candidate, <<"device">> => <<"message@1.0">>,
+                <<"subject">> => Account },
+            maybe
+                {ok, State} ?= owner_state(Base, Req, Opts),
+                case hb_ao:resolve_many([State, <<"balances">>,
+                    #{ <<"path">> => Account }], Opts) of
+                    {ok, Balance} when is_integer(Balance), Balance >= 0 ->
+                        {ok, Balance, State};
+                    {ok, Balance} when is_integer(Balance) ->
+                        {error, <<"Balance cannot be negative.">>};
+                    {ok, _Balance} ->
+                        {error, <<"Balance must be an integer.">>};
+                    {error, not_found} ->
+                        {ok, 0, State};
+                    {error, Reason} ->
+                        {error, Reason}
+                end
             end
+    end.
+
+owner_state(Base, Req, Opts) ->
+    try hb_ao:raw(<<"token@1.0">>, <<"mint">>, Base, Req, Opts) of
+        {ok, State} -> {ok, State};
+        {error, _} -> {ok, Base}
+    catch
+        throw:{error, {device_not_loadable, _Device, _Reason}} ->
+            {ok, Base}
     end.
 
 total_supply(Base, Opts) ->
