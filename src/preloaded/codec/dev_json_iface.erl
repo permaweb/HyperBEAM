@@ -268,7 +268,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
         <<"Owner">> => Owner,
         <<"From">> => case ?IS_ID(From) of true -> safe_to_id(From); false -> From end,
         <<"Tags">> => prepare_tags(TABM, Msg, Commitment, Opts),
-        <<"Target">> => safe_to_id(Target),
+        <<"Target">> => safe_to_id(raw_value(Target)),
         <<"Data">> => Data,
         <<"Signature">> =>
             case byte_size(Signature) of
@@ -344,7 +344,7 @@ prepare_header_case_tags(TABM, RawMsg, Commitment, Opts) ->
             [
                 #{
                     <<"name">> => header_case_string(maybe_list_to_binary(Name)),
-                    <<"value">> => maybe_list_to_binary(Element)
+                    <<"value">> => raw_value(maybe_list_to_binary(Element))
                 }
             ||
                 Element <- Values
@@ -404,6 +404,11 @@ from(Base, Req, Opts) ->
 
 safe_to_id(<<>>) -> <<>>;
 safe_to_id(ID) -> hb_util:human_id(ID).
+
+%% @doc Give a committer URI as the raw address of its key, the form that AOS
+%% read before committers had URIs. Other values are given unchanged.
+raw_value(Value = <<"uri-did-", _/binary>>) -> hb_util:raw_address(Value);
+raw_value(Value) -> Value.
 
 maybe_list_to_binary(List) when is_list(List) ->
     % A list gives bytes only if every element is a byte. Any other list has
@@ -874,6 +879,31 @@ signer_address_of_each_key_type_test() ->
             <<"ans104-item-ethereum.bin">>,
             <<"ans104-item-typed-ethereum.bin">>,
             <<"ans104-item-solana.bin">>
+        ]
+    ),
+    % A committer URI in the target or a tag is given as the raw address.
+    Ethereum = <<"0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B">>,
+    Solana = <<"7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv">>,
+    Arweave = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    URIMsg =
+        hb_message:commit(
+            #{
+                <<"target">> => hb_committer:uri(Ethereum),
+                <<"recipient">> => hb_committer:uri(Solana),
+                <<"sender">> => hb_committer:uri(Arweave)
+            },
+            #{ <<"priv-wallet">> => ar_wallet:new() }
+        ),
+    {ok, URIJSON} = to(#{}, #{ <<"message">> => URIMsg }, #{}),
+    ?assertMatch(#{ <<"Target">> := Ethereum }, URIJSON),
+    ?assertEqual(
+        [Solana, Arweave],
+        [
+            Value
+        ||
+            #{ <<"name">> := Name, <<"value">> := Value } <-
+                maps:get(<<"Tags">>, URIJSON),
+            lists:member(Name, [<<"Recipient">>, <<"Sender">>])
         ]
     ).
 
