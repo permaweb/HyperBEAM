@@ -257,7 +257,7 @@ normalize_action(Action) ->
 balance(Base, Req, Opts) ->
     maybe
         {ok, Account0} ?= field(<<"balance">>, Req, Opts),
-        {ok, Account} ?= hb_committer:validated(Account0),
+        {ok, Account} ?= hb_committer:name(Account0),
         ?event(
             debug_token,
             {balance_request,
@@ -314,8 +314,8 @@ transfer(Base, Assignment, Opts) ->
                 {ok, Integer} -> Integer;
                 _ -> Quantity0
             end,
-        {ok, From} ?= hb_committer:validated(From0),
-        {ok, Recipient} ?= hb_committer:validated(Recipient0),
+        {ok, From} ?= hb_committer:name(From0),
+        {ok, Recipient} ?= hb_committer:name(Recipient0),
         % Normalize the base's minting state for the sender.
         {ok, NormBase} ?=
             normalize_mint(
@@ -420,7 +420,7 @@ mint(Base, Assignment, Opts) ->
                     as_mint_device(<<"mint">>, Base, Assignment, Opts);
                 {ok, Subject} ->
                     maybe
-                        {ok, Account} ?= hb_committer:validated(Subject),
+                        {ok, Account} ?= hb_committer:name(Subject),
                         MintReq1 =
                             hb_ao:set(
                                 Assignment#{ <<"device">> => <<"message@1.0">> },

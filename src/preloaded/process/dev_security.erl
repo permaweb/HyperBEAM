@@ -129,7 +129,7 @@ validate_authority(Base, Assignment, Opts) ->
                 maybe
                     %% A delegated sender must be one valid identity, never a
                     %% list interpreted as multiple authorization candidates.
-                    {ok, From} ?= hb_committer:validated(Sender),
+                    {ok, From} ?= hb_committer:name(Sender),
                     true ?= (length(Signers) =:= 1) orelse
                         {error, <<"Delegated messages require exactly one signer.">>},
                     true ?= validate(<<"authority">>, Base, Msg, Signers, Opts),
@@ -376,7 +376,7 @@ valid_static_signer(_Signer) ->
 single_authority_candidate(RawFrom, Opts) ->
     case lists:uniq([hb_committer:uri(F) || F <- as_list(RawFrom, Opts)]) of
         [Candidate] ->
-            hb_committer:validated(Candidate);
+            hb_committer:name(Candidate);
         [] ->
             {error, <<"Authority candidate not found.">>};
         _ ->

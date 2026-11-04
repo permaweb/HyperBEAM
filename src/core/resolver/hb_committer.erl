@@ -61,7 +61,7 @@
 %%% in the form that `hb_util:human_id/1' gives.
 -module(hb_committer).
 -export([uri/1, uri/2, matches_commitment/3, address/1, encode/2, decode/1]).
--export([validated/1, account/1, account_label/1]).
+-export([name/1, account/1, account_label/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -122,19 +122,18 @@ uri(Value, _Opts) when is_binary(Value) ->
 uri(Value, _Opts) ->
     uri(Value).
 
-%% @doc Return `{ok, URI}' with the host-form URI of a committer given as a
-%% binary in any form that `uri/1' reads: an Arweave address, or a `did:ar:'
-%% URI of one in either form, or an Ethereum or Solana address, or a `did:pkh:'
-%% URI of one in either form. Returns `{error, Reason}' for any other value,
-%% including a URI with a query. A message is not read, as its device would
-%% have to be resolved.
-validated(Value) when is_binary(Value) ->
-    URI = uri(Value),
-    case address(URI) =/= error orelse account(URI) =/= error of
-        true -> {ok, URI};
+%% @doc Return `{ok, Name}' with the name of a committer: its URI in host form.
+%% The committer is given as a binary: an Arweave, Ethereum or Solana address,
+%% or a `did:ar:' or `did:pkh:' URI in either form. Returns `{error, Reason}'
+%% for any other value, including a URI with a query. A message is not read,
+%% as its device would have to be resolved.
+name(Value) when is_binary(Value) ->
+    Name = uri(Value),
+    case address(Name) =/= error orelse account(Name) =/= error of
+        true -> {ok, Name};
         false -> {error, <<"Not the address or URI of a committer.">>}
     end;
-validated(_Value) ->
+name(_Value) ->
     {error, <<"A committer must be given as a binary.">>}.
 
 %% @doc Return whether a commitment's `committer', if present, is the given
@@ -440,22 +439,22 @@ account_uri_test() ->
     <<Prefix:23/binary, Hex/binary>> = EthereumURI,
     ?assertEqual(error, account(<<Prefix/binary, (string:uppercase(Hex))/binary>>)).
 
-%% @doc Every form of a committer given as a binary is validated to its
-%% host-form URI, and any other value is refused without a throw.
-validated_test() ->
+%% @doc Every form of a committer given as a binary gives its name, and any
+%% other value is refused without a throw.
+name_test() ->
     Address = hb_util:human_id(crypto:strong_rand_bytes(32)),
     URI = encode({address, undefined}, Address),
     Ethereum = <<"0x626334b6ef6D3e8537E9f8d97d65f59832219315">>,
     Solana = <<"7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv">>,
     lists:foreach(
-        fun(Form) -> ?assertEqual({ok, uri(Form)}, validated(Form)) end,
+        fun(Form) -> ?assertEqual({ok, uri(Form)}, name(Form)) end,
         [Address, <<"did:ar:", Address/binary>>, URI,
             encode({address, ?RSA_KEY_TYPE}, Address), Ethereum, Solana,
             <<"did:pkh:eip155:1:", Ethereum/binary>>]
     ),
-    ?assertEqual({ok, URI}, validated(Address)),
+    ?assertEqual({ok, URI}, name(Address)),
     lists:foreach(
-        fun(Bad) -> ?assertMatch({error, _}, validated(Bad)) end,
+        fun(Bad) -> ?assertMatch({error, _}, name(Bad)) end,
         [<<>>, <<"alice">>, <<255>>, binary:copy(<<255>>, 200),
             <<"uri-did-ar-garbage">>, encode({id, undefined}, Address),
             <<"hmac:constant:ao">>, <<Address/binary, "?hint=x">>, 42,

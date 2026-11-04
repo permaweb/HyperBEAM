@@ -255,7 +255,7 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
                 <<"No security-normalized `from` key found in request.">>,
                 Opts
             ),
-        {ok, Listener} ?= hb_committer:validated(From),
+        {ok, Listener} ?= hb_committer:name(From),
         NewState =
             set_subscription(
                 State,
@@ -274,7 +274,7 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
 %% @doc Return the target of a subscription: `broadcast', or the host-form URI
 %% of a committer.
 subscription_target(<<"broadcast">>) -> {ok, <<"broadcast">>};
-subscription_target(Target) -> hb_committer:validated(Target).
+subscription_target(Target) -> hb_committer:name(Target).
 
 set_subscription(State, Action, Target, Listener, unset, Opts) ->
     ActionBin = hb_util:lowercase_key(hb_util:bin(Action)),
