@@ -33,7 +33,12 @@ route and then perform the transport themselves.
 - **Routing table / routes:** an ordered collection of **route** messages. May
   be supplied as an Erlang/AO-Core **list**, or as a **numbered map** (keys
   `1`, `2`, … contiguous from 1) which is treated as a list in that numeric
-  order. Lower index = higher precedence (checked first).
+  order. Lower index = higher precedence (checked first). An entry may be a
+  **reference** instead of a route: a binary AO-Core path, resolved with
+  `hb_ao:raw/2` when matching reaches it, to a route or a list of routes. These
+  are matched in its place, before the entries after it, and the `reference`
+  of a route matched among them gives its index in the resolved list. The
+  resolution adds its cost to each match that reaches it.
 - **Route:** a message describing one routing rule. Recognised keys:
   - `template` — the matcher (see **Template**). Absent template means "match
     everything" (an empty-map template matches every request).

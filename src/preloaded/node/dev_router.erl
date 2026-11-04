@@ -5,7 +5,8 @@
 %%% 
 %%% The routes for the router are defined in the `routes' key of the `Opts',
 %%% as a precidence-ordered list of maps. The first map that matches the
-%%% message will be used to determine the route.
+%%% message will be used to determine the route. An entry of the list may be
+%%% a reference to a route or a list of routes (see `match_route/6').
 %%% 
 %%% Multiple nodes can be specified as viable for a single route, with the
 %%% `Choose' key determining how many nodes to choose from the list (defaulting
@@ -498,6 +499,24 @@ match_routes(_, _, [], _) -> no_matches;
 match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
     NormRoutes = hb_ao:normalize_keys(Routes, Opts),
     XM = hb_maps:get(hb_ao:normalize_key(XKey), NormRoutes, not_found, Opts),
+    match_route(ToMatch, XM, XKey, Routes, Keys, Opts).
+
+%% @doc Match a route of a list against a message. A route may be a reference:
+%% a binary, resolved with `hb_ao:raw/2' each time that it is reached, to a
+%% route or a list of routes. These are matched in its place, before the
+%% routes after it.
+match_route(ToMatch, Ref, _XKey, Routes, Keys, Opts) when is_binary(Ref) ->
+    Resolved =
+        case hb_ao:raw(Ref, Opts) of
+            {ok, List} when is_list(List) -> List;
+            {ok, Route} when is_map(Route) -> [Route];
+            Res -> throw({unresolved_route_reference, Ref, Res})
+        end,
+    case match_routes(ToMatch, Resolved, Opts) of
+        no_matches -> match_routes(ToMatch, Routes, Keys, Opts);
+        Match -> Match
+    end;
+match_route(ToMatch, XM, XKey, Routes, Keys, Opts) ->
     Template =
         hb_maps:get(
             <<"template">>,
@@ -1876,6 +1895,71 @@ explicit_route_test_parallel() ->
                 <<"route-path">> => <<"http://google.com">>
             },
             #{}
+        )
+    ).
+
+%% @doc A route may be a reference, resolved when matching reaches it, to a
+%% route or a list of routes that are matched in its place. Any AO-Core path
+%% is a reference: here, a key of the node message, and a message in the
+%% cache.
+route_reference_test_parallel() ->
+    Ref =
+        fun(Key) ->
+            <<"~meta@1.0/info/whatever-else-they-want/", Key/binary>>
+        end,
+    Listed = [
+        #{ <<"template">> => <<"/a">>, <<"node">> => <<"a">> },
+        #{ <<"template">> => <<"/b">>, <<"node">> => <<"b">> }
+    ],
+    Opts =
+        #{
+            <<"whatever-else-they-want">> =>
+                #{
+                    <<"list">> => Listed,
+                    <<"one">> =>
+                        #{ <<"template">> => <<"/c">>, <<"node">> => <<"c">> },
+                    <<"nested">> => [Ref(<<"one">>)]
+                },
+            <<"routes">> => [
+                Ref(<<"list">>),
+                #{ <<"template">> => <<"/b">>, <<"node">> => <<"after-b">> },
+                Ref(<<"nested">>),
+                #{ <<"template">> => <<"/d">>, <<"node">> => <<"after-d">> },
+                Ref(<<"missing">>)
+            ]
+        },
+    % The routes of a list are matched in its place, before those after it.
+    ?assertEqual({ok, <<"b">>}, route(#{ <<"path">> => <<"/b">> }, Opts)),
+    % A route is matched in place of its reference, here through a list.
+    ?assertEqual({ok, <<"c">>}, route(#{ <<"path">> => <<"/c">> }, Opts)),
+    % A match ends before a later reference is resolved.
+    ?assertEqual({ok, <<"after-d">>}, route(#{ <<"path">> => <<"/d">> }, Opts)),
+    % A reference that does not resolve is an error, not a missing route.
+    ?assertThrow(
+        {unresolved_route_reference, _, {error, not_found}},
+        route(#{ <<"path">> => <<"/e">> }, Opts)
+    ),
+    % The `match' key reads the routes of its base, with their references.
+    ?assertMatch(
+        {ok, #{ <<"node">> := <<"a">> }},
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"router@1.0">>,
+                <<"routes">> => [Ref(<<"list">>)]
+            },
+            #{ <<"path">> => <<"match">>, <<"route-path">> => <<"/a">> },
+            Opts
+        )
+    ),
+    % A path into a message in the cache is a reference too.
+    Store = hb_test_utils:test_store(hb_store_volatile, <<"route-reference">>),
+    StoreOpts = #{ <<"store">> => Store },
+    {ok, ID} = hb_cache:write(#{ <<"routes">> => Listed }, StoreOpts),
+    ?assertEqual(
+        {ok, <<"a">>},
+        route(
+            #{ <<"path">> => <<"/a">> },
+            StoreOpts#{ <<"routes">> => [<<ID/binary, "/routes">>] }
         )
     ).
 
