@@ -10,7 +10,8 @@
 -export([write_header/2, read_header/2]).
 -export([write_block/3, read_block/2]).
 -export([ensure_target_root/2]).
--export([write_target/4, write_targets/2, read_target/3, list_targets/2]).
+-export([write_target/4, write_target/5, write_targets/2]).
+-export([read_target/3, read_target_timestamp/3, list_targets/2]).
 -export([write_assignment/2, read_assignment/3]).
 -export([assignments_to_bundle/4]).
 -include("include/hb.hrl").
@@ -89,22 +90,26 @@ read_block(Height, RawOpts) ->
 %% @doc Link an address and ordinate to the cached transaction header's TXID.
 write_target(Address, Ordinate, TXID, RawOpts) ->
     write_targets([{Address, Ordinate, TXID}], RawOpts).
+%% @doc Link a target with the timestamp of its containing block.
+write_target(Address, Ordinate, Timestamp, TXID, RawOpts) ->
+    write_targets([{Address, Ordinate, Timestamp, TXID}], RawOpts).
 
 %% @doc Link all targets found in one block in a single store operation.
 write_targets(Targets, RawOpts) ->
     write_targets_map(
-        maps:from_list(
-            [
-                {
-                    target_path(Address, Ordinate),
-                    <<"ao:", (hb_util:human_id(TXID))/binary>>
-                }
-            ||
-                {Address, Ordinate, TXID} <- Targets
-            ]
-        ),
+        maps:from_list(lists:append([target_entries(Target) || Target <- Targets])),
         RawOpts
     ).
+
+%% @doc Encode one target and its optional block timestamp as store entries.
+target_entries({Address, Ordinate, TXID}) ->
+    [{target_path(Address, Ordinate), <<"ao:", (hb_util:human_id(TXID))/binary>>}];
+target_entries({Address, Ordinate, Timestamp, TXID}) ->
+    [
+        {target_timestamp_path(Address, Ordinate), integer_to_binary(Timestamp)}
+    |
+        target_entries({Address, Ordinate, TXID})
+    ].
 
 write_targets_map(Targets, _RawOpts) when map_size(Targets) =:= 0 -> ok;
 write_targets_map(Targets, RawOpts) ->
@@ -123,6 +128,21 @@ read_target(Address, Ordinate, RawOpts) ->
                 {error, not_found} -> not_found
             end;
         _ -> not_found
+    end.
+
+%% @doc Read a target and its indexed block timestamp when available.
+read_target_timestamp(Address, Ordinate, RawOpts) ->
+    case read_target(Address, Ordinate, RawOpts) of
+        {ok, TXID, Header} ->
+            Opts = opts(RawOpts),
+            Store = hb_opts:get(store, no_viable_store, Opts),
+            case hb_store:read(Store, target_timestamp_path(Address, Ordinate), Opts) of
+                {ok, Timestamp} ->
+                    {ok, TXID, binary_to_integer(Timestamp), Header};
+                {error, not_found} -> {ok, TXID, undefined, Header};
+                Error -> Error
+            end;
+        Error -> Error
     end.
 
 %% @doc Ensure that listing an address can distinguish no targets from failure.
@@ -250,6 +270,11 @@ target_root(Address) ->
 target_path(Address, Ordinate) ->
     hb_path:to_binary([target_root(Address), Ordinate]).
 
+target_timestamp_path(Address, Ordinate) ->
+    hb_path:to_binary(
+        [?CACHE_PREFIX, <<"target-timestamps">>, hb_util:human_id(Address), Ordinate]
+    ).
+
 assignment_path(ProcessID, Slot) ->
     hb_path:to_binary(
         [
@@ -348,7 +373,7 @@ linked_state_and_target_test() ->
     ?assertEqual({ok, Process}, read_process(ProcessID, Opts)),
     ?assertEqual([ProcessID], list_processes(Opts)),
     {ok, _} = write_header(Header, Opts),
-    ok = write_target(ProcessID, <<"101-3">>, TXID, Opts),
+    ok = write_target(ProcessID, <<"101-3">>, 123456, TXID, Opts),
     ?assertEqual({ok, [<<"101-3">>]}, list_targets(ProcessID, Opts)),
     EmptyStore = hb_test_utils:test_store(hb_store_volatile, <<"empty">>),
     ok = hb_store:start(EmptyStore),
@@ -367,6 +392,19 @@ linked_state_and_target_test() ->
     ?assertEqual(
         TXID,
         hb_util:human_id(hb_message:id(ReadHeader, signed, Opts))
+    ),
+    ?assertMatch(
+        {ok, TXID, 123456, _},
+        read_target_timestamp(ProcessID, <<"101-3">>, ReadOpts)
+    ),
+    ?assertEqual(
+        {ok, <<"ao:", TXID/binary>>},
+        hb_store:read(Store, target_path(ProcessID, <<"101-3">>), Opts)
+    ),
+    ok = write_target(ProcessID, <<"101-4">>, TXID, Opts),
+    ?assertMatch(
+        {ok, TXID, undefined, _},
+        read_target_timestamp(ProcessID, <<"101-4">>, ReadOpts)
     ),
     ok = hb_store:stop(EmptyStore),
     ok = hb_store:stop(Store).
