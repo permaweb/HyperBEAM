@@ -287,3 +287,10 @@ malformed_subscribe_vector_test() ->
             Opts
         )
     ).
+
+malformed_forwarded_key_does_not_throw_vector_test() ->
+    Opts = opts(),
+    ?assertMatch({ok, _}, call(<<"send">>, base(), #{
+        <<"messages">> => #{ <<"action">> => <<"ping">> },
+        <<16#C3, "x">> => <<"1">>
+    }, Opts)).

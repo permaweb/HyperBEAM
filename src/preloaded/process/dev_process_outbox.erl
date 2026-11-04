@@ -359,10 +359,10 @@ forwarded_keys(Req, Opts) ->
     with_prefix([<<"x-">>], Req, Opts).
 
 with_prefix(Prefixes, Map, Opts) when is_list(Prefixes) ->
-    PrefixBins = [hb_util:to_lower(hb_util:bin(P)) || P <- Prefixes],
+    PrefixBins = [hb_util:bin(P) || P <- Prefixes],
     hb_maps:filter(
         fun(Key, _Value) ->
-            KeyBin = hb_util:to_lower(hb_util:bin(Key)),
+            KeyBin = hb_util:bin(Key),
             lists:any(
                 fun(Prefix) ->
                     binary:match(KeyBin, Prefix) =:= {0, byte_size(Prefix)}
