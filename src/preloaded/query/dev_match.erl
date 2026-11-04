@@ -79,8 +79,9 @@
 %%% Writes have empty values and entry keys with an additional `path' that
 %%% gives the group. `hb_store' applies prefix handling and `to-key' to these
 %%% keys.
-%%% The encoder also receives binary group paths and pathless entry messages
-%%% for list bounds. List results pass through `from-key' to become entries.
+%%% Reads list each group by its `path' and the `value' that the path hashes.
+%%% The encoder also receives pathless entry messages for list bounds.
+%%% List results pass through `from-key' to become entries.
 %%% A `from-list' pipeline can decode the entire batch instead, using `entries'
 %%% for native keys or `members' for packed rows.
 %%% Reads merge all configured stores using ordered, inclusive batch listing.
@@ -94,7 +95,7 @@
 %%% or the base itself if it has no `body'; batch adapters take a `body' list:
 %%% ```
 %%%     key:    Encode an entry as a native binary key, joined to its `path'
-%%%             when present. A binary group path passes through unchanged.
+%%%             when present. A group's path passes through unchanged.
 %%%     entry:  Decode a native key, or normalize an entry message's offset
 %%%             and supply empty `id' and `commitment-device' when absent.
 %%%     entries: Decode a list of native keys in one call.
@@ -121,6 +122,9 @@
 %%% `-1' to zero and `infinity' or oversized offsets to the field's maximum;
 %%% `member' maps that maximum to `infinity'. The pipeline must supply any
 %%% known commitment device, for example with `/set&commitment-device=ans104@1.0'.
+%%% `row' hashes a `committer' group's value as given, or with
+%%% `committer-format=raw' as its raw address (`hb_util:raw_address/1'): the
+%%% form of an index built before committers had URIs.
 -module(dev_match).
 -specification("../../../specs/match@1.0.md").
 -export([device_info/0]).
@@ -191,6 +195,11 @@ group(Name, Value, Opts) ->
         (value_path(Value, Opts))/binary
     >>.
 
+%% @doc The key a pair's group is read with: its path, and the value that the
+%% path hashes, for a store that hashes the value in another form.
+lookup(Name, Value, Opts) ->
+    #{ <<"path">> => group(Name, Value, Opts), <<"value">> => Value }.
+
 %% @doc The path `hb_cache' links a value under: the hashpath of a binary,
 %% the ID of a message.
 value_path(Link, Opts) when ?IS_LINK(Link) ->
@@ -200,15 +209,17 @@ value_path(Bin, Opts) when is_binary(Bin) ->
 value_path(Msg, Opts) ->
     hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }).
 
-%% @doc Encode an entry's fields and optional path, or pass a group through.
+%% @doc Encode an entry's fields and optional path, or pass a group's path
+%% through.
 key(Base, _Req, Opts) ->
     {ok, key(hb_cache:ensure_all_loaded(
         hb_maps:get(<<"body">>, Base, Base, Opts), Opts
     ))}.
 
 %% @doc A key of a group: the offset, signed ID, and commitment device.
-key(#{ <<"path">> := Path } = Match) ->
+key(#{ <<"path">> := Path, <<"offset">> := _ } = Match) ->
     hb_path:to_binary([Path, key(maps:remove(<<"path">>, Match))]);
+key(#{ <<"path">> := Path }) -> Path;
 key(#{ <<"offset">> := Offset } = Match) ->
     ID = maps:get(<<"id">>, Match, <<>>),
     Device = maps:get(<<"commitment-device">>, Match, <<>>),
@@ -408,7 +419,10 @@ check(Base, Req, Opts) ->
         {Name, Value} <- pairs(Handler, Base, Names, Opts)],
     {ok, lists:all(
         fun(Alternatives) ->
-            lists:any(fun(Path) -> lists:member(Path, Present) end, Alternatives)
+            lists:any(
+                fun(#{ <<"path">> := Path }) -> lists:member(Path, Present) end,
+                Alternatives
+            )
         end,
         groups(#{}, Req, Opts)
     )}.
@@ -455,12 +469,12 @@ locate(Base, Req, Opts) ->
             end
     end.
 
-%% @doc Each AND predicate's alternative group paths, normalized as templates.
+%% @doc Each AND predicate's alternative groups, normalized as templates.
 groups(Base, Req, Opts) ->
-    [ [group(Name, Value, Opts)] || {Name, Value} <- template(Base, Opts) ] ++
+    [ [lookup(Name, Value, Opts)] || {Name, Value} <- template(Base, Opts) ] ++
         [
             lists:usort([
-                group(Key, Value, Opts)
+                lookup(Key, Value, Opts)
             ||
                 Alternative <- hb_maps:get(<<"values">>, Predicate, not_found, Opts),
                 {Key, Value} <- template(#{ Name => Alternative }, Opts)
@@ -757,17 +771,34 @@ from(_Direction, Cursor, _Exclusive) -> Cursor.
 %% index: the leading `key-hash-size' bits of the SHA-256 of the name under
 %% `~match@1.0/' and the leading `value-hash-size' bits of the digest the
 %% value's path names; or a key's offset in `offset-size' bits, `-1' as zero
-%% and `infinity', with every offset past the field, as its maximum.
+%% and `infinity', with every offset past the field, as its maximum. A
+%% `committer-format' of `raw' hashes a `committer' group's raw address.
 row(Base, Req, Opts) ->
-    {ok, row(
-        hb_cache:ensure_all_loaded(hb_maps:get(<<"body">>, Base, <<>>, Opts), Opts),
-        sizes(Req, Opts)
-    )}.
+    Key = hb_cache:ensure_all_loaded(hb_maps:get(<<"body">>, Base, <<>>, Opts), Opts),
+    case hb_maps:get(<<"committer-format">>, Req, <<"uri">>, Opts) of
+        <<"uri">> -> {ok, row(Key, sizes(Req, Opts))};
+        <<"raw">> -> {ok, row(raw_committer(Key, Opts), sizes(Req, Opts))};
+        _ ->
+            {error,
+                #{
+                    <<"status">> => 400,
+                    <<"body">> => <<"Unsupported committer format.">>
+                }
+            }
+    end.
+
+%% @doc A `committer' group with the path of its value's raw address.
+raw_committer(#{ <<"path">> := <<"committer=", _/binary>> } = Group, Opts) ->
+    Raw = hb_util:raw_address(maps:get(<<"value">>, Group)),
+    Group#{ <<"path">> => <<"committer=", (value_path(Raw, Opts))/binary>> };
+raw_committer(Key, _Opts) ->
+    Key.
 
 %% @doc Encode a group, an offset, or a complete row from their fields.
-row(#{ <<"path">> := Path } = Match, Sizes) ->
+row(#{ <<"path">> := Path, <<"offset">> := _ } = Match, Sizes) ->
     <<(row(Path, Sizes))/bitstring,
         (row(maps:remove(<<"path">>, Match), Sizes))/bitstring>>;
+row(#{ <<"path">> := Path }, Sizes) -> row(Path, Sizes);
 row(#{ <<"offset">> := Offset }, {_, _, OffsetBits}) ->
     Max = (1 bsl OffsetBits) - 1,
     case Offset of
@@ -1268,6 +1299,30 @@ row_test() ->
     ?assertEqual(
         {error, {'invalid-row', <<0>>}},
         Normalize(<<"members">>, [Row, <<0>>])
+    ),
+    % A raw-address index reads a committer's URI as its raw address alone.
+    Owner = <<"0x626334b6ef6D3e8537E9f8d97d65f59832219315">>,
+    URI = hb_committer:uri(Owner),
+    Lookup =
+        fun(Name, Value) ->
+            #{
+                <<"path">> =>
+                    <<Name/binary, "=", (hb_path:hashpath(Value, #{}))/binary>>,
+                <<"value">> => Value
+            }
+        end,
+    Raw = <<"row&committer-format=raw">>,
+    ?assertEqual(
+        Normalize(<<"row">>, Lookup(<<"committer">>, Owner)),
+        Normalize(Raw, Lookup(<<"committer">>, URI))
+    ),
+    ?assertEqual(
+        Normalize(<<"row">>, Lookup(<<"type">>, URI)),
+        Normalize(Raw, Lookup(<<"type">>, URI))
+    ),
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        Normalize(<<"row&committer-format=did">>, Lookup(<<"committer">>, URI))
     ).
 
 %% @doc A request over HTTP loses its private keys, so it is not the kernel.
