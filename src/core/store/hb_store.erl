@@ -10,22 +10,6 @@
 %%% is provided, the node will cycle through each until a viable store is found
 %%% to execute the given function.
 %%% 
-%%% An entry of a list of stores may instead be a reference: a binary that
-%%% `hb_ao:raw/2' resolves, with the caller's options, to a store message or a
-%%% list of store messages. These are used in its place in the list. A
-%%% configuration file reads a binary that starts with `ao:' as a link
-%%% (`hb_link'), so a reference in one is a path without it, such as
-%%% `~meta@1.0/info/<key>'. A reference is resolved each time that a call
-%%% reaches it in its list, and the resolution adds its cost to the call: a
-%%% path through `~meta@1.0/info' reads the whole node message. Stores that
-%%% are called often, such as LMDB and volatile stores, should be given as
-%%% messages. A store that makes remote calls, such as `hb_store_arweave',
-%%% costs little more as a reference. A function that must see every store
-%%% message of a list, such as `flush/2' and the normalization pipeline below,
-%%% resolves all of its references first (`resolve_references/2'). A
-%%% reference has the scope `remote', so `scope/2' and `filter/2' place it
-%%% with the remote stores, which `hb_cache' reads after the local ones.
-%%% 
 %%% A valid store must implement a _subset_ of the following functions:
 %%% ```
 %%%     start/3:      Initialize the store.
@@ -128,7 +112,7 @@
     list/2, list/3,
     match/2, match/3
 ]).
--export([find/1, resolve_references/2]).
+-export([find/1]).
 -export([generate_test_suite/1, generate_test_suite/2, test_stores/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -261,8 +245,6 @@ start(StoreOpts, Req, Opts) when not is_list(StoreOpts) ->
     start([StoreOpts], Req, Opts);
 start([], _Req, _Opts) ->
     ok;
-start([Ref | Rest], Req, Opts) when is_binary(Ref) ->
-    start(resolve_reference(Ref, Opts) ++ Rest, Req, Opts);
 start([StoreOpts | Rest], Req, Opts) ->
     case start_one(StoreOpts, Req, Opts) of
         ok -> start(Rest, Req, Opts);
@@ -292,7 +274,7 @@ flush(Stores, Opts) ->
             fun(#{ <<"store-module">> := Mod }) ->
                 erlang:function_exported(Mod, flush, 3)
             end,
-            resolve_references(Stores, Opts)
+            Stores
         ),
         flush,
         #{},
@@ -460,10 +442,6 @@ do_call_function(X, Function, Args, Failure, Error) when not is_list(X) ->
     do_call_function([X], Function, Args, Failure, Error);
 do_call_function([], _Function, _Args, Failure, Error) ->
     terminal_result(Failure, Error);
-do_call_function([Ref | Rest], Function, Args = [_, Opts], Failure, Error)
-        when is_binary(Ref) ->
-    Stores = resolve_reference(Ref, Opts),
-    do_call_function(Stores ++ Rest, Function, Args, Failure, Error);
 do_call_function([Store = #{<<"access">> := Access} | Rest], Function, Args, Failure, Error) ->
     % If the store has an access controls, check if the function is allowed from
     % the stated policies.
@@ -517,29 +495,6 @@ do_call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args, 
         Raised = {failure, {Class, Reason, Stacktrace}},
         handle_failure(Store, Rest, Function, Args, Failure, Error, Raised)
     end.
-
-%% @doc Resolve a reference to a store message, or to a list of them, with
-%% `hb_ao:raw/2'. A message gives a list of one store.
-resolve_reference(Ref, Opts) ->
-    case hb_ao:raw(Ref, Opts) of
-        {ok, Stores} when is_list(Stores) -> Stores;
-        {ok, Store} when is_map(Store) -> [Store];
-        Res -> throw({unresolved_store_reference, Ref, Res})
-    end.
-
-%% @doc Resolve every reference of a store, or of a list of stores, in place,
-%% for a caller that must see each store message.
-resolve_references(Stores, Opts) when not is_list(Stores) ->
-    resolve_references([Stores], Opts);
-resolve_references(Stores, Opts) ->
-    lists:flatmap(
-        fun(Ref) when is_binary(Ref) ->
-                resolve_references(resolve_reference(Ref, Opts), Opts);
-           (Store) ->
-                [Store]
-        end,
-        Stores
-    ).
 
 %% @doc Apply a store's `store-failure' to its failure, reading it from the
 %% store message first, then from the node's options. With `skip' (the
@@ -717,8 +672,11 @@ execute_normalizer(Setting, Store, Term, Opts) ->
     case maps:get(Setting, Store, []) of
         [] -> {ok, Term};
         Path ->
-            AllOptsStores =
-                resolve_references(hb_opts:get(<<"store">>, [], Opts), Opts),
+            AllOptsStores = 
+                case hb_opts:get(<<"store">>, [], Opts) of
+                    OptStores when is_list(OptStores) -> OptStores;
+                    OptStore -> [OptStore]
+                end,
             hb_ao:raw(
                 #{ <<"path">> => Path, <<"0.body">> => Term },
                 Opts#{
@@ -867,9 +825,6 @@ is_admissible(#{ <<"access">> := Access }, Function) ->
 is_admissible(_, _) ->
     true.
 
-get_store_scope_result(Ref) when is_binary(Ref) ->
-    % A reference is read with the remote stores (see the module doc).
-    remote;
 get_store_scope_result(Store = #{ <<"scope">> := Scope }) ->
     normalize_scope(Scope);
 get_store_scope_result(Store = #{ <<"store-module">> := Mod }) ->
@@ -1054,67 +1009,6 @@ unsupported_operation_test() ->
         read(Gateway, hb_util:human_id(crypto:strong_rand_bytes(32)), Throw)
     ),
     stop(Store).
-
-%% @doc A reference resolves, each time that a call reaches it, to a store or
-%% a list of stores that are used in its place. Any AO-Core path is a
-%% reference: here, a key of the node message, and a message in the cache.
-reference_test() ->
-    A = hb_test_utils:test_store(hb_store_volatile, <<"reference-a">>),
-    B = hb_test_utils:test_store(hb_store_volatile, <<"reference-b">>),
-    Piped =
-        A#{
-            <<"to-value">> => <<"~base64url@1.0/encode/body">>,
-            <<"from-value">> => <<"~base64url@1.0/decode/body">>
-        },
-    Ref =
-        fun(Key) ->
-            <<"~meta@1.0/info/whatever-else-they-want/", Key/binary>>
-        end,
-    Opts =
-        #{
-            <<"store">> => [A, Ref(<<"piped">>)],
-            <<"whatever-else-they-want">> =>
-                #{
-                    <<"list">> => [A, B],
-                    <<"one">> => B,
-                    <<"nested">> => [Ref(<<"one">>)],
-                    <<"piped">> => Piped
-                }
-        },
-    ok = start([Ref(<<"list">>)], #{}, Opts),
-    ok = flush([Ref(<<"list">>)], Opts),
-    % A list takes the place of its reference: the write goes to its first
-    % store.
-    ok = write([Ref(<<"list">>)], #{ <<"in-a">> => <<"1">> }, Opts),
-    ?assertEqual({ok, <<"1">>}, read(A, <<"in-a">>, #{})),
-    % A message takes the place of its reference as a list of one store.
-    ok = write([Ref(<<"one">>)], #{ <<"in-b">> => <<"2">> }, Opts),
-    ?assertEqual({ok, <<"2">>}, read(B, <<"in-b">>, #{})),
-    % A reference may resolve to further references.
-    ?assertEqual({ok, <<"2">>}, read([A, Ref(<<"nested">>)], <<"in-b">>, Opts)),
-    % A reference has the scope `remote': `hb_cache' reads it after the local
-    % stores.
-    {ok, MsgID} = hb_cache:write(#{ <<"k">> => <<"v">> }, #{ <<"store">> => B }),
-    ?assertMatch(
-        {ok, #{ <<"k">> := <<"v">> }},
-        hb_cache:read(MsgID, Opts#{ <<"store">> => [Ref(<<"one">>)] })
-    ),
-    % A path into a message in the cache is a reference too.
-    {ok, ID} = hb_cache:write(#{ <<"stores">> => [B] }, #{ <<"store">> => A }),
-    ?assertEqual(
-        {ok, <<"2">>},
-        read(<<ID/binary, "/stores">>, <<"in-b">>, #{ <<"store">> => A })
-    ),
-    % A reference may give a store with a pipeline: the pipeline runs, here
-    % with the reference among the node's stores as well.
-    ok = write([Ref(<<"piped">>)], #{ <<"piped">> => <<"3">> }, Opts),
-    ?assertEqual({ok, hb_util:encode(<<"3">>)}, read(A, <<"piped">>, #{})),
-    ?assertEqual({ok, <<"3">>}, read([Ref(<<"piped">>)], <<"piped">>, Opts)),
-    % A reference that does not resolve is an error, not an empty list.
-    ?assertThrow(
-        {unresolved_store_reference, _, {error, not_found}},
-        read([Ref(<<"missing">>)], <<"in-a">>, Opts)
-    ).
 
 write_req(Key, Value) ->
     #{ hb_path:to_binary(Key) => Value }.
