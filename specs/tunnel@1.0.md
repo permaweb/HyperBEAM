@@ -22,7 +22,7 @@ caller with the origin's reply.
 A caller asks the broker for an origin in one of three ways:
 
 1. **Host:** the request's `host` is `<label>.<tunnel-host>`, where `<label>`
-   is the base32 form of the origin's address.
+   is the host label of the origin's address.
 2. **Explicit target:** the request carries `tunnel-target`, as a key or as a
    query parameter.
 3. **Call:** the caller posts to `/~tunnel@1.0/call` an envelope with the
@@ -36,8 +36,12 @@ may have executed the request; the tunnel never retries application work.
 
 - **Address:** a 32-byte wallet address, given as its 43-character base64url
   form. A value that does not decode to 32 bytes is not an address.
-- **Host label:** the 52-character, lowercase, unpadded RFC 4648 base32 form of
-  the 32 bytes of an address.
+- **Host label:** the DNS URI of an address (`hb_committer`): 63 characters,
+  `uri-did-ar-`, the 43 characters of the address in lowercase with each `_`
+  given as `-`, and 9 base36 characters that restore its case and give its key
+  type. An address has one label for each key type, and each decodes to the
+  address. The label of a message ID is not a host label.
+  `/~meta@1.0/info/committer` gives a node's label.
 - **Broker scope:** each HTTP node has its own broker state, keyed by the
   node's `http-server` option, or by the address of its wallet when it has no
   `http-server`. Two listeners in one runtime never share registrations,
@@ -171,10 +175,10 @@ may have executed the request; the tunnel never retries application work.
   2. **Host routing:** take the request's `host`, without a port, in lowercase
      and without a trailing `.`. Split it at its first `.` into a label and a
      parent. The request is for the address that the label decodes to if the
-     label has 52 characters, it decodes to 32 bytes, and either there is no
-     tunnel host (the base's `host`, else the node option `tunnel-host`), or
-     the parent equals the tunnel host. A host that has no parent is accepted
-     only when there is no tunnel host.
+     label is a host label, and either there is no tunnel host (the base's
+     `host`, else the node option `tunnel-host`), or the parent equals the
+     tunnel host. A host that has no parent is accepted only when there is no
+     tunnel host.
   3. **Explicit routing:** otherwise, if the request has `tunnel-target` (as a
      key of the request, else of the base, else as a parameter of the query of
      its path), the request is for that address. A value that is not an address
@@ -188,8 +192,8 @@ may have executed the request; the tunnel never retries application work.
      and `tunnel-timeout` from its `path`. If the result does not verify, the
      request ends with `400`
      (`Tunnel routing must preserve the request commitments.`). The first
-     label of a routing `host` is the base32 form of the origin's address,
-     which an origin with `name@1.0` would read as a name.
+     label of a routing `host` is the origin's host label, which an origin
+     with `name@1.0` would read as a name.
   6. The wait is `tunnel-timeout` of the request, then of the base, then of the
      query, then the node option `tunnel-response-timeout`, bounded by that
      node option: a request's `infinity`, or a wait past the limit, becomes the
@@ -302,7 +306,7 @@ that it receives:
 ## 5. Data formats & encodings
 
 - All keys are binary, lowercase and hyphenated.
-- Addresses and request IDs are base64url; host labels are base32 as in §2.
+- Addresses and request IDs are base64url; host labels are as in §2.
   Nothing is hex.
 - Control messages that this device signs (registrations, work messages and
   envelopes) are committed with `httpsig@1.0` over all of their keys, after
