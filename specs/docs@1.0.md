@@ -94,9 +94,9 @@ Its script, `docs.js`, reads:
    its schema and its specification. The signer of the specification is the
    `committer` of its signature;
 2. the recipes for the specification, through the node's
-   `POST /~query@1.0/graphql`. Recipes signed by the signer of the
-   specification are listed as **Recipes**, and all others as **Community
-   recipes**;
+   `POST /~query@1.0/graphql`. They are listed together as **Recipes**, each
+   with the address that uploaded it. When several share a slug, the one signed
+   by the signer of the specification is shown;
 3. the implementations of the device;
 4. the device list, and the assets of the page.
 
@@ -107,8 +107,7 @@ page can load from `/~docs@1.0/asset/markdown.js`.
 
 - The runner of the page sends a recipe's requests with `credentials: 'omit'`,
   so that they do not carry the visitor's cookies.
-- A community recipe is rendered without raw HTML, and the first click on one
-  of its requests shows a caution that someone else made it. Only a second
-  click sends the request.
+- A recipe that the signer of the specification did not sign is rendered
+  without raw HTML.
 - `markdown.js` renders a link only if it is relative, or its scheme is
   `http`, `https` or `mailto`.

@@ -12,14 +12,6 @@
   const homeLinks = ".site-header-home, .mobile-nav-home";
   const missingRecipeSummary =
     "Recipe body could not be loaded from the weave.";
-  const communityPill =
-    `<span class="pill pill-required">Community recipe</span>`;
-  const communityCaution =
-    `<p>${communityPill} Someone other than the signer of this device's ` +
-    "specification made this recipe. Check each request before you run it.</p>";
-  const runCaution =
-    `<p>${communityPill} You are about to run a community created path. ` +
-    "Click again to run it.</p>";
   const recipeQuery = `query($type: [String!]!, $specid: [String!]!) {
     transactions(
       tags: [
@@ -162,7 +154,6 @@
     ({ section, path, title, summary, href: `/docs/${path}` }));
   let page;
   let shownRoute;
-  let communityRecipe = false;
 
   // Gets a path of the node as JSON, with the messages that it links to when
   // bundle is true, and returns the result of the reply.
@@ -407,8 +398,8 @@
     return json.data.transactions.edges.map((edge) => edge.node);
   }
 
-  // Gets a recipe: its Markdown, slug, title and summary, and the number of
-  // its runnable code blocks. A recipe is official when its owner is the
+  // Gets a recipe: its Markdown, slug, title, summary and owner, and the number
+  // of its runnable code blocks. A recipe is official when its owner is the
   // signer of the specification.
   async function recipeDoc(node, signer) {
     const tag = (name, fallback) => {
@@ -418,6 +409,7 @@
     const recipe = {
       txid: node.id,
       name: tag("slug", node.id),
+      owner: node.owner.address,
       official: signer !== "" && node.owner.address === signer
     };
     try {
@@ -441,22 +433,19 @@
     }
   }
 
-  // Gets the recipes of a specification in two groups: those of its signer,
-  // and those of the community. Each group keeps the first recipe of a slug.
+  // Gets the recipes of a specification by slug. A slug keeps the first recipe
+  // of the signer of the specification, or else its first recipe.
   async function deviceRecipes(specId, signer) {
-    const groups = new Map([
-      ["recipes", new Map()],
-      ["community-recipes", new Map()]
-    ]);
-    if (!isId(specId)) return groups;
+    const recipes = new Map();
+    if (!isId(specId)) return recipes;
     const nodes = await recipeNodes(specId).catch(() => []);
     const docs =
       await Promise.all(nodes.map((node) => recipeDoc(node, signer)));
+    docs.sort((a, b) => b.official - a.official);
     for (const doc of docs) {
-      const group = groups.get(doc.official ? "recipes" : "community-recipes");
-      if (!group.has(doc.name)) group.set(doc.name, doc);
+      if (!recipes.has(doc.name)) recipes.set(doc.name, doc);
     }
-    return groups;
+    return recipes;
   }
 
   // Resolves a relative href of the Markdown at sourceRel to its path in the
@@ -530,11 +519,7 @@
       schemaTable(data.id, data.schema, data.schemaOrder),
       `<h2 id="spec">Spec</h2>`,
       renderSpecBody(data.spec, devicePath(data.id)),
-      `<h2 id="recipes">Recipes</h2>${recipeGrid(data, "recipes")}`,
-      data.recipes.get("community-recipes").size === 0
-        ? ""
-        : `<h2 id="community-recipes">Community recipes</h2>` +
-          recipeGrid(data, "community-recipes")
+      `<h2 id="recipes">Recipes</h2>${recipeGrid(data)}`
     ];
     return docsPageHtml("HyperBEAM Device Info", devicePath(data.id),
       deviceSidebar(data, devicePath(data.id)), content.join(""));
@@ -616,28 +601,24 @@
       deviceSidebar(data, activePath), content.join(""));
   }
 
-  // Renders a group of the recipes of a device: `recipes`, by the signer of
-  // its specification, or `community-recipes`, by anyone else.
-  function renderRecipesHtml(data, group) {
-    const activePath = devicePath(data.id, group);
-    const [eyebrow, title] = group === "recipes"
-      ? ["Recipes", "recipes"]
-      : ["Community recipes", "community recipes"];
+  // Renders the recipes of a device.
+  function renderRecipesHtml(data) {
+    const activePath = devicePath(data.id, "recipes");
     const content = [
-      `<p class="eyebrow">${eyebrow}</p>`,
-      `<h1>${esc(deviceMarkedId(data.id))} ${title}</h1>`,
-      recipeGrid(data, group)
+      `<p class="eyebrow">Recipes</p>`,
+      `<h1>${esc(deviceMarkedId(data.id))} recipes</h1>`,
+      recipeGrid(data)
     ];
     return docsPageHtml("HyperBEAM Recipes", activePath,
       deviceSidebar(data, activePath), content.join(""));
   }
 
-  // Renders a recipe of a device: the link to its transaction, then its
-  // Markdown. A community recipe has a caution, and its raw HTML is shown as
-  // text.
-  function renderRecipeHtml(data, group, slug) {
-    const recipe = data.recipes.get(group).get(slug);
-    const activePath = devicePath(data.id, group, slug);
+  // Renders a recipe of a device: the link to its transaction, the address that
+  // uploaded it, then its Markdown. Raw HTML is shown as text unless the signer
+  // of the specification uploaded the recipe.
+  function renderRecipeHtml(data, slug) {
+    const recipe = data.recipes.get(slug);
+    const activePath = devicePath(data.id, "recipes", slug);
     const opts = {
       resolveLink: linkResolver("", activePath),
       html: recipe.official
@@ -646,14 +627,11 @@
       `<p class="eyebrow">Recipe</p>`,
       `<h1>${esc(data.id)} / ${esc(recipe.title)}</h1>`,
       onChainLinkParagraph(recipe.txid, "View recipe transaction"),
-      recipe.official ? "" : communityCaution,
+      `<p class="hb-docs-renderer-note"><code>${esc(recipe.owner)}</code></p>`,
       HBMarkdown.render(HBMarkdown.dropFirstH1(recipe.markdown), opts)
     ];
-    return {
-      ...docsPageHtml("HyperBEAM Recipe", activePath,
-        deviceSidebar(data, activePath), content.join("")),
-      community: !recipe.official
-    };
+    return docsPageHtml("HyperBEAM Recipe", activePath,
+      deviceSidebar(data, activePath), content.join(""));
   }
 
   // Renders the implementations of a device, with the hashpath of the reply
@@ -815,26 +793,25 @@
     ].join("");
   }
 
-  // Renders the cards of a group of the recipes of a device, or `No recipes.`
-  // when the group has none.
-  function recipeGrid(data, group) {
-    const recipes = sorted(data.recipes.get(group));
+  // Renders the cards of the recipes of a device, or `No recipes.` when it has
+  // none.
+  function recipeGrid(data) {
+    const recipes = sorted(data.recipes);
     if (recipes.length === 0) return "<p>No recipes.</p>";
     const cards = recipes.map(([slug, recipe]) =>
-      recipeNav(data.id, group, slug, recipe));
+      recipeNav(data.id, slug, recipe));
     return `<div class="hb-docs-card-grid">${cards.join("")}</div>`;
   }
 
   // Renders the card of a recipe: its icon, its title, its summary and the
-  // number of its runnable code blocks. A community recipe has a pill.
-  function recipeNav(id, group, slug, recipe) {
+  // number of its runnable code blocks.
+  function recipeNav(id, slug, recipe) {
     const meta = recipe.runnable === 0
       ? ""
       : `<small class="hb-docs-recipe-card-meta">${recipe.runnable} ` +
         "runnable</small>";
-    const desc = (recipe.official ? "" : communityPill) +
-      esc(HBMarkdown.recipeCardSummary(recipe));
-    return recipeCard(devicePath(id, group, slug), slug, recipe.title, desc,
+    const desc = esc(HBMarkdown.recipeCardSummary(recipe));
+    return recipeCard(devicePath(id, "recipes", slug), slug, recipe.title, desc,
       meta);
   }
 
@@ -1048,9 +1025,8 @@
     const specLis = specSections(data.spec).map(([sectionId, title]) =>
       sidebarLi(activePath, devicePath(id, "spec", sectionId),
         esc(HBMarkdown.specSectionNavLabel(title))));
-    const recipeLis = (group) => sorted(data.recipes.get(group))
-      .map(([slug, recipe]) =>
-        sidebarLi(activePath, devicePath(id, group, slug), esc(recipe.title)));
+    const recipeLis = sorted(data.recipes).map(([slug, recipe]) =>
+      sidebarLi(activePath, devicePath(id, "recipes", slug), esc(recipe.title)));
     return [
       sidebarDeviceContext(activePath, id),
       sidebarNavSection(activePath, "Schema", "All keys",
@@ -1058,12 +1034,7 @@
       sidebarNavSection(activePath, "Spec", "All spec",
         devicePath(id, "spec"), specLis),
       sidebarNavSection(activePath, "Recipes", "All recipes",
-        devicePath(id, "recipes"), recipeLis("recipes")),
-      data.recipes.get("community-recipes").size === 0
-        ? ""
-        : sidebarNavSection(activePath, "Community recipes",
-          "All community recipes", devicePath(id, "community-recipes"),
-          recipeLis("community-recipes"))
+        devicePath(id, "recipes"), recipeLis)
     ].join("");
   }
 
@@ -1073,7 +1044,6 @@
     const keySchema = data.schema.get(name);
     const specSection =
       specSections(data.spec).find(([sectionId]) => sectionId === name);
-    const group = data.recipes.get(section);
     if (section === "schema" && name === undefined) {
       return renderSchemaIndexHtml(data);
     }
@@ -1087,8 +1057,12 @@
     if (section === "spec" && specSection) {
       return renderSpecSectionPageHtml(data, ...specSection);
     }
-    if (group && name === undefined) return renderRecipesHtml(data, section);
-    if (group && group.has(name)) return renderRecipeHtml(data, section, name);
+    if (section === "recipes" && name === undefined) {
+      return renderRecipesHtml(data);
+    }
+    if (section === "recipes" && data.recipes.has(name)) {
+      return renderRecipeHtml(data, name);
+    }
     if (section === "implementations") return renderImplementationsHtml(data);
     return renderDeviceHtml(data);
   }
@@ -1137,7 +1111,6 @@
     for (const home of document.querySelectorAll(homeLinks)) {
       home.setAttribute("href", "/docs");
     }
-    communityRecipe = shown.community === true;
     runPageScripts();
     for (const link of document.querySelectorAll("a[href]")) {
       const href = link.getAttribute("href");
@@ -1147,18 +1120,6 @@
         link.setAttribute("href", pageHref(href));
       }
     }
-  }
-
-  // Holds the first click on the run button of a code block of a community
-  // recipe, and shows a caution above the code block. The next click runs it.
-  function holdCommunityRun(event) {
-    const button = event.target.closest(".hb-code-actions button");
-    if (!communityRecipe || button === null) return;
-    if (button.dataset.cautioned === "true") return;
-    event.preventDefault();
-    event.stopPropagation();
-    button.dataset.cautioned = "true";
-    button.closest("pre").insertAdjacentHTML("beforebegin", runCaution);
   }
 
   // Shows the route of the URL's hash when it changes, then scrolls to the
@@ -1182,7 +1143,6 @@
   // Gets the data of the page: the node's home, or the page of a device. Then
   // shows the route of the URL's hash, and again each time the hash changes.
   async function start() {
-    article.addEventListener("click", holdCommunityRun, true);
     if ([homeUrl, `${homeUrl}/index`].includes(location.pathname)) {
       page = { home: true, devices: await nodeDevices().catch(() => []) };
     } else {
