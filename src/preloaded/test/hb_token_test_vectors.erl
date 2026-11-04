@@ -1389,3 +1389,18 @@ malformed_accounts_do_not_block_followup_transfer_test() ->
         {ok, 1},
         public_balance(Updated, <<"did:pkh:eip155:1:", Ethereum/binary>>, Opts)
     ).
+
+malformed_request_key_does_not_block_transfer_test() ->
+    Opts = opts(),
+    {OwnerWallet, Owner} = party(),
+    {_, Recipient} = party(),
+    Body = asset_tx(OwnerWallet, #{
+        <<"target">> => ?ASSET_PROCESS,
+        <<"action">> => <<"transfer">>,
+        <<"recipient">> => Recipient,
+        <<"quantity">> => <<"1">>,
+        <<16#C3, "x">> => <<"1">>
+    }),
+    Updated = asset_apply(asset_base(Owner, Opts), Body, 100, Opts),
+    ?assertEqual(0, asset_balance(Updated, Owner, Opts)),
+    ?assertEqual(1, asset_balance(Updated, Recipient, Opts)).
