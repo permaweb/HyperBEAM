@@ -21,14 +21,10 @@ apply(StoreOpts, Defaults) when is_list(StoreOpts), is_map(Defaults) ->
         StoreOpts
     ).
 
-%% @doc Apply defaults to a single store configuration. A reference (see
-%% `hb_store') is returned as it is: it is resolved where its list is used,
-%% and the stores that it resolves to take no defaults.
+%% @doc Apply defaults to a single store configuration.
 apply_defaults_to_store(StoreOpt, Defaults) when is_map(StoreOpt), is_map(Defaults) ->
     UpdatedStore = apply_defaults_by_module_type(StoreOpt, Defaults),
-    apply_defaults_to_substores(UpdatedStore, Defaults);
-apply_defaults_to_store(Ref, _Defaults) when is_binary(Ref) ->
-    Ref.
+    apply_defaults_to_substores(UpdatedStore, Defaults).
 
 %% @doc Apply defaults based on store-module.
 apply_defaults_by_module_type(StoreOpt, Defaults) ->

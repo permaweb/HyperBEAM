@@ -183,7 +183,7 @@ store(Opts) ->
         <<"to-key">> => <<"~match@1.0/key">>,
         <<"from-key">> => <<"~match@1.0/entry">>
     },
-    [ maps:merge(Defaults, S) || S <- hb_store:resolve_references(Stores, Opts) ].
+    [ maps:merge(Defaults, S) || S <- Stores ].
 
 %%% Groups and their keys.
 
@@ -971,20 +971,6 @@ weave_order_test() ->
         hb_ao:raw(
             <<"match@1.0">>, <<"locate">>, Template, #{},
             Opts#{ <<"match-index">> => Normalized }
-        )
-    ),
-    % A reference in the index's list gives stores that take the index's
-    % defaults, as the stores given as messages do.
-    ?assertEqual(
-        {ok, [MinedMatch]},
-        hb_ao:raw(
-            <<"match@1.0">>, <<"locate">>, Template, #{},
-            Opts#{
-                <<"match-index">> =>
-                    [<<"~meta@1.0/info/whatever-else-they-want">>],
-                <<"whatever-else-they-want">> =>
-                    maps:get(<<"match-index">>, Opts)
-            }
         )
     ),
     Later = Cache(Template#{ <<"n">> => <<"2">> }, 7),

@@ -21,9 +21,7 @@
 %% `store' list for the first Arweave store with an index.
 store_from_opts(Opts) ->
     Store = case hb_opts:get(arweave_index_store, no_store, Opts) of
-        no_store ->
-            Stores = hb_opts:get(store, [], Opts),
-            first_arweave_store(hb_store:resolve_references(Stores, Opts));
+        no_store -> first_arweave_store(hb_opts:get(store, [], Opts));
         IndexStoreOpts -> IndexStoreOpts
     end,
     case Store of
@@ -464,16 +462,6 @@ slash_offset_key_read_test_parallel() ->
         }]
     },
     Store = store_from_opts(Opts),
-    % The store is found as well when the list gives it as a reference.
-    ?assertMatch(
-        #{ <<"index-store">> := IndexStore },
-        store_from_opts(
-            #{
-                <<"store">> => [<<"~meta@1.0/info/whatever-else-they-want">>],
-                <<"whatever-else-they-want">> => hd(maps:get(<<"store">>, Opts))
-            }
-        )
-    ),
     ID = <<"L2FiY2RlZmdoaWprbG0vL29wcXJzdHV2d3h5ejAxMi8">>,
     ?assertEqual(
         <<"/abcdefghijklm//opqrstuvwxyz012/">>,
