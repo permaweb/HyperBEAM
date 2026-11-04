@@ -66,8 +66,10 @@ init(Base, _Req, Opts) ->
     case hb_maps:find(<<"initial-holder">>, Base, Opts) of
         error -> {ok, Base};
         {ok, Holder} ->
-            {ok, Account} = account(Holder),
-            {ok, Base#{ <<"initial-holder">> => Account }}
+            maybe
+                {ok, Account} ?= hb_committer:name(Holder),
+                {ok, Base#{ <<"initial-holder">> => Account }}
+            end
     end.
 snapshot(Base, _Req, _Opts) -> {ok, Base}.
 normalize(Base, _Req, _Opts) -> {ok, Base}.
@@ -208,7 +210,8 @@ normalize_action(Action) -> Action.
 transfer(Base, Body, Opts) ->
     maybe
         {ok, Sender} ?= signer(Body, Opts),
-        {ok, Recipient} ?= account(field(<<"recipient">>, Body, not_found, Opts)),
+        {ok, Recipient} ?=
+            hb_committer:name(field(<<"recipient">>, Body, not_found, Opts)),
         {ok, Quantity} ?= hb_util:safe_int(field(<<"quantity">>, Body, 0, Opts)),
         true ?= Quantity >= 1,
         true ?= balance(Base, Sender, Opts) >= Quantity,
@@ -378,15 +381,9 @@ debit(Base, Address, Amount, Opts) -> credit(Base, Address, -Amount, Opts).
 %% so it can neither move the unit nor speak for the name.
 signer(Body, Opts) ->
     SignerURIs = hb_message:signers(Body, Opts),
-    case [account(SignerURI) || SignerURI <- SignerURIs] of
+    case [hb_committer:name(SignerURI) || SignerURI <- SignerURIs] of
         [{ok, Address}] -> {ok, Address};
         _ -> not_found
-    end.
-
-account(Value) ->
-    maybe
-        {ok, Address} ?= hb_committer:address(Value),
-        {ok, hb_committer:uri(Address)}
     end.
 
 %%% Tests
@@ -1054,4 +1051,15 @@ account_forms_test() ->
         [{RawOwner, RawBuyer},
             {<<"did:ar:", RawOwner/binary>>, <<"did:ar:", RawBuyer/binary>>},
             {OwnerAccount, BuyerAccount}]
+    ),
+    % An Ethereum holder gets its name, and a holder that is not a committer
+    % is refused without a throw.
+    Ethereum = <<"0x626334b6ef6D3e8537E9f8d97d65f59832219315">>,
+    ?assertEqual(
+        {ok, #{ <<"initial-holder">> => hb_committer:uri(Ethereum) }},
+        init(#{ <<"initial-holder">> => Ethereum }, #{}, Opts)
+    ),
+    ?assertMatch(
+        {error, _},
+        init(#{ <<"initial-holder">> => <<"alice">> }, #{}, Opts)
     ).
