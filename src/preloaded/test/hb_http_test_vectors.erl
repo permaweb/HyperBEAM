@@ -1233,7 +1233,7 @@ resize(BrokerHost, Workers, Opts) ->
 %% @doc Return the headers that ask a broker for an origin. An unsigned request
 %% gives the origin's address as its `tunnel-target'. A node keeps only the keys
 %% of a signed request that its commitments cover, and its `host', so a signed
-%% request gives a `host' whose first label is the base32 form of the address.
+%% request gives a `host' whose first label is the DNS URI of the address.
 route(Request, Address, Opts) ->
     case hb_message:signers(Request, Opts) of
         [] -> #{ <<"tunnel-target">> => Address };
