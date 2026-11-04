@@ -244,10 +244,14 @@ init_authority(Base, RefID, Opts) ->
         undefined -> undefined;
         Init ->
             case hb_maps:find(<<"authority">>, Init, Opts) of
-                {ok, A} when is_binary(A) -> A;
+                {ok, A} when is_binary(A) ->
+                    case hb_committer:name(A) of
+                        {ok, Name} -> Name;
+                        {error, _} -> undefined
+                    end;
                 _ ->
                     case hb_message:signers(Init, Opts) of
-                        [Single | _] -> hb_util:committer_address(Single);
+                        [Single | _] -> Single;
                         _ -> undefined
                     end
             end
@@ -339,7 +343,7 @@ authorized_set(RefID, Authority, ID, Pos, Bound, Opts) ->
         Committed =
             hb_message:committed(
                 Msg,
-                #{ <<"committers">> => hb_committer:uri(Authority) },
+                #{ <<"committers">> => Authority },
                 Opts
             ),
         Set = hb_maps:with([<<"commitments">> | Committed], Msg, Opts),
@@ -353,9 +357,8 @@ authorized_set(RefID, Authority, ID, Pos, Bound, Opts) ->
 
 signed_by(_Msg, undefined, _Opts) -> false;
 signed_by(Msg, Authority, Opts) when is_binary(Authority) ->
-    Committer = hb_committer:uri(Authority),
-    lists:member(Committer, hb_message:signers(Msg, Opts))
-        andalso hb_message:verify(Msg, Committer, Opts).
+    lists:member(Authority, hb_message:signers(Msg, Opts))
+        andalso hb_message:verify(Msg, Authority, Opts).
 
 %%%-------------------------------------------------------------------
 %%% Cache writes
@@ -468,10 +471,13 @@ empty_reference_query_response(_, _Opts) ->
 build_reference_query(Authority, RefID, MinBlock, Limit) ->
     OwnerJSON =
         json_string_array(
-            case Authority of
-                Bin when is_binary(Bin) -> [Bin];
-                List when is_list(List) -> List
-            end),
+            lists:map(
+                fun hb_util:raw_address/1,
+                case Authority of
+                    Bin when is_binary(Bin) -> [Bin];
+                    List when is_list(List) -> List
+                end
+            )),
     RefIDJSON = json_string_array([RefID]),
     LimitBin = integer_to_binary(Limit),
     MinBlockBin = integer_to_binary(MinBlock),
@@ -692,7 +698,8 @@ normalize_store(Store) -> [Store].
 
 -ifdef(TEST).
 
-addr(Wallet) -> hb_opts:address(#{ <<"priv-wallet">> => Wallet }).
+addr(Wallet) ->
+    hb_committer:uri(hb_opts:address(#{ <<"priv-wallet">> => Wallet })).
 
 %% Each test allocates a fresh store and wallet so cases don't bleed.
 fresh_opts() ->
@@ -1177,6 +1184,12 @@ now_over_graphql_loads_only_newest_test() ->
 
 reference_query_paginates_without_device_filter_test() ->
     Query = build_reference_query(<<"AUTH">>, <<"REF">>, 10, 100),
+    % The gateway is asked for the raw address of the authority's name.
+    Address = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    NameQuery =
+        build_reference_query(hb_committer:uri(Address), <<"REF">>, 10, 100),
+    ?assertNotEqual(nomatch,
+        binary:match(NameQuery, <<"[\"", Address/binary, "\"]">>)),
     ?assertNotEqual(nomatch, binary:match(Query, <<"query($after: String)">>)),
     ?assertNotEqual(nomatch, binary:match(Query, <<", after: $after">>)),
     ?assertNotEqual(nomatch, binary:match(Query, <<"pageInfo { hasNextPage }">>)),
