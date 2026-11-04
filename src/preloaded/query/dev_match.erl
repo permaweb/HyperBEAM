@@ -1325,6 +1325,62 @@ row_test() ->
         Normalize(<<"row&committer-format=did">>, Lookup(<<"committer">>, URI))
     ).
 
+%% @doc The node's default published index holds raw addresses: the URIs of
+%% an Arweave, an Ethereum and a Solana committer find their items there,
+%% and none when the index hashes the URIs as given.
+published_committer_test_() ->
+    {timeout, 300, fun published_committer/0}.
+published_committer() ->
+    [Raw] =
+        [
+            Store
+        ||
+            Store <- maps:get(<<"match-index">>, hb_opts:default_message()),
+            maps:get(<<"store-module">>, Store) =:= hb_store_arlmdb
+        ],
+    AsGiven =
+        Raw#{
+            <<"to-key">> =>
+                binary:replace(
+                    maps:get(<<"to-key">>, Raw),
+                    <<"&committer-format=raw">>,
+                    <<>>
+                )
+        },
+    Rows =
+        fun(Store, Base, Owner, Bounds) ->
+            {ok, Matches} =
+                hb_ao:raw(
+                    <<"match@1.0">>,
+                    Base,
+                    Bounds#{
+                        <<"path">> => <<"locate">>,
+                        <<"predicates">> =>
+                            [#{ <<"name">> => <<"committer">>,
+                                <<"values">> => [hb_committer:uri(Owner)] }]
+                    },
+                    #{
+                        <<"store">> => hb_test_utils:test_store(),
+                        <<"match-index">> => [Store]
+                    }
+                ),
+            length(Matches)
+        end,
+    % The Ethereum committer's processes in blocks 1,988,300 to 1,988,324.
+    Blocks = #{ <<"from">> => 390098371256566, <<"to">> => 390099942023415 },
+    lists:foreach(
+        fun({Expected, Base, Owner, Bounds}) ->
+            ?assertEqual(Expected, Rows(Raw, Base, Owner, Bounds)),
+            ?assertEqual(0, Rows(AsGiven, Base, Owner, Bounds))
+        end,
+        [
+            {3, #{}, <<"-ZaPWTP0JZE6_iX9uquLOby7g8AGCBh3SaKUIxQbw54">>, #{}},
+            {18, #{ <<"type">> => <<"Process">> },
+                <<"0xa9A1BdfA750Bc1b317c4D139AC6bBfA72839AEcE">>, Blocks},
+            {58, #{}, <<"2H6kvxkUj3ythDBdS3vJe8Li9vTEHYioa5y5BtKwmApo">>, #{}}
+        ]
+    ).
+
 %% @doc A request over HTTP loses its private keys, so it is not the kernel.
 unauthorized_index_test() ->
     Node =

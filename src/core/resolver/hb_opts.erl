@@ -103,6 +103,27 @@
         <<"~bits@1.0/from=_:71,start:49+integer,length:40+integer"
             "/set&codec=tx@1.0">>
 }).
+%% The published `~match@1.0' index of ANS-104 data items to block 1,988,355,
+%% without Redstone messages: a predicate's packed rows give the weave offsets
+%% of the items that carry it. Its committers are raw addresses
+%% (`hb_util:raw_address/1'), so its `row' hashes a committer's URI as one.
+-define(DEFAULT_MATCH_INDEX, #{
+    <<"store-module">> => hb_store_arlmdb,
+    <<"name">> => <<"published-match-index">>,
+    <<"root">> => <<"oWRzBr3KHhULAL-s5ULeXac1mb_WQOX5uFBRea16iRI">>,
+    <<"access">> => [<<"read">>],
+    <<"return-row">> => true,
+    <<"prefix">> => <<"~match@1.0/">>,
+    <<"to-key">> =>
+        <<"~match@1.0/row&key-hash-size=39&value-hash-size=40&offset-size=49"
+            "&committer-format=raw">>,
+    <<"from-key">> =>
+        <<"~match@1.0/member&key-hash-size=39&value-hash-size=40&offset-size=49"
+            "/set&commitment-device=ans104@1.0">>,
+    <<"from-list">> =>
+        <<"~match@1.0/members&key-hash-size=39&value-hash-size=40"
+            "&offset-size=49&commitment-device=ans104@1.0">>
+}).
 -define(DEFAULT_GATEWAY, <<"https://arweave.net">>).
 -define(
     DEFAULT_HTTP_OPTS,
@@ -492,7 +513,7 @@ raw_default_message() ->
                     <<"remote-index">> => true
                 }
             ],
-        <<"match-index">> => [?DEFAULT_PRIMARY_STORE],
+        <<"match-index">> => [?DEFAULT_PRIMARY_STORE, ?DEFAULT_MATCH_INDEX],
         <<"attested-store">> =>
             #{
                 <<"store-module">> => hb_store_lmdb,
