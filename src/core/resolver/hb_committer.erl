@@ -184,7 +184,7 @@ account(<<"did:pkh:solana:", Reference:32/binary, ":", Key/binary>>)
         when Reference =:= ?SOLANA_MAINNET ->
     solana_account(Key);
 account(<<"uri-did-pkh-eip155-1-0x", Hex:40/binary>>) ->
-    case hb_util:to_lower(Hex) of
+    case hb_util:lowercase_key(Hex) of
         Hex -> ethereum_account(Hex);
         _ -> error
     end;
@@ -457,6 +457,7 @@ name_test() ->
         fun(Bad) -> ?assertMatch({error, _}, name(Bad)) end,
         [<<>>, <<"alice">>, <<255>>, binary:copy(<<255>>, 200),
             <<"uri-did-ar-garbage">>, encode({id, undefined}, Address),
+            <<"uri-did-pkh-eip155-1-0x", 255, (binary:copy(<<"a">>, 39))/binary>>,
             <<"hmac:constant:ao">>, <<Address/binary, "?hint=x">>, 42,
             [Address], #{ <<"device">> => <<"nope@9.9">> }]
     ).
