@@ -166,7 +166,7 @@ start_application() ->
                 hb_store_opts:apply(StoreOpts, StoreDefaults);
             _ -> StoreOpts
         end,
-    hb_store:start(UpdatedStoreOpts),
+    hb_store:start(UpdatedStoreOpts, MergedConfig),
     PrivWallet =
         hb:wallet(
             hb_opts:get(
