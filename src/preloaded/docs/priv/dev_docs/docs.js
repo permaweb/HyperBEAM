@@ -12,14 +12,9 @@
   const homeLinks = ".site-header-home, .mobile-nav-home";
   const missingRecipeSummary =
     "Recipe body could not be loaded from the weave.";
-  const recipeQuery = `query($type: [String!]!, $specid: [String!]!) {
-    transactions(
-      tags: [
-        { name: "type", values: $type },
-        { name: "recipe-for-device", values: $specid }
-      ],
-      first: 20
-    ) {
+  const recipeLimit = 20;
+  const recipeQuery = `query($tags: [TagFilter!]!, $first: Int!) {
+    transactions(tags: $tags, first: $first) {
       edges { node { id owner { address } tags { name value } } }
     }
   }`;
@@ -317,7 +312,9 @@
       schema,
       schemaOrder: [...schema.keys()].sort(),
       spec,
-      recipes: await deviceRecipes(spec.txid, spec.signer),
+      recipes: await deviceRecipes(
+        info.specification.name, spec.txid, spec.signer
+      ),
       implementations
     };
   }
@@ -381,15 +378,20 @@
     return HBMarkdown.specSections(spec.markdown);
   }
 
-  // Queries the node's GraphQL for the `Device-Recipe` items of a
-  // specification, and returns their nodes.
-  async function recipeNodes(specId) {
+  // Queries the node's GraphQL for recipes by a spec ID or device name.
+  async function recipeNodes(tag, value, first) {
     const reply = await fetch("/~query@1.0/graphql", {
       method: "POST",
       headers: { accept: jsonType, "content-type": jsonType },
       body: JSON.stringify({
         query: recipeQuery,
-        variables: { type: ["Device-Recipe"], specid: [specId] }
+        variables: {
+          tags: [
+            { name: "type", values: ["Device-Recipe"] },
+            { name: tag, values: [value] }
+          ],
+          first
+        }
       }),
       credentials: "omit"
     });
@@ -398,26 +400,25 @@
     return json.data.transactions.edges.map((edge) => edge.node);
   }
 
-  // Gets a recipe: its Markdown, slug, title, summary and owner, and the number
-  // of its runnable code blocks. A recipe is official when its owner is the
-  // signer of the specification.
-  async function recipeDoc(node, signer) {
-    const tag = (name, fallback) => {
-      const found = node.tags.find((item) => item.name === name);
-      return found === undefined ? fallback : found.value;
-    };
+  // Gets the value of a recipe tag, or a fallback when it is absent.
+  function recipeTag(node, name, fallback) {
+    return node.tags.find((tag) => tag.name === name)?.value ?? fallback;
+  }
+
+  // Gets the recipe's Markdown, title, summary and runnable code block count.
+  async function recipeDoc(node, name, official) {
     const recipe = {
       txid: node.id,
-      name: tag("slug", node.id),
+      name,
       owner: node.owner.address,
-      official: signer !== "" && node.owner.address === signer
+      official
     };
     try {
       const { text } = await getText(`/${node.id}`);
       return {
         ...recipe,
         markdown: text,
-        title: tag("title", HBMarkdown.title(text, recipe.name)),
+        title: recipeTag(node, "title", HBMarkdown.title(text, name)),
         summary: HBMarkdown.summary(text),
         runnable: HBMarkdown.codeBlocks(text).filter((block) => block.runnable)
           .length
@@ -426,26 +427,44 @@
       return {
         ...recipe,
         markdown: "",
-        title: tag("title", node.id),
+        title: recipeTag(node, "title", node.id),
         summary: missingRecipeSummary,
         runnable: 0
       };
     }
   }
 
-  // Gets the recipes of a specification by slug. A slug keeps the first recipe
-  // of the signer of the specification, or else its first recipe.
-  async function deviceRecipes(specId, signer) {
-    const recipes = new Map();
-    if (!isId(specId)) return recipes;
-    const nodes = await recipeNodes(specId).catch(() => []);
-    const docs =
-      await Promise.all(nodes.map((node) => recipeDoc(node, signer)));
-    docs.sort((a, b) => b.official - a.official);
-    for (const doc of docs) {
-      if (!recipes.has(doc.name)) recipes.set(doc.name, doc);
+  // Picks a recipe per slug before fetching bodies. Recipes for the active
+  // spec take priority. The versioned name fills gaps across spec signatures.
+  async function deviceRecipes(device, specId, signer) {
+    if (!isId(specId)) return new Map();
+    const [bySpec, byName] = await Promise.all([
+      recipeNodes("recipe-for-device", specId, recipeLimit).catch(() => []),
+      typeof device === "string" && device.includes("@")
+        ? recipeNodes("device-name", device, 100).catch(() => [])
+        : []
+    ]);
+    const candidates = new Map();
+    for (const node of bySpec) {
+      const name = recipeTag(node, "slug", node.id);
+      const official = signer !== "" && node.owner.address === signer;
+      const existing = candidates.get(name);
+      if (!existing || (official && !existing.official)) {
+        candidates.set(name, { node, official });
+      }
     }
-    return recipes;
+    for (const node of byName) {
+      const name = recipeTag(node, "slug", node.id);
+      if (!candidates.has(name) && isId(recipeTag(node, "recipe-for-device", ""))) {
+        candidates.set(name, { node, official: false });
+      }
+    }
+    const recipes = await Promise.all(
+      [...candidates].slice(0, recipeLimit)
+        .map(async ([name, { node, official }]) =>
+          [name, await recipeDoc(node, name, official)])
+    );
+    return new Map(recipes);
   }
 
   // Resolves a relative href of the Markdown at sourceRel to its path in the
