@@ -1,7 +1,8 @@
 %%% @doc Read the data of Arweave transactions from Arweave nodes for the
 %%% `~arweave@2.9' device: byte ranges of the weave or of a pending
 %%% transaction, read chunk by chunk, each chunk checked against its Merkle
-%%% proof, or a whole transaction checked against its data root.
+%%% proof, or a whole transaction checked against its data root. Weave chunks
+%%% are kept in the node's `arweave-chunk-store' (`dev_arweave_chunk_cache').
 -module(dev_arweave_data).
 -export([get_chunk/2, get_chunk/3]).
 -export([get_chunk_range_relative/4, decode_relative_chunk/4]).
@@ -278,17 +279,31 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
             end
     end.
 
-%% @doc Fetch chunks at the given offsets in parallel and parse the responses
-%% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
+%% @doc Read chunks at the given offsets in parallel, as
+%% {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
 fetch_and_collect(Offsets, Opts) ->
     fetch_and_collect(
         Offsets,
-        fun(Offset) -> decode_chunk(Offset, get_chunk(Offset, Opts)) end,
+        fun(Offset) -> read_chunk(Offset, Opts) end,
         Opts
     ).
 fetch_and_collect(Offsets, GETFun, Opts) ->
     Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
     collect_chunks(hb_pmap:parallel_map(Offsets, GETFun, Concurrency)).
+
+%% @doc Read the chunk that holds the byte at the offset from the node's
+%% `arweave-chunk-store', or fetch it from an Arweave node and write it there.
+read_chunk(Offset, Opts) ->
+    case dev_arweave_chunk_cache:read(Offset, Opts) of
+        {error, not_found} ->
+            maybe
+                {ok, {Start, End, Chunk}} ?=
+                    decode_chunk(Offset, get_chunk(Offset, Opts)),
+                dev_arweave_chunk_cache:write(End, Chunk, Opts),
+                {ok, {Start, End, Chunk}}
+            end;
+        Read -> Read
+    end.
 
 %% @doc Generate a list of offsets from Start to End (inclusive) stepping by
 %% Step bytes. Used to produce candidate query offsets at 256KiB increments.

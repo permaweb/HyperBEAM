@@ -1,0 +1,197 @@
+%%% @doc A store of the weave chunks that a node reads from Arweave nodes, so
+%%% that a read of bytes in a chunk that the node has read before does not
+%%% download the chunk again. `arweave-chunk-store' selects the store, and a
+%%% node has none by default. Each chunk is held at `~arweave@2.9/chunks/END',
+%%% where `END' is the weave offset of its last byte, zero-padded to 20 digits
+%%% so that the order of the keys is the order of the offsets. A read of an
+%%% offset lists the group from that offset with a limit of one: the first
+%%% chunk that ends at or after the offset holds it if the chunk starts at or
+%%% before it.
+-module(dev_arweave_chunk_cache).
+-export([read/2, write/3]).
+-include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
+
+%% @doc The group of chunks, named by the offsets of their last bytes.
+-define(CHUNKS, <<"~arweave@2.9/chunks">>).
+
+%% @doc Read the chunk that holds the byte at a weave offset, as the offsets
+%% of its first and last bytes and its data.
+read(Offset, Opts) ->
+    Store = hb_opts:get(arweave_chunk_store, [], Opts),
+    maybe
+        {ok, [Key]} ?=
+            hb_store:list(
+                Store,
+                #{
+                    <<"list">> => ?CHUNKS,
+                    <<"from">> => key(Offset),
+                    <<"limit">> => 1
+                },
+                Opts
+            ),
+        {ok, Chunk} ?=
+            hb_store:read(Store, <<?CHUNKS/binary, "/", Key/binary>>, Opts),
+        End = hb_util:int(Key),
+        Start = End - byte_size(Chunk) + 1,
+        true ?= Start =< Offset orelse {error, not_found},
+        {ok, {Start, End, Chunk}}
+    else
+        {ok, []} -> {error, not_found};
+        {error, _} = Error -> Error
+    end.
+
+%% @doc Write a chunk at the weave offset of its last byte.
+write(End, Chunk, Opts) ->
+    hb_store:write(
+        hb_opts:get(arweave_chunk_store, [], Opts),
+        #{ <<?CHUNKS/binary, "/", (key(End))/binary>> => Chunk },
+        Opts
+    ).
+
+%% @doc A weave offset, zero-padded to 20 digits as block index and match
+%% index offsets are.
+key(Offset) ->
+    iolist_to_binary(io_lib:format("~20..0B", [Offset])).
+
+%%% Tests
+
+%% @doc Keys sort as their offsets do, including across a change in the
+%% number of digits.
+key_test() ->
+    ?assertEqual(<<"00000000000000000001">>, key(1)),
+    ?assertEqual(<<"00000378092137521399">>, key(378092137521399)),
+    ?assert(key(9) < key(10)).
+
+%% @doc A read finds the chunk that holds an offset at the chunk's last byte,
+%% inside it, and at its first byte, and finds no chunk for an offset between
+%% the chunks that the store holds or after them.
+read_test_() ->
+    [
+        {hb_util:list(Module), fun() -> read_offsets(Module) end}
+    ||
+        Module <- [hb_store_volatile, hb_store_lmdb]
+    ].
+
+read_offsets(Module) ->
+    Opts = #{ <<"arweave-chunk-store">> => hb_test_utils:test_store(Module) },
+    A = binary:copy(<<"a">>, 100),
+    B = binary:copy(<<"b">>, 150),
+    C = binary:copy(<<"c">>, 100),
+    ok = write(100, A, Opts),
+    ok = write(250, B, Opts),
+    ok = write(600, C, Opts),
+    % The last byte of a chunk, two adjacent bytes inside it, and the byte
+    % after its last, which is the first byte of the next chunk.
+    ?assertEqual({ok, {1, 100, A}}, read(100, Opts)),
+    ?assertEqual({ok, {1, 100, A}}, read(50, Opts)),
+    ?assertEqual({ok, {1, 100, A}}, read(51, Opts)),
+    ?assertEqual({ok, {101, 250, B}}, read(101, Opts)),
+    % A byte between the chunks that the store holds, and one after them.
+    ?assertEqual({error, not_found}, read(300, Opts)),
+    ?assertEqual({error, not_found}, read(601, Opts)),
+    % A node with no chunk store holds no chunks.
+    ?assertEqual({error, not_found}, read(100, #{})).
+
+%% @doc An empty store misses an offset inside a chunk, downloads the chunk
+%% once and keeps it at the chunk's last byte. The next offset, and both
+%% offsets together, then read from that entry with no download and no new
+%% entry. A read of the whole transaction downloads only the four chunks that
+%% the store lacks, leaving one entry per chunk at its last byte, after which
+%% no read inside it downloads anything. A node without the store downloads
+%% the chunk for each read.
+stored_range_test_() ->
+    [
+        {hb_util:list(Module), fun() -> stored_range(Module) end}
+    ||
+        Module <- [hb_store_volatile, hb_store_lmdb]
+    ].
+
+stored_range(Module) ->
+    %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
+    Offset = 378092137521399,
+    Length = 1264430,
+    DataRoot = <<"aHoisEr0IJ5xV2i0NjnE-vbtZOzZqI01ecyn15tojbE">>,
+    Store = hb_test_utils:test_store(Module),
+    Self = self(),
+    Receipt =
+        fun(_, Req, _) ->
+            Self ! {receipt, hb_ao:get(<<"body/request-path">>, Req, #{})},
+            {ok, Req}
+        end,
+    Opts =
+        #{
+            <<"arweave-chunk-store">> => Store,
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"on">> =>
+                #{
+                    <<"http-client-receipt">> =>
+                        #{ <<"device">> => #{ http_client_receipt => Receipt } }
+                }
+        },
+    Read =
+        fun(From, Size, ReadOpts) ->
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{
+                    <<"path">> => <<"chunk">>,
+                    <<"offset">> => From,
+                    <<"length">> => Size
+                },
+                ReadOpts
+            )
+        end,
+    % The `GET /chunk' requests made since the last call, counted from their
+    % receipts, which arrive after the reads return.
+    Downloads =
+        fun Count(N) ->
+            receive
+                {receipt, <<"/chunk/", _/binary>>} -> Count(N + 1);
+                {receipt, _} -> Count(N)
+            after 500 -> N
+            end
+        end,
+    Ends =
+        fun() ->
+            {ok, Keys} = hb_store:list(Store, ?CHUNKS, #{}),
+            lists:sort(Keys)
+        end,
+    FirstEnd = key(Offset + ?DATA_CHUNK_SIZE - 1),
+    % Offset X misses, and its chunk is downloaded once and kept at the
+    % chunk's last byte.
+    {ok, <<X>>} = Read(Offset + 1000, 1, Opts),
+    ?assertEqual(1, Downloads(0)),
+    ?assertEqual([FirstEnd], Ends()),
+    % X+1, then X and X+1 together, read from that entry.
+    {ok, <<Y>>} = Read(Offset + 1001, 1, Opts),
+    ?assertEqual({ok, <<X, Y>>}, Read(Offset + 1000, 2, Opts)),
+    ?assertEqual(0, Downloads(0)),
+    ?assertEqual([FirstEnd], Ends()),
+    % Without the store, a read downloads its chunk.
+    ?assertEqual(
+        {ok, <<Y>>},
+        Read(Offset + 1001, 1, maps:remove(<<"arweave-chunk-store">>, Opts))
+    ),
+    ?assertEqual(1, Downloads(0)),
+    % The whole transaction downloads its other four chunks, three of 256 KiB
+    % and one of 215,854 bytes, and keeps each at its last byte.
+    {ok, Data} = Read(Offset, Length, Opts),
+    ?assertEqual(4, Downloads(0)),
+    ?assertEqual(DataRoot, hb_util:encode(ar_tx:data_root(Data))),
+    ?assertEqual(<<X, Y>>, binary:part(Data, 1000, 2)),
+    ?assertEqual(
+        [ key(Offset + N * ?DATA_CHUNK_SIZE - 1) || N <- lists:seq(1, 4) ] ++
+            [key(Offset + Length - 1)],
+        Ends()
+    ),
+    % Every byte after the first, and the bytes either side of the first
+    % chunk's end, read from the store alone.
+    ?assertEqual(
+        {ok, binary:part(Data, 1, Length - 1)},
+        Read(Offset + 1, Length - 1, Opts)
+    ),
+    ?assertEqual(
+        {ok, binary:part(Data, ?DATA_CHUNK_SIZE - 1, 2)},
+        Read(Offset + ?DATA_CHUNK_SIZE - 1, 2, Opts)
+    ),
+    ?assertEqual(0, Downloads(0)).
