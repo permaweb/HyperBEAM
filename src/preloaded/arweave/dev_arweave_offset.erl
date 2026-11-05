@@ -89,7 +89,7 @@ unit(Base, <<"y">>) when Base > 0 -> unit(Base * 1000, <<"z">>).
 %% we can skip bundle index discovery and read only the remaining payload bytes.
 load_item_at_offset(ExplicitOffset, Length, Opts) when is_integer(Length) ->
     maybe
-        {ok, _ChunkJSON, FirstChunk} ?= chunk_from_offset(ExplicitOffset, Opts),
+        {ok, FirstChunk} ?= chunk_from_offset(ExplicitOffset, Opts),
         {ok, HeaderChunk} ?=
             header_chunk(ExplicitOffset, infinity, FirstChunk, Opts),
         ?event(
@@ -177,19 +177,19 @@ load_item_from_header(StartOffset, HeaderSize, HeaderTX, DataSize, Opts) ->
         }
     end.
 
-%% @doc Read the chunk containing the given offset and trim it to begin at the
-%% first byte of the requested item.
+%% @doc Read the chunk containing the given offset, through the node's
+%% `arweave-chunk-store', trimmed to begin at the first byte of the requested
+%% item.
 chunk_from_offset(StartOffset, Opts) ->
-    case dev_arweave_data:get_chunk(StartOffset + 1, Opts) of
-        {ok, ChunkJSON} ->
-            AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, ChunkJSON)),
-            Chunk = hb_util:decode(maps:get(<<"chunk">>, ChunkJSON)),
-            ChunkStart = AbsEnd - byte_size(Chunk) + 1,
-            Skip = (StartOffset + 1) - ChunkStart,
-            {ok, ChunkJSON, binary:part(Chunk, Skip, byte_size(Chunk) - Skip)};
-        Error ->
-            Error
-    end.
+    dev_arweave_data:get_chunk(#{}, #{ <<"offset">> => StartOffset + 1 }, Opts).
+
+%% @doc Trim a fetched chunk to begin at the given offset.
+trim_chunk(StartOffset, ChunkJSON) ->
+    AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, ChunkJSON)),
+    Chunk = hb_util:decode(maps:get(<<"chunk">>, ChunkJSON)),
+    ChunkStart = AbsEnd - byte_size(Chunk) + 1,
+    Skip = (StartOffset + 1) - ChunkStart,
+    binary:part(Chunk, Skip, byte_size(Chunk) - Skip).
 
 %% @doc Safe wraper for ANS-104 header deserialization.
 deserialize_header(Binary) ->
@@ -214,14 +214,16 @@ read_remaining_data(StartOffset, HeaderSize, PrefixSize, Length, Opts) ->
     hb_store_arweave:read_chunks(StartOffset + HeaderSize + PrefixSize, Length, Opts).
 
 %% @doc Locate the deepest bundled item that contains the given global offset.
+%% The proof of the chunk containing the offset gives the start of its bundle,
+%% so that chunk is fetched with its proof.
 message_from_offset(TargetOffset, Opts) ->
     maybe
-        {ok, ChunkJSON, FirstChunk} ?= chunk_from_offset(TargetOffset, Opts),
+        {ok, ChunkJSON} ?= dev_arweave_data:get_chunk(TargetOffset + 1, Opts),
         message_from_offset(
             TargetOffset,
             bundle_start_offset(ChunkJSON),
             TargetOffset,
-            FirstChunk,
+            trim_chunk(TargetOffset, ChunkJSON),
             Opts
         )
     end.
@@ -238,8 +240,7 @@ bundle_start_offset(ChunkJSON) ->
 
 message_from_offset(TargetOffset, BundleStartOffset, KnownOffset, KnownChunk, Opts) ->
     maybe
-        {ok, _ChunkJSON, BundleChunk} ?=
-            chunk_from_offset(BundleStartOffset, Opts),
+        {ok, BundleChunk} ?= chunk_from_offset(BundleStartOffset, Opts),
         % A member contains the target only if the header ends at or before the
         % target, so a longer header gives `not_found` without reading the rest
         % of it. `bundle_header/4` refuses a chunk too short to contain the item
@@ -331,10 +332,7 @@ maybe_nested_item(
 item_chunk(ItemStartOffset, ItemStartOffset, FirstChunk, _Opts) ->
     {ok, FirstChunk};
 item_chunk(ItemStartOffset, _KnownOffset, _KnownChunk, Opts) ->
-    case chunk_from_offset(ItemStartOffset, Opts) of
-        {ok, _ChunkJSON, FirstChunk} -> {ok, FirstChunk};
-        Error -> Error
-    end.
+    chunk_from_offset(ItemStartOffset, Opts).
 
 %% @doc Read on into the next chunk when an item runs past its first chunk and
 %% its header does not decode from that chunk alone.
@@ -345,7 +343,7 @@ header_chunk(ItemStartOffset, ItemSize, FirstChunk, Opts)
             {ok, FirstChunk};
         {error, _} ->
             maybe
-                {ok, _ChunkJSON, NextChunk} ?=
+                {ok, NextChunk} ?=
                     chunk_from_offset(
                         ItemStartOffset + byte_size(FirstChunk),
                         Opts
@@ -564,7 +562,7 @@ bundled_index_offset(BundleStartOffset, [Index], Opts) ->
 bundled_index_offset(BundleStartOffset, [Index | Rest], Opts) ->
     {ItemStartOffset, _ItemSize} =
         bundled_index_offset(BundleStartOffset, [Index], Opts),
-    {ok, _ChunkJSON, FirstChunk} = chunk_from_offset(ItemStartOffset, Opts),
+    {ok, FirstChunk} = chunk_from_offset(ItemStartOffset, Opts),
     {ok, HeaderSize, _HeaderTX} = deserialize_header(FirstChunk),
     bundled_index_offset(ItemStartOffset + HeaderSize, Rest, Opts).
 

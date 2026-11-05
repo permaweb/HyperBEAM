@@ -192,30 +192,11 @@ offset_index_test_() ->
     ].
 
 offset_index(IndexKeeps, NodeKeeps) ->
-    #{ <<"index-store">> := IndexStores } =
-        hb_store_arweave:store_from_opts(#{}),
-    [Default] =
-        [
-            Store
-        ||
-            Store = #{ <<"name">> := <<"published-offset-index">> } <-
-                IndexStores
-        ],
     Keep =
         fun(true) -> [hb_test_utils:test_store(hb_store_volatile)];
            (false) -> []
         end,
-    % A fresh name and chunk store, so that the chunks the lookups use are
-    % this test's own.
-    Index =
-        Default#{
-            <<"name">> =>
-                <<
-                    "published-offset-index-",
-                    (hb_util:encode(crypto:strong_rand_bytes(4)))/binary
-                >>,
-            <<"chunk-store">> => Keep(IndexKeeps)
-        },
+    Index = published_offset_index(Keep(IndexKeeps)),
     Opts = (receipt_opts())#{ <<"arweave-chunk-store">> => Keep(NodeKeeps) },
     Lookup =
         fun(ID) ->
@@ -236,6 +217,76 @@ offset_index(IndexKeeps, NodeKeeps) ->
         true -> ?assertEqual(0, Second);
         false -> ?assert(Second > 0)
     end.
+
+%% @doc Two items next to each other in the weave, read by ID through the
+%% published offset index, as GraphQL reads the IDs it matches, and then at
+%% the first item's offset: once the chunk that holds the first item is
+%% downloaded, the second item, and the first again, read with no download.
+adjacent_items_test_() ->
+    {timeout, 120, fun adjacent_items/0}.
+
+adjacent_items() ->
+    First = <<"AAAAhyV8_NwududSxuraAj7DLWiZHDTqVKWrZglpNok">>,
+    Next = <<"jjlrZfiS_WGVxvp-AhpypEhc1o7zpFr3rfBhgse9zkE">>,
+    Index =
+        published_offset_index([hb_test_utils:test_store(hb_store_volatile)]),
+    Arweave =
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"name">> => <<"chunk-cache-adjacent-items">>,
+            <<"index-store">> => [Index]
+        },
+    Opts =
+        (receipt_opts())#{
+            <<"arweave-chunk-store">> =>
+                [hb_test_utils:test_store(hb_store_volatile)]
+        },
+    Offset =
+        fun(ID) ->
+            hb_store:read([Index], <<"~arweave@2.9/offset=", ID/binary>>, Opts)
+        end,
+    % The second item begins where the first ends. The offsets are looked up
+    % first, so that the downloads after them are the items' own.
+    {ok, #{ <<"start">> := Start, <<"length">> := 3947 }} = Offset(First),
+    NextStart = Start + 3947,
+    ?assertMatch({ok, #{ <<"start">> := NextStart }}, Offset(Next)),
+    downloads(),
+    ?assertMatch({ok, _}, hb_store:read([Arweave], First, Opts)),
+    ?assertEqual(1, downloads()),
+    ?assertMatch({ok, _}, hb_store:read([Arweave], Next, Opts)),
+    ?assertEqual(0, downloads()),
+    % The first item at its offset, with its data length: 3,947 bytes less
+    % its 1,120-byte header.
+    {ok, Item} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            <<(hb_util:bin(Start))/binary, "-2827">>,
+            Opts
+        ),
+    ?assertEqual(First, hb_message:id(Item, signed, Opts)),
+    ?assertEqual(0, downloads()).
+
+%% @doc The default definition of the published offset index, under a fresh
+%% name and with the given chunk store, so that the chunks its lookups use
+%% are the calling test's own.
+published_offset_index(ChunkStore) ->
+    #{ <<"index-store">> := IndexStores } =
+        hb_store_arweave:store_from_opts(#{}),
+    [Default] =
+        [
+            Store
+        ||
+            Store = #{ <<"name">> := <<"published-offset-index">> } <-
+                IndexStores
+        ],
+    Default#{
+        <<"name">> =>
+            <<
+                "published-offset-index-",
+                (hb_util:encode(crypto:strong_rand_bytes(4)))/binary
+            >>,
+        <<"chunk-store">> => ChunkStore
+    }.
 
 %% @doc Node options whose `http-client-receipt' hook sends the path of each
 %% outbound request to the calling process.
