@@ -63,7 +63,8 @@ build_info() ->
 
 %% @doc Get/set the node message. If the request is a `POST', we check that the
 %% request is signed by the owner of the node. If not, we return the node message
-%% as-is, aside all keys that are private (according to `hb_private').
+%% over the defaults that `hb_opts:get' falls back to, aside all keys that are
+%% private (according to `hb_private').
 -spec info(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 info(_, Request, NodeMsg) ->
     {ErlStatus, Res} = case hb_ao:get(<<"method">>, Request, NodeMsg) of
@@ -82,7 +83,10 @@ info(_, Request, NodeMsg) ->
             end;
         _ ->
             ?event({get_config_req, Request, NodeMsg}),
-            DynamicKeys = add_dynamic_keys(NodeMsg),
+            DynamicKeys =
+                add_dynamic_keys(
+                    hb_maps:merge(hb_opts:default_message_with_env(), NodeMsg)
+                ),
             {ok,
                 lib_meta:without_credentials(
                     filter_node_msg(DynamicKeys, NodeMsg),
