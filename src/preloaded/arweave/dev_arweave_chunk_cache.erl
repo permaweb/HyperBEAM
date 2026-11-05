@@ -288,13 +288,18 @@ published_offset_index(ChunkStore) ->
         <<"chunk-store">> => ChunkStore
     }.
 
-%% @doc Node options whose `http-client-receipt' hook sends the path of each
-%% outbound request to the calling process.
+%% @doc Node options whose `http-client-receipt' hook sends the path and
+%% status class of each outbound request attempt to the calling process.
 receipt_opts() ->
     Self = self(),
     Receipt =
         fun(_, Req, _) ->
-            Self ! {receipt, hb_ao:get(<<"body/request-path">>, Req, #{})},
+            Self !
+                {
+                    receipt,
+                    hb_ao:get(<<"body/request-path">>, Req, #{}),
+                    hb_ao:get(<<"body/status-class">>, Req, #{})
+                },
             {ok, Req}
         end,
     #{
@@ -306,12 +311,15 @@ receipt_opts() ->
             }
     }.
 
-%% @doc The `GET /chunk' requests made since the last call, counted from
-%% their receipts, which arrive after the reads that made them return.
+%% @doc The chunks downloaded since the last call: `GET /chunk' requests that
+%% succeeded, counted from their receipts, which arrive after the reads that
+%% made them return. A chunk request goes on from node to node until one
+%% answers 200, and the attempts that other nodes refused or failed
+%% downloaded nothing.
 downloads() -> downloads(0).
 downloads(N) ->
     receive
-        {receipt, <<"/chunk/", _/binary>>} -> downloads(N + 1);
-        {receipt, _} -> downloads(N)
+        {receipt, <<"/chunk/", _/binary>>, <<"success">>} -> downloads(N + 1);
+        {receipt, _, _} -> downloads(N)
     after 500 -> N
     end.
