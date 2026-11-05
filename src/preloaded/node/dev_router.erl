@@ -1963,6 +1963,24 @@ route_reference_test_parallel() ->
         )
     ).
 
+%% @doc The default routes keep the Arweave node routes behind a reference to
+%% `arweave-routes'. A node adds its own routes and keeps them the same way.
+arweave_routes_reference_test_parallel() ->
+    Defaults = hb_opts:default_message_with_env(),
+    Arweave = #{ <<"path">> => <<"/arweave/info">> },
+    {ok, Default} = route(Arweave, Defaults),
+    Opts =
+        Defaults#{
+            <<"routes">> => [
+                #{ <<"template">> => <<"/custom">>, <<"node">> => <<"custom">> },
+                <<"~meta@1.0/info/arweave-routes">>
+            ]
+        },
+    ?assertEqual({ok, <<"custom">>}, route(#{ <<"path">> => <<"/custom">> }, Opts)),
+    ?assertEqual({ok, Default}, route(Arweave, Opts)),
+    % Only Arweave node routes are behind the reference: no GraphQL relay.
+    ?assertEqual({error, no_matches}, route(#{ <<"path">> => <<"/graphql">> }, Opts)).
+
 device_call_from_singleton_test_parallel() ->
     % Try with a real-world example, taken from a GET request to the router.
     NodeOpts = #{ <<"routes">> => Routes = [#{

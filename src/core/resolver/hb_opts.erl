@@ -381,6 +381,39 @@ raw_default_message() ->
                         }
                     ]
             },
+            % The routes to Arweave nodes, given once under `arweave-routes'.
+            % A node's own `routes' keep them with this same reference.
+            <<"~meta@1.0/info/arweave-routes">>,
+            % Message offsets from an index node. Read over HTTP/2, whose
+            % header names are always lower-case, such that the typed fields of
+            % the response survive intermediaries and decode.
+            #{
+                <<"template">> =>
+                    #{
+                        <<"path">> => <<"^/~arweave@2.9/raw">>,
+                        <<"method">> => <<"HEAD">>
+                    },
+                <<"node">> =>
+                    #{
+                        <<"prefix">> => ?DEFAULT_GATEWAY,
+                        <<"opts">> =>
+                            #{
+                                <<"http-client">> => gun,
+                                <<"protocol">> => http2
+                            }
+                    }
+            },
+            % Raw data requests via arweave.net gateway. TODO: Update later.
+            #{
+                <<"template">> => <<"/raw">>,
+                <<"node">> =>
+                    #{
+                        <<"prefix">> => ?DEFAULT_GATEWAY,
+                        <<"opts">> => ?DEFAULT_HTTP_OPTS
+                    }
+            }
+        ],
+        <<"arweave-routes">> => [
             % chunk and transaction data requests: route to the nearest data
             % nodes by partition midpoint (byte offset).
             #{
@@ -462,34 +495,6 @@ raw_default_message() ->
                 <<"parallel">> => true,
                 <<"stop-after">> => true,
                 <<"admissible-status">> => 200
-            },
-            % Message offsets from an index node. Read over HTTP/2, whose
-            % header names are always lower-case, such that the typed fields of
-            % the response survive intermediaries and decode.
-            #{
-                <<"template">> =>
-                    #{
-                        <<"path">> => <<"^/~arweave@2.9/raw">>,
-                        <<"method">> => <<"HEAD">>
-                    },
-                <<"node">> =>
-                    #{
-                        <<"prefix">> => ?DEFAULT_GATEWAY,
-                        <<"opts">> =>
-                            #{
-                                <<"http-client">> => gun,
-                                <<"protocol">> => http2
-                            }
-                    }
-            },
-            % Raw data requests via arweave.net gateway. TODO: Update later.
-            #{
-                <<"template">> => <<"/raw">>,
-                <<"node">> =>
-                    #{
-                        <<"prefix">> => ?DEFAULT_GATEWAY,
-                        <<"opts">> => ?DEFAULT_HTTP_OPTS
-                    }
             }
         ],
         <<"store">> =>

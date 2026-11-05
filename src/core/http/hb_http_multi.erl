@@ -471,7 +471,7 @@ multirequest_test_() ->
 parallel_race_stops_at_first_admissible_test_() ->
     {timeout, 30, fun parallel_race_stops_at_first_admissible/0}.
 parallel_race_stops_at_first_admissible() ->
-    Routes = maps:get(<<"routes">>, hb_opts:default_message()),
+    Routes = maps:get(<<"arweave-routes">>, hb_opts:default_message()),
     [ArweaveRoute] =
         [R || R <- Routes,
             maps:get(<<"template">>, R, undefined) =:= <<"^/arweave">>,
