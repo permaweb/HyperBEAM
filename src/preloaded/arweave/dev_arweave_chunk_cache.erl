@@ -113,22 +113,7 @@ stored_range(Module) ->
     Length = 1264430,
     DataRoot = <<"aHoisEr0IJ5xV2i0NjnE-vbtZOzZqI01ecyn15tojbE">>,
     Store = hb_test_utils:test_store(Module),
-    Self = self(),
-    Receipt =
-        fun(_, Req, _) ->
-            Self ! {receipt, hb_ao:get(<<"body/request-path">>, Req, #{})},
-            {ok, Req}
-        end,
-    Opts =
-        #{
-            <<"arweave-chunk-store">> => Store,
-            <<"priv-wallet">> => ar_wallet:new(),
-            <<"on">> =>
-                #{
-                    <<"http-client-receipt">> =>
-                        #{ <<"device">> => #{ http_client_receipt => Receipt } }
-                }
-        },
+    Opts = (receipt_opts())#{ <<"arweave-chunk-store">> => Store },
     Read =
         fun(From, Size, ReadOpts) ->
             hb_ao:resolve(
@@ -141,16 +126,6 @@ stored_range(Module) ->
                 ReadOpts
             )
         end,
-    % The `GET /chunk' requests made since the last call, counted from their
-    % receipts, which arrive after the reads return.
-    Downloads =
-        fun Count(N) ->
-            receive
-                {receipt, <<"/chunk/", _/binary>>} -> Count(N + 1);
-                {receipt, _} -> Count(N)
-            after 500 -> N
-            end
-        end,
     Ends =
         fun() ->
             {ok, Keys} = hb_store:list(Store, ?CHUNKS, #{}),
@@ -160,23 +135,23 @@ stored_range(Module) ->
     % Offset X misses, and its chunk is downloaded once and kept at the
     % chunk's last byte.
     {ok, <<X>>} = Read(Offset + 1000, 1, Opts),
-    ?assertEqual(1, Downloads(0)),
+    ?assertEqual(1, downloads()),
     ?assertEqual([FirstEnd], Ends()),
     % X+1, then X and X+1 together, read from that entry.
     {ok, <<Y>>} = Read(Offset + 1001, 1, Opts),
     ?assertEqual({ok, <<X, Y>>}, Read(Offset + 1000, 2, Opts)),
-    ?assertEqual(0, Downloads(0)),
+    ?assertEqual(0, downloads()),
     ?assertEqual([FirstEnd], Ends()),
     % Without the store, a read downloads its chunk.
     ?assertEqual(
         {ok, <<Y>>},
         Read(Offset + 1001, 1, maps:remove(<<"arweave-chunk-store">>, Opts))
     ),
-    ?assertEqual(1, Downloads(0)),
+    ?assertEqual(1, downloads()),
     % The whole transaction downloads its other four chunks, three of 256 KiB
     % and one of 215,854 bytes, and keeps each at its last byte.
     {ok, Data} = Read(Offset, Length, Opts),
-    ?assertEqual(4, Downloads(0)),
+    ?assertEqual(4, downloads()),
     ?assertEqual(DataRoot, hb_util:encode(ar_tx:data_root(Data))),
     ?assertEqual(<<X, Y>>, binary:part(Data, 1000, 2)),
     ?assertEqual(
@@ -194,4 +169,98 @@ stored_range(Module) ->
         {ok, binary:part(Data, ?DATA_CHUNK_SIZE - 1, 2)},
         Read(Offset + ?DATA_CHUNK_SIZE - 1, 2, Opts)
     ),
-    ?assertEqual(0, Downloads(0)).
+    ?assertEqual(0, downloads()).
+
+%% @doc The offsets of two IDs that are adjacent in the published offset
+%% index, looked up through its default definition: the leaf chunk that the
+%% first lookup downloads answers the second, with no download, when either
+%% the index's own `chunk-store' or the node's `arweave-chunk-store' keeps
+%% it. With neither, the second lookup downloads again.
+offset_index_test_() ->
+    [
+        {
+            Desc,
+            {timeout, 120, fun() -> offset_index(IndexKeeps, NodeKeeps) end}
+        }
+    ||
+        {Desc, IndexKeeps, NodeKeeps} <-
+            [
+                {"index chunk-store", true, false},
+                {"arweave-chunk-store", false, true},
+                {"no chunk store", false, false}
+            ]
+    ].
+
+offset_index(IndexKeeps, NodeKeeps) ->
+    #{ <<"index-store">> := IndexStores } =
+        hb_store_arweave:store_from_opts(#{}),
+    [Default] =
+        [
+            Store
+        ||
+            Store = #{ <<"name">> := <<"published-offset-index">> } <-
+                IndexStores
+        ],
+    Keep =
+        fun(true) -> [hb_test_utils:test_store(hb_store_volatile)];
+           (false) -> []
+        end,
+    % A fresh name and chunk store, so that the chunks the lookups use are
+    % this test's own.
+    Index =
+        Default#{
+            <<"name">> =>
+                <<
+                    "published-offset-index-",
+                    (hb_util:encode(crypto:strong_rand_bytes(4)))/binary
+                >>,
+            <<"chunk-store">> => Keep(IndexKeeps)
+        },
+    Opts = (receipt_opts())#{ <<"arweave-chunk-store">> => Keep(NodeKeeps) },
+    Lookup =
+        fun(ID) ->
+            hb_store:read([Index], <<"~arweave@2.9/offset=", ID/binary>>, Opts)
+        end,
+    ?assertMatch(
+        {ok, #{ <<"start">> := 381852134215637, <<"length">> := 3947 }},
+        Lookup(<<"AAAAhyV8_NwududSxuraAj7DLWiZHDTqVKWrZglpNok">>)
+    ),
+    First = downloads(),
+    ?assertMatch(
+        {ok, #{ <<"start">> := 189811668003858, <<"length">> := 22938 }},
+        Lookup(<<"AAAAh8mf_LHy_pkEoPL0pedAkw0S6PDbPZ3Nu2WBLc0">>)
+    ),
+    Second = downloads(),
+    ?assert(First > 0),
+    case IndexKeeps orelse NodeKeeps of
+        true -> ?assertEqual(0, Second);
+        false -> ?assert(Second > 0)
+    end.
+
+%% @doc Node options whose `http-client-receipt' hook sends the path of each
+%% outbound request to the calling process.
+receipt_opts() ->
+    Self = self(),
+    Receipt =
+        fun(_, Req, _) ->
+            Self ! {receipt, hb_ao:get(<<"body/request-path">>, Req, #{})},
+            {ok, Req}
+        end,
+    #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"on">> =>
+            #{
+                <<"http-client-receipt">> =>
+                    #{ <<"device">> => #{ http_client_receipt => Receipt } }
+            }
+    }.
+
+%% @doc The `GET /chunk' requests made since the last call, counted from
+%% their receipts, which arrive after the reads that made them return.
+downloads() -> downloads(0).
+downloads(N) ->
+    receive
+        {receipt, <<"/chunk/", _/binary>>} -> downloads(N + 1);
+        {receipt, _} -> downloads(N)
+    after 500 -> N
+    end.
