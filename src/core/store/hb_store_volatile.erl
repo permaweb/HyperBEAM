@@ -127,7 +127,8 @@ read(Opts, #{ <<"read">> := RawKey }, _NodeOpts) ->
             {error, not_found}
     end.
 
-%% @doc List immediate child names under a group path.
+%% @doc List immediate child names under a group path. An ascending list
+%% walks from its `from' child and ends at its limit.
 list(Opts, Req = #{ <<"list">> := RawPath }, _NodeOpts) ->
     list_path(Opts, hb_path:to_binary(RawPath), Req).
 
@@ -136,7 +137,16 @@ list_path(Opts, <<"">>, Req) ->
 list_path(Opts, Path, Req) ->
     case lookup_entry(Opts, Path) of
         group ->
-            Children = immediate_children(Opts, Path),
+            Children =
+                case hb_store_utils:list_request_bounds(Req, Opts) of
+                    #{
+                        <<"from">> := From,
+                        <<"limit">> := Limit,
+                        <<"direction">> := asc
+                    } when is_binary(From) ->
+                        immediate_children(Opts, Path, From, Limit);
+                    _ -> immediate_children(Opts, Path)
+                end,
             {ok, hb_store_utils:apply_list_bounds(Children, Req, Opts)};
         _ ->
             % A path with a value has no children to list. An empty
@@ -228,41 +238,61 @@ maybe_delete_subtree(Table, Key) ->
 %% would skip any top-level key whose binary sort order is less than
 %% `<<"/">>` (for example base64url paths starting with `-`) — so the
 %% root marker row itself is skipped explicitly inside the loop instead.
+%%
+%% With a `From' child and a `Limit', the walk starts at the first key at
+%% or after `From' and ends after `Limit' names, so a seek costs O(Limit).
+%% Every child has a row of its own, before any row below it, so the names
+%% are recorded in ascending order. A name before `From', whose subtree the
+%% walk may start inside, is skipped like a recorded one.
 immediate_children(Opts, GroupPath) ->
+    immediate_children(Opts, GroupPath, <<>>, all).
+immediate_children(Opts, GroupPath, From, Limit) ->
     Table = table(Opts),
     Seen =
         case GroupPath of
             ?ROOT_GROUP ->
                 collect_immediate_children(
-                    Table, <<>>, ets:first(Table), #{});
+                    Table, <<>>, ets:first(Table), #{}, {From, Limit});
             _ ->
                 Prefix = <<GroupPath/binary, $/>>,
+                Start = <<Prefix/binary, From/binary>>,
+                FirstKey =
+                    case ets:member(Table, Start) of
+                        true -> Start;
+                        false -> ets:next(Table, Start)
+                    end,
                 collect_immediate_children(
-                    Table, Prefix, ets:next(Table, Prefix), #{})
+                    Table, Prefix, FirstKey, #{}, {From, Limit})
         end,
     maps:keys(Seen).
 
-collect_immediate_children(_Table, _Prefix, '$end_of_table', Seen) ->
+collect_immediate_children(_Table, _Prefix, _Key, Seen, {_From, Limit})
+        when map_size(Seen) =:= Limit ->
     Seen;
-collect_immediate_children(Table, <<>> = Prefix, ?ROOT_GROUP, Seen) ->
-    collect_immediate_children(Table, Prefix, ets:next(Table, ?ROOT_GROUP), Seen);
-collect_immediate_children(Table, Prefix, Key, Seen) ->
+collect_immediate_children(_Table, _Prefix, '$end_of_table', Seen, _Bounds) ->
+    Seen;
+collect_immediate_children(Table, <<>> = Prefix, ?ROOT_GROUP, Seen, Bounds) ->
+    collect_immediate_children(
+        Table, Prefix, ets:next(Table, ?ROOT_GROUP), Seen, Bounds);
+collect_immediate_children(Table, Prefix, Key, Seen, Bounds = {From, _}) ->
     PLen = byte_size(Prefix),
     case Key of
         <<Prefix:PLen/binary, Rest/binary>> ->
             [Name | _] = binary:split(Rest, <<"/">>),
-            case is_map_key(Name, Seen) of
+            case is_map_key(Name, Seen) orelse Name < From of
                 true ->
                     %% Re-entered a subtree we already recorded (possible
                     %% when a sibling like `<<Name, X>>` with X < $/ is
-                    %% interleaved in ordered_set iteration). Jump past
+                    %% interleaved in ordered_set iteration), or entered
+                    %% the subtree of a name before `From'. Jump past
                     %% Name's subtree in one step.
                     NextKey = skip_subtree(Table, Prefix, Name),
-                    collect_immediate_children(Table, Prefix, NextKey, Seen);
+                    collect_immediate_children(
+                        Table, Prefix, NextKey, Seen, Bounds);
                 false ->
                     NextKey = advance_past_child(Table, Prefix, Name, Key),
                     collect_immediate_children(
-                        Table, Prefix, NextKey, Seen#{Name => true})
+                        Table, Prefix, NextKey, Seen#{Name => true}, Bounds)
             end;
         _ ->
             Seen
@@ -449,4 +479,33 @@ prefixed_sibling_no_duplicate_test() ->
            <<"p/a-">> => <<"2">> }, #{}),
     {ok, Children} = hb_store:list(S, <<"p">>, #{}),
     ?assertEqual([<<"a">>, <<"a-">>], lists:sort(Children)),
+    ok = hb_store:stop(S).
+
+list_from_limit_test() ->
+    %% An ascending list with `from' and `limit' gives the first children at
+    %% or after `from', including when the walk starts inside the subtree of
+    %% a child before it (`a.' sorts between `a-' and `a/leaf').
+    S = hb_test_utils:test_store(?MODULE, <<"list-from-limit-test">>),
+    hb_store:start(S),
+    ok = hb_store:write(S,
+        #{ <<"p/a/leaf">> => <<"1">>,
+           <<"p/a-">> => <<"2">>,
+           <<"p/b">> => <<"3">>,
+           <<"p/c/leaf">> => <<"4">> }, #{}),
+    List =
+        fun(From, Limit) ->
+            hb_store:list(
+                S,
+                #{
+                    <<"list">> => <<"p">>,
+                    <<"from">> => From,
+                    <<"limit">> => Limit
+                },
+                #{}
+            )
+        end,
+    ?assertEqual({ok, [<<"a">>, <<"a-">>]}, List(<<"a">>, 2)),
+    ?assertEqual({ok, [<<"b">>]}, List(<<"a.">>, 1)),
+    ?assertEqual({ok, [<<"b">>, <<"c">>]}, List(<<"b">>, 5)),
+    ?assertEqual({ok, []}, List(<<"d">>, 1)),
     ok = hb_store:stop(S).
