@@ -2,6 +2,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+-define(PROCESS, <<"bEtA000000000000000000000000000000000000000">>).
+
 opts() ->
     hb:init(),
     #{
@@ -14,70 +16,104 @@ opts() ->
             ]
     }.
 
-token() ->
-    {ok, Token} = hb_device_load:reference(<<"token@1.0">>, #{}),
-    Token.
-
 id(Seed) ->
     hb_util:human_id(crypto:hash(sha256, Seed)).
+
+wallet() ->
+    Wallet = ar_wallet:new(),
+    {Wallet, hb_util:human_id(ar_wallet:to_address(Wallet))}.
 
 base(Authority, Opts) ->
     base(Authority, #{}, Opts).
 base(Authority, Extra, Opts) ->
+    {ok, Base} =
+        hb_ao:resolve(
+            maps:merge(
+                #{
+                    <<"device">> => <<"token@1.0">>,
+                    <<"scheduler">> => hb_util:human_id(hb_opts:address(Opts)),
+                    <<"total-supply">> => 0,
+                    <<"max-supply">> => 100,
+                    <<"mint-device">> => <<"mint-authority@1.0">>,
+                    <<"mint-authority">> => Authority
+                },
+                Extra
+            ),
+            #{ <<"path">> => <<"init">> },
+            Opts
+        ),
+    Base.
+
+signed(Wallet, Fields, Opts) ->
     hb_message:commit(
-        maps:merge(
+        Fields#{ <<"target">> => ?PROCESS },
+        Opts#{ <<"priv-wallet">> => Wallet },
+        #{
+            <<"commitment-device">> => <<"tx@1.0">>,
+            <<"field-target">> => ?PROCESS,
+            <<"field-quantity">> => <<"0">>
+        }
+    ).
+
+compute(State, Body, Opts) ->
+    {ok, Next} =
+        hb_ao:resolve(
+            State,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"compute">>,
+                    <<"process">> => ?PROCESS,
+                    <<"slot">> => 0,
+                    <<"body">> => Body
+                },
+                Opts
+            ),
+            Opts
+        ),
+    Next.
+
+mint(State, {Wallet, From}, Recipient, Quantity, Trigger, Opts) ->
+    compute(
+        State,
+        signed(
+            Wallet,
             #{
-                <<"device">> => <<"token@1.0">>,
-                <<"name">> => <<"Test Token">>,
-                <<"ticker">> => <<"TEST">>,
-                <<"denomination">> => 0,
-                <<"total-supply">> => 0,
-                <<"max-supply">> => 100,
-                <<"mint-device">> => <<"mint-authority@1.0">>,
-                <<"mint-authority">> => Authority
+                <<"action">> => <<"Mint">>,
+                <<"from">> => From,
+                <<"recipient">> => Recipient,
+                <<"quantity">> => Quantity,
+                <<"mint-trigger">> => Trigger
             },
-            Extra
+            Opts
         ),
         Opts
     ).
 
-mint(State, From, Recipient, Quantity, Trigger, Opts) ->
-    (token()):handle_action(
-        <<"mint">>,
+transfer(State, Signer, Recipient, Quantity, Opts) ->
+    transfer(State, Signer, Recipient, Quantity, #{}, Opts).
+transfer(State, {Wallet, From}, Recipient, Quantity, Extra, Opts) ->
+    compute(
         State,
-        #{
-            <<"body">> =>
-                #{
-                    <<"action">> => <<"Mint">>,
-                    <<"from">> => From,
-                    <<"recipient">> => Recipient,
-                    <<"quantity">> => Quantity,
-                    <<"mint-trigger">> => Trigger
-                }
-        },
-        Opts
-    ).
-
-transfer(State, From, Recipient, Quantity, Opts) ->
-    transfer(State, From, Recipient, Quantity, #{}, Opts).
-transfer(State, From, Recipient, Quantity, Extra, Opts) ->
-    (token()):handle_action(
-        <<"transfer">>,
-        State,
-        #{
-            <<"body">> =>
-                Extra#{
-                    <<"action">> => <<"Transfer">>,
-                    <<"from">> => From,
-                    <<"recipient">> => Recipient,
-                    <<"quantity">> => Quantity
-                }
-        },
+        signed(
+            Wallet,
+            Extra#{
+                <<"action">> => <<"Transfer">>,
+                <<"from">> => From,
+                <<"recipient">> => Recipient,
+                <<"quantity">> => Quantity
+            },
+            Opts
+        ),
         Opts
     ).
 
 balance(State, Account, Opts) ->
-    {ok, Balance} = (token()):balance(State, #{ <<"balance">> => Account }, Opts),
+    {ok, Balance} =
+        hb_ao:resolve(
+            State,
+            #{ <<"path">> => <<"balance">>, <<"balance">> => Account },
+            Opts
+        ),
     Balance.
 
 supply(State, Opts) ->
@@ -91,27 +127,6 @@ outbox(State, Opts) ->
         hb_ao:get(<<"results/outbox">>, State, [], Opts),
         Opts
     ).
-
--define(PROCESS, <<"bEtA000000000000000000000000000000000000000">>).
-
-l1_base(Authority, Opts) ->
-    {ok, Base} =
-        (token()):init(
-            #{
-                <<"device">> => <<"token@1.0">>,
-                <<"execution-device">> => <<"token@1.0">>,
-                <<"scheduler-device">> => <<"arweave-scheduler@1.0">>,
-                <<"scheduler">> => hb_util:human_id(hb_opts:address(Opts)),
-                <<"mint-device">> => <<"mint-authority@1.0">>,
-                <<"mint-authority">> => Authority,
-                <<"total-supply">> => <<"0">>,
-                <<"max-supply">> => <<"100">>,
-                <<"denomination">> => <<"12">>
-            },
-            #{},
-            Opts
-        ),
-    Base.
 
 l1_mint(Wallet, NativeQuantity, Tags, Opts) ->
     TX =
@@ -127,69 +142,48 @@ l1_mint(Wallet, NativeQuantity, Tags, Opts) ->
         ),
     hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts).
 
-l1_apply(State, Body, Height, Opts) ->
-    {ok, Updated} =
-        (token()):compute(
-            State,
-            hb_message:commit(
-                #{
-                    <<"path">> => <<"compute">>,
-                    <<"process">> => ?PROCESS,
-                    <<"slot">> => Height,
-                    <<"block-height">> => Height,
-                    <<"body">> => Body
-                },
-                Opts
-            ),
-            Opts
-        ),
-    Updated.
-
 mint_once_per_trigger_test() ->
     Opts = opts(),
-    Authority = id(<<"authority">>),
+    {_, Authority} = Signer = wallet(),
     Alice = id(<<"Alice">>),
     Burn1 = id(<<"burn-1">>),
     Burn2 = id(<<"burn-2">>),
-    Base = base(Authority, Opts),
-    {ok, Minted} = mint(Base, Authority, Alice, <<"5">>, Burn1, Opts),
+    Minted = mint(base(Authority, Opts), Signer, Alice, <<"5">>, Burn1, Opts),
     ?assertEqual(5, balance(Minted, Alice, Opts)),
     ?assertEqual(5, supply(Minted, Opts)),
     [Notice] = outbox(Minted, Opts),
     ?assertEqual(<<"Mint-Notice">>, hb_ao:get(<<"action">>, Notice, Opts)),
     ?assertEqual(Burn1, hb_ao:get(<<"mint-trigger">>, Notice, Opts)),
     ?assertEqual(5, hb_ao:get(<<"quantity">>, Notice, Opts)),
-    ?assertEqual(
-        {error, <<"Mint trigger already used.">>},
-        mint(Minted, Authority, Alice, 5, Burn1, Opts)
-    ),
-    {ok, Again} = mint(Minted, Authority, Alice, 3, Burn2, Opts),
+    Replayed = mint(Minted, Signer, Alice, <<"4">>, Burn1, Opts),
+    ?assert(lists:member(<<"Mint trigger already used.">>, reasons(Replayed, Opts))),
+    ?assertEqual(5, balance(Replayed, Alice, Opts)),
+    Again = mint(Replayed, Signer, Alice, <<"3">>, Burn2, Opts),
     ?assertEqual(8, balance(Again, Alice, Opts)),
     ?assertEqual(8, supply(Again, Opts)).
 
 minted_balance_is_transferable_test() ->
     Opts = opts(),
-    Authority = id(<<"authority">>),
-    Alice = id(<<"Alice">>),
+    {_, Authority} = Signer = wallet(),
+    {_, Alice} = AliceSigner = wallet(),
     Bob = id(<<"Bob">>),
-    {ok, Minted} = mint(base(Authority, Opts), Authority, Alice, 5, id(<<"b">>), Opts),
-    {ok, Moved} = transfer(Minted, Alice, Bob, 2, Opts),
+    Minted = mint(base(Authority, Opts), Signer, Alice, <<"5">>, id(<<"b">>), Opts),
+    Moved = transfer(Minted, AliceSigner, Bob, <<"2">>, Opts),
     ?assertEqual(3, balance(Moved, Alice, Opts)),
     ?assertEqual(2, balance(Moved, Bob, Opts)),
     ?assertEqual(5, supply(Moved, Opts)).
 
 authority_transfer_does_not_mint_test() ->
     Opts = opts(),
-    Authority = id(<<"authority">>),
+    {_, Authority} = Signer = wallet(),
     Bob = id(<<"Bob">>),
-    {ok, Minted} =
-        mint(base(Authority, Opts), Authority, Authority, 5, id(<<"b">>), Opts),
-    {ok, Moved} =
+    Minted = mint(base(Authority, Opts), Signer, Authority, <<"5">>, id(<<"b">>), Opts),
+    Moved =
         transfer(
             Minted,
-            Authority,
+            Signer,
             Bob,
-            2,
+            <<"2">>,
             #{ <<"mint-trigger">> => id(<<"t">>) },
             Opts
         ),
@@ -199,125 +193,98 @@ authority_transfer_does_not_mint_test() ->
 
 rejects_invalid_mints_test() ->
     Opts = opts(),
-    Authority = id(<<"authority">>),
-    Other = id(<<"other">>),
+    {AuthorityWallet, Authority} = Signer = wallet(),
+    {OtherWallet, _} = Other = wallet(),
     Alice = id(<<"Alice">>),
     Burn = id(<<"burn">>),
     Base = base(Authority, Opts),
-    Rejected =
+    Unchanged =
+        fun(State) ->
+            ?assertEqual(0, balance(State, Alice, Opts)),
+            ?assertEqual(0, supply(State, Opts))
+        end,
+    lists:foreach(
+        fun({S, Recipient, Quantity, Trigger}) ->
+            Unchanged(mint(Base, S, Recipient, Quantity, Trigger, Opts))
+        end,
         [
-            mint(Base, Other, Alice, 5, Burn, Opts),
-            mint(Base, [Authority, Other], Alice, 5, Burn, Opts),
-            mint(Base, Authority, Alice, 0, Burn, Opts),
-            mint(Base, Authority, Alice, -1, Burn, Opts),
-            mint(Base, Authority, Alice, <<"1.5">>, Burn, Opts),
-            mint(Base, Authority, Alice, #{}, Burn, Opts),
-            mint(Base, Authority, Alice, 5, <<"not-an-id">>, Opts),
-            mint(Base, Authority, Alice, 5, binary:copy(<<"_">>, 43), Opts),
-            mint(Base, Authority, <<"not-an-address">>, 5, Burn, Opts),
-            mint(Base, Authority, <<"uri-did-pkh-eip155-1-0x", 255>>, 5, Burn, Opts)
-        ],
-    lists:foreach(fun(Res) -> ?assertMatch({error, _}, Res) end, Rejected),
-    ?assertMatch(
-        {error, _},
-        (token()):handle_action(
-            <<"mint">>,
-            Base,
-            #{
-                <<"body">> =>
-                    #{
-                        <<"from">> => Authority,
-                        <<"recipient">> => Alice,
-                        <<"quantity">> => 5,
-                        <<"mint-trigger">> => Burn
-                    }
-            },
-            Opts
-        )
-    ).
+            {Other, Alice, <<"5">>, Burn},
+            {Signer, Alice, <<"0">>, Burn},
+            {Signer, Alice, <<"-1">>, Burn},
+            {Signer, Alice, <<"1.5">>, Burn},
+            {Signer, Alice, <<"x">>, Burn},
+            {Signer, Alice, <<"5">>, <<"not-an-id">>},
+            {Signer, Alice, <<"5">>, binary:copy(<<"_">>, 43)},
+            {Signer, <<"not-an-address">>, <<"5">>, Burn},
+            {Signer, <<"uri-did-pkh-eip155-1-0x", 255>>, <<"5">>, Burn}
+        ]
+    ),
+    Fields =
+        #{
+            <<"recipient">> => Alice,
+            <<"quantity">> => <<"5">>,
+            <<"mint-trigger">> => Burn
+        },
+    TwoSigners =
+        hb_message:commit(
+            hb_message:commit(
+                Fields#{ <<"action">> => <<"Mint">> },
+                Opts#{ <<"priv-wallet">> => AuthorityWallet }
+            ),
+            Opts#{ <<"priv-wallet">> => OtherWallet }
+        ),
+    Unchanged(compute(Base, TwoSigners, Opts)),
+    Unchanged(compute(Base, signed(AuthorityWallet, Fields, Opts), Opts)).
 
 max_supply_caps_minting_test() ->
     Opts = opts(),
-    Authority = id(<<"authority">>),
+    {_, Authority} = Signer = wallet(),
     Alice = id(<<"Alice">>),
     Base = base(Authority, Opts),
-    {ok, Full} = mint(Base, Authority, Alice, 100, id(<<"b1">>), Opts),
+    Full = mint(Base, Signer, Alice, <<"100">>, id(<<"b1">>), Opts),
     ?assertEqual(100, supply(Full, Opts)),
-    ?assertEqual(
-        {error, <<"Mint exceeds max supply.">>},
-        mint(Full, Authority, Alice, 1, id(<<"b2">>), Opts)
-    ),
-    ?assertEqual(
-        {error, <<"Mint exceeds max supply.">>},
-        mint(Base, Authority, Alice, 101, id(<<"b3">>), Opts)
-    ),
+    Over = mint(Full, Signer, Alice, <<"1">>, id(<<"b2">>), Opts),
+    ?assert(lists:member(<<"Mint exceeds max supply.">>, reasons(Over, Opts))),
+    ?assertEqual(100, supply(Over, Opts)),
+    TooLarge = mint(Base, Signer, Alice, <<"101">>, id(<<"b3">>), Opts),
+    ?assert(lists:member(<<"Mint exceeds max supply.">>, reasons(TooLarge, Opts))),
+    ?assertEqual(0, supply(TooLarge, Opts)),
     lists:foreach(
-        fun(Extra) ->
-            ?assertEqual(
-                {error, <<"Invalid max supply.">>},
-                mint(
-                    base(Authority, Extra, Opts),
-                    Authority,
-                    Alice,
-                    1,
-                    id(<<"b4">>),
-                    Opts
-                )
-            )
+        fun(State) ->
+            Res = mint(State, Signer, Alice, <<"1">>, id(<<"b4">>), Opts),
+            ?assert(lists:member(<<"Invalid max supply.">>, reasons(Res, Opts))),
+            ?assertEqual(0, balance(Res, Alice, Opts))
         end,
         [
-            #{ <<"max-supply">> => <<"x">> },
-            #{ <<"max-supply">> => -1 },
-            #{ <<"max-supply">> => #{} }
+            base(Authority, #{ <<"max-supply">> => <<"x">> }, Opts),
+            base(Authority, #{ <<"max-supply">> => -1 }, Opts),
+            base(Authority, #{ <<"max-supply">> => #{} }, Opts),
+            maps:remove(<<"max-supply">>, Base)
         ]
-    ),
-    NoCap = maps:remove(<<"max-supply">>, hb_message:uncommitted(Base, Opts)),
-    ?assertEqual(
-        {error, <<"Invalid max supply.">>},
-        mint(hb_message:commit(NoCap, Opts), Authority, Alice, 1, id(<<"b5">>), Opts)
     ).
 
 l1_mint_compute_test() ->
     Opts = opts(),
-    AuthorityWallet = ar_wallet:new(),
-    Authority = hb_util:human_id(ar_wallet:to_address(AuthorityWallet)),
+    {AuthorityWallet, Authority} = Signer = wallet(),
+    {AttackerWallet, _} = wallet(),
     Alice = id(<<"Alice">>),
-    Burn1 = id(<<"burn-1">>),
-    Base = l1_base(Authority, Opts),
-    Tags =
-        fun(Quantity, Trigger) ->
-            [
-                {<<"Recipient">>, Alice},
-                {<<"Quantity">>, Quantity},
-                {<<"Mint-Trigger">>, Trigger}
-            ]
-        end,
-    Minted = l1_apply(Base, l1_mint(AuthorityWallet, 0, Tags(<<"5">>, Burn1), Opts), 1, Opts),
+    Minted = mint(base(Authority, Opts), Signer, Alice, <<"5">>, id(<<"burn-1">>), Opts),
     ?assertEqual(5, balance(Minted, Alice, Opts)),
-    ?assertEqual(5, supply(Minted, Opts)),
-    Forged =
-        l1_mint(
-            ar_wallet:new(),
-            0,
-            [{<<"From">>, Authority} | Tags(<<"5">>, id(<<"burn-2">>))],
-            Opts
-        ),
-    AfterForged = l1_apply(Minted, Forged, 2, Opts),
-    ?assert(lists:member(<<"Minter is not the mint authority.">>, reasons(AfterForged, Opts))),
-    ?assertEqual(5, balance(AfterForged, Alice, Opts)),
-    ?assertEqual(5, supply(AfterForged, Opts)),
-    Replay =
+    Forged = mint(Minted, {AttackerWallet, Authority}, Alice, <<"5">>, id(<<"burn-2">>), Opts),
+    ?assert(lists:member(<<"Minter is not the mint authority.">>, reasons(Forged, Opts))),
+    ?assertEqual(5, balance(Forged, Alice, Opts)),
+    ?assertEqual(5, supply(Forged, Opts)),
+    WithAR =
         l1_mint(
             AuthorityWallet,
-            0,
-            [{<<"From">>, Authority} | Tags(<<"6">>, Burn1)],
+            1000,
+            [
+                {<<"Recipient">>, Alice},
+                {<<"Quantity">>, <<"7">>},
+                {<<"Mint-Trigger">>, id(<<"burn-3">>)}
+            ],
             Opts
         ),
-    AfterReplay = l1_apply(AfterForged, Replay, 3, Opts),
-    ?assert(lists:member(<<"Mint trigger already used.">>, reasons(AfterReplay, Opts))),
-    ?assertEqual(5, balance(AfterReplay, Alice, Opts)),
-    ?assertEqual(5, supply(AfterReplay, Opts)),
-    WithAR = l1_mint(AuthorityWallet, 1000, Tags(<<"7">>, id(<<"burn-3">>)), Opts),
-    AfterAR = l1_apply(AfterReplay, WithAR, 4, Opts),
+    AfterAR = compute(Forged, WithAR, Opts),
     ?assertEqual(12, balance(AfterAR, Alice, Opts)),
     ?assertEqual(12, supply(AfterAR, Opts)).
