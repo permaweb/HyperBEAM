@@ -153,7 +153,7 @@ write(Opts, Req, _NodeOpts) when is_map(Req) ->
     lists:foreach(
         fun(Key) ->
             maybe_delete_subtree(Table, Key),
-            ?event(store_volatile, {put, {key, Key}})
+            sample_event(put)
         end,
         maps:keys(Entries)
     ),
@@ -169,16 +169,27 @@ read(Opts, #{ <<"read">> := RawKey }, _NodeOpts) ->
     Key = hb_path:to_binary(RawKey),
     case lookup_entry(Opts, Key) of
         {raw, Value} ->
-            ?event(store_volatile, {hit, {key, Key}}),
+            sample_event(hit),
             {ok, Value};
         group ->
-            ?event(store_volatile, {hit, {key, Key}}),
+            sample_event(hit),
             Children = immediate_children(Opts, Key),
             {composite, [ child(Name, Entry) || {Name, Entry} <- Children ]};
         _ ->
             ?event(store_volatile, {miss, {key, Key}}),
             {error, not_found}
     end.
+
+%% @doc Count a `hit` or `put` event for about one in every 1,024 of them,
+%% chosen by the low bits of the monotonic clock, and credit it with 1,024,
+%% as `hb_store_lmdb` samples its reads: the counters keep their approximate
+%% totals at a thousandth of the cost of an event each.
+sample_event(Name) ->
+    sample_event(Name, erlang:monotonic_time()).
+sample_event(_Name, Time) when (Time band 1023) =/= 0 ->
+    ok;
+sample_event(Name, _Time) ->
+    hb_event:record(store_volatile, Name, #{}, 1024).
 
 %% @doc List immediate child names under a group path. An ascending list
 %% walks from its `from' child and ends at its limit.
