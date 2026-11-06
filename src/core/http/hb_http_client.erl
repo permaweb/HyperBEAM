@@ -13,7 +13,10 @@
 -export([init_prometheus/0, init_peer_metrics/1]).
 
 %% The buckets of the request duration histograms, in seconds.
--define(DURATION_BUCKETS, [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 20, 25, 30]).
+-define(
+    DURATION_BUCKETS,
+    [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 20, 25, 30]
+).
 
 -record(state, {
 	opts = #{}
