@@ -2,26 +2,28 @@
 %%% that a read of bytes in a chunk that the node has read before does not
 %%% download the chunk again. `arweave-chunk-store' selects the store: by
 %%% default a volatile table that keeps each chunk for five minutes, while
-%%% `[]' keeps no chunks. Each chunk is held at `~arweave@2.9/chunks/END',
-%%% where `END' is the weave offset of its last byte, zero-padded to 20 digits
-%%% so that the order of the keys is the order of the offsets. A read of an
-%%% offset lists the group from that offset with a limit of one: the first
-%%% chunk that ends at or after the offset holds it if the chunk starts at or
-%%% before it.
+%%% `[]' keeps no chunks. Each chunk is held at `~arweave@2.9/chunk=END', the
+%%% path of the request that gives it: its compact hashpath (`hb_hashpath') is
+%%% `ao:~arweave@2.9/chunk=END'. `END' is the weave offset of the chunk's last
+%%% byte, zero-padded to 20 digits so that the order of the keys is the order
+%%% of the offsets. A read of an offset lists the `~arweave@2.9' group from
+%%% `chunk=OFFSET' with a limit of one: the first chunk that ends at or after
+%%% the offset holds it if the chunk starts at or before it.
 -module(hb_store_arweave_chunk).
 -export([read/2, write/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc The group of chunks, named by the offsets of their last bytes.
--define(CHUNKS, <<"~arweave@2.9/chunks">>).
+%% @doc The group of chunks: the `~arweave@2.9' device, whose `chunk' key
+%% gives each of them.
+-define(CHUNKS, <<"~arweave@2.9">>).
 
 %% @doc Read the chunk that holds the byte at a weave offset, as the offsets
 %% of its first and last bytes and its data.
 read(Offset, Opts) ->
     Store = hb_opts:get(arweave_chunk_store, [], Opts),
     maybe
-        {ok, [Key]} ?=
+        {ok, [Key = <<"chunk=", Digits/binary>>]} ?=
             hb_store:list(
                 Store,
                 #{
@@ -33,12 +35,12 @@ read(Offset, Opts) ->
             ),
         {ok, Chunk} ?=
             hb_store:read(Store, <<?CHUNKS/binary, "/", Key/binary>>, Opts),
-        End = hb_util:int(Key),
+        End = hb_util:int(Digits),
         Start = End - byte_size(Chunk) + 1,
         true ?= Start =< Offset orelse {error, not_found},
         {ok, {Start, End, Chunk}}
     else
-        {ok, []} -> {error, not_found};
+        {ok, _} -> {error, not_found};
         {error, _} = Error -> Error
     end.
 
@@ -50,18 +52,18 @@ write(End, Chunk, Opts) ->
         Opts
     ).
 
-%% @doc A weave offset, zero-padded to 20 digits as block index and match
-%% index offsets are.
+%% @doc The `chunk' key of a weave offset, zero-padded to 20 digits as block
+%% index and match index offsets are.
 key(Offset) ->
-    iolist_to_binary(io_lib:format("~20..0B", [Offset])).
+    iolist_to_binary(io_lib:format("chunk=~20..0B", [Offset])).
 
 %%% Tests
 
 %% @doc Keys sort as their offsets do, including across a change in the
 %% number of digits.
 key_test() ->
-    ?assertEqual(<<"00000000000000000001">>, key(1)),
-    ?assertEqual(<<"00000378092137521399">>, key(378092137521399)),
+    ?assertEqual(<<"chunk=00000000000000000001">>, key(1)),
+    ?assertEqual(<<"chunk=00000378092137521399">>, key(378092137521399)),
     ?assert(key(9) < key(10)).
 
 %% @doc A read finds the chunk that holds an offset at the chunk's last byte,
@@ -172,6 +174,43 @@ stored_range(Module) ->
     ?assertEqual(
         {ok, binary:part(Data, ?DATA_CHUNK_SIZE - 1, 2)},
         Read(Offset + ?DATA_CHUNK_SIZE - 1, 2, Opts)
+    ),
+    ?assertEqual(0, downloads()).
+
+%% @doc The chunk that `~arweave@2.9/chunk=END' gives is held in the store at
+%% that path, which is the request's compact hashpath without its `ao:'
+%% scheme. The path, and a range read of the same bytes, then read from that
+%% entry with no download.
+chunk_path_test_() ->
+    {timeout, 120, fun chunk_path/0}.
+
+chunk_path() ->
+    % The first chunk of the transaction that `stored_range/1' reads.
+    Start = 378092137521399,
+    Path = <<"~arweave@2.9/chunk=00000378092137783542">>,
+    Store = hb_test_utils:test_store(hb_store_volatile),
+    Opts = (receipt_opts())#{ <<"arweave-chunk-store">> => Store },
+    [Base, Req] = hb_singleton:from(#{ <<"path">> => Path }, Opts),
+    ?assertEqual(
+        <<"ao:", Path/binary>>,
+        hb_hashpath:format(#{ <<"base">> => Base, <<"request">> => Req }, Opts)
+    ),
+    {ok, Chunk} = hb_ao:resolve(Path, Opts),
+    ?assertEqual(1, downloads()),
+    ?assertEqual(?DATA_CHUNK_SIZE, byte_size(Chunk)),
+    ?assertEqual({ok, Chunk}, hb_store:read(Store, Path, Opts)),
+    ?assertEqual({ok, Chunk}, hb_ao:resolve(Path, Opts)),
+    ?assertEqual(
+        {ok, Chunk},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"chunk">>,
+                <<"offset">> => Start,
+                <<"length">> => ?DATA_CHUNK_SIZE
+            },
+            Opts
+        )
     ),
     ?assertEqual(0, downloads()).
 

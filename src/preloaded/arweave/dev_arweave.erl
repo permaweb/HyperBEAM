@@ -486,10 +486,14 @@ list_find(Key, [{XKey, Value} | Rest], Default) ->
 %% - `GET` with `tx` and `data-root`, for a range that is the whole data of
 %%   that transaction: reads the data in one request when it is 12 MiB or less
 %%   and hashes to `data-root' (see `dev_arweave_data').
+%% - `GET` with `chunk=OFFSET`: Returns the whole weave chunk that holds the
+%%   byte at the offset, which the node's `arweave-chunk-store' keeps at
+%%   `chunk=END' for the offset `END' of its last byte.
 -spec chunk(
     #{ _ => _ },
     #{
         method => binary(),
+        chunk => binary() | integer(),
         offset => binary() | integer(),
         length => binary() | integer(),
         pending => binary(),

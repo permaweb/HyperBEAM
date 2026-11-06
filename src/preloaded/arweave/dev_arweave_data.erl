@@ -18,6 +18,14 @@
 %% global Arweave data tree, or relative to the start of a specific pending
 %% transaction. A request that also gives the `tx' whose data the range is and
 %% that transaction's `data-root' is read whole when `tx_data/2' can read it.
+%% `chunk=OFFSET' gives the whole weave chunk that holds the byte at the
+%% offset, which the node's `arweave-chunk-store' keeps at `chunk=END' for
+%% the offset `END' of its last byte (`hb_store_arweave_chunk').
+get_chunk(_Base, #{ <<"chunk">> := Offset }, Opts) ->
+    maybe
+        {ok, {_Start, _End, Chunk}} ?= read_chunk(hb_util:int(Offset), Opts),
+        {ok, Chunk}
+    end;
 get_chunk(Base, Request, Opts) ->
     case tx_data(Request, Opts) of
         {ok, Data} -> {ok, Data};
