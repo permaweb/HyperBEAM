@@ -59,20 +59,19 @@ request(_Base, HookReq, Opts) ->
             case is_match(HookReq, Opts) of
                 {blocked_txid, ID} ->
                     ?event(blacklist, {blocked, ID}, Opts),
+                    % The refusal ends the `request' hook, so that no later
+                    % handler, such as `router@1.0/preprocess', executes it.
                     {
-                        ok,
-                        HookReq#{
+                        error,
+                        #{
+                            <<"status">> => 451,
+                            <<"reason">> => <<"content-policy">>,
+                            <<"blocked-id">> => ID,
                             <<"body">> =>
-                                [#{
-                                    <<"status">> => 451,
-                                    <<"reason">> => <<"content-policy">>,
-                                    <<"blocked-id">> => ID,
-                                    <<"body">> =>
-                                        <<
-                                            "Requested message blocked by this node's ",
-                                            "content policy. Blocked ID: ", ID/binary
-                                        >>
-                                }]
+                                <<
+                                    "Requested message blocked by this node's ",
+                                    "content policy. Blocked ID: ", ID/binary
+                                >>
                         }
                     };
                 Response ->
@@ -438,8 +437,7 @@ opaque_content_test() ->
         hb_ao:resolve(Base, Req#{ <<"body">> => Body }, Opts)
     ),
     ?assertMatch(
-        {ok, #{ <<"body">> := [#{ <<"status">> := 451,
-            <<"blocked-id">> := ID }] }},
+        {error, #{ <<"status">> := 451, <<"blocked-id">> := ID }},
         hb_ao:resolve(Base, Req#{ <<"body">> => ID }, Opts)
     ).
 
@@ -528,6 +526,63 @@ basic_test() ->
     ),
     hb_name:unregister(Table),
     ok.
+
+%% @doc A blocked request ends the `request' hook, so that a later handler does
+%% not relay it: a routed request with a blocked ID is refused, and one without
+%% is relayed to the route's node.
+routed_request_test() ->
+    {ok, #{
+        opts := Opts0,
+        signed1 := SignedID1,
+        blacklist := BlacklistID
+    }} = setup_test_env(),
+    Backend =
+        hb_http_server:start_node(
+            #{
+                <<"store">> => hb_test_utils:test_store(),
+                <<"priv-wallet">> => BackendWallet = ar_wallet:new()
+            }
+        ),
+    Opts1 =
+        Opts0#{
+            <<"blacklist-providers">> => [BlacklistID],
+            <<"on">> =>
+                #{
+                    <<"request">> =>
+                        [
+                            #{ <<"device">> => <<"blacklist@1.0">> },
+                            #{
+                                <<"device">> => <<"router@1.0">>,
+                                <<"path">> => <<"preprocess">>
+                            }
+                        ]
+                },
+            <<"routes">> =>
+                [
+                    #{
+                        <<"template">> => <<"^/~meta@1\\.0/info/address">>,
+                        <<"node">> =>
+                            #{
+                                <<"match">> => <<"^/.*">>,
+                                <<"with">> =>
+                                    <<Backend/binary, "~apply@1.0/user-path">>
+                            }
+                    }
+                ]
+        },
+    Node = hb_http_server:start_node(Opts1),
+    ?assertEqual(
+        {ok, hb_util:human_id(ar_wallet:to_address(BackendWallet))},
+        hb_http:get(Node, <<"/~meta@1.0/info/address">>, Opts1)
+    ),
+    ?assertMatch(
+        {error, #{ <<"status">> := 451, <<"blocked-id">> := SignedID1 }},
+        hb_http:get(
+            Node,
+            <<"/~meta@1.0/info/address?ref=", SignedID1/binary>>,
+            Opts1
+        )
+    ).
 
 %% @doc Ensure that the default provider does not block any requests.
 first_request_always_return_503_test() ->
