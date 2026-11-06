@@ -373,7 +373,7 @@ new_server(RawNodeMsg) ->
                 )
         end,
     % Put server ID into node message so it's possible to update current server
-    hb_http:start(),
+    hb_http:start(NodeMsg),
     init_prometheus(),
     Wallet = hb_opts:get(priv_wallet, no_wallet, NodeMsg),
     ServerID = hb_util:human_id(ar_wallet:to_address(Wallet)),

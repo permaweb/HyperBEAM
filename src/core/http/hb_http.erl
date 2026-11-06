@@ -48,7 +48,7 @@
 %%% sets are placed in `priv/cookie'. If `http-only-result' is set, as it is by
 %%% default, we return only the value of the key in the response's `ao-result'.
 -module(hb_http).
--export([start/0]).
+-export([start/1]).
 -export([get/2, get/3, post/3, post/4, request/2, request/4, request/5]).
 -export([message_to_request/2, status_code/2, is_own_origin/2, cookie/4]).
 -export([codec/2, message_codec/2, media_type/1, encode/4, decode/3]).
@@ -56,9 +56,11 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-start() ->
+%% @doc Set up the HTTP clients for a node, with a duration histogram for each
+%% peer that its routes name (`hb_http_client:init_peer_metrics/1').
+start(Opts) ->
     httpc:set_options([{max_keep_alive_length, 0}]),
-    ok.
+    hb_http_client:init_peer_metrics(Opts).
 
 %% @doc Gets a URL via HTTP and returns the resulting message in deserialized
 %% form.

@@ -10,7 +10,10 @@
 %% GenServer
 -export([start_link/1, init/1]).
 -export([handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
--export([init_prometheus/0]).
+-export([init_prometheus/0, init_peer_metrics/1]).
+
+%% The buckets of the request duration histograms, in seconds.
+-define(DURATION_BUCKETS, [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 20, 25, 30]).
 
 -record(state, {
 	opts = #{}
@@ -132,6 +135,7 @@ do_request(Args, Opts) ->
             hackney -> hackney_req(Args, Opts)
         end,
     record_duration(
+        maps:get(peer, Args),
         #{
             <<"request-method">> => method_to_bin(maps:get(method, Args)),
             <<"request-path">> => hb_util:bin(maps:get(path, Args)),
@@ -694,22 +698,13 @@ init_prometheus() ->
 		{help, "The current number of the open outbound network connections"}]),
 	hb_prometheus:declare(histogram, [
 		{name, http_client_duration_seconds},
-		{buckets, [0.01, 0.1, 0.5, 1, 5, 10, 30, 60]},
+		{buckets, ?DURATION_BUCKETS},
         {labels, [http_method, status_class, category]},
 		{
 			help,
 			"The total duration of an hb_http_client:req call. This includes more than"
             " just the GUN request itself (e.g. establishing a connection, "
             "throttling, etc...)"
-		}
-	]),
-	hb_prometheus:declare(histogram, [
-		{name, http_client_get_chunk_duration_seconds},
-		{buckets, [0.1, 1, 10, 60]},
-        {labels, [status_class, peer]},
-		{
-			help,
-			"The total duration of an HTTP GET chunk request made to a peer."
 		}
 	]),
 	hb_prometheus:declare(counter, [
@@ -733,10 +728,113 @@ init_prometheus() ->
     ?event(started),
     ok.
 
+%% @doc Declare a duration histogram for each peer that the node's `routes'
+%% name, with the routes of their references such as
+%% `~meta@1.0/info/arweave-routes'. Each is named for its peer
+%% (`peer_metric/1') and has the peer, `scheme://host:port', as its constant
+%% `peer' label. Peers are taken in the order of the routes, up to
+%% `http-client-max-peer-metrics' of them. Any other peer has no histogram, so
+%% Prometheus refuses the observations of the requests to it: a node that
+%% routes to many peers keeps a bounded number of series. Peers added to the
+%% routes after the node starts have no histogram either.
+init_peer_metrics(Opts) ->
+    case prometheus_enabled(Opts) of
+        true ->
+            Peers = route_peers(hb_opts:get(routes, [], Opts), Opts),
+            lists:foreach(
+                fun declare_peer_metric/1,
+                lists:sublist(
+                    lists:uniq(Peers),
+                    hb_opts:get(
+                        http_client_max_peer_metrics,
+                        ?DEFAULT_MAX_PEER_METRICS,
+                        Opts
+                    )
+                )
+            );
+        false -> ok
+    end.
+
+declare_peer_metric(Peer = {Scheme, Host, Port}) ->
+    hb_prometheus:declare(histogram, [
+        {name, peer_metric(Peer)},
+        {buckets, ?DURATION_BUCKETS},
+        {labels, [status_class]},
+        {constant_labels,
+            #{
+                peer =>
+                    hb_util:list(
+                        <<Scheme/binary, "://", (hb_util:bin(Host))/binary, ":",
+                            (hb_util:bin(Port))/binary>>
+                    )
+            }
+        },
+        {
+            help,
+            "The total duration of an hb_http_client:req call to a peer"
+            " that the node's routes name."
+        }
+    ]).
+
+%% @doc The peers that a list of routes names, in order. A route that is a
+%% reference is resolved as `dev_router' resolves it, to its route or routes.
+route_peers(Routes, Opts) ->
+    lists:flatmap(
+        fun(Route) -> route_peer(Route, Opts) end,
+        hb_util:message_to_ordered_list(Routes, Opts)
+    ).
+
+route_peer(Ref, Opts) when is_binary(Ref) ->
+    case hb_ao:raw(Ref, Opts) of
+        {ok, Routes} when is_list(Routes) -> route_peers(Routes, Opts);
+        {ok, Route} when is_map(Route) -> route_peer(Route, Opts);
+        _ -> []
+    end;
+route_peer(#{ <<"node">> := Node }, Opts) -> node_peers([Node], Opts);
+route_peer(#{ <<"nodes">> := Nodes }, Opts) ->
+    node_peers(hb_util:message_to_ordered_list(Nodes, Opts), Opts);
+route_peer(_Route, _Opts) -> [].
+
+%% @doc The peer of each node of a route that gives one: its `uri', `prefix'
+%% or `with', as `dev_router' applies them.
+node_peers(Nodes, Opts) ->
+    [ Peer || Node <- Nodes, {ok, Peer} <- [node_peer(Node, Opts)] ].
+
+node_peer(URI, Opts) when is_binary(URI) -> parse_peer(URI, Opts);
+node_peer(#{ <<"uri">> := URI }, Opts) -> node_peer(URI, Opts);
+node_peer(#{ <<"prefix">> := Prefix }, Opts) -> node_peer(Prefix, Opts);
+node_peer(#{ <<"with">> := With }, Opts) -> node_peer(With, Opts);
+node_peer(_Node, _Opts) -> {error, no_peer}.
+
+%% @doc The name of a peer's duration histogram: `http_client_peer_', then its
+%% scheme, host and port with `_' for each character that a metric name cannot
+%% hold, then `_duration_seconds'.
+peer_metric({Scheme, Host, Port}) ->
+    Peer =
+        <<Scheme/binary, "_", (hb_util:bin(Host))/binary, "_",
+            (hb_util:bin(Port))/binary>>,
+    <<"http_client_peer_",
+        << <<(metric_char(C))>> || <<C>> <= Peer >>/binary,
+        "_duration_seconds">>.
+
+metric_char(C) when C >= $a, C =< $z; C >= $A, C =< $Z; C >= $0, C =< $9 -> C;
+metric_char(_) -> $_.
+
+%% @doc Record a request's duration in the histogram of its peer. Only the
+%% peers that the node's routes name have one (`init_peer_metrics/1'): for any
+%% other, Prometheus refuses the observation as an unknown metric, and
+%% `hb_prometheus:observe/3' ignores the refusal.
+observe_peer(Peer, Duration, StatusClass, Opts) ->
+    case parse_peer(Peer, Opts) of
+        {ok, Parsed} ->
+            hb_prometheus:observe(Duration, peer_metric(Parsed), [StatusClass]);
+        {error, _} -> ok
+    end.
+
 %% @doc Record the duration of the request in an async process. We write the 
 %% data to prometheus if enabled and invoke `on/http-client-receipt'. The
 %% receipt describes a transport attempt, not application-level acceptance.
-record_duration(Details, Opts) ->
+record_duration(Peer, Details, Opts) ->
     spawn(
         fun() ->
             % Prometheus works only with strings as lists, so we encode the 
@@ -761,6 +859,12 @@ record_duration(Details, Opts) ->
                         maps:get(<<"duration">>, Details),
                         http_client_duration_seconds,
                         Labels
+                    ),
+                    observe_peer(
+                        Peer,
+                        maps:get(<<"duration">>, Details),
+                        GetFormat(<<"status-class">>),
+                        Opts
                     );
                 false ->
                     ok
