@@ -82,9 +82,13 @@
 %%%    body, and the result's own `content-type' as its `content-type', so a
 %%%    stored page or image is served as itself. A `content-type' of the result
 %%%    of the form `application/x.ao.<name>' is sent in a body part instead. If
-%%%    the request does not have `accept-bundle: true', we add the node's index
-%%%    page to the reply as its `body' and `content-type'. We only do this if
-%%%    the message has neither key, as a value or as a link.
+%%%    the most preferred range of the request's `accept' is `text/html', as a
+%%%    browser's is, and the request does not have `accept-bundle: true', we
+%%%    add the node's index page to the reply as its `body' and `content-type'.
+%%%    We only do this if the message has neither key, as a value or as a
+%%%    link, and the node has `generate-index' set, as it does by default. A
+%%%    request that prefers any other range, such as `*/*' or `text/*', gets
+%%%    the reply as it is.
 %%% 6. A reply in any other codec sends the result as its body, encoded by the
 %%%    codec, with the type and subtype of the range as its `content-type': a
 %%%    request for `application/json' gets `application/json'. The codec
@@ -1426,7 +1430,8 @@ encode_reply(Status, TABMReq, RawMessage, Opts) ->
                                 <<"device">> => <<"httpsig@1.0">>,
                                 <<"path">> => <<"to">>,
                                 <<"index">> =>
-                                    hb_opts:get(generate_index, true, Opts)
+                                    prefers_html(TABMReq, Opts) andalso
+                                        hb_opts:get(generate_index, true, Opts)
                             }
                     end,
                     <<"structured@1.0">>,
@@ -1493,17 +1498,6 @@ cache_control_header(Message, Opts) ->
 %% We pass over any other range, such as `*/*' and `text/html'. If no range can
 %% be served, or the `accept' is not a valid HTTP field, we use `httpsig@1.0'.
 accept_to_codec(TABMReq, Msg, Opts) ->
-    Accept = hb_maps:get(<<"accept">>, TABMReq, <<"*/*">>, Opts),
-    ?event_debug(debug_accept,
-        {accept_to_codec,
-            {original_req, TABMReq},
-            {accept, Accept}
-        }
-    ),
-    MediaRanges =
-        try cow_http_hd:parse_accept(Accept)
-        catch error:_ -> []
-        end,
     Own =
         try
             {Type, SubType, _Params} =
@@ -1513,6 +1507,23 @@ accept_to_codec(TABMReq, Msg, Opts) ->
             {Type, SubType}
         catch error:_ -> undefined
         end,
+    preferred_codec(accept_ranges(TABMReq, Opts), Own, Opts).
+
+%% @doc The media ranges of the request's `accept' in order of preference, by
+%% q-value and then by their order, without those of q-value 0. An `accept'
+%% that is not a valid HTTP field has none.
+accept_ranges(TABMReq, Opts) ->
+    Accept = hb_maps:get(<<"accept">>, TABMReq, <<"*/*">>, Opts),
+    ?event_debug(debug_accept,
+        {accept_ranges,
+            {original_req, TABMReq},
+            {accept, Accept}
+        }
+    ),
+    MediaRanges =
+        try cow_http_hd:parse_accept(Accept)
+        catch error:_ -> []
+        end,
     Ranges = [Range || Range = {_, Quality, _} <- MediaRanges, Quality > 0],
     Sorted = lists:sort(
         fun({_, QualityA, _}, {_, QualityB, _}) ->
@@ -1520,7 +1531,15 @@ accept_to_codec(TABMReq, Msg, Opts) ->
         end,
         Ranges
     ),
-    preferred_codec(lists:sublist(Sorted, ?MAX_ACCEPT_RANGES), Own, Opts).
+    lists:sublist(Sorted, ?MAX_ACCEPT_RANGES).
+
+%% @doc Whether the most preferred media range of the request's `accept' is
+%% `text/html', as a browser's is. A range such as `*/*' or `text/*' is not.
+prefers_html(TABMReq, Opts) ->
+    case accept_ranges(TABMReq, Opts) of
+        [{{<<"text">>, <<"html">>, _}, _, _} | _] -> true;
+        _ -> false
+    end.
 
 %% @doc Return the codec of the first media range that the node can serve, and
 %% the `content-type' of a reply in it, or `httpsig@1.0' if there is none.
@@ -2638,7 +2657,10 @@ index_test() ->
                 peer => NodeURL,
                 path => <<"/~test-device@1.0/load">>,
                 method => <<"GET">>,
-                headers => #{ <<"accept-bundle">> => <<"false">> },
+                headers => #{
+                    <<"accept">> => <<"text/html">>,
+                    <<"accept-bundle">> => <<"false">>
+                },
                 body => <<>>
             },
             #{}
@@ -2668,7 +2690,10 @@ index_test() ->
                 peer => NodeURL,
                 path => <<"/", ID/binary>>,
                 method => <<"GET">>,
-                headers => #{ <<"accept-bundle">> => <<"false">> },
+                headers => #{
+                    <<"accept">> => <<"text/html">>,
+                    <<"accept-bundle">> => <<"false">>
+                },
                 body => <<>>
             },
             #{}
@@ -2683,12 +2708,97 @@ index_request_test() ->
                 peer => URL,
                 path => <<"/~test-device@1.0/load?name=dogs">>,
                 method => <<"GET">>,
-                headers => #{ <<"accept-bundle">> => <<"false">> },
+                headers => #{
+                    <<"accept">> => <<"text/html">>,
+                    <<"accept-bundle">> => <<"false">>
+                },
                 body => <<>>
             },
             #{}
         ),
     ?assertEqual(<<"i like dogs!">>, Body).
+
+%% @doc The index page is added to a reply only for a request whose `accept'
+%% prefers HTML, as a browser's does. Any other request gets the reply as it
+%% is, and a reply with a body is sent as itself for every `accept'.
+index_only_for_html_test() ->
+    URL = start_node(),
+    Get =
+        fun(Path, Headers) ->
+            {ok, 200, _, Body} =
+                hb_http_client:request(
+                    #{
+                        peer => URL,
+                        path => Path,
+                        method => <<"GET">>,
+                        headers => Headers#{ <<"accept-bundle">> => <<"false">> },
+                        body => <<>>
+                    },
+                    #{}
+                ),
+            Body
+        end,
+    Browser =
+        <<"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8">>,
+    PrefersHTML =
+        [
+            #{ <<"accept">> => <<"text/html">> },
+            #{ <<"accept">> => <<"text/html;q=0.9, */*;q=0.8">> },
+            #{ <<"accept">> => Browser }
+        ],
+    Others =
+        [
+            #{},
+            #{ <<"accept">> => <<"*/*">> },
+            #{ <<"accept">> => <<"text/*">> },
+            #{ <<"accept">> => <<"*/*, text/html;q=0.5">> },
+            #{ <<"accept">> => <<"text/html;q=0, */*">> },
+            #{ <<"accept">> => <<"application/octet-stream">> }
+        ],
+    % A reply with neither `body' nor `content-type' gets the index page only
+    % for a request that prefers HTML.
+    lists:foreach(
+        fun(Headers) ->
+            ?assertEqual(
+                <<"i like turtles!">>,
+                Get(<<"/~test-device@1.0/load">>, Headers)
+            )
+        end,
+        PrefersHTML
+    ),
+    lists:foreach(
+        fun(Headers) ->
+            ?assertEqual(<<>>, Get(<<"/~test-device@1.0/load">>, Headers))
+        end,
+        Others
+    ),
+    % A request that prefers a codec gets the reply in that codec.
+    ?assertMatch(
+        #{ <<"device">> := <<"test-device@1.0">> },
+        hb_json:decode(
+            Get(
+                <<"/~test-device@1.0/load">>,
+                #{ <<"accept">> => <<"application/json, text/html;q=0.5">> }
+            )
+        )
+    ),
+    % The node's `default-index' is the index page of a message whose device
+    % has none.
+    {ok, ID} = hb_cache:write(#{ <<"key">> => <<"value">> }, get_opts()),
+    Page = Get(<<"/~hyperbuddy@1.0/index">>, #{}),
+    ?assertNotEqual(<<>>, Page),
+    ?assertEqual(Page, Get(<<"/", ID/binary>>, #{ <<"accept">> => Browser })),
+    ?assertEqual(<<>>, Get(<<"/", ID/binary>>, #{ <<"accept">> => <<"*/*">> })),
+    % A reply with a body is sent as itself for every `accept'.
+    lists:foreach(
+        fun(Headers) ->
+            ?assertEqual(
+                <<"hello">>,
+                Get(<<"/~test-device@1.0/load?body=hello">>, Headers)
+            )
+        end,
+        PrefersHTML ++ Others
+    ).
 
 %% @doc A query parameter overrides a request header of the same name, so the
 %% keys that a request sets in its path keep working beside headers.
