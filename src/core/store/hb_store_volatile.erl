@@ -173,9 +173,8 @@ read(Opts, #{ <<"read">> := RawKey }, _NodeOpts) ->
             {ok, Value};
         group ->
             ?event(store_volatile, {hit, {key, Key}}),
-            Table = table(Opts),
             Children = immediate_children(Opts, Key),
-            {composite, [ child(Table, Key, Name) || Name <- Children ]};
+            {composite, [ child(Name, Entry) || {Name, Entry} <- Children ]};
         _ ->
             ?event(store_volatile, {miss, {key, Key}}),
             {error, not_found}
@@ -201,7 +200,8 @@ list_path(Opts, Path, Req) ->
                         immediate_children(Opts, Path, From, Limit);
                     _ -> immediate_children(Opts, Path)
                 end,
-            {ok, hb_store_utils:apply_list_bounds(Children, Req, Opts)};
+            Names = [ Name || {Name, _} <- Children ],
+            {ok, hb_store_utils:apply_list_bounds(Names, Req, Opts)};
         _ ->
             % A path with a value has no children to list. An empty
             % store returns `not_found` for the root too, so that a chained
@@ -211,11 +211,8 @@ list_path(Opts, Path, Req) ->
 
 %% @doc Return a listed child with its value if it has one, or its name if
 %% it is a group.
-child(Table, Path, Name) ->
-    case lookup_entry(Table, next_group_path(Path, Name)) of
-        {raw, Value} -> {Name, Value};
-        _ -> Name
-    end.
+child(Name, {raw, Value}) -> {Name, Value};
+child(Name, group) -> Name.
 
 table(Opts) ->
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
@@ -275,9 +272,10 @@ maybe_delete_subtree(Table, Key) ->
             ok
     end.
 
-%% @doc Return immediate child names under GroupPath. Walks the ordered_set
-%% with `ets:next/2`, jumping past each child's own subtree after it has
-%% been recorded (see `advance_past_child/4`). Cost is O(immediate
+%% @doc Return the immediate children under GroupPath, each as
+%% `{Name, Entry}`. Walks the ordered_set with `ets:next_lookup/2`, which
+%% gives each key with its row, jumping past each child's own subtree after
+%% it has been recorded (see `advance_past_child/4`). Cost is O(immediate
 %% children), not O(descendants). For root listings the scan must start
 %% from the true beginning of the table — `ets:next(Table, ?ROOT_GROUP)`
 %% would skip any top-level key whose binary sort order is less than
@@ -290,10 +288,11 @@ maybe_delete_subtree(Table, Key) ->
 %% are recorded in ascending order. A name before `From', whose subtree the
 %% walk may start inside, is skipped like a recorded one.
 %%
-%% Only live children are recorded, so an expired one does not count toward
-%% `Limit'. The walk passes over an expired child with its subtree: a group
-%% marker expires with the last entry written below it, so the subtree of
-%% an expired child has expired too.
+%% Each child is recorded with the entry of its first row in the walk (see
+%% `child_entry/2'), and only live ones are, so an expired child does not
+%% count toward `Limit'. The walk passes over an expired child with its
+%% subtree: a group marker expires with the last entry written below it, so
+%% the subtree of an expired child has expired too.
 immediate_children(Opts, GroupPath) ->
     immediate_children(Opts, GroupPath, <<>>, all).
 immediate_children(Opts, GroupPath, From, Limit) ->
@@ -302,33 +301,28 @@ immediate_children(Opts, GroupPath, From, Limit) ->
         case GroupPath of
             ?ROOT_GROUP ->
                 collect_immediate_children(
-                    Table, <<>>, ets:first(Table), #{}, {From, Limit});
+                    Table, <<>>, ets:first_lookup(Table), #{}, {From, Limit});
             _ ->
                 Prefix = <<GroupPath/binary, $/>>,
-                Start = <<Prefix/binary, From/binary>>,
-                FirstKey =
-                    case ets:member(Table, Start) of
-                        true -> Start;
-                        false -> ets:next(Table, Start)
-                    end,
+                First = lookup_from(Table, <<Prefix/binary, From/binary>>),
                 collect_immediate_children(
-                    Table, Prefix, FirstKey, #{}, {From, Limit})
+                    Table, Prefix, First, #{}, {From, Limit})
         end,
-    maps:keys(Seen).
+    maps:to_list(Seen).
 
-collect_immediate_children(_Table, _Prefix, _Key, Seen, {_From, Limit})
+collect_immediate_children(_Table, _Prefix, _Next, Seen, {_From, Limit})
         when map_size(Seen) =:= Limit ->
     Seen;
 collect_immediate_children(_Table, _Prefix, '$end_of_table', Seen, _Bounds) ->
     Seen;
-collect_immediate_children(Table, <<>> = Prefix, ?ROOT_GROUP, Seen, Bounds) ->
+collect_immediate_children(Table, <<>> = Prefix, {?ROOT_GROUP, _}, Seen, Bounds) ->
     collect_immediate_children(
-        Table, Prefix, ets:next(Table, ?ROOT_GROUP), Seen, Bounds);
-collect_immediate_children(Table, Prefix, Key, Seen, Bounds = {From, _}) ->
+        Table, Prefix, ets:next_lookup(Table, ?ROOT_GROUP), Seen, Bounds);
+collect_immediate_children(Table, Prefix, {Key, [Row]}, Seen, Bounds = {From, _}) ->
     PLen = byte_size(Prefix),
     case Key of
         <<Prefix:PLen/binary, Rest/binary>> ->
-            [Name | _] = binary:split(Rest, <<"/">>),
+            [Name | Below] = binary:split(Rest, <<"/">>),
             case is_map_key(Name, Seen) orelse Name < From of
                 true ->
                     %% Re-entered a subtree we already recorded (possible
@@ -336,50 +330,62 @@ collect_immediate_children(Table, Prefix, Key, Seen, Bounds = {From, _}) ->
                     %% interleaved in ordered_set iteration), or entered
                     %% the subtree of a name before `From'. Jump past
                     %% Name's subtree in one step.
-                    NextKey = skip_subtree(Table, Prefix, Name),
+                    Next = skip_subtree(Table, Prefix, Name),
                     collect_immediate_children(
-                        Table, Prefix, NextKey, Seen, Bounds);
+                        Table, Prefix, Next, Seen, Bounds);
                 false ->
-                    NextKey = advance_past_child(Table, Prefix, Name, Key),
+                    Next = advance_past_child(Table, Prefix, Name, Key),
                     NextSeen =
-                        case lookup_entry(Table, Key) of
+                        case child_entry(Row, Below) of
                             nil -> Seen;
-                            _ -> Seen#{Name => true}
+                            Entry -> Seen#{Name => Entry}
                         end,
                     collect_immediate_children(
-                        Table, Prefix, NextKey, NextSeen, Bounds)
+                        Table, Prefix, Next, NextSeen, Bounds)
             end;
         _ ->
             Seen
     end.
 
-%% @doc Advance to the next sibling of Name under Prefix. Plain `ets:next`
-%% handles the shallow case at one-op cost; if it lands inside Name's own
-%% subtree, jump past it via `skip_subtree/3`.
+%% @doc The entry that the first row of a child in the walk gives it: the
+%% row's own entry, `group` if the row is below the child, or `nil` if the
+%% row has expired.
+child_entry(Row, Below) ->
+    child_entry(Row, Below, erlang:monotonic_time(millisecond)).
+child_entry({_, _, Expiry}, _Below, Now) when Expiry =< Now -> nil;
+child_entry({_, Entry, _}, [], _Now) -> Entry;
+child_entry(_Row, _Below, _Now) -> group.
+
+%% @doc Advance to the next sibling of Name under Prefix. Plain
+%% `ets:next_lookup` handles the shallow case at one-op cost; if it lands
+%% inside Name's own subtree, jump past it via `skip_subtree/3`.
 advance_past_child(Table, Prefix, Name, Key) ->
-    case ets:next(Table, Key) of
+    case ets:next_lookup(Table, Key) of
         '$end_of_table' ->
             '$end_of_table';
-        NextKey ->
+        Next = {NextKey, _} ->
             SubtreePrefix = <<Prefix/binary, Name/binary, $/>>,
             SPLen = byte_size(SubtreePrefix),
             case NextKey of
                 <<SubtreePrefix:SPLen/binary, _/binary>> ->
                     skip_subtree(Table, Prefix, Name);
                 _ ->
-                    NextKey
+                    Next
             end
     end.
 
 %% @doc Jump past every key under `<<Prefix, Name, $/>>`. The lex successor
 %% of that prefix is `<<Prefix, Name, $0>>` (since $0 = $/ + 1); an explicit
-%% `ets:member` probe preserves a literal sibling named `<<Name/binary, "0">>`
-%% if one exists (possible with hex-TXID-shaped keys).
+%% lookup probe (see `lookup_from/2`) preserves a literal sibling named
+%% `<<Name/binary, "0">>` if one exists (possible with hex-TXID-shaped keys).
 skip_subtree(Table, Prefix, Name) ->
-    SkipPast = <<Prefix/binary, Name/binary, $0>>,
-    case ets:member(Table, SkipPast) of
-        true -> SkipPast;
-        false -> ets:next(Table, SkipPast)
+    lookup_from(Table, <<Prefix/binary, Name/binary, $0>>).
+
+%% @doc The first key at or after Key, with its row.
+lookup_from(Table, Key) ->
+    case ets:lookup(Table, Key) of
+        [] -> ets:next_lookup(Table, Key);
+        Rows -> {Key, Rows}
     end.
 
 %%% Tests
