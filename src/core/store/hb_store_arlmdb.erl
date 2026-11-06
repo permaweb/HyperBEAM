@@ -93,8 +93,8 @@
 %%% `lower bsr 1' items fill the page, ascending strictly.
 %%%
 %%% Fetched chunks are retained in the stores under the `chunk-store' key
-%%% of the store definition, defaulting to a volatile store that expires
-%%% every five minutes; `[]' retains nothing. Published files are
+%%% of the store definition, defaulting to a volatile store that keeps
+%%% each chunk for five minutes; `[]' retains nothing. Published files are
 %%% defragmented -- the first chunk contains the meta pages and main root,
 %%% branch pages cluster, and leaves follow in key order -- so the chunks a
 %%% read retains answer most of the reads that follow it.
@@ -114,7 +114,7 @@
 %% a published file's data begins on a chunk boundary, so every page
 %% fetch lies within one chunk of the file.
 -define(CHUNK_SIZE, ?DATA_CHUNK_SIZE).
-%% The default chunk store expires its whole table on this cadence.
+%% The default chunk store keeps each chunk for this long.
 -define(CHUNK_TTL_MS, 300000).
 -define(PAGE_HDR, 24).
 -define(NODE_HDR, 8).
@@ -1141,7 +1141,7 @@ fill_chunk(Stores, Key, Start, Size, Chunk, Opts) ->
 
 %% @doc The stores retaining fetched chunks, from the `chunk-store' key of
 %% the store definition. The default is a volatile store named after the
-%% root, expiring wholesale every five minutes; `[]' retains nothing.
+%% root, keeping each chunk for five minutes; `[]' retains nothing.
 chunk_store(#{ <<"chunk-store">> := Stores }) when is_list(Stores) -> Stores;
 chunk_store(#{ <<"chunk-store">> := Store }) -> [Store];
 chunk_store(StoreOpts = #{ <<"root">> := Root }) ->

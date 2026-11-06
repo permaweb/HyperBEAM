@@ -1,15 +1,23 @@
 %%% @doc A lightweight in-memory HyperBEAM store backed by a single ETS
 %%% `ordered_set`. The store is volatile: it does not persist data to disk
-%%% ever, and -- critically -- can be configured to expire all data
-%%% periodically. This is useful for testing and as a short-term in-memory
+%%% ever, and -- critically -- can be configured to expire each entry
+%%% after a fixed TTL. This is useful for testing and as a short-term in-memory
 %%% cache, not for instances where an `ok` from the `write` function should
 %%% imply data persistence.
 %%%
-%%% Each entry is stored as `{Path, {raw, Bin} | group}`. Group membership is
-%%% discovered by a lexicographic range scan over the `Path ++ "/"` prefix,
-%%% mirroring the LMDB and FS store layouts. An explicit `group` marker is
-%%% inserted at every ancestor path, so that a single lookup tells whether a
-%%% path has keys below it.
+%%% Each entry is stored as `{Path, {raw, Bin} | group, Expiry}`. Group
+%%% membership is discovered by a lexicographic range scan over the
+%%% `Path ++ "/"` prefix, mirroring the LMDB and FS store layouts. An explicit
+%%% `group` marker is inserted at every ancestor path, so that a single lookup
+%%% tells whether a path has keys below it.
+%%%
+%%% `Expiry` is the monotonic time in milliseconds at which the entry expires:
+%%% the time of its write plus the store's `max-ttl-ms` (or `max-ttl`, in
+%%% seconds), or `infinity` if the store has neither. Reads and lists treat an
+%%% expired entry as missing, and the owner process deletes expired entries
+%%% `?SWEEPS_PER_TTL` times in each TTL. A write gives its ancestor group
+%%% markers its own expiry, so a group expires with the last entry written
+%%% below it.
 -module(hb_store_volatile).
 -export([start/3, stop/3, reset/3, scope/0, scope/1]).
 -export([write/3, read/3, list/3]).
@@ -17,6 +25,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ROOT_GROUP, <<"/">>).
+%% The number of sweeps for expired entries in each TTL.
+-define(SWEEPS_PER_TTL, 10).
 
 %% @doc Start the ETS-backed store and return the store instance message.
 start(StoreOpts = #{ <<"name">> := Name }, _Req, _Opts) ->
@@ -43,15 +53,15 @@ start(StoreOpts = #{ <<"name">> := Name }, _Req, _Opts) ->
     end.
 
 %% @doc Owner loop for the ETS store. Supervised long-lived server: blocks
-%% indefinitely on stop/reset/other messages; the table stays alive until
+%% indefinitely on stop/sweep/other messages; the table stays alive until
 %% the owner exits.
 owner_loop(StoreOpts) ->
     receive
         {stop, From, Ref} ->
             From ! {ok, Ref},
             exit(normal);
-        reset ->
-            reset_store(StoreOpts),
+        sweep ->
+            sweep_store(StoreOpts),
             maybe_start_ttl_timer(StoreOpts, self()),
             owner_loop(StoreOpts);
         _ ->
@@ -59,15 +69,31 @@ owner_loop(StoreOpts) ->
     end.
 
 maybe_start_ttl_timer(StoreOpts, PID) ->
+    case max_ttl_ms(StoreOpts) of
+        infinity -> skip;
+        MaxTTLMs ->
+            timer:send_after(MaxTTLMs div ?SWEEPS_PER_TTL, PID, sweep)
+    end.
+
+%% @doc The store's TTL in milliseconds, from `max-ttl-ms` or `max-ttl` (in
+%% seconds), or `infinity` if it has neither.
+max_ttl_ms(StoreOpts) ->
     case maps:get(<<"max-ttl-ms">>, StoreOpts, undefined) of
         undefined ->
             case maps:get(<<"max-ttl">>, StoreOpts, infinity) of
-                infinity -> skip;
-                MaxTTL ->
-                    timer:send_after(hb_util:int(MaxTTL) * 1000, PID, reset)
+                infinity -> infinity;
+                MaxTTL -> hb_util:int(MaxTTL) * 1000
             end;
         MaxTTLMs ->
-            timer:send_after(hb_util:int(MaxTTLMs), PID, reset)
+            hb_util:int(MaxTTLMs)
+    end.
+
+%% @doc The expiry of an entry written now: the current monotonic time plus
+%% the store's TTL, or `infinity` if it has none.
+expiry(StoreOpts) ->
+    case max_ttl_ms(StoreOpts) of
+        infinity -> infinity;
+        MaxTTLMs -> erlang:monotonic_time(millisecond) + MaxTTLMs
     end.
 
 %% @doc Stop the ETS owner process (which also drops the table).
@@ -94,14 +120,28 @@ reset_store(Opts) ->
     ?event(store_volatile, {reset, {table, Table}}),
     ok.
 
+%% @doc Delete every entry whose expiry has passed.
+sweep_store(Opts) ->
+    Table = table(Opts),
+    Now = erlang:monotonic_time(millisecond),
+    Swept =
+        ets:select_delete(
+            Table,
+            [{{'_', '_', '$1'}, [{'=<', '$1', Now}], [true]}]
+        ),
+    ?event(store_volatile, {swept, {table, Table}, {entries, Swept}}),
+    ok.
+
 %% @doc Write one or more entries. Request maps are folded into individual
 %% writes. Any raw entry at an ancestor path is converted to a group marker
 %% (raw entries have no descendants, so no subtree purge is needed). If the
-%% target key is a group, its descendants are deleted first.
+%% target key is a group, its descendants are deleted first. The entries of
+%% one request share one expiry.
 write(Opts, Req, _NodeOpts) when is_map(Req) ->
+    Expiry = expiry(Opts),
     maps:fold(
         fun(Path, Value, ok) ->
-            put_entry(Opts, Path, {raw, Value});
+            put_entry(Opts, Path, {raw, Value}, Expiry);
            (_Path, _Value, Error) ->
             Error
         end,
@@ -164,50 +204,53 @@ child(Table, Path, Name) ->
     end.
 
 %% @doc Install an entry at Key, purging any prior group subtree and
-%% ensuring ancestor group markers exist.
-put_entry(Opts, RawKey, Entry) ->
+%% ensuring ancestor group markers exist. The entry and its ancestor
+%% markers are given `Expiry`.
+put_entry(Opts, RawKey, Entry, Expiry) ->
     Key = hb_path:to_binary(RawKey),
     Table = table(Opts),
     maybe_delete_subtree(Table, Key),
-    ensure_parent_groups(Table, Key),
+    ensure_parent_groups(Table, Key, Expiry),
     ?event(store_volatile, {put, {key, Key}}),
-    ets:insert(Table, {Key, Entry}),
+    ets:insert(Table, {Key, Entry, Expiry}),
     ok.
 
 table(Opts) ->
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
     Table.
 
+%% @doc Return the entry at Key, or `nil` if it is missing or expired.
 lookup_entry(Opts, Key) when is_map(Opts) ->
     lookup_entry(table(Opts), Key);
 lookup_entry(Table, Key) ->
+    Now = erlang:monotonic_time(millisecond),
     case ets:lookup(Table, Key) of
-        [] -> nil;
-        [{_, Entry}] -> Entry
+        [{_, Entry, Expiry}] when Expiry > Now -> Entry;
+        _ -> nil
     end.
 
 %% @doc Walk ancestor paths from root to parent, inserting a `group` marker
 %% via unconditional `ets:insert/2` at each. A raw entry sitting at an
 %% intermediate path is converted to a group — such an entry has no
 %% descendants, so no subtree purge is required.
-ensure_parent_groups(Table, Key) ->
+ensure_parent_groups(Table, Key, Expiry) ->
     case filename:dirname(Key) of
         <<".">> ->
-            ets:insert(Table, {?ROOT_GROUP, group});
+            ets:insert(Table, {?ROOT_GROUP, group, Expiry});
         ParentDir ->
-            ensure_dir(Table, ParentDir)
+            ensure_dir(Table, ParentDir, Expiry)
     end.
 
-ensure_dir(Table, Path) ->
-    ets:insert(Table, {?ROOT_GROUP, group}),
-    ensure_dir(Table, ?ROOT_GROUP, hb_path:term_to_path_parts(Path)).
+ensure_dir(Table, Path, Expiry) ->
+    ets:insert(Table, {?ROOT_GROUP, group, Expiry}),
+    ensure_dir(Table, ?ROOT_GROUP, hb_path:term_to_path_parts(Path), Expiry).
 
-ensure_dir(_Table, _CurrentGroup, []) ->
+ensure_dir(_Table, _CurrentGroup, [], _Expiry) ->
     ok;
-ensure_dir(Table, CurrentGroup, [Next | Rest]) ->
+ensure_dir(Table, CurrentGroup, [Next | Rest], Expiry) ->
     NextGroup = next_group_path(CurrentGroup, Next),
-    ets:insert(Table, {NextGroup, group}),
-    ensure_dir(Table, NextGroup, Rest).
+    ets:insert(Table, {NextGroup, group, Expiry}),
+    ensure_dir(Table, NextGroup, Rest, Expiry).
 
 next_group_path(?ROOT_GROUP, Next) ->
     hb_path:to_binary(Next);
@@ -222,7 +265,7 @@ maybe_delete_subtree(Table, Key) ->
             Prefix = <<Key/binary, $/>>,
             PLen = byte_size(Prefix),
             ets:select_delete(Table, [
-                {{'$1', '_'},
+                {{'$1', '_', '_'},
                  [{'=:=', {binary_part, '$1', 0, PLen}, {const, Prefix}}],
                  [true]}
             ]);
@@ -244,6 +287,11 @@ maybe_delete_subtree(Table, Key) ->
 %% Every child has a row of its own, before any row below it, so the names
 %% are recorded in ascending order. A name before `From', whose subtree the
 %% walk may start inside, is skipped like a recorded one.
+%%
+%% Only live children are recorded, so an expired one does not count toward
+%% `Limit'. The walk passes over an expired child with its subtree: a group
+%% marker expires with the last entry written below it, so the subtree of
+%% an expired child has expired too.
 immediate_children(Opts, GroupPath) ->
     immediate_children(Opts, GroupPath, <<>>, all).
 immediate_children(Opts, GroupPath, From, Limit) ->
@@ -291,8 +339,13 @@ collect_immediate_children(Table, Prefix, Key, Seen, Bounds = {From, _}) ->
                         Table, Prefix, NextKey, Seen, Bounds);
                 false ->
                     NextKey = advance_past_child(Table, Prefix, Name, Key),
+                    NextSeen =
+                        case lookup_entry(Table, Key) of
+                            nil -> Seen;
+                            _ -> Seen#{Name => true}
+                        end,
                     collect_immediate_children(
-                        Table, Prefix, NextKey, Seen#{Name => true}, Bounds)
+                        Table, Prefix, NextKey, NextSeen, Bounds)
             end;
         _ ->
             Seen
@@ -346,6 +399,126 @@ max_ttl_test() ->
     timer:sleep(200),
     ?assertEqual({error, not_found}, hb_store:read(StoreOpts, <<"a">>, #{})),
     ok = hb_store:stop(StoreOpts).
+
+entry_expiry_test() ->
+    % Each entry expires a TTL after its own write: an entry written late in
+    % the store's first TTL is still read after it, and one written at its
+    % start is not.
+    S = (hb_test_utils:test_store(?MODULE, <<"entry-expiry-test">>))#{
+        <<"max-ttl">> => 1
+    },
+    hb_store:start(S),
+    ok = hb_store:write(S, #{ <<"early">> => <<"1">> }, #{}),
+    timer:sleep(600),
+    ok = hb_store:write(S, #{ <<"late">> => <<"2">> }, #{}),
+    timer:sleep(600),
+    ?assertEqual({error, not_found}, hb_store:read(S, <<"early">>, #{})),
+    ?assertEqual({ok, <<"2">>}, hb_store:read(S, <<"late">>, #{})),
+    timer:sleep(600),
+    ?assertEqual({error, not_found}, hb_store:read(S, <<"late">>, #{})),
+    ok = hb_store:stop(S).
+
+sweep_test() ->
+    % The owner process deletes expired entries from the table, and keeps
+    % those that have not expired.
+    S = (hb_test_utils:test_store(?MODULE, <<"sweep-test">>))#{
+        <<"max-ttl-ms">> => 1000
+    },
+    hb_store:start(S),
+    Table = table(S),
+    Old = maps:from_list(
+        [
+            {<<"old/", (integer_to_binary(I))/binary>>, <<"v">>}
+        ||
+            I <- lists:seq(1, 100)
+        ]
+    ),
+    ok = hb_store:write(S, Old, #{}),
+    timer:sleep(600),
+    ok = hb_store:write(S, #{ <<"new">> => <<"v">> }, #{}),
+    % The old entries, the `old` and root markers, and the new entry.
+    ?assertEqual(103, ets:info(Table, size)),
+    timer:sleep(750),
+    % The root marker, given the new entry's expiry, and the new entry.
+    ?assertEqual(2, ets:info(Table, size)),
+    ok = hb_store:stop(S).
+
+group_expiry_test() ->
+    % A group lasts as long as the last entry written below it, and reads and
+    % lists of it give only the children that have not expired.
+    S = (hb_test_utils:test_store(?MODULE, <<"group-expiry-test">>))#{
+        <<"max-ttl-ms">> => 1000
+    },
+    hb_store:start(S),
+    ok = hb_store:write(S,
+        #{ <<"g/a">> => <<"1">>,
+           <<"g/b/leaf">> => <<"2">> }, #{}),
+    timer:sleep(600),
+    ok = hb_store:write(S,
+        #{ <<"g/b-">> => <<"3">>,
+           <<"g/c">> => <<"4">> }, #{}),
+    timer:sleep(600),
+    {ok, Children} = hb_store:list(S, <<"g">>, #{}),
+    ?assertEqual([<<"b-">>, <<"c">>], lists:sort(Children)),
+    {composite, Composite} = hb_store:read(S, <<"g">>, #{}),
+    ?assertEqual(
+        [{<<"b-">>, <<"3">>}, {<<"c">>, <<"4">>}],
+        lists:sort(Composite)
+    ),
+    ?assertEqual({error, not_found}, hb_store:list(S, <<"g/b">>, #{})),
+    ?assertEqual({ok, [<<"g">>]}, hb_store:list(S, <<"/">>, #{})),
+    timer:sleep(600),
+    ?assertEqual({error, not_found}, hb_store:read(S, <<"g">>, #{})),
+    ?assertEqual({error, not_found}, hb_store:list(S, <<"/">>, #{})),
+    ok = hb_store:stop(S).
+
+list_from_limit_expiry_test() ->
+    % An ascending list with `from' and `limit' passes over the children that
+    % have expired, swept or not: they do not count toward the limit.
+    S = (hb_test_utils:test_store(?MODULE, <<"list-from-expiry-test">>))#{
+        <<"max-ttl-ms">> => 3600000
+    },
+    hb_store:start(S),
+    ok = hb_store:write(S,
+        #{ <<"p/a">> => <<"1">>,
+           <<"p/b">> => <<"2">>,
+           <<"p/c">> => <<"3">>,
+           <<"p/d">> => <<"4">> }, #{}),
+    % Expire the first two children in place, as a sweep finds them before
+    % it deletes them.
+    Past = erlang:monotonic_time(millisecond) - 1,
+    true = ets:update_element(table(S), <<"p/a">>, {3, Past}),
+    true = ets:update_element(table(S), <<"p/b">>, {3, Past}),
+    List =
+        fun(From, Limit) ->
+            hb_store:list(
+                S,
+                #{
+                    <<"list">> => <<"p">>,
+                    <<"from">> => From,
+                    <<"limit">> => Limit
+                },
+                #{}
+            )
+        end,
+    ?assertEqual({ok, [<<"c">>, <<"d">>]}, List(<<"a">>, 2)),
+    ?assertEqual({ok, [<<"c">>]}, List(<<"b">>, 1)),
+    ?assertEqual({error, not_found}, hb_store:read(S, <<"p/a">>, #{})),
+    ok = hb_store:stop(S).
+
+no_max_ttl_test() ->
+    % Without a TTL every entry, group marker included, never expires.
+    S = hb_test_utils:test_store(?MODULE, <<"no-max-ttl-test">>),
+    hb_store:start(S),
+    ok = hb_store:write(S, #{ <<"a">> => <<"1">>, <<"g/b">> => <<"2">> }, #{}),
+    timer:sleep(300),
+    ?assertEqual({ok, <<"1">>}, hb_store:read(S, <<"a">>, #{})),
+    ?assertEqual({ok, [<<"b">>]}, hb_store:list(S, <<"g">>, #{})),
+    ?assertEqual(
+        [infinity, infinity, infinity, infinity],
+        [ Expiry || {_, _, Expiry} <- ets:tab2list(table(S)) ]
+    ),
+    ok = hb_store:stop(S).
 
 empty_root_reports_not_found_test() ->
     %% A fresh store with no writes must report `{error, not_found}` on
