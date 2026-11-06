@@ -132,21 +132,35 @@ sweep_store(Opts) ->
     ?event(store_volatile, {swept, {table, Table}, {entries, Swept}}),
     ok.
 
-%% @doc Write one or more entries. Request maps are folded into individual
-%% writes. Any raw entry at an ancestor path is converted to a group marker
-%% (raw entries have no descendants, so no subtree purge is needed). If the
-%% target key is a group, its descendants are deleted first. The entries of
-%% one request share one expiry.
+%% @doc Write one or more entries, and a `group` marker once at each of
+%% their ancestor paths. The rows of a request share one expiry. A raw entry
+%% at an ancestor path is converted to a group marker (raw entries have no
+%% descendants, so no subtree purge is needed). If a key written is a group,
+%% its descendants are deleted first. Rows are inserted one at a time: a
+%% multi-object `ets:insert/2` locks the whole of a `write_concurrency`
+%% ordered_set, stalling every reader.
 write(Opts, Req, _NodeOpts) when is_map(Req) ->
+    Table = table(Opts),
     Expiry = expiry(Opts),
-    maps:fold(
-        fun(Path, Value, ok) ->
-            put_entry(Opts, Path, {raw, Value}, Expiry);
-           (_Path, _Value, Error) ->
-            Error
+    Entries =
+        maps:from_list(
+            [
+                {hb_path:to_binary(Path), {raw, Value}}
+            ||
+                {Path, Value} <- maps:to_list(Req)
+            ]
+        ),
+    lists:foreach(
+        fun(Key) ->
+            maybe_delete_subtree(Table, Key),
+            ?event(store_volatile, {put, {key, Key}})
         end,
-        ok,
-        Req
+        maps:keys(Entries)
+    ),
+    Groups = lists:foldl(fun parent_groups/2, #{}, maps:keys(Entries)),
+    lists:foreach(
+        fun({Key, Entry}) -> ets:insert(Table, {Key, Entry, Expiry}) end,
+        maps:to_list(maps:merge(Entries, Groups))
     ).
 
 %% @doc Read a value. Group paths return `{composite, Children}`: their
@@ -203,18 +217,6 @@ child(Table, Path, Name) ->
         _ -> Name
     end.
 
-%% @doc Install an entry at Key, purging any prior group subtree and
-%% ensuring ancestor group markers exist. The entry and its ancestor
-%% markers are given `Expiry`.
-put_entry(Opts, RawKey, Entry, Expiry) ->
-    Key = hb_path:to_binary(RawKey),
-    Table = table(Opts),
-    maybe_delete_subtree(Table, Key),
-    ensure_parent_groups(Table, Key, Expiry),
-    ?event(store_volatile, {put, {key, Key}}),
-    ets:insert(Table, {Key, Entry, Expiry}),
-    ok.
-
 table(Opts) ->
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
     Table.
@@ -229,28 +231,28 @@ lookup_entry(Table, Key) ->
         _ -> nil
     end.
 
-%% @doc Walk ancestor paths from root to parent, inserting a `group` marker
-%% via unconditional `ets:insert/2` at each. A raw entry sitting at an
-%% intermediate path is converted to a group — such an entry has no
-%% descendants, so no subtree purge is required.
-ensure_parent_groups(Table, Key, Expiry) ->
+%% @doc Add a `group` marker for the root and for each ancestor path of Key,
+%% from root to parent, to Groups. A parent that Groups has already has its
+%% own ancestors there too.
+parent_groups(Key, Groups) ->
     case filename:dirname(Key) of
         <<".">> ->
-            ets:insert(Table, {?ROOT_GROUP, group, Expiry});
+            Groups#{ ?ROOT_GROUP => group };
+        ParentDir when is_map_key(ParentDir, Groups) ->
+            Groups;
         ParentDir ->
-            ensure_dir(Table, ParentDir, Expiry)
+            parent_groups(
+                ?ROOT_GROUP,
+                hb_path:term_to_path_parts(ParentDir),
+                Groups#{ ?ROOT_GROUP => group }
+            )
     end.
 
-ensure_dir(Table, Path, Expiry) ->
-    ets:insert(Table, {?ROOT_GROUP, group, Expiry}),
-    ensure_dir(Table, ?ROOT_GROUP, hb_path:term_to_path_parts(Path), Expiry).
-
-ensure_dir(_Table, _CurrentGroup, [], _Expiry) ->
-    ok;
-ensure_dir(Table, CurrentGroup, [Next | Rest], Expiry) ->
+parent_groups(_CurrentGroup, [], Groups) ->
+    Groups;
+parent_groups(CurrentGroup, [Next | Rest], Groups) ->
     NextGroup = next_group_path(CurrentGroup, Next),
-    ets:insert(Table, {NextGroup, group, Expiry}),
-    ensure_dir(Table, NextGroup, Rest, Expiry).
+    parent_groups(NextGroup, Rest, Groups#{ NextGroup => group }).
 
 next_group_path(?ROOT_GROUP, Next) ->
     hb_path:to_binary(Next);
@@ -595,6 +597,21 @@ implicit_group_conversion_test() ->
     ),
     {ok, Children} = hb_store:list(S, <<"a">>, #{}),
     ?assertEqual([<<"b">>], Children),
+    ok = hb_store:stop(S).
+
+same_request_group_test() ->
+    % A key written in the same request as keys below it is a group, as it
+    % is when they are written one after the other.
+    S = hb_test_utils:test_store(?MODULE, <<"same-request-group-test">>),
+    hb_store:start(S),
+    ok = hb_store:write(S,
+        #{ <<"a">> => <<"raw_val">>,
+           <<"a/b">> => <<"child_val">>,
+           <<"a/c/d">> => <<"deep_val">> }, #{}),
+    {composite, Composite} = hb_store:read(S, <<"a">>, #{}),
+    ?assertEqual([{<<"b">>, <<"child_val">>}, <<"c">>], lists:sort(Composite)),
+    ?assertEqual({ok, [<<"d">>]}, hb_store:list(S, <<"a/c">>, #{})),
+    ?assertEqual({ok, [<<"a">>]}, hb_store:list(S, <<"/">>, #{})),
     ok = hb_store:stop(S).
 
 list_deep_subtree_test() ->
