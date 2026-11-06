@@ -428,6 +428,8 @@ offset_header_bound_test() ->
         ),
     Opts =
         #{
+            % The mock serves its own chunk at this offset: keep none of it.
+            <<"arweave-chunk-store">> => [],
             <<"routes">> =>
                 [
                     #{

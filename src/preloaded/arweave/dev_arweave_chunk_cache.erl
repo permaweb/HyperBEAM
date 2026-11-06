@@ -1,7 +1,8 @@
 %%% @doc A store of the weave chunks that a node reads from Arweave nodes, so
 %%% that a read of bytes in a chunk that the node has read before does not
-%%% download the chunk again. `arweave-chunk-store' selects the store, and a
-%%% node has none by default. Each chunk is held at `~arweave@2.9/chunks/END',
+%%% download the chunk again. `arweave-chunk-store' selects the store: by
+%%% default a volatile table that keeps each chunk for five minutes, while
+%%% `[]' keeps no chunks. Each chunk is held at `~arweave@2.9/chunks/END',
 %%% where `END' is the weave offset of its last byte, zero-padded to 20 digits
 %%% so that the order of the keys is the order of the offsets. A read of an
 %%% offset lists the group from that offset with a limit of one: the first
@@ -91,7 +92,10 @@ read_offsets(Module) ->
     ?assertEqual({error, not_found}, read(300, Opts)),
     ?assertEqual({error, not_found}, read(601, Opts)),
     % A node with no chunk store holds no chunks.
-    ?assertEqual({error, not_found}, read(100, #{})).
+    ?assertEqual(
+        {error, not_found},
+        read(100, #{ <<"arweave-chunk-store">> => [] })
+    ).
 
 %% @doc An empty store misses an offset inside a chunk, downloads the chunk
 %% once and keeps it at the chunk's last byte. The next offset, and both
@@ -145,7 +149,7 @@ stored_range(Module) ->
     % Without the store, a read downloads its chunk.
     ?assertEqual(
         {ok, <<Y>>},
-        Read(Offset + 1001, 1, maps:remove(<<"arweave-chunk-store">>, Opts))
+        Read(Offset + 1001, 1, Opts#{ <<"arweave-chunk-store">> => [] })
     ),
     ?assertEqual(1, downloads()),
     % The whole transaction downloads its other four chunks, three of 256 KiB
@@ -220,8 +224,9 @@ offset_index(IndexKeeps, NodeKeeps) ->
 
 %% @doc Two items next to each other in the weave, read by ID through the
 %% published offset index, as GraphQL reads the IDs it matches, and then at
-%% the first item's offset: once the chunk that holds the first item is
-%% downloaded, the second item, and the first again, read with no download.
+%% the first item's offset, with the default options: once the chunk that
+%% holds the first item is downloaded, the second item, and the first again,
+%% read with no download.
 adjacent_items_test_() ->
     {timeout, 120, fun adjacent_items/0}.
 
@@ -236,11 +241,8 @@ adjacent_items() ->
             <<"name">> => <<"chunk-cache-adjacent-items">>,
             <<"index-store">> => [Index]
         },
-    Opts =
-        (receipt_opts())#{
-            <<"arweave-chunk-store">> =>
-                [hb_test_utils:test_store(hb_store_volatile)]
-        },
+    Opts = receipt_opts(),
+    empty_chunk_store(Opts),
     Offset =
         fun(ID) ->
             hb_store:read([Index], <<"~arweave@2.9/offset=", ID/binary>>, Opts)
@@ -254,6 +256,7 @@ adjacent_items() ->
     ?assertMatch({ok, _}, hb_store:read([Arweave], First, Opts)),
     ?assertEqual(1, downloads()),
     ?assertMatch({ok, _}, hb_store:read([Arweave], Next, Opts)),
+    ?assertMatch({ok, _}, hb_store:read([Arweave], First, Opts)),
     ?assertEqual(0, downloads()),
     % The first item at its offset, with its data length: 3,947 bytes less
     % its 1,120-byte header.
@@ -287,6 +290,11 @@ published_offset_index(ChunkStore) ->
             >>,
         <<"chunk-store">> => ChunkStore
     }.
+
+%% @doc Stop the node's chunk store, so that a test's reads begin with an
+%% empty table.
+empty_chunk_store(Opts) ->
+    ok = hb_store:stop(hb_opts:get(arweave_chunk_store, [], Opts), Opts).
 
 %% @doc Node options whose `http-client-receipt' hook sends the path and
 %% status class of each outbound request attempt to the calling process.

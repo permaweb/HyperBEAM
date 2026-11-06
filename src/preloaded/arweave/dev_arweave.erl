@@ -2251,6 +2251,8 @@ chunk_proof(Mode, Change) ->
         ),
     Opts = #{
         <<"store">> => [hb_test_utils:test_store(hb_store_volatile)],
+        % The mock serves its own chunks at these offsets: keep none of them.
+        <<"arweave-chunk-store">> => [],
         <<"routes">> =>
             [
                 #{

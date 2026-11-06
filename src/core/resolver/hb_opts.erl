@@ -545,6 +545,15 @@ raw_default_message() ->
         <<"ans104-trust-gql">> => false,
         % Number of chunks to fetch in parallel when loading a TX or dataitem.
         <<"arweave-chunk-fetch-concurrency">> => 5,
+        % Store of the weave chunks that the node reads, so that bytes in a
+        % chunk that it has read before are not downloaded again. The table
+        % keeps each chunk for five minutes; `[]' keeps no chunks.
+        <<"arweave-chunk-store">> =>
+            #{
+                <<"store-module">> => hb_store_volatile,
+                <<"name">> => <<"arweave-chunks">>,
+                <<"max-ttl">> => 300
+            },
         <<"http-extra-opts">> =>
             #{
                 <<"force-message">> => true,
