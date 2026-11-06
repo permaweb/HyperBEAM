@@ -62,10 +62,11 @@ read_offset(StoreOpts, ID, Opts) ->
 %% @doc Read the offset of the data at the given key from the local index alone.
 read_index_offset(StoreOpts = #{ <<"index-store">> := _ }, ID) ->
     maybe
-        % First check the full offset path from the `~arweave@2.9` device.
-        not_found ?= read_offset_path(StoreOpts, <<"~arweave@2.9/offset=", ID/binary>>),
-        % ...otherwise, check the raw binary path for the ID.
-        read_offset_path(StoreOpts, hb_store_arweave_offset:path(ID))
+        % First check the raw binary path, which only a node's own index holds,
+        % so that an indexed ID does not consult the published indices.
+        not_found ?= read_offset_path(StoreOpts, hb_store_arweave_offset:path(ID)),
+        % ...otherwise, check the full offset path from the `~arweave@2.9` device.
+        read_offset_path(StoreOpts, <<"~arweave@2.9/offset=", ID/binary>>)
     end;
 read_index_offset(_, _) -> not_found.
 
@@ -539,6 +540,30 @@ write_read_tx_test() ->
     },
     ?assert(hb_message:match(ExpectedChild, Child, only_present)),
     ok.
+
+%% @doc An offset in the node's own index is read before the published
+%% indices are consulted: a published index that would answer differently for
+%% the same ID is not reached.
+local_offset_first_test() ->
+    Local = hb_test_utils:test_store(),
+    Published = hb_test_utils:test_store(),
+    ID = <<"cGNURX2IUt98VKVIeXSfYe6eulNwPEqijaQfvatzd_o">>,
+    StartOffset = 155309918167286,
+    Size = 2,
+    LocalOpts = #{ <<"index-store">> => [Local] },
+    ok = write_offset(LocalOpts, ID, <<"tx@1.0">>, StartOffset, Size),
+    PublishedValue = hb_store_arweave_offset:encode(<<"tx@1.0">>, 1, 1),
+    ok =
+        hb_store:write(
+            Published,
+            #{ <<"~arweave@2.9/offset=", ID/binary>> => PublishedValue },
+            #{}
+        ),
+    Opts = #{ <<"index-store">> => [Local, Published] },
+    ?assertMatch(
+        {ok, #{ <<"start">> := StartOffset, <<"length">> := Size }},
+        read_index_offset(Opts, ID)
+    ).
 
 %% @doc Stale ANS-104 offset: fake ID pointing to a known bundle TX's
 %% data range. The deserialized item's ID won't match the fake ID.
