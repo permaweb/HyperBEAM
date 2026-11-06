@@ -75,7 +75,7 @@ test_env_with_blocks(InitialHeight, FinalHeight) ->
         <<
             "/~copycat@1.0/arweave?from=",
                 (hb_util:bin(InitialHeight))/binary, "&to=",
-                (hb_util:bin(FinalHeight))/binary
+                (hb_util:bin(FinalHeight))/binary, "&reindex=true"
         >>,
         Opts
     ),

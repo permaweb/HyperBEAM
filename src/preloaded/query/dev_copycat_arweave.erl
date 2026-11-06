@@ -4,10 +4,12 @@
 %%% block that is already indexed at the requested mode and, unless `reindex'
 %%% is `false', is the `previous-block' of the block above it. A height whose
 %%% indexed block a reorg replaced is read again, past cached headers, and
-%%% indexed. If `to' is provided, every block in the range is processed. A
-%%% block-header request reads at most `?MAX_LIST_BLOCKS' heights.
-%%% `reindex' defaults to true and bypasses cached block headers. `forks' and
-%%% `false' read cached headers, and skip the indexed blocks of a range.
+%%% indexed. If `to' is provided, every block in the range that is not indexed
+%%% is processed. A block-header request reads at most `?MAX_LIST_BLOCKS'
+%%% heights.
+%%% `reindex' defaults to `forks'. `forks' and `false' read cached headers, and
+%%% skip the indexed blocks of a range. `true' bypasses cached block headers and
+%%% processes every block of a range, so it re-indexes given heights.
 %%% `mode=blocks' stores only block headers in `arweave-block-store' (or `store'),
 %%% irrespective of `arweave-index-blocks', and does not process pending TXs.
 %%% `include-proofs=false' omits block proofs from the returned/cached headers.
@@ -293,9 +295,9 @@ classify_txs(TXIDs, Opts) ->
 
 %% @doc Fetch blocks from an Arweave node while moving downward from `Current'.
 %% If `To' is provided, every block in [`To', `Current'] is processed (unless
-%% `reindex' is `false' or `forks', in which case already-indexed blocks are
-%% skipped). If `To' is omitted, stop at the first block indexed to the target
-%% mode, or refuse after `?MAX_LIST_BLOCKS' heights.
+%% `reindex' is `forks', the default, or `false', in which case already-indexed
+%% blocks are skipped). If `To' is omitted, stop at the first block indexed to
+%% the target mode, or refuse after `?MAX_LIST_BLOCKS' heights.
 fetch_blocks(Req, Current, To, _IndexMode, _Opts) when is_integer(To), Current < To ->
     ?event(copycat_short,
         {arweave_block_indexing_completed,
@@ -308,8 +310,8 @@ fetch_blocks(Req, Current, undefined, IndexMode, Opts) ->
     fetch_to_indexed_block(
         Req, Current, IndexMode, Current - ?MAX_LIST_BLOCKS, none, Opts);
 fetch_blocks(Req, Current, To, IndexMode, Opts) ->
-    % Unless `reindex' is `true' (the default), skip blocks already indexed at
-    % this mode, so overlapping ranges from different callers are not re-fetched.
+    % Unless `reindex' is `true', skip blocks already indexed at this mode, so
+    % overlapping ranges from different callers are not re-fetched.
     (reindex(Req, Opts) =:= true
         orelse not is_block_indexed(Current, IndexMode, Req, Opts))
         andalso observe_event(<<"block_indexed">>, fun() ->
@@ -394,10 +396,10 @@ previous_block({error, _}, _Opts) ->
     none.
 
 %% @doc Whether an index run should reprocess blocks that are already indexed:
-%% `true' (the default) every block of a bounded range, `forks' only a block
-%% that a walk finds a reorg replaced, as `true' does too, and `false' none.
+%% `forks' (the default) only a block that a walk finds a reorg replaced,
+%% `true' every block of a bounded range as well, and `false' none.
 reindex(Req, Opts) ->
-    hb_util:atom(hb_maps:get(<<"reindex">>, Req, true, Opts)).
+    hb_util:atom(hb_maps:get(<<"reindex">>, Req, forks, Opts)).
 
 stop_at_indexed_block(Req, Current) ->
     ?event(copycat_short,
@@ -1851,8 +1853,17 @@ block_cache_control_test_() ->
         Request = #{ <<"reindex">> => false,
             <<"cache-control">> => [<<"only-if-cached">>] },
         try
-            {ok, _} = fetch_block_header(2003806, #{}, Opts),
+            {ok, _} =
+                fetch_block_header(2003806, #{ <<"reindex">> => true }, Opts),
             ?assertMatch({ok, _}, fetch_block_header(2003806, Request, Opts)),
+            ?assertMatch(
+                {ok, _},
+                fetch_block_header(
+                    2003806,
+                    maps:remove(<<"reindex">>, Request),
+                    Opts
+                )
+            ),
             lists:foreach(
                 fun(Req) ->
                     ?assertEqual({error, not_found},
@@ -1860,7 +1871,7 @@ block_cache_control_test_() ->
                 end,
                 [
                     Request#{ <<"reindex">> => true },
-                    maps:remove(<<"reindex">>, Request),
+                    Request#{ <<"reindex">> => <<"true">> },
                     Request#{ <<"cache-control">> =>
                         [<<"no-cache">>, <<"only-if-cached">>] },
                     Request#{ <<"reindex">> => true,
@@ -1992,7 +2003,8 @@ explicit_to_reindexes_all_test_parallel() ->
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(IndexedBlock+1))/binary, "&"
                 "to=", (hb_util:bin(LowerBlock))/binary, "&"
-                "mode=shallow"
+                "mode=shallow&"
+                "reindex=true"
             >>,
             Opts
         ),

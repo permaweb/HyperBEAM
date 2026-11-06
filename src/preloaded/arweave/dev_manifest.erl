@@ -410,7 +410,8 @@ manifest_download_via_raw_endpoint_test_ignore() ->
             Node,
             #{
                 <<"path">> =>
-                    <<"~copycat@1.0/arweave/?from+integer=1809222&to+integer=1809222">>
+                    <<"~copycat@1.0/arweave/?from+integer=1809222&to+integer=1809222"
+                        "&reindex=true">>
             },
             #{}
         ),

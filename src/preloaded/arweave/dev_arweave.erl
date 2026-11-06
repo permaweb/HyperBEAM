@@ -1683,7 +1683,8 @@ index_test_block(Block, Opts) ->
                 "~copycat@1.0/arweave&from=",
                 BlockBin/binary,
                 "&to=",
-                BlockBin/binary
+                BlockBin/binary,
+                "&reindex=true"
             >>,
             Opts#{ <<"arweave-index-ids">> => true }
         ),
@@ -1930,7 +1931,8 @@ head_raw_ans104_test_parallel() ->
     DataItemID = <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
     BlockBin = hb_util:bin(1_827_942),
     hb_ao:resolve(
-        <<"~copycat@1.0/arweave&from=", BlockBin/binary, "&to=", BlockBin/binary>>,
+        <<"~copycat@1.0/arweave&from=", BlockBin/binary, "&to=", BlockBin/binary,
+            "&reindex=true">>,
         Opts
     ),
     {ok, Result} =
@@ -2063,7 +2065,8 @@ get_raw_range_ans104_test_parallel() ->
     DataItemID = <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
     BlockBin = hb_util:bin(1_827_942),
     hb_ao:resolve(
-        <<"~copycat@1.0/arweave&from=", BlockBin/binary, "&to=", BlockBin/binary>>,
+        <<"~copycat@1.0/arweave&from=", BlockBin/binary, "&to=", BlockBin/binary,
+            "&reindex=true">>,
         Opts
     ),
     {ok, Result} =
