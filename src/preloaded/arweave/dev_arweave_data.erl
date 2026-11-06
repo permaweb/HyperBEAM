@@ -2,7 +2,7 @@
 %%% `~arweave@2.9' device: byte ranges of the weave or of a pending
 %%% transaction, read chunk by chunk, each chunk checked against its Merkle
 %%% proof, or a whole transaction checked against its data root. Weave chunks
-%%% are kept in the node's `arweave-chunk-store' (`dev_arweave_chunk_cache').
+%%% are kept in the node's `arweave-chunk-store' (`hb_store_arweave_chunk').
 -module(dev_arweave_data).
 -export([get_chunk/2, get_chunk/3]).
 -export([get_chunk_range_relative/4, decode_relative_chunk/4]).
@@ -294,12 +294,12 @@ fetch_and_collect(Offsets, GETFun, Opts) ->
 %% @doc Read the chunk that holds the byte at the offset from the node's
 %% `arweave-chunk-store', or fetch it from an Arweave node and write it there.
 read_chunk(Offset, Opts) ->
-    case dev_arweave_chunk_cache:read(Offset, Opts) of
+    case hb_store_arweave_chunk:read(Offset, Opts) of
         {error, not_found} ->
             maybe
                 {ok, {Start, End, Chunk}} ?=
                     decode_chunk(Offset, get_chunk(Offset, Opts)),
-                dev_arweave_chunk_cache:write(End, Chunk, Opts),
+                hb_store_arweave_chunk:write(End, Chunk, Opts),
                 {ok, {Start, End, Chunk}}
             end;
         Read -> Read

@@ -8,7 +8,7 @@
 %%% offset lists the group from that offset with a limit of one: the first
 %%% chunk that ends at or after the offset holds it if the chunk starts at or
 %%% before it.
--module(dev_arweave_chunk_cache).
+-module(hb_store_arweave_chunk).
 -export([read/2, write/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -176,32 +176,25 @@ stored_range(Module) ->
     ?assertEqual(0, downloads()).
 
 %% @doc The offsets of two IDs that are adjacent in the published offset
-%% index, looked up through its default definition: the leaf chunk that the
-%% first lookup downloads answers the second, with no download, when either
-%% the index's own `chunk-store' or the node's `arweave-chunk-store' keeps
-%% it. With neither, the second lookup downloads again.
+%% index, looked up through its default definition: with the default
+%% options, the leaf chunk that the first lookup downloads answers the
+%% second with no download. With no chunk store, the second lookup downloads
+%% again.
 offset_index_test_() ->
     [
-        {
-            Desc,
-            {timeout, 120, fun() -> offset_index(IndexKeeps, NodeKeeps) end}
-        }
+        {Desc, {timeout, 120, fun() -> offset_index(NodeOpts) end}}
     ||
-        {Desc, IndexKeeps, NodeKeeps} <-
+        {Desc, NodeOpts} <-
             [
-                {"index chunk-store", true, false},
-                {"arweave-chunk-store", false, true},
-                {"no chunk store", false, false}
+                {"default options", #{}},
+                {"no chunk store", #{ <<"arweave-chunk-store">> => [] }}
             ]
     ].
 
-offset_index(IndexKeeps, NodeKeeps) ->
-    Keep =
-        fun(true) -> [hb_test_utils:test_store(hb_store_volatile)];
-           (false) -> []
-        end,
-    Index = published_offset_index(Keep(IndexKeeps)),
-    Opts = (receipt_opts())#{ <<"arweave-chunk-store">> => Keep(NodeKeeps) },
+offset_index(NodeOpts) ->
+    Index = published_offset_index(),
+    Opts = maps:merge(receipt_opts(), NodeOpts),
+    empty_chunk_store(Opts),
     Lookup =
         fun(ID) ->
             hb_store:read([Index], <<"~arweave@2.9/offset=", ID/binary>>, Opts)
@@ -217,9 +210,9 @@ offset_index(IndexKeeps, NodeKeeps) ->
     ),
     Second = downloads(),
     ?assert(First > 0),
-    case IndexKeeps orelse NodeKeeps of
-        true -> ?assertEqual(0, Second);
-        false -> ?assert(Second > 0)
+    case NodeOpts of
+        #{ <<"arweave-chunk-store">> := [] } -> ?assert(Second > 0);
+        _ -> ?assertEqual(0, Second)
     end.
 
 %% @doc Two items next to each other in the weave, read by ID through the
@@ -233,8 +226,7 @@ adjacent_items_test_() ->
 adjacent_items() ->
     First = <<"AAAAhyV8_NwududSxuraAj7DLWiZHDTqVKWrZglpNok">>,
     Next = <<"jjlrZfiS_WGVxvp-AhpypEhc1o7zpFr3rfBhgse9zkE">>,
-    Index =
-        published_offset_index([hb_test_utils:test_store(hb_store_volatile)]),
+    Index = published_offset_index(),
     Arweave =
         #{
             <<"store-module">> => hb_store_arweave,
@@ -270,9 +262,8 @@ adjacent_items() ->
     ?assertEqual(0, downloads()).
 
 %% @doc The default definition of the published offset index, under a fresh
-%% name and with the given chunk store, so that the chunks its lookups use
-%% are the calling test's own.
-published_offset_index(ChunkStore) ->
+%% name, so that its start is the calling test's own.
+published_offset_index() ->
     #{ <<"index-store">> := IndexStores } =
         hb_store_arweave:store_from_opts(#{}),
     [Default] =
@@ -287,8 +278,7 @@ published_offset_index(ChunkStore) ->
             <<
                 "published-offset-index-",
                 (hb_util:encode(crypto:strong_rand_bytes(4)))/binary
-            >>,
-        <<"chunk-store">> => ChunkStore
+            >>
     }.
 
 %% @doc Stop the node's chunk store, so that a test's reads begin with an

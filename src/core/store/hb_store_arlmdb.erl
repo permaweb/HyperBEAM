@@ -92,9 +92,9 @@
 %%% where item `I' is the `pad' bytes at page offset `24 + I * pad' and
 %%% `lower bsr 1' items fill the page, ascending strictly.
 %%%
-%%% Fetched chunks are retained in the stores under the `chunk-store' key
-%%% of the store definition, defaulting to a volatile store that keeps
-%%% each chunk for five minutes; `[]' retains nothing. Published files are
+%%% Fetched chunks are retained in the node's `arweave-chunk-store'
+%%% (`hb_store_arweave_chunk'), which every read consults first; `[]' retains
+%%% nothing. Published files are
 %%% defragmented -- the first chunk contains the meta pages and main root,
 %%% branch pages cluster, and leaves follow in key order -- so the chunks a
 %%% read retains answer most of the reads that follow it.
@@ -114,8 +114,6 @@
 %% a published file's data begins on a chunk boundary, so every page
 %% fetch lies within one chunk of the file.
 -define(CHUNK_SIZE, ?DATA_CHUNK_SIZE).
-%% The default chunk store keeps each chunk for this long.
--define(CHUNK_TTL_MS, 300000).
 -define(PAGE_HDR, 24).
 -define(NODE_HDR, 8).
 -define(DB_SIZE, 48).
@@ -134,7 +132,7 @@
 
 %% @doc Resolve the root's weave location, validate the file's meta page
 %% and main tree, and return the store instance: the location, the main
-%% tree and the layout. Fetched chunks are retained by the chunk
+%% tree and the layout. Fetched chunks are retained by the node's chunk
 %% store alone.
 start(Store = #{ <<"root">> := Root }, _Req, NodeOpts) ->
     StoreOpts = maps:merge(NodeOpts, Store),
@@ -1106,53 +1104,26 @@ fetch(Start, Size, Offset, Length, Opts) ->
         {ok, binary:part(Bytes, Within, Length)}
     end.
 
-%% @doc One whole chunk of the file, from the chunk store when it is
-%% held, and from the weave -- retained for the next read -- when it is not.
+%% @doc One whole chunk of the file, from the weave chunk that holds it in the
+%% node's `arweave-chunk-store' when there is one, and from the weave when
+%% there is not.
 read_chunk(Start, Size, Chunk, Opts) ->
-    Stores = chunk_store(Opts),
-    % The key is the `~arweave@2.9' device's own address for the chunk: the
-    % 1-based absolute weave offset of its first byte, so every store and
-    % device retaining weave chunks shares one namespace.
-    Key =
-        <<
-            "~arweave@2.9/chunk=",
-            (hb_util:bin(Start + (Chunk * ?CHUNK_SIZE) + 1))/binary
-        >>,
-    case hb_store:read(Stores, Key, Opts) of
-        {ok, Bytes} -> {ok, Bytes};
-        _ -> fill_chunk(Stores, Key, Start, Size, Chunk, Opts)
+    ChunkStart = Start + (Chunk * ?CHUNK_SIZE),
+    Length = min(?CHUNK_SIZE, Size - (Chunk * ?CHUNK_SIZE)),
+    case hb_store_arweave_chunk:read(ChunkStart + 1, Opts) of
+        {ok, {From, To, Held}} when ChunkStart + Length =< To ->
+            {ok, binary:part(Held, ChunkStart + 1 - From, Length)};
+        _ -> fetch_chunk(ChunkStart, Length, Opts)
     end.
 
-%% @doc Fetch a chunk from the weave and retain it. Retention is best-effort:
-%% a store that refuses the write costs the next read a fetch, nothing more.
-fill_chunk(Stores, Key, Start, Size, Chunk, Opts) ->
-    ChunkStart = Chunk * ?CHUNK_SIZE,
-    Length = min(?CHUNK_SIZE, Size - ChunkStart),
-    case hb_store_arweave:read_chunks(Start + ChunkStart, Length, Opts) of
-        {ok, Bytes} when byte_size(Bytes) =:= Length ->
-            case hb_store:write(Stores, #{ Key => Bytes }, Opts) of
-                ok -> ok;
-                Refused -> ?event(store_arlmdb, {chunk_not_retained, Refused})
-            end,
-            {ok, Bytes};
+%% @doc Fetch a byte range of the weave through `~arweave@2.9', which keeps
+%% the weave chunks that it reads in the node's `arweave-chunk-store'.
+fetch_chunk(ChunkStart, Length, Opts) ->
+    case hb_store_arweave:read_chunks(ChunkStart, Length, Opts) of
+        {ok, Bytes} when byte_size(Bytes) =:= Length -> {ok, Bytes};
         {ok, Bytes} -> {error, {unavailable, {short_read, byte_size(Bytes)}}};
         Error -> {error, {unavailable, Error}}
     end.
-
-%% @doc The stores retaining fetched chunks, from the `chunk-store' key of
-%% the store definition. The default is a volatile store named after the
-%% root, keeping each chunk for five minutes; `[]' retains nothing.
-chunk_store(#{ <<"chunk-store">> := Stores }) when is_list(Stores) -> Stores;
-chunk_store(#{ <<"chunk-store">> := Store }) -> [Store];
-chunk_store(StoreOpts = #{ <<"root">> := Root }) ->
-    Name = maps:get(<<"name">>, StoreOpts, Root),
-    [
-        #{
-            <<"store-module">> => hb_store_volatile,
-            <<"name">> => <<Name/binary, "-chunks">>,
-            <<"max-ttl-ms">> => ?CHUNK_TTL_MS
-        }
-    ].
 
 %%% Tests
 
@@ -1281,29 +1252,35 @@ invalid_container_test() ->
     {error, Reason} = hb_store:start([Store]),
     ?assertEqual('invalid-meta', element(1, Reason)).
 
-%% @doc Retained chunks serve repeated reads without the weave: a key looked
-%% up once answers again through a store whose routes are gone, while an
-%% indexed key whose leaf chunk was never fetched cannot. The read of the
-%% second key raises, as the store has no route to fetch its chunk, so the
-%% store manager returns a failure, not a miss.
+%% @doc Chunks retained in the node's `arweave-chunk-store' serve repeated
+%% reads without the weave: a key looked up once answers again through a
+%% store whose routes are gone, while an indexed key whose leaf chunk was
+%% never fetched cannot. The read of the second key raises, as the store has
+%% no route to fetch its chunk, so the store manager returns a failure, not a
+%% miss.
 chunk_retention_test_() ->
     {timeout, 120, fun chunk_retention/0}.
 chunk_retention() ->
     Store =
         (test_store())#{ <<"name">> => <<?OFFSET_INDEX/binary, "-cached">> },
+    Opts =
+        #{
+            <<"arweave-chunk-store">> =>
+                hb_test_utils:test_store(hb_store_volatile)
+        },
     Key =
         <<"~arweave@2.9/offset="
             "AAAAhyV8_NwududSxuraAj7DLWiZHDTqVKWrZglpNok">>,
-    {ok, First} = hb_store:read([Store], Key, #{}),
+    {ok, First} = hb_store:read([Store], Key, Opts),
     Unrouted = Store#{ <<"routes">> => [] },
-    ?assertEqual({ok, First}, hb_store:read([Unrouted], Key, #{})),
+    ?assertEqual({ok, First}, hb_store:read([Unrouted], Key, Opts)),
     Fresh =
         <<"~arweave@2.9/offset="
             "KgADUJYkEY0dbUKTI3aDZy2c_nb4WLh7VDh2ZHrb1yY">>,
-    ?assertMatch({failure, _}, hb_store:read([Unrouted], Fresh, #{})),
+    ?assertMatch({failure, _}, hb_store:read([Unrouted], Fresh, Opts)),
     ?assertMatch(
         {ok, #{ <<"start">> := 381838173656091 }},
-        hb_store:read([Store], Fresh, #{})
+        hb_store:read([Store], Fresh, Opts)
     ).
 
 %% @doc The offset index has one key, so its requests are value bits. A
@@ -1344,8 +1321,7 @@ list_values() ->
     ?assertEqual(3, length(Head)),
     ?assertEqual(lists:sort(Head), Head).
 
-%% @doc The match index mounted raw, under a fresh name and with a
-%% retained-chunk store of its own, so that its chunks are the test's own.
+%% @doc The match index mounted raw, under a fresh name.
 published_store() ->
     #{
         <<"store-module">> => hb_store_arlmdb,
@@ -1354,8 +1330,7 @@ published_store() ->
                 "arlmdb-published-",
                 (hb_util:encode(crypto:strong_rand_bytes(4)))/binary
             >>,
-        <<"root">> => ?MATCH_INDEX,
-        <<"chunk-store">> => hb_test_utils:test_store(hb_store_volatile)
+        <<"root">> => ?MATCH_INDEX
     }.
 
 %% @doc The 79 bits of a predicate's rows: the leading bits of the SHA-256
@@ -1497,8 +1472,7 @@ published_keys() ->
         hb_store:list(Store, #{ <<"list">> => <<Small/bitstring, 0:1>> }, #{})
     ).
 
-%% @doc The published `hb_store_lmdb' layout, under a fresh name and with
-%% a retained-chunk store of its own.
+%% @doc The published `hb_store_lmdb' layout, under a fresh name.
 paths_store() ->
     #{
         <<"store-module">> => hb_store_arlmdb,
@@ -1507,8 +1481,7 @@ paths_store() ->
                 "arlmdb-paths-",
                 (hb_util:encode(crypto:strong_rand_bytes(4)))/binary
             >>,
-        <<"root">> => ?PATHS_INDEX,
-        <<"chunk-store">> => hb_test_utils:test_store(hb_store_volatile)
+        <<"root">> => ?PATHS_INDEX
     }.
 
 %% @doc A published `hb_store_lmdb' layout is served as that store serves
