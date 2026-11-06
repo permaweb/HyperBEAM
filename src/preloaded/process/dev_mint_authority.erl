@@ -11,17 +11,17 @@ device_info() ->
 
 mint(Base, Assignment, Opts) ->
     maybe
-        {ok, Req} ?= field(<<"body">>, Assignment, Opts),
+        {ok, Req} ?= key(<<"body">>, Assignment, Opts),
         true ?= is_map(Req) orelse {error, <<"Mint body must be a message.">>},
-        true ?= is_mint(field(<<"action">>, Req, Opts))
+        true ?= is_mint(key(<<"action">>, Req, Opts))
             orelse {error, <<"Not a mint request.">>},
         {ok, Minter} ?= committer(<<"from">>, Req, Opts),
         {ok, Authority} ?= committer(<<"mint-authority">>, Base, Opts),
         true ?= (Minter =:= Authority)
             orelse {error, <<"Minter is not the mint authority.">>},
         {ok, Recipient} ?= committer(<<"recipient">>, Req, Opts),
-        {ok, Quantity} ?= quantity(field(<<"quantity">>, Req, Opts)),
-        {ok, Trigger} ?= trigger(field(<<"mint-trigger">>, Req, Opts)),
+        {ok, Quantity} ?= quantity(key(<<"quantity">>, Req, Opts)),
+        {ok, Trigger} ?= trigger(key(<<"mint-trigger">>, Req, Opts)),
         TriggerKey = hb_committer:encode({id, undefined}, Trigger),
         Triggers = hb_maps:get(<<"mint-triggers">>, Base, #{}, Opts),
         true ?= (hb_ao:get(TriggerKey, Triggers, not_found, Opts) =:= not_found)
@@ -71,7 +71,7 @@ mint(Base, Assignment, Opts) ->
         )
     end.
 
-field(Key, Msg, Opts) ->
+key(Key, Msg, Opts) ->
     case hb_maps:find(Key, Msg, Opts) of
         {ok, Value} -> {ok, Value};
         error -> {error, <<"Mint `", Key/binary, "` not found.">>}
@@ -79,7 +79,7 @@ field(Key, Msg, Opts) ->
 
 committer(Key, Msg, Opts) ->
     maybe
-        {ok, Value} ?= field(Key, Msg, Opts),
+        {ok, Value} ?= key(Key, Msg, Opts),
         hb_committer:name(Value)
     end.
 
