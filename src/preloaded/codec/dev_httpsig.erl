@@ -224,18 +224,12 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
             Error -> throw({cannot_commit, Error, MsgToSign})
         end,
     Owner = hb_maps:get(<<"owner">>, CommitterMsg, <<>>, Opts),
-    % Utilize the hashpath, if present, as the tag for the commitment.
-    MaybeTagMap =
-        case MsgToSign of
-            #{ <<"priv">> := #{ <<"hashpath">> := HP }} -> #{ <<"tag">> => HP };
-            _ -> #{}
-        end,
     % Generate the unsigned commitment and signature base.
     ToCommit = hb_ao:normalize_keys(keys_to_commit(MsgToSign, Req, Opts)),
     ?event_debug({to_commit, ToCommit}),
     UnsignedCommitment =
         maybe_bundle_tag_commitment(
-            MaybeTagMap#{
+            #{
                 <<"commitment-device">> => <<"httpsig@1.0">>,
                 <<"type">> => <<"rsa-pss-sha512">>,
                 <<"keyid">> => KeyID,
