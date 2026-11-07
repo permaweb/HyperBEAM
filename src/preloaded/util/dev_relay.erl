@@ -633,6 +633,7 @@ relay_relative_routed_test() ->
 relay_chunk_upload_test_() ->
     {timeout, 60, fun relay_chunk_upload/0}.
 relay_chunk_upload() ->
+    Opts = #{ <<"http-only-result">> => false },
     Relay =
         hb_http_server:start_node(#{
             <<"priv-wallet">> => ar_wallet:new(),
@@ -650,9 +651,9 @@ relay_chunk_upload() ->
                         "GD43WIemSeN_h_mlsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFg\","
                         "\"offset\":\"21\",\"chunk\":\"QmF6YXIgY29sbGVjdGlvbiBpbmRleA\"}">>
             },
-            #{ <<"http-only-result">> => false }
+            Opts
         ),
-    ?assertEqual(200, hb_ao:get(<<"status">>, Res, #{})).
+    ?assertEqual(200, hb_ao:get(<<"status">>, Res, Opts)).
 
 %% @doc A relayed request's `multirequest-*' keys configure the node's own
 %% multirequest, so the relay removes them: a request on a `nodes' route cannot

@@ -134,7 +134,7 @@ stored_range(Module) ->
         end,
     Ends =
         fun() ->
-            {ok, Keys} = hb_store:list(Store, ?CHUNKS, #{}),
+            {ok, Keys} = hb_store:list(Store, ?CHUNKS, Opts),
             lists:sort(Keys)
         end,
     FirstEnd = key(Offset + ?DATA_CHUNK_SIZE - 1),
@@ -330,12 +330,12 @@ empty_chunk_store(Opts) ->
 receipt_opts() ->
     Self = self(),
     Receipt =
-        fun(_, Req, _) ->
+        fun(_, Req, Opts) ->
             Self !
                 {
                     receipt,
-                    hb_ao:get(<<"body/request-path">>, Req, #{}),
-                    hb_ao:get(<<"body/status-class">>, Req, #{})
+                    hb_ao:get(<<"body/request-path">>, Req, Opts),
+                    hb_ao:get(<<"body/status-class">>, Req, Opts)
                 },
             {ok, Req}
         end,

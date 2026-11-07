@@ -2186,9 +2186,10 @@ read_missing_link_test() ->
 %% is named for its device and version.
 exception_metric_test() ->
     Peer = start_node(isolated_test_opts()),
+    Opts = isolated_test_opts(),
     Node =
         start_node(
-            (isolated_test_opts())#{
+            Opts#{
                 <<"routes">> => [
                     #{
                         <<"template">> =>
@@ -2203,7 +2204,7 @@ exception_metric_test() ->
             }
         ),
     Router =
-        hb_device:message_to_device(#{ <<"device">> => <<"router@1.0">> }, #{}),
+        hb_device:message_to_device(#{ <<"device">> => <<"router@1.0">> }, Opts),
     Function = <<(hb_format:pretty_mod(Router))/binary, ":choose/5">>,
     Labels = [<<"error">>, <<"function_clause">>, Function],
     Before = exception_count(Labels),
@@ -2213,7 +2214,7 @@ exception_metric_test() ->
             Node,
             <<"/~relay@1.0/call?relay-path=/arweave/chunk">>,
             #{ <<"body">> => <<"chunk">> },
-            #{}
+            Opts
         )
     ),
     ?assert(
