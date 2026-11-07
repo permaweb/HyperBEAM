@@ -10,7 +10,7 @@
 %% GenServer
 -export([start_link/1, init/1]).
 -export([handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
--export([init_prometheus/0, init_peer_metrics/1]).
+-export([init_prometheus/0, init_peer_metrics/1, record_multirequest/4]).
 
 %% The buckets of the request duration histograms, in seconds.
 -define(
@@ -728,6 +728,15 @@ init_prometheus() ->
 			"Bytes requested per generate_offsets call"
 			" in dev_arweave chunk loading"}
 	]),
+	hb_prometheus:declare(counter, [
+		{name, http_multirequest_total},
+		{labels, [route, outcome]},
+		{
+			help,
+			"The multirequests to the nodes of a route, by the route and by"
+			" whether they gathered all, some or none of their responses."
+		}
+	]),
     ?event(started),
     ok.
 
@@ -879,6 +888,56 @@ record_duration(Peer, Details, Opts) ->
             )
         end
     ).
+
+%% @doc Count a multirequest to the nodes of a route, by the route's label
+%% (`route_label/2') and its outcome: `admissible' if it gathered as many
+%% admissible responses as it awaited, `partial' if fewer, and
+%% `no-viable-responses' if none. The count is made in a process of its own, so
+%% that it cannot fail the request.
+record_multirequest(Route, Admissible, Responses, Opts) ->
+    case prometheus_enabled(Opts) of
+        true ->
+            spawn(
+                fun() ->
+                    hb_prometheus:inc(
+                        counter,
+                        http_multirequest_total,
+                        [
+                            hb_util:list(route_label(Route, Opts)),
+                            hb_util:list(
+                                multirequest_outcome(Admissible, Responses)
+                            )
+                        ],
+                        1
+                    )
+                end
+            );
+        false ->
+            ok
+    end.
+
+%% @doc The `route' label of a route: the method and path of its `template',
+%% as the node's routes give them, or its `reference' if the template gives no
+%% path. No label holds the path of a request, so a node has a label for each
+%% of its routes.
+route_label(#{ <<"template">> := Path }, _Opts) when is_binary(Path) -> Path;
+route_label(#{ <<"template">> := Template = #{ <<"path">> := Path } }, Opts)
+        when is_binary(Path) ->
+    case hb_maps:get(<<"method">>, Template, not_found, Opts) of
+        Method when is_binary(Method) -> <<Method/binary, " ", Path/binary>>;
+        _ -> Path
+    end;
+route_label(Route, Opts) ->
+    hb_maps:get(<<"reference">>, Route, <<"unknown">>, Opts).
+
+%% @doc The outcome of a multirequest that gathered `Admissible' of the
+%% `Responses' that it awaited.
+multirequest_outcome(0, _Responses) -> <<"no-viable-responses">>;
+multirequest_outcome(Admissible, Responses) ->
+    case Admissible >= hb_util:int(Responses) of
+        true -> <<"admissible">>;
+        false -> <<"partial">>
+    end.
 
 record_response_status(Method, Response, Path) ->
     record_response_status(Method, Response, Path, #{}).

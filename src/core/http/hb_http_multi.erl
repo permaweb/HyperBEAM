@@ -24,6 +24,10 @@
 %%% `response', the original `request-method' and `request-path', and the peer's
 %%% `reference', if set. Acceptance means the configured checks passed; without
 %%% a content predicate it does not establish that the returned content is valid.
+%%%
+%%% Each multirequest is counted in `http_multirequest_total', by the template
+%%% of its route and by whether it gathered all, some or none of the responses
+%%% that it awaited (`hb_http_client:record_multirequest/4').
 -module(hb_http_multi).
 -export([request/5, multirequest_keys/2]).
 -include("include/hb.hrl").
@@ -85,6 +89,12 @@ request(Config, Method, Path, Message, Opts) ->
             )
         end,
     ?event(debug_http, {multirequest_results, {admissible_results, AdmissibleResults}, {all_responses, AllResponses}}),
+    hb_http_client:record_multirequest(
+        Config,
+        length(AdmissibleResults),
+        Responses,
+        Opts
+    ),
     case [hb_http:only_result(Res, Opts) || Res <- AdmissibleResults] of
         [] -> {error, {no_viable_responses, AllResponses}};
         Results -> if Responses == 1 -> hd(Results); true -> Results end
@@ -531,5 +541,62 @@ no_admissible_node_returns_error() ->
     },
     Result = hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}),
     ?assertMatch({error, {no_viable_responses, _}}, Result).
+
+%% @doc Each multirequest is counted by the template of its route, with its
+%% method, and by whether it gathered all, some or none of the responses that
+%% it awaited.
+outcome_metric_test_() ->
+    {timeout, 30, fun outcome_metric/0}.
+outcome_metric() ->
+    hb_http_client:init_prometheus(),
+    Good = ao_node(hb_http_server:start_node(#{})),
+    Chunk =
+        #{
+            <<"template">> =>
+                #{
+                    <<"path">> => <<"^/arweave/chunk">>,
+                    <<"method">> => <<"POST">>
+                },
+            <<"nodes">> => [dead_node(), Good],
+            <<"admissible-status">> => 200
+        },
+    Raw =
+        #{
+            <<"template">> => <<"^/arweave/raw">>,
+            <<"nodes">> => [dead_node(), dead_node()],
+            <<"admissible-status">> => 200
+        },
+    Cases =
+        [
+            {Chunk#{ <<"responses">> => 1 }, "POST ^/arweave/chunk", "admissible"},
+            {Chunk#{ <<"responses">> => 2 }, "POST ^/arweave/chunk", "partial"},
+            {Raw, "^/arweave/raw", "no-viable-responses"}
+        ],
+    lists:foreach(
+        fun({Config, Route, Outcome}) ->
+            Before = multirequest_count(Route, Outcome),
+            hb_http_multi:request(
+                Config,
+                <<"GET">>,
+                <<"/">>,
+                #{},
+                #{ <<"prometheus">> => true }
+            ),
+            ?assert(
+                hb_util:wait_until(
+                    fun() -> multirequest_count(Route, Outcome) == Before + 1 end,
+                    1000
+                )
+            )
+        end,
+        Cases
+    ).
+
+%% @doc The number of multirequests counted for a route and an outcome.
+multirequest_count(Route, Outcome) ->
+    case prometheus_counter:value(http_multirequest_total, [Route, Outcome]) of
+        undefined -> 0;
+        Count -> Count
+    end.
 
 -endif.
