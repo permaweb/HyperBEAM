@@ -124,7 +124,12 @@ execute_handlers(HookName, [Handler|Rest], Req, Opts) ->
             % If status is ok, continue with the next handler
             execute_handlers(HookName, Rest, NewReq, Opts);
         {Status, Res} ->
-            % If status is error, halt execution and return the error
+            % If status is error, halt execution and return the error. The
+            % event is named for the handler, so that the `event' counter
+            % tells apart the handlers that halt a hook.
+            ?event(hook_halt,
+                {handler_name(Handler), {hook, HookName}, {status, Status}}
+            ),
             {Status, Res};
         Other ->
             % If status is unknown, convert to error and halt execution
@@ -137,6 +142,12 @@ execute_handlers(HookName, [Handler|Rest], Req, Opts) ->
                 >>
             }
     end.
+
+%% @doc The name of a handler in the events of its hook: the device that it
+%% names, from the node's configuration, or `unnamed' for a handler whose
+%% device is not a name, such as a message of functions.
+handler_name(#{ <<"device">> := Device }) when is_binary(Device) -> Device;
+handler_name(_Handler) -> unnamed.
 
 %% @doc Execute a single handler
 %% Handlers are expressed as messages that can be resolved via AO.
@@ -326,3 +337,28 @@ halt_on_error_test() ->
     Opts = #{ <<"on">> => #{ <<"test-hook">> => [Handler1, Handler2, Handler3] }},
     {error, Result} = on(<<"test-hook">>, Req, Opts),
     ?assertEqual(<<"Error in handler2">>, Result).
+
+-ifndef(NO_EVENTS).
+%% @doc A handler that halts a hook is named by its device in the hook's
+%% `hook_halt' event, which the `event' counter counts. Here `update-state' of
+%% `test-device@1.0' refuses a request without a `test-id'.
+halt_event_names_handler_test() ->
+    Handler =
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"path">> => <<"update-state">>
+        },
+    Opts = #{ <<"on">> => #{ <<"test-hook">> => Handler }},
+    Before = halt_count(<<"test-device@1.0">>),
+    ?assertMatch({error, _}, on(<<"test-hook">>, #{}, Opts)),
+    ?assert(
+        hb_util:wait_until(
+            fun() -> halt_count(<<"test-device@1.0">>) == Before + 1 end,
+            1000
+        )
+    ).
+
+%% @doc The number of times that the named handler has halted a hook.
+halt_count(Handler) ->
+    maps:get(Handler, maps:get(<<"hook_halt">>, hb_event:counters(), #{}), 0).
+-endif.
