@@ -20,7 +20,7 @@
 %%% Public Utility Functions.
 -export([escape_format/1, short_id/1, trace_to_list/1]).
 -export([get_trace/1, print_trace/4, trace_macro_helper/5, print_trace_short/4]).
--export([process_from_trace/1]).
+-export([process_from_trace/1, pretty_mod/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 

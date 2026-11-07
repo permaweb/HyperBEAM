@@ -931,6 +931,7 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
         },
         NodeMsg
     ),
+    record_exception(Type, Details, Stacktrace),
     reply(Req, Singleton, Reply, NodeMsg).
 
 %% @doc Return the status and the message of the reply to an exception: the
@@ -1880,7 +1881,16 @@ init_prometheus() ->
 			help,
 			"The total duration of an hb_http_server request call." 
 		}
-	]).
+	]),
+    hb_prometheus:declare(counter, [
+        {name, http_server_exceptions_total},
+        {labels, [class, reason, function]},
+        {
+            help,
+            "The exceptions that the node answered requests with, by their"
+            " class, reason and the function that raised them."
+        }
+    ]).
 
 record_request_metric(TotalDuration, ReplyDuration, StatusCode) ->
     spawn(
@@ -1897,6 +1907,43 @@ record_request_metric(TotalDuration, ReplyDuration, StatusCode) ->
             )
         end
     ).
+
+%% @doc Count an exception that the node answers a request with, by its class,
+%% its reason and the function at the top of its stacktrace. No label holds the
+%% data of a request, so the labels are bounded by the node's code.
+record_exception(Class, Reason, Stacktrace) ->
+    spawn(
+        fun() ->
+            hb_prometheus:inc(
+                counter,
+                http_server_exceptions_total,
+                [
+                    hb_util:bin(Class),
+                    exception_reason(Reason),
+                    exception_function(Stacktrace)
+                ]
+            )
+        end
+    ).
+
+%% @doc The `reason' label of an exception: its atom, or the atom that its tuple
+%% starts with. Any other reason may hold the data of a request.
+exception_reason(Reason) when is_atom(Reason) -> hb_util:bin(Reason);
+exception_reason(Reason) when is_tuple(Reason), is_atom(element(1, Reason)) ->
+    hb_util:bin(element(1, Reason));
+exception_reason(_Reason) -> <<"other">>.
+
+%% @doc The `function' label of an exception: the function of the top frame of
+%% its stacktrace, as `module:function/arity'.
+exception_function([{Mod, Func, Args, Location} | _]) when is_list(Args) ->
+    exception_function([{Mod, Func, length(Args), Location}]);
+exception_function([{Mod, Func, Arity, _Location} | _]) ->
+    <<
+        (hb_format:pretty_mod(Mod))/binary, ":",
+        (hb_util:bin(Func))/binary, "/",
+        (hb_util:bin(Arity))/binary
+    >>;
+exception_function(_Stacktrace) -> <<"unknown">>.
 
 %%% Tests
 
@@ -2131,6 +2178,72 @@ read_missing_link_test() ->
             #{}
         )
     ).
+
+%% @doc An exception that the node answers a request with is counted by its
+%% class, its reason and the function that raised it. A relay to a route that
+%% chooses its nodes by `Shuffled-Range', for a request without the `route-by'
+%% that the strategy reads, raises in `choose/5' of `router@1.0', whose module
+%% is named for its device and version.
+exception_metric_test() ->
+    Peer = start_node(isolated_test_opts()),
+    Node =
+        start_node(
+            (isolated_test_opts())#{
+                <<"routes">> => [
+                    #{
+                        <<"template">> =>
+                            #{
+                                <<"path">> => <<"^/arweave/chunk">>,
+                                <<"method">> => <<"POST">>
+                            },
+                        <<"nodes">> => [#{ <<"prefix">> => Peer }],
+                        <<"strategy">> => <<"Shuffled-Range">>
+                    }
+                ]
+            }
+        ),
+    Router =
+        hb_device:message_to_device(#{ <<"device">> => <<"router@1.0">> }, #{}),
+    Function = <<(hb_format:pretty_mod(Router))/binary, ":choose/5">>,
+    Labels = [<<"error">>, <<"function_clause">>, Function],
+    Before = exception_count(Labels),
+    ?assertMatch(
+        {failure, #{ <<"status">> := 500 }},
+        hb_http:post(
+            Node,
+            <<"/~relay@1.0/call?relay-path=/arweave/chunk">>,
+            #{ <<"body">> => <<"chunk">> },
+            #{}
+        )
+    ),
+    ?assert(
+        hb_util:wait_until(
+            fun() -> exception_count(Labels) == Before + 1 end,
+            1000
+        )
+    ).
+
+%% @doc The `reason' of an exception is an atom of it, never the data that it
+%% carries, and the `function' is its top frame.
+exception_labels_test() ->
+    ?assertEqual(<<"badarg">>, exception_reason(badarg)),
+    ?assertEqual(<<"badmatch">>, exception_reason({badmatch, {error, x}})),
+    ?assertEqual(<<"other">>, exception_reason(<<"/a/path?with=data">>)),
+    ?assertEqual(<<"other">>, exception_reason({<<"id">>, badarg})),
+    ?assertEqual(
+        <<"lists:nth/2">>,
+        exception_function(
+            [{lists, nth, [1, []], []}, {?MODULE, f, 0, []}]
+        )
+    ),
+    ?assertEqual(<<"unknown">>, exception_function([])).
+
+%% @doc The number of exceptions that the node answered with the given labels.
+exception_count(Labels) ->
+    case prometheus_counter:value(http_server_exceptions_total, Labels) of
+        undefined -> 0;
+        Count -> Count
+    end.
 
 test_opts() ->
     #{ <<"store">> => hb_test_utils:test_store(), <<"priv-wallet">> => hb:wallet() }.
