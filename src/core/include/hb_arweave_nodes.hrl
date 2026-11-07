@@ -201,6 +201,49 @@
     }
 ]).
 
+%% The data nodes that sync the partitions at the tip, and so accept the chunks
+%% of new uploads.
+-define(ARWEAVE_BOOTSTRAP_TIP_SYNC_NODES,
+[
+    %% Partitions 64-126
+    #{
+        <<"match">> => <<"^/arweave">>,
+        <<"min">> => 230_400_000_000_000,
+        <<"max">> => 457_200_000_000_000,
+        <<"center">> => 343_800_000_000_000,
+        <<"with">> => <<"http://data-8.arweave.xyz:1984">>
+    },
+    %% Partitions 75-138
+    #{
+        <<"match">> => <<"^/arweave">>,
+        <<"min">> => 270_000_000_000_000,
+        <<"max">> => 500_400_000_000_000,
+        <<"center">> => 385_200_000_000_000,
+        <<"with">> => <<"http://data-9.arweave.xyz:1984">>
+    },
+    #{
+        <<"match">> => <<"^/arweave">>,
+        <<"min">> => 270_000_000_000_000,
+        <<"max">> => 500_400_000_000_000,
+        <<"center">> => 385_200_000_000_000,
+        <<"with">> => <<"http://data-10.arweave.xyz:1984">>
+    },
+    #{
+        <<"match">> => <<"^/arweave">>,
+        <<"min">> => 270_000_000_000_000,
+        <<"max">> => 500_400_000_000_000,
+        <<"center">> => 385_200_000_000_000,
+        <<"with">> => <<"http://data-11.arweave.xyz:1984">>
+    },
+    #{
+        <<"match">> => <<"^/arweave">>,
+        <<"min">> => 270_000_000_000_000,
+        <<"max">> => 500_400_000_000_000,
+        <<"center">> => 385_200_000_000_000,
+        <<"with">> => <<"http://data-12.arweave.xyz:1984">>
+    }
+]).
+
 -define(ARWEAVE_BOOTSTRAP_CHAIN_NODES,
 [
     #{

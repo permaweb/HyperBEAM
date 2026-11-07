@@ -447,22 +447,31 @@ raw_default_message() ->
                 <<"stop-after">> => true,
                 <<"admissible-status">> => 200
             },
+            % Chunk uploads: an upload gives its offset in its transaction, not
+            % in the weave, so it cannot be routed by range. Its chunks are new
+            % data at the tip: post them to every node that syncs the tip, as
+            % the JSON that an Arweave node parses, and reply after 3x 200s.
             #{
                 <<"template">> => 
                     #{
                         <<"path">> => <<"^/arweave/chunk">>,
                         <<"method">> => <<"POST">>
                     },
-                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES),
-                <<"strategy">> => <<"Shuffled-Range">>,
+                <<"nodes">> =>
+                    add_opts(
+                        ?ARWEAVE_BOOTSTRAP_TIP_NODES
+                            ++ ?ARWEAVE_BOOTSTRAP_TIP_SYNC_NODES,
+                        ?DEFAULT_HTTP_OPTS#{ <<"http-codec">> => <<"json@1.0">> }
+                    ),
+                <<"strategy">> => <<"Random">>,
                 <<"choose">> =>
                     length(
-                        ?ARWEAVE_BOOTSTRAP_DATA_NODES
-                            ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES
+                        ?ARWEAVE_BOOTSTRAP_TIP_NODES
+                            ++ ?ARWEAVE_BOOTSTRAP_TIP_SYNC_NODES
                     ),
-                <<"parallel">> => 5,
-                <<"responses">> => 3, %% keep going until we get 3x 200s
-                <<"stop-after">> => true,
+                <<"parallel">> => true,
+                <<"responses">> => 3,
+                <<"stop-after">> => false,
                 <<"admissible-status">> => 200
             },
             #{

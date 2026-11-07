@@ -625,6 +625,35 @@ relay_relative_routed_test() ->
         ),
     ?assertEqual(Address, hb_ao:get(<<"body">>, Res, #{})).
 
+%% @doc A chunk upload relayed through the node's default Arweave routes, as a
+%% gateway relays `POST /chunk', is accepted by the nodes that sync the tip.
+%% The upload is a chunk that the network holds already (the 22 bytes of
+%% transaction `A7TGD0bktXYkQSrz4UWfPqgcb8A4TAOEsKQU5_zAu7g'), which a node
+%% accepts again.
+relay_chunk_upload_test_() ->
+    {timeout, 60, fun relay_chunk_upload/0}.
+relay_chunk_upload() ->
+    Relay =
+        hb_http_server:start_node(#{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"routes">> => [<<"~meta@1.0/info/arweave-routes">>]
+        }),
+    {ok, Res} =
+        hb_http:post(
+            Relay,
+            #{
+                <<"path">> => <<"/~relay@1.0/call?relay-path=/arweave/chunk">>,
+                <<"content-type">> => <<"application/json">>,
+                <<"body">> =>
+                    <<"{\"data_root\":\"oQKhNnXBWbOvjI2edcEXDCnB7BUvDeZsZ4zTn2R95TI\","
+                        "\"data_size\":\"22\",\"data_path\":\"LCdnBIZXnavBo4CnAfMwu5kGK4"
+                        "GD43WIemSeN_h_mlsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFg\","
+                        "\"offset\":\"21\",\"chunk\":\"QmF6YXIgY29sbGVjdGlvbiBpbmRleA\"}">>
+            },
+            #{ <<"http-only-result">> => false }
+        ),
+    ?assertEqual(200, hb_ao:get(<<"status">>, Res, #{})).
+
 %% @doc A relayed request's `multirequest-*' keys configure the node's own
 %% multirequest, so the relay removes them: a request on a `nodes' route cannot
 %% choose the peers it is sent to, only the route's own nodes are reached.
