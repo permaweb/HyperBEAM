@@ -14,10 +14,16 @@
 %% (`MAX_SERVED_TX_DATA_SIZE').
 -define(MAX_SERVED_TX_DATA_SIZE, 12 * 1024 * 1024).
 
+%% The most bytes that a range read gives, unless the node's
+%% `arweave-max-range' gives another number.
+-define(DEFAULT_MAX_RANGE, 256 * 1024 * 1024).
+
 %% @doc Retrieve a chunk or slice of bytes by its offset, either relative to the
 %% global Arweave data tree, or relative to the start of a specific pending
 %% transaction. A request that also gives the `tx' whose data the range is and
 %% that transaction's `data-root' is read whole when `tx_data/2' can read it.
+%% A range longer than the node's `arweave-max-range' answers 413 before any
+%% of it is read.
 %% `chunk=OFFSET' gives the whole weave chunk that holds the byte at the
 %% offset, which the node's `arweave-chunk-store' keeps at `chunk=END' for
 %% the offset `END' of its last byte (`hb_store_arweave_chunk').
@@ -27,11 +33,21 @@ get_chunk(_Base, #{ <<"chunk">> := Offset }, Opts) ->
         {ok, Chunk}
     end;
 get_chunk(Base, Request, Opts) ->
-    case tx_data(Request, Opts) of
-        {ok, Data} -> {ok, Data};
-        Other ->
-            ?event(debug_arweave, {tx_data_not_read, {reason, Other}}),
-            get_range(Base, Request, Opts)
+    Length = hb_util:int(hb_maps:get(<<"length">>, Request, 0, Opts)),
+    MaxRange = hb_opts:get(<<"arweave-max-range">>, ?DEFAULT_MAX_RANGE, Opts),
+    maybe
+        true ?=
+            Length =< MaxRange orelse
+                {error, #{
+                    <<"status">> => 413,
+                    <<"body">> => <<"Range too large.">>
+                }},
+        case tx_data(Request, Opts) of
+            {ok, Data} -> {ok, Data};
+            Other ->
+                ?event(debug_arweave, {tx_data_not_read, {reason, Other}}),
+                get_range(Base, Request, Opts)
+        end
     end.
 
 %% @doc Read the data of a transaction of at most 12 MiB in one request, as
@@ -575,3 +591,39 @@ tx_data_test_parallel() ->
             }
         )
     ).
+
+%% @doc A range longer than the node's `arweave-max-range' answers 413 before
+%% any chunk of it is read, and a range of exactly that length is read.
+max_range_test_parallel() ->
+    %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
+    Offset = 378092137521399,
+    Opts =
+        #{
+            <<"arweave-max-range">> => ?DATA_CHUNK_SIZE,
+            <<"arweave-chunk-store">> =>
+                hb_test_utils:test_store(hb_store_volatile)
+        },
+    Read =
+        fun(Length) ->
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{
+                    <<"path">> => <<"chunk">>,
+                    <<"offset">> => Offset,
+                    <<"length">> => Length
+                },
+                Opts
+            )
+        end,
+    ?assertMatch(
+        {error, #{ <<"status">> := 413 }},
+        Read(?DATA_CHUNK_SIZE + 1)
+    ),
+    % Every chunk that a range read fetches is written to the chunk store.
+    ?assertEqual({error, not_found}, hb_store_arweave_chunk:read(Offset, Opts)),
+    {ok, Data} = Read(?DATA_CHUNK_SIZE),
+    ?assertEqual(
+        <<"LyTBdUe0rNmpqt8C-p7HksdiredXaa0wCBAPt3504W0">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ?assertMatch({ok, _}, hb_store_arweave_chunk:read(Offset, Opts)).

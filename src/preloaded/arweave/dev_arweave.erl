@@ -383,29 +383,31 @@ get_raw(Base, Request, Opts) ->
             Err = {error, _} -> Err;
             {ok, StartRange, EndRange} ->
                 RangeLength = (EndRange - StartRange) + 1,
-                {ok, Data} =
-                    hb_store_arweave:read_chunks(
-                        add_data_offset(ArweaveDataOffset, StartRange),
-                        RangeLength,
-                        Opts
-                    ),
-                {
-                    ok,
-                    Header#{
-                        <<"status">> => 206,
-                        <<"content-type">> => ContentType,
-                        <<"content-range">> =>
-                            <<
-                                "bytes ",
-                                (hb_util:bin(StartRange))/binary,
-                                "-",
-                                (hb_util:bin(EndRange))/binary,
-                                "/",
-                                (hb_util:bin(FullContentLength))/binary
-                            >>,
-                        <<"body">> => Data
+                maybe
+                    {ok, Data} ?=
+                        hb_store_arweave:read_chunks(
+                            add_data_offset(ArweaveDataOffset, StartRange),
+                            RangeLength,
+                            Opts
+                        ),
+                    {
+                        ok,
+                        Header#{
+                            <<"status">> => 206,
+                            <<"content-type">> => ContentType,
+                            <<"content-range">> =>
+                                <<
+                                    "bytes ",
+                                    (hb_util:bin(StartRange))/binary,
+                                    "-",
+                                    (hb_util:bin(EndRange))/binary,
+                                    "/",
+                                    (hb_util:bin(FullContentLength))/binary
+                                >>,
+                            <<"body">> => Data
+                        }
                     }
-                };
+                end;
             false ->
                 case hb_store_arweave:read_chunks(ArweaveDataOffset, FullContentLength, Opts) of
                     {ok, Data} ->
@@ -480,7 +482,7 @@ list_find(Key, [{XKey, Value} | Rest], Default) ->
 %% single chunk. Notably, as well as wrapping the Arweave node's normal
 %% `GET /chunk' API, it also supports additional facilities:
 %% - `GET` with `length`: Returns precisely the range of bytes specified by the
-%%   offset and length.
+%%   offset and length, of at most the node's `arweave-max-range' bytes.
 %% - `GET` with `txid`: `GET`s a chunk or range of bytes from the given offset,
 %%   relative to the given transaction's data root.
 %% - `GET` with `tx` and `data-root`, for a range that is the whole data of
@@ -2109,6 +2111,40 @@ get_raw_range_ans104_test_parallel() ->
         {ok, <<"t #972">>},
         hb_maps:find(<<"body">>, Result2, Opts)
     ).
+
+%% @doc A raw read over HTTP of a range of at most the node's
+%% `arweave-max-range' bytes answers 206 with the range in `content-range' and
+%% advertises `accept-ranges'. A read of a longer range, or of the whole item
+%% when it is longer, answers 413.
+get_raw_max_range_test_parallel() ->
+    TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+    Opts =
+        (setup_arweave_index_opts([TXID]))#{
+            <<"arweave-max-range">> => 100
+        },
+    Node = hb_http_server:start_node(Opts),
+    Get =
+        fun(ReqHeaders) ->
+            {ok, Status, ResHeaders, ResBody} =
+                hb_http_client:request(
+                    #{
+                        peer => Node,
+                        path => <<"/~arweave@2.9/raw=", TXID/binary>>,
+                        method => <<"GET">>,
+                        headers => ReqHeaders,
+                        body => <<>>
+                    },
+                    Opts
+                ),
+            {Status, maps:from_list(ResHeaders), ResBody}
+        end,
+    {206, Headers, Body} = Get(#{ <<"range">> => <<"bytes=0-99">> }),
+    ?assertEqual(<<"bytes 0-99/774">>, maps:get(<<"content-range">>, Headers)),
+    ?assertEqual(<<"bytes">>, maps:get(<<"accept-ranges">>, Headers)),
+    ?assertEqual(<<"{\"d">>, binary:part(Body, 0, 3)),
+    ?assertEqual(100, byte_size(Body)),
+    ?assertMatch({413, _, _}, Get(#{ <<"range">> => <<"bytes=0-100">> })),
+    ?assertMatch({413, _, _}, Get(#{})).
 
 get_tx_rsa_nested_bundle_test_parallel() ->
     Node = hb_http_server:start_node(),
