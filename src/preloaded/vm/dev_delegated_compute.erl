@@ -223,6 +223,10 @@ do_compute(ProcID, Req, Opts) ->
 do_dryrun(ProcID, Req, Opts) ->
     ?event({do_dryrun_msg, {req, Req}}),
     % Remove commitments from the message before sending to the external CU
+    % Resolve without a hashpath, as `lib_scheduler_formats' does for
+    % `do_compute/3': with one, AO-Core returns the JSON-Struct as a message,
+    % whose keys are normalized to lower case (`tags', not `Tags') and which
+    % gains `commitments' and `priv', so the CU rejects the dry-run.
     {ok, Struct} =
         hb_ao:resolve(
             #{ <<"device">> => <<"json-iface@1.0">> },
@@ -230,7 +234,10 @@ do_dryrun(ProcID, Req, Opts) ->
                 <<"path">> => <<"to">>,
                 <<"message">> => hb_maps:without([<<"commitments">>], Req, Opts)
             },
-            Opts
+            Opts#{
+                <<"hashpath">> => ignore,
+                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+            }
         ),
     Body = hb_json:encode(Struct),
     ?event({do_dryrun_body, {string, Body}}),
