@@ -245,6 +245,10 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
         maps:from_list(
             lists:map(
                 fun ({Key, {binary, Bin}}) -> {Key, hb_util:encode(Bin)};
+                    ({<<"keyid">>, BareItem}) ->
+                    % A `keyid' is a string, never a nested map: v0.11 nodes
+                    % give unsigned commitments the keyid `hmac:constant:ao'.
+                    {<<"keyid">>, hb_structured_fields:from_bare_item(BareItem)};
                     ({Key, BareItem}) ->
                     Item =
                         case hb_structured_fields:from_bare_item(BareItem) of
@@ -571,3 +575,61 @@ escaped_value_test() ->
     ?event(debug_test, {siginfo, {explicit, SigInfo}}),
     ?event(debug_test, {commitments, {explicit, Commitments}}),
     ?assertEqual(#{ ID => Commitment }, Commitments).
+
+%% @doc Test that a `keyid' is read as the string that it is. The keyid that
+%% v0.11 nodes give unsigned commitments, `hmac:constant:ao', has the form of
+%% an `original-tags' entry (`ID:name:value'), but is not a map.
+keyid_string_test() ->
+    HMAC = <<"comm-mrzt2jrrr4scnmx-aeuwvuyazjbrugshwqo4rwxamye=">>,
+    RSA = <<"comm-bxw8ynnpbbgnmrj4vnx3t62pajf4nsk70w5l7xvocv4=">>,
+    URIKeyID =
+        <<"uri-did-ar---e-0ohvvxistetquohab150qvpk-k5e1mvv2jcitrw3cylsv4kg">>,
+    % The headers of an arweave.net `/info' reply, with the signature and
+    % public key of its RSA member cut short.
+    Signature =
+        <<
+            HMAC/binary, ":Vr2hLnSF2PIiAJxLrc6rgQPTQHT9ITKdh27EKQ3zx9Q=:, ",
+            RSA/binary, ":IcPh2NODEv1n8PCrnDiqfFjd6jIszrNz3Woao+kvsZ5TU80bPnoC:"
+        >>,
+    SigInput =
+        fun(KeyID) ->
+            <<
+                HMAC/binary,
+                "(\"access-control-allow-origin\" \"ao-types\" "
+                "\"content-digest\" \"date\" \"server\" \"status\")"
+                ";alg=\"hmac-sha256\";keyid=\"", KeyID/binary, "\", ",
+                RSA/binary,
+                "(\"hashpath\");alg=\"rsa-pss-sha512\""
+                ";keyid=\"", URIKeyID/binary, "\""
+                ";public-key=\"popB9mRzTdDMhkP3flg290Y0C1etiR1I\""
+            >>
+        end,
+    KeyIDs =
+        fun(KeyID) ->
+            Commitments =
+                siginfo_to_commitments(
+                    #{
+                        <<"signature">> => Signature,
+                        <<"signature-input">> => SigInput(KeyID)
+                    },
+                    #{},
+                    #{}
+                ),
+            lists:sort(
+                [
+                    {maps:get(<<"keyid">>, C), maps:is_key(<<"committer">>, C)}
+                ||
+                    C <- maps:values(Commitments)
+                ]
+            )
+        end,
+    % The keyid that v0.11 nodes send.
+    ?assertEqual(
+        lists:sort([{<<"hmac:constant:ao">>, false}, {URIKeyID, false}]),
+        KeyIDs(<<"hmac:constant:ao">>)
+    ),
+    % The keyid that v0.9 nodes send.
+    ?assertEqual(
+        lists:sort([{<<"constant:ao">>, false}, {URIKeyID, false}]),
+        KeyIDs(<<"constant:ao">>)
+    ).
