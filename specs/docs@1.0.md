@@ -35,8 +35,9 @@ script reads the data of a device from the node, and renders it.
   device's name in the node's preloaded index. Its body is the device's
   `-specification` file, or the module's `%%% @doc` block without one.
 - **Recipe:** an item with the tags `type: Device-Recipe` and
-  `recipe-for-device: <spec ID>`. Its body is Markdown, whose code blocks are
-  requests that the page can run.
+  `recipe-for-device: <spec ID>`. The optional `device-name` tag gives the
+  full versioned name, for example `message@1.0`. Its body is Markdown, whose
+  code blocks are requests that the page can run.
 - **Package:** the files of the device's implementation archive, which the
   loader extracts when it loads the device.
 
@@ -93,10 +94,10 @@ Its script, `docs.js`, reads:
 1. the info of the device, as JSON with `accept-bundle: true`, which holds
    its schema and its specification. The signer of the specification is the
    `committer` of its signature;
-2. the recipes for the specification, through the node's
-   `POST /~query@1.0/graphql`. Recipes signed by the signer of the
-   specification are listed as **Recipes**, and all others as **Community
-   recipes**;
+2. the recipes for the specification and for the full versioned device name,
+   through the node's `POST /~query@1.0/graphql`. They are listed together as
+   **Recipes**, each with the address that uploaded it. For each slug, a recipe
+   for the active specification takes priority, with its signer's recipe first;
 3. the implementations of the device;
 4. the device list, and the assets of the page.
 
@@ -107,8 +108,7 @@ page can load from `/~docs@1.0/asset/markdown.js`.
 
 - The runner of the page sends a recipe's requests with `credentials: 'omit'`,
   so that they do not carry the visitor's cookies.
-- A community recipe is rendered without raw HTML, and the first click on one
-  of its requests shows a caution that someone else made it. Only a second
-  click sends the request.
+- Raw HTML is enabled only for a recipe tagged with the active specification's
+  ID and signed by that specification's signer.
 - `markdown.js` renders a link only if it is relative, or its scheme is
   `http`, `https` or `mailto`.
