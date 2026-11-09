@@ -230,15 +230,19 @@ encode_ao_types(Types, _Opts) ->
 
 %% @doc Parse the `ao-types' field of a TABM if present, and return a map of
 %% keys and their types. If the given value is a list, we return an empty map
-%% as there can be no `ao-types'.
+%% as there can be no `ao-types'. A member gives the type of its key, as this
+%% node writes it (`status="integer"'), or the keys of its type, as v0.11 nodes
+%% write it (`integer=("status")').
 decode_ao_types(List, _Opts) when is_list(List) -> #{};
 decode_ao_types(Msg, Opts) when is_map(Msg) ->
     decode_ao_types(hb_maps:get(<<"ao-types">>, Msg, <<>>, Opts), Opts);
 decode_ao_types(Bin, _Opts) when is_binary(Bin) ->
     hb_maps:from_list(
-        lists:map(
+        lists:flatmap(
             fun({Key, {item, {_, Value}, _}}) ->
-                {hb_escape:decode(Key), Value}
+                [{hb_escape:decode(Key), Value}];
+            ({Type, {list, Keys, _}}) ->
+                [{Key, Type} || {item, {_, Key}, _} <- Keys]
             end,
             hb_structured_fields:parse_dictionary(Bin)    
         )
@@ -383,3 +387,50 @@ list_encoding_test() ->
     % Test that we can encode and decode a mixed list.
     {<<"list">>, Encoded3} = encode_value(List3 = [1, <<"2">>, 3]),
     ?assertEqual(List3, decode_value(list, Encoded3)).
+
+%% @doc Test that `ao-types' is read in the form that this node writes, a type
+%% for each key, and in the form that v0.11 nodes write, the keys of each type.
+decode_ao_types_test() ->
+    Types =
+        #{
+            <<".">> => <<"list">>,
+            <<"1">> => <<"integer">>,
+            <<"compute-mode">> => <<"atom">>
+        },
+    % The form that v0.9 nodes write.
+    ?assertEqual(
+        #{ <<"status">> => <<"integer">> },
+        decode_ao_types(<<"status=\"integer\"">>, #{})
+    ),
+    ?assertEqual(
+        Types,
+        decode_ao_types(
+            <<".=\"list\", 1=\"integer\", compute-mode=\"atom\"">>,
+            #{}
+        )
+    ),
+    % The form that v0.11 nodes write, as in arweave.net's `/info' reply.
+    ?assertEqual(
+        #{ <<"status">> => <<"integer">> },
+        decode_ao_types(<<"integer=(\"status\")">>, #{})
+    ),
+    ?assertEqual(
+        Types,
+        decode_ao_types(
+            <<"atom=(\"compute-mode\"), integer=(\"1\"), list=(\".\")">>,
+            #{}
+        )
+    ),
+    % A relayed `/height' reply decodes with its `status' as an integer.
+    ?assertEqual(
+        {ok, #{ <<"status">> => 200, <<"body">> => <<"2038656">> }},
+        to(
+            #{
+                <<"ao-types">> => <<"integer=(\"status\")">>,
+                <<"status">> => <<"200">>,
+                <<"body">> => <<"2038656">>
+            },
+            #{},
+            #{}
+        )
+    ).
