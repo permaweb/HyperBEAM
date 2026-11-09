@@ -8,13 +8,14 @@
 
 opts() ->
     hb:init(),
+    Store = [hb_test_utils:test_store()],
     #{
         <<"priv-wallet">> => ar_wallet:new(),
-        <<"store">> => [hb_test_utils:test_store() | default_stores()]
+        <<"store">> => Store,
+        <<"process-store">> => Store,
+        <<"attested-store">> => hb_test_utils:test_store(),
+        <<"priv-store">> => [hb_test_utils:test_store()]
     }.
-
-default_stores() ->
-    hb_opts:get(store, [], hb_opts:default_message()).
 
 %% @doc The module the preloaded `token@1.0' device runs as.
 token() ->
