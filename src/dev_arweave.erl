@@ -876,17 +876,26 @@ request(Method, Path, Extra, Opts) ->
 request(Method, Path, Extra, LogExtra, Opts) ->
     ?event(debug_arweave, {request,
         {method, Method}, {path, {explicit, Path}}, {log_extra, LogExtra}}),
-    Res =
-        hb_http:request(
+    RequestOpts = Opts#{
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    {ok, RoutedMethod, Peer, RoutedPath, RoutedMessage, RoutedOpts} =
+        hb_http:message_to_request(
             Extra#{
                 <<"path">> => <<"/arweave", Path/binary>>,
                 <<"method">> => Method
             },
-            Opts#{
-                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
-                % Arweave gateways read AO types by type group.
-                <<"ao-types-encoding">> => grouped
-            }
+            RequestOpts
+        ),
+    WireMessage =
+        case maps:find(<<"route-by">>, RoutedMessage) of
+            {ok, RouteBy} when is_integer(RouteBy) ->
+                RoutedMessage#{<<"route-by">> => hb_util:bin(RouteBy)};
+            _ -> RoutedMessage
+        end,
+    Res =
+        hb_http:request(
+            RoutedMethod, Peer, RoutedPath, WireMessage, RoutedOpts
         ),
     to_message(Path, Method, best_response(Res), LogExtra, Opts).
 

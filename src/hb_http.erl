@@ -104,9 +104,8 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             Opts
         ),
     StartTime = os:system_time(millisecond),
-    ResponseOpts = maps:without([<<"ao-types-encoding">>], Opts),
     % Perform the HTTP request.
-    Response = hb_http_client:request(Req, ResponseOpts),
+    Response = hb_http_client:request(Req, Opts),
     % Process the response.
     EndTime = os:system_time(millisecond),
     Duration = EndTime - StartTime,
@@ -126,7 +125,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
                 },
                 Opts
             ),
-            request_response(Method, Peer, Path, Response, Duration, ResponseOpts);
+            request_response(Method, Peer, Path, Response, Duration, Opts);
         Error ->
             Error
     end.
@@ -1443,16 +1442,18 @@ request_error_handling_test() ->
     % The result should be an error tuple, not crash with badmatch
     ?assertMatch({error, _}, Result).
 
-arweave_gateway_ao_types_test() ->
+arweave_gateway_plain_route_by_test() ->
     Request = prepare_request(
         <<"httpsig@1.0">>,
         <<"GET">>,
         <<"https://arweave.net">>,
         <<"/chunk/392870129607127">>,
-        #{ <<"route-by">> => 392870129607127 },
-        #{ <<"port">> => 64331, <<"ao-types-encoding">> => grouped }
+        #{ <<"route-by">> => <<"392870129607127">> },
+        #{ <<"port">> => 64331 }
     ),
+    Headers = maps:get(headers, Request),
     ?assertEqual(
-        <<"integer=(\"route-by\")">>,
-        maps:get(<<"ao-types">>, maps:get(headers, Request))
-    ).
+        <<"392870129607127">>,
+        maps:get(<<"route-by">>, Headers)
+    ),
+    ?assertEqual(false, maps:is_key(<<"ao-types">>, Headers)).
