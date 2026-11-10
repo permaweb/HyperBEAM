@@ -3,6 +3,7 @@
 #
 # Usage: make [all|clean]
 # Usage: make [secp256k1|secp256k1-clean]
+# Usage: make [blst|blst-clean]
 #
 # Based on Arweave's lib/Makefile
 ######################################################################
@@ -28,15 +29,16 @@ SECP256K1_SOURCE_FILES := $(shell \
 GIT_SUBMODULE_OPTIONS ?= --checkout --init
 
 PHONY += all
-all: secp256k1
+all: secp256k1 blst
 
 PHONY += help
 help:
 	@echo "Usage: make [all|clean]"
 	@echo "Usage: make [secp256k1|secp256k1-clean]"
+	@echo "Usage: make [blst|blst-clean]"
 
 PHONY += clean
-clean: secp256k1-clean
+clean: secp256k1-clean blst-clean
 
 ######################################################################
 # secp256k1 targets
@@ -61,5 +63,31 @@ secp256k1/build/Makefile: secp256k1/build
 secp256k1/build/lib/libsecp256k1.a: secp256k1/build/Makefile $(SECP256K1_SOURCE_FILES)
 	cd secp256k1/build \
 		&& cmake --build .
+
+######################################################################
+# blst targets
+######################################################################
+# `__BLST_PORTABLE__' picks the ADX code path at run time instead of from
+# the build host's CPU, so a library built in one image runs on any x86_64
+# node.
+BLST_SOURCE_FILES := $(shell \
+	if [ -d blst/src ] && [ -d blst/build ]; then \
+		find blst/bindings blst/src blst/build \
+			-type f \( -name '*.c' -o -name '*.h' -o -name '*.S' \) -print; \
+	fi)
+
+PHONY += blst
+blst: blst/build.sh blst-build/libblst.a
+
+PHONY += blst-clean
+blst-clean:
+	-rm -rf blst-build
+
+blst/build.sh:
+	git submodule update $(GIT_SUBMODULE_OPTIONS) blst
+
+blst-build/libblst.a: blst/build.sh $(BLST_SOURCE_FILES)
+	mkdir -p blst-build
+	cd blst-build && sh ../blst/build.sh -D__BLST_PORTABLE__
 
 .PHONY: $(PHONY)

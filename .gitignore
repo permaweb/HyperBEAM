@@ -34,6 +34,7 @@ native/hb_keccak/*.d
 
 native/hb_util_string/*.o
 native/hb_util_string/*.d
+native/lib/blst-build
 
 priv/*
 .DS_STORE
