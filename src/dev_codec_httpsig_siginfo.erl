@@ -309,6 +309,22 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
     % Return the commitment and calculated ID.
     {ok, ID, Commitment5}.
 
+%% @doc Decode current grouped parameters and older per-key tag maps.
+decoding_nested_map_binary(<<",", List/binary>>) ->
+    [<<>> | Values] = binary:split(List, <<":">>, [global]),
+    [decoding_nested_map_binary(hb_escape:decode(Value)) || Value <- Values];
+decoding_nested_map_binary(<<":">>) -> #{};
+decoding_nested_map_binary(<<":", Map/binary>>) ->
+    maps:from_list(
+        lists:map(
+            fun(Pair) ->
+                [Key, Value] = binary:split(Pair, <<":">>),
+                {hb_escape:decode(Key),
+                    decoding_nested_map_binary(hb_escape:decode(Value))}
+            end,
+            binary:split(Map, <<", ">>, [global])
+        )
+    );
 decoding_nested_map_binary(Bin) ->
     MapBinary =
         lists:foldl(
@@ -332,7 +348,7 @@ decoding_nested_map_binary(Bin) ->
         Res when is_map(Res) ->
             Res;
         Res ->
-            Res
+            hb_escape:decode(Res)
     end.
 
 %% @doc Normalize a list of AO-Core keys to their equivalents in `httpsig@1.0'
@@ -633,3 +649,10 @@ keyid_string_test() ->
         lists:sort([{<<"constant:ao">>, false}, {URIKeyID, false}]),
         KeyIDs(<<"constant:ao">>)
     ).
+
+original_tags_gateway_format_test() ->
+    Tags = #{<<"1">> => #{<<"name">> => <<"Action">>, <<"value">> => <<"Transfer">>}},
+    ?assertEqual(Tags, decoding_nested_map_binary(
+        <<":1:%3aname%3aAction%2c value%3aTransfer">>)),
+    ?assertEqual(Tags, decoding_nested_map_binary(<<"1:Action:VHJhbnNmZXI">>)),
+    ?assertEqual(<<"a:b">>, decoding_nested_map_binary(<<"a%3ab">>)).

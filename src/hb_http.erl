@@ -104,8 +104,9 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             Opts
         ),
     StartTime = os:system_time(millisecond),
+    ResponseOpts = maps:without([<<"ao-types-encoding">>], Opts),
     % Perform the HTTP request.
-    Response = hb_http_client:request(Req, Opts),
+    Response = hb_http_client:request(Req, ResponseOpts),
     % Process the response.
     EndTime = os:system_time(millisecond),
     Duration = EndTime - StartTime,
@@ -125,7 +126,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
                 },
                 Opts
             ),
-            request_response(Method, Peer, Path, Response, Duration, Opts);
+            request_response(Method, Peer, Path, Response, Duration, ResponseOpts);
         Error ->
             Error
     end.
@@ -385,7 +386,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % set an explicit preference.
     WithAcceptBundle =
         case hb_maps:get(<<"accept-bundle">>, Message, not_found, Opts) of
-            not_found -> WithoutPriv#{ <<"accept-bundle">> => true };
+            not_found -> WithoutPriv#{ <<"accept-bundle">> => <<"true">> };
             _ -> WithoutPriv
         end,
     % Determine the `ao-peer-port' from the message to send or the node message.
@@ -398,11 +399,11 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                 hb_maps:get(
                     <<"ao-peer-port">>,
                     WithAcceptBundle,
-                    hb_opts:get(
+                    hb_util:bin(hb_opts:get(
                         port_external,
                         hb_opts:get(port, undefined, Opts),
                         Opts
-                    ),
+                    )),
                     Opts
                 )
         },
@@ -1441,3 +1442,17 @@ request_error_handling_test() ->
     ),
     % The result should be an error tuple, not crash with badmatch
     ?assertMatch({error, _}, Result).
+
+arweave_gateway_ao_types_test() ->
+    Request = prepare_request(
+        <<"httpsig@1.0">>,
+        <<"GET">>,
+        <<"https://arweave.net">>,
+        <<"/chunk/392870129607127">>,
+        #{ <<"route-by">> => 392870129607127 },
+        #{ <<"port">> => 64331, <<"ao-types-encoding">> => grouped }
+    ),
+    ?assertEqual(
+        <<"integer=(\"route-by\")">>,
+        maps:get(<<"ao-types">>, maps:get(headers, Request))
+    ).

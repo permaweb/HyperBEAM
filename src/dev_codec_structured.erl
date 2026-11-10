@@ -132,7 +132,11 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                         lists:reverse(T)
                     )
                 )),
-                [{<<"ao-types">>, AoTypes} | Values]
+                [{<<"ao-types">>, case {hb_opts:get(ao_types_encoding, per_key, Opts), T} of
+                    {grouped, [{<<"route-by">>, <<"integer">>}]} ->
+                        <<"integer=(\"route-by\")">>;
+                    _ -> AoTypes
+                end} | Values]
         end),
     % If the message has a `commitments' field, add it to the TABM unmodified.
     {ok,

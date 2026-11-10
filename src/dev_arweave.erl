@@ -883,7 +883,9 @@ request(Method, Path, Extra, LogExtra, Opts) ->
                 <<"method">> => Method
             },
             Opts#{
-                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+                % Arweave gateways read AO types by type group.
+                <<"ao-types-encoding">> => grouped
             }
         ),
     to_message(Path, Method, best_response(Res), LogExtra, Opts).
