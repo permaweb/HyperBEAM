@@ -143,9 +143,11 @@ write(Opts, Req, _NodeOpts) ->
     case elmdb:put_batch(DBInstance, Pairs) of
         ok -> ok;
         {error, Type, Description} ->
+            Name = maps:get(<<"name">>, Opts, not_set),
             ?event(
                 error,
                 {lmdb_error,
+                    {name, Name},
                     {type, Type},
                     {description, Description}
                 }
