@@ -67,7 +67,11 @@ request(State, Raw, NodeMsg) ->
 admit_request(State, Raw, NodeMsg) ->
     PricingDevice = hb_ao:get(<<"pricing-device">>, State, false, NodeMsg),
     LedgerDevice = hb_ao:get(<<"ledger-device">>, State, false, NodeMsg),
-    Messages = hb_ao:get(<<"body">>, Raw, NodeMsg#{ <<"hashpath">> => ignore }),
+    % The hook body is already parsed; read it without decoding it again.
+    Messages =
+        hb_maps:get(
+            <<"body">>, Raw, not_found, NodeMsg#{ <<"hashpath">> => ignore }
+        ),
     Request = hb_ao:get(<<"request">>, Raw, NodeMsg),
     IsChargable = is_chargable_req(Request, NodeMsg),
     ?event(payment,
