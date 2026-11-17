@@ -184,7 +184,7 @@ load_modules([ModuleID | Rest], Opts, Acc) when ?IS_ID(ModuleID) ->
             % We read a message from the store, so we recurse upon the output,
             % as if the module message had beeen given directly.
             load_modules([ModuleMsg|Rest], Opts, Acc);
-        not_found ->
+        {error, not_found} ->
             {error, #{
                 <<"status">> => 404,
                 <<"body">> => <<"Lua module '", ModuleID/binary, "' not found.">>
@@ -810,6 +810,20 @@ load_modules_by_id() ->
     <<Prefix:8/binary, _/binary>> = Code,
     ?assertEqual(<<"function">>, Prefix).
     
+%% @doc A module ID that the node cannot read is a 404 that names the module.
+missing_module_test() ->
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()] },
+    ModuleID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Expected = <<"Lua module '", ModuleID/binary, "' not found.">>,
+    ?assertMatch(
+        {error, #{ <<"status">> := 404, <<"body">> := Expected }},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"lua@5.3a">>, <<"module">> => ModuleID },
+            <<"init">>,
+            Opts
+        )
+    ).
+
 multiple_modules_test() ->
     {ok, Module} = file:read_file("test/test.lua"),
     Module2 =
