@@ -130,14 +130,26 @@ image(M1, InPrefix, Opts) ->
         ImageID when ?IS_ID(ImageID) ->
             ?event({getting_wasm_image, ImageID}),
             {ok, ImageMsg} = hb_cache:read(ImageID, Opts),
-            hb_ao:get(<<"body">>, ImageMsg, Opts);
+            image_bytes(ImageMsg, Opts);
         ImageMsg when is_map(ImageMsg) ->
             ?event(wasm_image_message_directly_provided),
-            hb_ao:get(<<"body">>, ImageMsg, Opts);
+            image_bytes(ImageMsg, Opts);
         Image when is_binary(Image) ->
             ?event(wasm_image_binary_directly_provided),
             Image
     end.
+
+%% @doc Read the bytes of an image message from its `body', or else from its
+%% `data', where ANS-104 and Arweave transaction items hold their payload.
+image_bytes(ImageMsg, Opts) ->
+    hb_ao:get_first(
+        [
+            {ImageMsg, <<"body">>},
+            {ImageMsg, <<"data">>}
+        ],
+        not_found,
+        Opts
+    ).
 
 %% @doc Read the WASM execution mode from the input prefix of the message.
 mode(M1, InPrefix, Opts) ->
@@ -548,6 +560,55 @@ init_test() ->
     ?assertMatch(
         {ok, Fun} when is_function(Fun),
         hb_ao:resolve(Priv, <<"import-resolver">>, #{})
+    ).
+
+%% @doc An image that is an ANS-104 data item, as a WASM module uploaded to
+%% Arweave is, holds its bytes in `data'. The image boots and runs both when it
+%% is given by its ID and when it is given as a message.
+ans104_image_test() ->
+    init(),
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()] },
+    {ok, Bin} = file:read_file("test/test-64.wasm"),
+    Image =
+        hb_message:convert(
+            ar_bundles:sign_item(
+                #tx {
+                    tags = [{<<"Content-Type">>, <<"application/wasm">>}],
+                    data = Bin
+                },
+                hb:wallet()
+            ),
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
+            Opts
+        ),
+    {ok, ImageID} = hb_cache:write(Image, Opts),
+    lists:foreach(
+        fun(ImageRef) ->
+            {ok, Base} =
+                hb_ao:resolve(
+                    #{
+                        <<"device">> => <<"wasm-64@1.0">>,
+                        <<"image">> => ImageRef
+                    },
+                    <<"init">>,
+                    Opts
+                ),
+            {ok, Res} =
+                hb_ao:resolve(
+                    Base#{
+                        <<"function">> => <<"fac">>,
+                        <<"parameters">> => [5.0]
+                    },
+                    <<"compute">>,
+                    Opts
+                ),
+            ?assertEqual(
+                {ok, [120.0]},
+                hb_ao:resolve(Res, <<"results/output">>, Opts)
+            )
+        end,
+        [ImageID, Image]
     ).
 
 basic_execution_test() ->

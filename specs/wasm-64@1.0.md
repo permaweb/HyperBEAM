@@ -32,7 +32,8 @@ implementations.
 - **Image:** the WASM module to execute, as a binary (the bytes of a `.wasm`
   module). It may be supplied directly, by reference (a content identifier
   resolvable to a message whose `body` is the bytes), or wrapped in a message
-  whose `body` is the bytes.
+  whose `body` is the bytes. A message without a `body` may carry the bytes in
+  `data`, as ANS-104 and Arweave transaction items carry their payload.
 - **Instance:** a live, instantiated WASM execution context produced from an
   image. The instance is **node-local, mutable, non-serialisable runtime
   state**. It is held in the message's **private** section (see `message@1.0`
@@ -111,11 +112,12 @@ implementations.
   - `<IN>/image` from `Base`. Resolution rules, in order:
     1. **Reference (content identifier):** if the value is an **ID** — a binary
        of 32, 42 or 43 bytes, per the platform's id predicate — read that
-       message and use its `body` binary as the image bytes.
+       message and use its `body` binary as the image bytes, or its `data`
+       binary if it has no `body`.
        (An ID-shaped value that does not resolve to a stored message fails
        `init` with `{badmatch, _}`.)
     2. **Wrapping message:** if the value is a message (map), use its `body`
-       binary as the image bytes.
+       binary as the image bytes, or its `data` binary if it has no `body`.
     3. **Raw binary:** if the value is a binary, use it directly as the image
        bytes.
     4. **Absent:** if `<IN>/image` is not present, fall back to the base
@@ -507,9 +509,11 @@ An implementation MUST exhibit all of the following observable behaviours:
    instantiates that module and installs a live instance and an
    `import-resolver` in the private section.
 4. **Image — by reference.** `init` with `<IN>/image` a content ID reads the
-   referenced message and uses its `body` bytes as the image.
+   referenced message and uses its `body` bytes as the image, or its `data`
+   bytes if it has no `body`.
 5. **Image — wrapping message.** `init` with `<IN>/image` a message uses that
-   message's `body` bytes as the image.
+   message's `body` bytes as the image, or its `data` bytes if it has no
+   `body`.
 6. **Image — top-level body fallback.** `init` with no `<IN>/image` but a binary
    top-level `body` uses `body` as the image.
 7. **Missing image error.** `init` with no obtainable image fails with
